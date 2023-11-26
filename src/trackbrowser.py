@@ -1,45 +1,63 @@
 from abc import ABC, abstractmethod
-from json import JSONEncoder
+from pydantic import BaseModel, PositiveInt
+from enum import Enum
+from typing import Callable
 
 
-class TrackInfo:
-    def __init__(self, metadata: dict, link_retriever, id: dict = None):
-        self.metadata = metadata
-        self.link_retriever = link_retriever
-        self.id = id
+class SourceType(Enum):
+    QOBUZ = "qobuz"
 
 
-class TrackUrl:
-    def __init__(
-        self,
-        url: str,
-        format: str = None,
-        sample_rate: int = None,
-        bit_depth: int = None,
-    ):
-        self.format = format
-        self.sample_rate = sample_rate
-        self.bit_depth = bit_depth
-        self.url = url
+class AlbumImage(BaseModel):
+    small: str = ""
+    large: str = ""
 
 
-class BrowseCategory:
-    def __init__(
-        self,
-        id: str,
-        name: str,
-        can_browse: bool,
-        needs_input: bool = False,
-        info: dict = {},
-        path: [str] = [],
-        image: dict = {},
-    ):
-        self.id = id
-        self.name = name
-        self.can_browse = can_browse
-        self.needs_input = needs_input
-        self.info = info
-        self.path = path
+class Album(BaseModel):
+    title: str
+    duration: int = 0
+    image: AlbumImage
+
+
+class Artist(BaseModel):
+    name: str
+
+
+class TrackMetadata(BaseModel):
+    id: str
+    title: str
+    duration: int
+    performer: Artist
+    album: Album
+
+
+class TrackInfo(BaseModel):
+    track_type: SourceType = SourceType.QOBUZ
+    id: str = ""
+    link_retriever: Callable[[], str]
+    metadata: TrackMetadata = None
+
+
+class TrackUrl(BaseModel):
+    url: str
+    format: str
+    sample_rate: PositiveInt
+    bit_depth: PositiveInt
+
+
+class CategoryImage(BaseModel):
+    small: str = ""
+    large: str = ""
+
+
+class BrowseCategory(BaseModel):
+    id: str
+    name: str
+    can_browse: bool
+    needs_input: bool = False
+    info: dict = {}
+    path: list[str] = []
+    image: CategoryImage = CategoryImage()
 
 
 class TrackBrowser(ABC):

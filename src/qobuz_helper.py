@@ -4,7 +4,14 @@ from qobuz_dl.bundle import Bundle
 
 from functools import partial
 
-from src.trackbrowser import TrackBrowser, TrackInfo, BrowseCategory, TrackUrl
+from src.trackbrowser import (
+    Album,
+    Artist,
+    TrackBrowser,
+    TrackInfo,
+    BrowseCategory,
+    TrackUrl,
+)
 
 import json
 
@@ -34,26 +41,23 @@ def extract_track_format(track):
     return (mime_type, sampling_rate, bit_depth)
 
 
-def get_track_url(qobuz_client, id):
-    s = time.time()
+def get_track_url(qobuz_client, id) -> str:
     track = qobuz_client.get_track_url(id, fmt_id=27)
-    e = time.time()
-    track_url = TrackUrl(url=track["url"])
-    (
-        track_url.format,
-        track_url.sample_rate,
-        track_url.bit_depth,
-    ) = extract_track_format(track)
+    (format, sample_rate, bit_depth) = extract_track_format(track)
+    track_url = TrackUrl(
+        url=track["url"], format=format, sample_rate=sample_rate, bit_depth=bit_depth
+    )
     return track_url
 
 
 def metadata_from_track(track, album_meta={}):
+    album_info = track.get("album", album_meta)
     return {
-        "id": track["id"],
+        "id": str(track["id"]),
         "title": track["title"],
-        "performer": track["performer"]["name"],
+        "performer": Artist(name=track["performer"]["name"]),
         "duration": track["duration"],
-        "album": track.get("album", album_meta),
+        "album": Album(title=album_info["title"], image=album_info["image"]),
     }
 
 
@@ -70,7 +74,10 @@ class QobuzTrackBrowser(TrackBrowser):
         if len(path) == 0:
             return [
                 BrowseCategory(
-                    "myweeklyq", "My Weekly Q", can_browse=True, path=["myweeklyq"]
+                    id="myweeklyq",
+                    name="My Weekly Q",
+                    can_browse=True,
+                    path=["myweeklyq"],
                 )
             ]
 
@@ -145,8 +152,8 @@ class QobuzTrackBrowser(TrackBrowser):
     def _tracks_to_browse_categories(self, tracks, album_meta={}):
         return [
             BrowseCategory(
-                track["id"],
-                track["title"],
+                id=str(track["id"]),
+                name=track["title"],
                 can_browse=False,
                 needs_input=False,
                 info={
@@ -175,8 +182,8 @@ class QobuzTrackBrowser(TrackBrowser):
     def _albums_to_browse_category(self, albums):
         return [
             BrowseCategory(
-                album["id"],
-                album["title"],
+                id=album["id"],
+                name=album["title"],
                 can_browse=True,
                 info={
                     "album": {

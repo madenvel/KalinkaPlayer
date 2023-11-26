@@ -2,4 +2,8 @@ __pycache__
 rpi.conf
 *.so
 build/
-
+native/call_obj.h
+native/call_obj.cpp
+native/rpiplayer.cpp
+native/rpiplayer.h
+.venv/

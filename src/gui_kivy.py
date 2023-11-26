@@ -105,7 +105,7 @@ class RpiPlaybar(BoxLayout):
     @mainthread
     def on_change_track(self, track_info):
         self.title = track_info["title"]
-        self.performer = track_info["performer"]
+        self.performer = track_info["performer"]["name"]
         self.album_image = track_info["album"]["image"]["large"]
         self.duration = track_info["duration"]
         self.current_time = 0
@@ -173,7 +173,7 @@ class RpiPlayQueue(TabbedPanelItem):
             "on_item_clicked": self.on_item_clicked,
             "index": track["index"],
             "title": track["title"],
-            "performer": track["performer"],
+            "performer": track["performer"]["name"],
             "image": track["album"]["image"],
             "selected": 0,
         }

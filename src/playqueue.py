@@ -2,6 +2,7 @@ from src.event_loop import AsyncExecutor, enqueue
 
 from src.rpiasync import EventEmitter
 from enum import Enum
+from src.track_url_retriever import TrackUrlRetriever
 
 from src.trackbrowser import TrackInfo
 from native.rpiplayer import RpiAudioPlayer
@@ -51,7 +52,7 @@ class PlayQueue(AsyncExecutor):
         self.current_track_id = 0
         self.current_context_id = -1
         self.context_map = {}
-        self.track_list: TrackInfo = []
+        self.track_list: list[TrackInfo] = []
         self.prefetched_tracks = {}
 
         # properties
@@ -244,9 +245,9 @@ class PlayQueue(AsyncExecutor):
             for i in range(offset, min(offset + limit, len(self.track_list)))
         ]
 
-    def get_track_info(self, index):
-        track_info = self.track_list[index]
+    def get_track_info(self, index: int):
+        track_info: TrackInfo = self.track_list[index]
         return {
             "index": index,
             "selected": index == self.current_track_id,
-        } | track_info.metadata
+        } | track_info.metadata.dict()

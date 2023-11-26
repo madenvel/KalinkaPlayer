@@ -91,14 +91,17 @@ class QobuzAutoplay:
         self.amount_to_request = amount_to_request
         self.tracks_to_analyze = []
 
+    def _track_meta_to_autoplay(self, track):
+        return {
+            "track_id": track["id"],
+            "artist_id": track["album"]["artist"]["id"],
+            "label_id": track["album"]["label"]["id"],
+            "genre_id": track["album"]["genre"]["id"],
+        }
+
     def add_tracks(self, tracks):
         tracks_to_analyze = [
-            {
-                "track_id": track["id"],
-                "artist_id": track["album"]["artist"]["id"],
-                "label_id": track["album"]["label"]["id"],
-                "genre_id": track["album"]["genre"]["id"],
-            }
+            self._track_meta_to_autoplay(self.qobuz_client.get_track_meta(track["id"]))
             for track in tracks
             if track["id"] not in self.listened_tracks
         ]
