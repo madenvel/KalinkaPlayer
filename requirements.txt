@@ -1,0 +1,5 @@
+qobuz-dl
+requests
+kivy[base]
+cython
+pydantic
