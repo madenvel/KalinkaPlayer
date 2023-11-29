@@ -7,6 +7,8 @@ from src.track_url_retriever import TrackUrlRetriever
 from src.trackbrowser import TrackInfo
 from native.rpiplayer import RpiAudioPlayer
 
+from src.events import EventType
+
 
 def buffer_size(seconds: int, bits: int, sample_rate: int):
     bytes = bits / 8
@@ -28,17 +30,6 @@ class State(Enum):
     FINISHED = 5
     STOPPED = 6
     ERROR = 7
-
-
-class EventType(Enum):
-    Playing = "playing"
-    Paused = "paused"
-    Stopped = "stopped"
-    Progress = "current_progress"
-    TrackChanged = "change_track"
-    RequestMoreTracks = "request_more_tracks"
-    TracksAdded = "track_added"
-    TracksRemoved = "track_removed"
 
 
 class PlayQueue(AsyncExecutor):
@@ -97,7 +88,6 @@ class PlayQueue(AsyncExecutor):
             self.next()
 
     def _notify_track_change(self):
-        track = self.track_list[self.current_track_id]
         self.event_emitter.dispatch(
             EventType.TrackChanged, self.get_track_info(self.current_track_id)
         )
@@ -250,4 +240,4 @@ class PlayQueue(AsyncExecutor):
         return {
             "index": index,
             "selected": index == self.current_track_id,
-        } | track_info.metadata.dict()
+        } | track_info.metadata.model_dump()

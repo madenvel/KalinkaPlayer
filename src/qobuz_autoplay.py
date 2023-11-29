@@ -4,7 +4,7 @@ from qobuz_dl.qopy import Client
 
 from src.playqueue import PlayQueue
 from src.qobuz_helper import get_track_url, metadata_from_track
-from src.trackbrowser import TrackInfo
+from src.trackbrowser import TrackBrowser, TrackInfo
 
 import json
 
@@ -82,10 +82,15 @@ import json
 
 class QobuzAutoplay:
     def __init__(
-        self, qobuz_client: Client, playqueue: PlayQueue, amount_to_request: int = 10
+        self,
+        qobuz_client: Client,
+        playqueue: PlayQueue,
+        track_browser: TrackBrowser,
+        amount_to_request: int = 10,
     ):
         self.qobuz_client = qobuz_client
         self.playqueue = playqueue
+        self.track_browser = track_browser
         self.remaining_tracks: list[TrackInfo] = []
         self.listened_tracks = set()
         self.amount_to_request = amount_to_request
@@ -138,27 +143,9 @@ class QobuzAutoplay:
             },
         )
 
-        tracks = req.json()["tracks"]["items"]
+        track_ids = [track["id"] for track in req.json()["tracks"]["items"]]
 
-        logging.info("Retrieved " + str(len(tracks)) + " new recommendation(s)")
+        logging.info("Retrieved " + str(len(track_ids)) + " new recommendation(s)")
 
-        self.remaining_tracks.extend(
-            [self._track_to_trackinfo(track) for track in tracks]
-        )
-        self.listened_tracks.update([track["id"] for track in tracks])
-
-    def save(self):
-        return {
-            "remainingTracks": [track.metadata for track in self.remaining_tracks],
-            "listenedTracks": list(self.listened_tracks),
-        }
-
-    def restore(self, data):
-        self.remaining_tracks = [
-            TrackInfo(
-                metadata=track,
-                link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
-            )
-            for track in data["remainingTracks"]
-        ]
-        self.listened_tracks = set(data["listenedTracks"])
+        self.remaining_tracks.extend(self.track_browser.get_track_info(track_ids))
+        self.listened_tracks.update(track_ids)

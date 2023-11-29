@@ -8,11 +8,16 @@ from src.qobuz_helper import QobuzTrackBrowser, get_client, get_track_url
 
 from src.playqueue import EventType, PlayQueue
 from src.track_url_retriever import TrackUrlRetriever
-from src.trackbrowser import SourceType
+from src.trackbrowser import SourceType, TrackBrowser
 
 
-def setup_autoplay(client, playqueue: PlayQueue, event_listener: EventListener):
-    autoplay = QobuzAutoplay(client, playqueue)
+def setup_autoplay(
+    client,
+    playqueue: PlayQueue,
+    track_browser: TrackBrowser,
+    event_listener: EventListener,
+):
+    autoplay = QobuzAutoplay(client, playqueue, track_browser)
     event_listener.subscribe(
         EventType.RequestMoreTracks, partial(autoplay.add_recommendations, 1)
     )
@@ -29,6 +34,6 @@ def setup():
     url_retriever = TrackUrlRetriever()
     url_retriever.register(SourceType.QOBUZ, partial(get_track_url, client))
     playqueue = PlayQueue(event_emitter)
-    setup_autoplay(client, playqueue, event_listener)
+    setup_autoplay(client, playqueue, trackbrowser, event_listener)
 
     return playqueue, event_listener, trackbrowser

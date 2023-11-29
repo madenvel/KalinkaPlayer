@@ -1,17 +1,12 @@
-from multiprocessing import Queue
+from enum import Enum
 
 
-class EventDispatcher:
-    def __init__(self, event_queue: Queue):
-        super().__init__()
-        self.subscriptions = {}
-
-    def dispatch(self, event_name, *args, **kwargs):
-        if event_name in self.subscriptions:
-            handlers = self.subscriptions[event_name]
-            for handler in handlers:
-                handler(*args, **kwargs)
-
-    def subscribe(self, event_name, callback):
-        self.subscriptions[event_name] = self.subscriptions.get(event_name, [])
-        self.subscriptions[event_name].append(callback)
+class EventType(Enum):
+    Playing = "playing"
+    Paused = "paused"
+    Stopped = "stopped"
+    Progress = "current_progress"
+    TrackChanged = "change_track"
+    RequestMoreTracks = "request_more_tracks"
+    TracksAdded = "track_added"
+    TracksRemoved = "track_removed"

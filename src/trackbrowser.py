@@ -9,18 +9,34 @@ class SourceType(Enum):
 
 
 class AlbumImage(BaseModel):
-    small: str = ""
-    large: str = ""
+    small: str | None = None
+    thumbnail: str | None = None
+    large: str | None = None
+    back: str | None = None
+
+
+class Label(BaseModel):
+    id: str
+    name: str
+
+
+class Genre(BaseModel):
+    id: str
+    name: str
 
 
 class Album(BaseModel):
+    id: str
     title: str
     duration: int = 0
     image: AlbumImage
+    label: Label | None
+    genre: Genre | None
 
 
 class Artist(BaseModel):
     name: str
+    id: str
 
 
 class TrackMetadata(BaseModel):
@@ -32,8 +48,7 @@ class TrackMetadata(BaseModel):
 
 
 class TrackInfo(BaseModel):
-    track_type: SourceType = SourceType.QOBUZ
-    id: str = ""
+    id: str
     link_retriever: Callable[[], str]
     metadata: TrackMetadata = None
 
@@ -45,27 +60,26 @@ class TrackUrl(BaseModel):
     bit_depth: PositiveInt
 
 
-class CategoryImage(BaseModel):
-    small: str = ""
-    large: str = ""
-
-
 class BrowseCategory(BaseModel):
     id: str
     name: str
-    can_browse: bool
-    needs_input: bool = False
-    info: dict = {}
-    path: list[str] = []
-    image: CategoryImage = CategoryImage()
+    subname: str = ""
+    comment: str = ""
+    url: str = ""
+    image: AlbumImage = AlbumImage()
 
 
 class TrackBrowser(ABC):
     @abstractmethod
-    def list_categories(
-        self,
-        path: list[str],
-        offset=0,
-        limit=50,
+    def search(self, type: str, query: str, offset=0, limit=50) -> list[BrowseCategory]:
+        pass
+
+    @abstractmethod
+    def browse(
+        self, endpoint: str, offset: int = 0, limit: int = 50
     ) -> list[BrowseCategory]:
+        pass
+
+    @abstractmethod
+    def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
         pass

@@ -1,5 +1,4 @@
 import logging
-from threading import Thread
 from queue import Queue
 
 from src.rpiasync import AsyncLoop

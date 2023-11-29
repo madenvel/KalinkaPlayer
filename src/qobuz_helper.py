@@ -6,7 +6,11 @@ from functools import partial
 
 from src.trackbrowser import (
     Album,
+    AlbumImage,
     Artist,
+    Genre,
+    Label,
+    SourceType,
     TrackBrowser,
     TrackInfo,
     BrowseCategory,
@@ -14,6 +18,10 @@ from src.trackbrowser import (
 )
 
 import json
+
+
+TrackInfoCache: dict[str, TrackInfo] = {}
+AlbumInfoCache: dict[str, Album] = {}
 
 
 def get_config():
@@ -55,9 +63,21 @@ def metadata_from_track(track, album_meta={}):
     return {
         "id": str(track["id"]),
         "title": track["title"],
-        "performer": Artist(name=track["performer"]["name"]),
+        "performer": Artist(
+            name=track["performer"]["name"], id=str(track["performer"]["id"])
+        ),
         "duration": track["duration"],
-        "album": Album(title=album_info["title"], image=album_info["image"]),
+        "album": Album(
+            id=str(album_info["id"]),
+            title=album_info["title"],
+            image=album_info["image"],
+            label=Label(
+                id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
+            ),
+            genre=Genre(
+                id=str(album_info["genre"]["id"]), name=album_info["genre"]["name"]
+            ),
+        ),
     }
 
 
@@ -65,13 +85,13 @@ class QobuzTrackBrowser(TrackBrowser):
     def __init__(self, qobuz_client: Client):
         self.qobuz_client = qobuz_client
 
-    def list_categories(
-        self,
-        path: list[str],
-        offset=0,
-        limit=50,
+    def search(self, type: str, query: str, offset=0, limit=50) -> list[BrowseCategory]:
+        return self._search_items(type, query, offset, limit)
+
+    def browse(
+        self, endpoint: str, offset: int = 0, limit: int = 50
     ) -> list[BrowseCategory]:
-        if len(path) == 0:
+        if endpoint == "":
             return [
                 BrowseCategory(
                     id="myweeklyq",
@@ -80,25 +100,17 @@ class QobuzTrackBrowser(TrackBrowser):
                     path=["myweeklyq"],
                 )
             ]
-
-        if path[0] == "myweeklyq":
-            if len(path) > 1:
-                return []
-
+        points = endpoint.split("/")
+        if points[0] == "myweeklyq":
             return self._tracks_to_browse_categories(
                 self._get_curated_tracks()["tracks"]["items"]
             )
-        elif path[0] in ["album", "playlist", "artist"]:
-            if len(path) != 2:
-                return []
-
-            id = path[1]
-
+        if points[0] in ["album", "playlist"]:
             req = self.qobuz_client.api_call(
-                path[0] + "/get", id=id, offset=offset, limit=limit
+                points[0] + "/get", id=points[1], offset=offset, limit=limit
             )
 
-            if path[0] == "album":
+            if points[0] == "album":
                 album_meta = req.copy()
                 del album_meta["tracks"]
                 return self._tracks_to_browse_categories(
@@ -106,67 +118,47 @@ class QobuzTrackBrowser(TrackBrowser):
                     album_meta=album_meta,
                 )
 
-            return []
+            return self._albums_to_browse_category(
+                self.qobuz_client.get_album_tracks(points[1])
+            )
 
-        elif path[0] == "search":
-            if len(path) == 1:
-                return [
-                    BrowseCategory(
-                        "album",
-                        "Album",
-                        can_browse=True,
-                        needs_input=True,
-                        path=["search", "album"],
-                    ),
-                    BrowseCategory(
-                        "track",
-                        "Track",
-                        can_browse=True,
-                        needs_input=True,
-                        path=["search", "track"],
-                    ),
-                    BrowseCategory(
-                        "artist",
-                        "Artist",
-                        can_browse=True,
-                        needs_input=True,
-                        path=["search", "artist"],
-                    ),
-                    BrowseCategory(
-                        "playlist",
-                        "Playlist",
-                        can_browse=True,
-                        needs_input=True,
-                        path=["search", "playlist"],
-                    ),
-                ]
-            if path[1] not in ["album", "track", "artist", "playlist"]:
-                raise Exception("Path does not exist")
-            if len(path) < 3:
-                raise Exception("Must provide search query")
-            if len(path) == 3:
-                return self._search_items(path[1], path[2], offset, limit)
-            else:
-                return []
+    def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
+        return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
+
+    def _track_to_track_info(self, track_id: str):
+        # if track_id in TrackInfoCache:
+        #     return TrackInfoCache[track_id]
+        track = self.qobuz_client.get_track_meta(track_id)
+        track_info = TrackInfo(
+            id=track_id,
+            link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
+            metadata=metadata_from_track(track),
+        )
+
+        TrackInfoCache[track_id] = track_info
+        return track_info
 
     def _tracks_to_browse_categories(self, tracks, album_meta={}):
-        return [
-            BrowseCategory(
-                id=str(track["id"]),
-                name=track["title"],
-                can_browse=False,
-                needs_input=False,
-                info={
-                    "track": TrackInfo(
-                        metadata=metadata_from_track(track, album_meta),
-                        link_retriever=partial(
-                            get_track_url, self.qobuz_client, track["id"]
-                        ),
-                    )
-                },
+        result = []
+        for track in tracks:
+            track_id = str(track["id"])
+            TrackInfoCache[track_id] = TrackInfo(
+                id=track_id,
+                link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
+                metadata=metadata_from_track(track, album_meta),
             )
-            for track in tracks
-        ]
+            album = track.get("album", album_meta)
+            result.append(
+                BrowseCategory(
+                    id=str(track["id"]),
+                    name=track["title"],
+                    subname=track["performer"]["name"] + " - " + album["title"],
+                    can_browse=False,
+                    needs_input=False,
+                    image=album["image"],
+                )
+            )
+        return result
 
     def _search_items(self, item_type, query, offset, limit):
         req = self.qobuz_client.api_call(
@@ -184,16 +176,9 @@ class QobuzTrackBrowser(TrackBrowser):
             BrowseCategory(
                 id=album["id"],
                 name=album["title"],
-                can_browse=True,
-                info={
-                    "album": {
-                        "artist": {
-                            "name": album["artist"]["name"],
-                            "id": album["artist"]["id"],
-                        }
-                    }
-                },
-                path=["album", album["id"]],
+                subname=album["artist"]["name"],
+                url="/browse/album/" + album["id"],
+                image=album["image"],
             )
             for album in albums
         ]
@@ -209,7 +194,7 @@ class QobuzTrackBrowser(TrackBrowser):
         limit : `int`, keyword-only, optional
             The maximum number of tracks to return.
 
-            **Default**: :code:`50`.
+            **Default**: :code:`30`.
 
         offset : `int`, keyword-only, optional
             The index of the first track to return. Use with `limit`
