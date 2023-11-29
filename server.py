@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from typing import Union
 from fastapi import FastAPI, Request
 from sse_starlette.sse import EventSourceResponse
 from src.player_setup import setup
@@ -39,7 +40,7 @@ async def add_album_to_queue(album_id: str, replace: bool = False):
 
 
 @app.get("/queue/play")
-async def queue_play(index: int | None = None):
+async def queue_play(index: Union[int, None] = None):
     playqueue.play(index)
     return {"message": "Ok"}
 
