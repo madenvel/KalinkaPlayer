@@ -96,9 +96,9 @@ class PlayQueue(AsyncExecutor):
     def _prepare_track(self, index):
         if index not in self.prefetched_tracks and index < len(self.track_list):
             link_retriever = self.track_list[index].link_retriever
-            track_id = self.track_list[index].metadata["id"]
+            track_id = self.track_list[index].metadata.id
             track_info = link_retriever()
-            if track_id == self.track_list[index].metadata["id"]:
+            if track_id == self.track_list[index].metadata.id:
                 context_id = self.track_player.prepare(
                     track_info.url,
                     buffer_size(10, track_info.bit_depth, track_info.sample_rate),
