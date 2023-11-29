@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pydantic import BaseModel, PositiveInt
 from enum import Enum
-from typing import Callable
+from typing import Callable, List, Optional, Union
 
 
 class SourceType(Enum):
@@ -9,10 +9,10 @@ class SourceType(Enum):
 
 
 class AlbumImage(BaseModel):
-    small: str | None = None
-    thumbnail: str | None = None
-    large: str | None = None
-    back: str | None = None
+    small: Optional[str]
+    thumbnail: Optional[str]
+    large: Optional[str]
+    back: Optional[str]
 
 
 class Label(BaseModel):
@@ -30,8 +30,8 @@ class Album(BaseModel):
     title: str
     duration: int = 0
     image: AlbumImage
-    label: Label | None
-    genre: Genre | None
+    label: Optional[Label]
+    genre: Optional[Genre]
 
 
 class Artist(BaseModel):
@@ -50,7 +50,7 @@ class TrackMetadata(BaseModel):
 class TrackInfo(BaseModel):
     id: str
     link_retriever: Callable[[], str]
-    metadata: TrackMetadata = None
+    metadata: Optional[TrackMetadata]
 
 
 class TrackUrl(BaseModel):
@@ -66,20 +66,20 @@ class BrowseCategory(BaseModel):
     subname: str = ""
     comment: str = ""
     url: str = ""
-    image: AlbumImage = AlbumImage()
+    image: AlbumImage
 
 
 class TrackBrowser(ABC):
     @abstractmethod
-    def search(self, type: str, query: str, offset=0, limit=50) -> list[BrowseCategory]:
+    def search(self, type: str, query: str, offset=0, limit=50) -> List[BrowseCategory]:
         pass
 
     @abstractmethod
     def browse(
         self, endpoint: str, offset: int = 0, limit: int = 50
-    ) -> list[BrowseCategory]:
+    ) -> List[BrowseCategory]:
         pass
 
     @abstractmethod
-    def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
+    def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         pass
