@@ -10,12 +10,6 @@ FlacDecoder::FlacDecoder() { init(); }
 void FlacDecoder::metadata_callback(const ::FLAC__StreamMetadata *pMetadata) {
   /* print some stats */
   if (pMetadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
-    /* save for later */
-    auto total_samples = pMetadata->data.stream_info.total_samples;
-    auto sample_rate = pMetadata->data.stream_info.sample_rate;
-    auto channels = pMetadata->data.stream_info.channels;
-    auto bps = pMetadata->data.stream_info.bits_per_sample;
-
     streamInfo = pMetadata->data.stream_info;
     streamInfoReady = true;
   }
@@ -56,7 +50,6 @@ FlacDecoder::write_callback(const ::FLAC__Frame *frame,
 }
 ::FLAC__StreamDecoderReadStatus FlacDecoder::read_callback(FLAC__byte buffer[],
                                                            size_t *bytes) {
-  size_t bytesRead = 0;
   std::stop_token token = decodingThread.get_stop_token();
 
   if (!in.expired()) {
