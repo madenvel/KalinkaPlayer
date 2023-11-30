@@ -287,6 +287,7 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
   size_t framesCount = 0;
   size_t prevFramesCountProgressReported = -1;
   bool eof = false;
+  bool error = false;
 
   while (!token.stop_requested()) {
     err = wait_for_poll(pcm_handle, ufds, count);
@@ -310,6 +311,11 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     } else {
       if (!in.expired()) {
         auto inNode = in.lock();
+        // Streaming error - will not recover
+        if (inNode->error()) {
+          error = true;
+          break;
+        }
         size_t read = inNode->read(data.data(), bytesToRead, token);
         framesCount += bytesToFrames(read);
         if (framesCount - prevFramesCountProgressReported > sampleRate / 2 ||
@@ -342,6 +348,17 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
   snd_pcm_drain(pcm_handle);
   snd_pcm_close(pcm_handle);
   delete[] ufds;
+  if (error) {
+    sm->updateState(State::ERROR);
+    if (!in.expired()) {
+      try {
+        std::rethrow_exception(in.lock()->error());
+      } catch (const std::exception &ex) {
+        sm->setStateComment(ex.what());
+      }
+    }
+    return -1;
+  }
   sm->updateState(eof ? State::FINISHED : State::STOPPED);
   return 0;
 }

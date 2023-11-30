@@ -17,6 +17,7 @@ enum State {
 
 class StateMachine {
   std::atomic<int> st;
+  std::string stateComment;
   std::function<void(State, State)> callback;
 
 public:
@@ -28,6 +29,8 @@ public:
 
     return oldState;
   }
+
+  void setStateComment(std::string comment) { stateComment = comment; }
 
   State state() const { return static_cast<State>(st.load()); }
 };

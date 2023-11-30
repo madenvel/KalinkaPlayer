@@ -7,3 +7,5 @@ native/call_obj.cpp
 native/rpiplayer.cpp
 native/rpiplayer.h
 .venv/
+.vscode/
+

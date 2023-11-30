@@ -11,13 +11,10 @@ from kivy.uix.recycleview import RecycleView
 from kivy.uix.boxlayout import BoxLayout
 
 from kivy.config import Config
+from .event_listener_sse import SSEEventListener
+from .rpiplayer_http import RpiPlayerHttp
 
-from src.rpiasync import EventListener
-from src.playqueue import EventType
-from src.trackbrowser import TrackBrowser
-
-
-from .playqueue import PlayQueue
+from src.events import EventType
 
 import time
 
@@ -30,22 +27,10 @@ from kivy.properties import (
     DictProperty,
 )
 
+rpiplayer = None
+event_listener = None
 
-class PlayQueueObj:
-    pass
-
-
-class EventListenerObj:
-    pass
-
-
-class TrackBrowserObj:
-    pass
-
-
-playqueueObj = PlayQueueObj()
-event_listenerObj = EventListenerObj()
-track_browserObj = TrackBrowserObj()
+logger = logging.getLogger(__name__)
 
 
 class RpiMainScreen(BoxLayout):
@@ -56,7 +41,7 @@ class RpiMainScreen(BoxLayout):
     # def update_track_list(self):
     #     tracks_to_request = 100
     #     while True:
-    #         tracks = self.playqueue.list(0, 100)
+    #         tracks = rpiplayer.list(0, 100)
     #         self.queue_data.extend(tracks)
     #         if len(tracks) < tracks_to_request:
     #             break
@@ -81,7 +66,7 @@ class RpiPlaybar(BoxLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        event_listenerObj.event_listener.subscribe_all(
+        event_listener.subscribe_all(
             {
                 EventType.TrackChanged: self.on_change_track,
                 EventType.Progress: self.on_current_progress,
@@ -91,16 +76,14 @@ class RpiPlaybar(BoxLayout):
             }
         )
 
-        self.playqueue = playqueueObj.playqueue
-
     @mainthread
     def on_play(self):
         if self.playing_state == PLAYING:
-            self.playqueue.pause(True)
+            rpiplayer.pause(True)
         elif self.playing_state == PAUSED:
-            self.playqueue.pause(False)
+            rpiplayer.pause(False)
         elif self.playing_state == STOPPED:
-            self.playqueue.play()
+            rpiplayer.play()
 
     @mainthread
     def on_change_track(self, track_info):
@@ -136,7 +119,7 @@ class RpiPlaybar(BoxLayout):
             return False
         x_pos = self.ids.progressbar.to_widget(*touch.pos, relative=True)[0]
         rel_pos = x_pos / self.ids.progressbar.width
-        self.playqueue.set_pos(rel_pos)
+        rpiplayer.set_pos(rel_pos)
         return True
 
 
@@ -146,7 +129,6 @@ class RpiPlayQueue(TabbedPanelItem):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        event_listener = event_listenerObj.event_listener
         event_listener.subscribe_all(
             {
                 EventType.TrackChanged: self.on_change_track,
@@ -157,18 +139,19 @@ class RpiPlayQueue(TabbedPanelItem):
                 EventType.Stopped: self.on_stopped,
             }
         )
-        self.playqueue = playqueueObj.playqueue
         self.track_index = 0
 
         self.update_list()
 
     @mainthread
     def update_list(self):
-        tracks = self.playqueue.list(0, 1000)
+        tracks = rpiplayer.list(0, 1000)
         self.ids.rv.data = [self.track_to_data(track) for track in tracks]
-        self.ids.rv.data[self.current_track_id]["selected"] = self.playing_state
+        if len(self.ids.rv.data) > 0:
+            self.ids.rv.data[self.current_track_id]["selected"] = self.playing_state
 
     def track_to_data(self, track):
+        logger.warn("Track to data: " + str(track))
         return {
             "on_item_clicked": self.on_item_clicked,
             "index": track["index"],
@@ -198,7 +181,7 @@ class RpiPlayQueue(TabbedPanelItem):
         self.ids.rv.refresh_from_data()
 
     def on_item_clicked(self, index):
-        self.playqueue.play(index)
+        rpiplayer.play(index)
 
     @mainthread
     def on_playing(self):
@@ -225,11 +208,8 @@ class RpiPlayingNow(TabbedPanelItem):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        event_listenerObj.event_listener.subscribe(
-            EventType.TrackChanged, self.on_change_track
-        )
+        event_listener.subscribe(EventType.TrackChanged, self.on_change_track)
         self.register_for_motion_event("touch")
-        self.playqueue = playqueueObj.playqueue
         self.initial = None
         self.sensitivity = 50
 
@@ -274,9 +254,9 @@ class RpiPlayingNow(TabbedPanelItem):
         if self.initial is None:
             return False
         if touch.x + self.sensitivity < self.initial:
-            self.playqueue.next()
+            rpiplayer.next()
         elif touch.x - self.sensitivity > self.initial:
-            self.playqueue.prev()
+            rpiplayer.prev()
 
         self.ids.image.color = (1, 1, 1, 1)
         self.ids.prev_image.color = (1, 1, 1, 0)
@@ -291,70 +271,76 @@ class RpiPlayingNow(TabbedPanelItem):
 class RpiBrowser(TabbedPanelItem):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.track_browser: TrackBrowser = track_browserObj.track_browser
-        self.playqueue = playqueueObj.playqueue
-        self.current_path = []
-        self.browse(self.current_path)
+        self.paths = []
+        self.browse("browse")
 
     def on_enter(self):
-        self.browse(["search", "album", self.ids.input.text])
+        self.paths = ["browse"]
+        self.browse("/search/album/" + self.ids.input.text)
 
     def category_to_data(self, item, index):
         return {
             "on_item_clicked": self.on_item_clicked,
             "index": index,
-            "title": item.name,
-            "performer": "",  # item.info["album"]["artist"]["name"],
-            "image": {"small": "", "large": ""},
+            "title": item["name"],
+            "performer": item["subname"],
+            "image": item["image"],
             "selected": 0,
-            "id": item.id,
-            "path": item.path,
-            "can_browse": item.can_browse,
-            "track": item.info.get("track", None),
+            "id": item["id"],
+            "url": item["url"],
+            "track": None,
         }
 
     def on_item_clicked(self, index):
         item = self.ids.rv.data[index]
-        if item["can_browse"] == True:
-            path = item["path"]
+        if len(item["url"]) != 0:
+            path = "/browse" + item["url"]
             self.browse(path)
         else:
-            self.playqueue.add([item["track"]])
+            rpiplayer.add([item["track"]])
 
     @mainthread
-    def update_list(self, path, categories):
+    def update_list(self, categories):
         start_index = 0
-        if len(path) > 0:
+        print(self.paths)
+        if len(self.paths) > 1:
             self.ids.rv.data = [
                 {
                     "on_item_clicked": self.on_item_clicked,
                     "index": start_index,
                     "title": "...",
-                    "performer": "",
+                    "performer": "Go back",
                     "image": {"small": "", "large": ""},
                     "selected": 0,
                     "id": "",
-                    "path": self.current_path,
-                    "can_browse": True,
+                    "url": "...",
                 }
             ]
             start_index = 1
         else:
             self.ids.rv.data = []
+        import json
+
         self.ids.rv.data.extend(
             [
-                self.category_to_data(categories[i], i)
-                for i in range(start_index, len(categories))
+                self.category_to_data(categories[i], i + start_index)
+                for i in range(len(categories))
             ]
         )
-        self.current_path = path
         self.ids.rv.refresh_from_data()
+        self.ids.rv.scroll_y = 1
 
     def browse(self, path):
         def task(callback):
-            categories = self.track_browser.list_categories(path)
-            callback(path, categories)
+            logger.warn("Path: %s", path)
+            categories = rpiplayer.browse(path)
+            callback(categories)
 
+        if path == "...":
+            self.paths.pop()
+            path = self.paths[-1]
+        else:
+            self.paths.append(path)
         threading.Thread(target=task, args=(self.update_list,)).start()
 
 
@@ -366,15 +352,15 @@ class RpiMusicPlayer(App):
         return RpiMainScreen()
 
 
-def run_app(
-    playqueue: PlayQueue, event_listener: EventListener, track_browser: TrackBrowser
-):
+def run_app(rpiplayer_local: RpiPlayerHttp, event_listener_local: SSEEventListener):
     # Config.set("input", "mouse", "mouse,multitouch_on_demand")
     Config.set("graphics", "resizable", False)
     Config.set("graphics", "width", "800")
     Config.set("graphics", "height", "480")
     Config.set("kivy", "keyboard_mode", "systemandmulti")
-    playqueueObj.playqueue = playqueue
-    event_listenerObj.event_listener = event_listener
-    track_browserObj.track_browser = track_browser
+    global rpiplayer
+    rpiplayer = rpiplayer_local
+    global event_listener
+    event_listener = event_listener_local
+
     RpiMusicPlayer().run()

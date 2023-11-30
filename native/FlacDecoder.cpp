@@ -84,23 +84,35 @@ void FlacDecoder::start() {
 }
 
 void FlacDecoder::thread_run(std::stop_token token) {
-  if (get_state() == FLAC__STREAM_DECODER_UNINITIALIZED) {
-    std::cerr << "Decoder is not initialized" << std::endl;
-    return;
-  }
-  while (!token.stop_requested()) {
-    State state = get_state();
-    if (state == FLAC__STREAM_DECODER_END_OF_STREAM ||
-        state == FLAC__STREAM_DECODER_ABORTED) {
-
-      if (!out.expired() && state == FLAC__STREAM_DECODER_END_OF_STREAM) {
-        out.lock()->setStreamFinished();
-      }
-      break;
+  try {
+    if (get_state() == FLAC__STREAM_DECODER_UNINITIALIZED) {
+      throw std::runtime_error("Flac decoder not initialized");
     }
-    bool retval = process_single();
-    if (!retval) {
-      break;
+    while (!token.stop_requested()) {
+      State state = get_state();
+      if (state == FLAC__STREAM_DECODER_END_OF_STREAM) {
+        if (!out.expired()) {
+          out.lock()->setStreamFinished();
+        }
+        break;
+      }
+      bool retval = process_single();
+      if (!retval) {
+        state = get_state();
+        switch (state) {
+        FLAC__STREAM_DECODER_OGG_ERROR:
+        FLAC__STREAM_DECODER_SEEK_ERROR:
+        FLAC__STREAM_DECODER_ABORTED:
+        FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
+          throw std::runtime_error("Flac decoder error: " +
+                                   std::string(state.as_cstring()));
+        }
+      }
+    }
+  } catch (...) {
+    auto exception = std::current_exception();
+    if (!out.expired()) {
+      out.lock()->setStreamError(exception);
     }
   }
 }

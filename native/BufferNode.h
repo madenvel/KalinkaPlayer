@@ -15,6 +15,8 @@ private:
   DequeBuffer<uint8_t> buffer;
   int flags;
 
+  std::exception_ptr error_;
+
 public:
   BufferNode(size_t bufferSize, int flags) : buffer(bufferSize), flags(flags) {}
 
@@ -25,6 +27,9 @@ public:
   virtual bool eof() override;
 
   virtual void setStreamFinished() override;
+
+  virtual std::exception_ptr error() const override;
+  virtual void setStreamError(std::exception_ptr error) override;
 };
 
 #endif

@@ -18,7 +18,7 @@ def timeit(func):
         end_time = time.perf_counter()
         total_time = end_time - start_time
         # first item in the args, ie `args[0]` is `self`
-        # print(f"{func.__name__}{args} {kwargs}: {total_time:.4f} s")
+        print(f"{func.__name__}{args} {kwargs}: {total_time:.4f} s")
         return result
 
     return timeit_wrapper

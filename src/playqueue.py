@@ -45,6 +45,7 @@ class PlayQueue(AsyncExecutor):
         self.context_map = {}
         self.track_list: list[TrackInfo] = []
         self.prefetched_tracks = {}
+        self.current_progress = 0
 
         # properties
         self.advance = True
@@ -52,7 +53,6 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def _state_callback(self, context_id, old_state, new_state):
-        print("Context", context_id, "state", State(new_state).name)
         if context_id != self.current_context_id:
             return
 
@@ -69,6 +69,10 @@ class PlayQueue(AsyncExecutor):
         if new_state in stateMap:
             self.event_emitter.dispatch(stateMap[new_state])
 
+        self.state = new_state
+        if self.state == State.STOPPED:
+            self.current_progress = 0
+
     @enqueue
     def _progress_callback(self, progress):
         current_time = self.get_track_info(self.current_track_id)["duration"] * progress
@@ -79,6 +83,7 @@ class PlayQueue(AsyncExecutor):
         remaining = (1 - progress) * self.get_track_info(self.current_track_id)[
             "duration"
         ]
+        self.current_progress = current_time
         if remaining < 5:
             self._prepare_track(self.current_track_id + 1)
 
@@ -241,3 +246,12 @@ class PlayQueue(AsyncExecutor):
             "index": index,
             "selected": index == self.current_track_id,
         } | track_info.metadata.model_dump()
+
+    def get_state(self):
+        return {
+            "state": self.state.name,
+            "current_track": self.get_track_info(self.current_track_id)
+            if self.current_track_id in range(0, len(self.track_list))
+            else None,
+            "progress": self.current_progress,
+        }

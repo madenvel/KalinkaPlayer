@@ -96,8 +96,9 @@ class QobuzTrackBrowser(TrackBrowser):
                 BrowseCategory(
                     id="myweeklyq",
                     name="My Weekly Q",
+                    url="/myweeklyq",
                     can_browse=True,
-                    path=["myweeklyq"],
+                    can_add=True,
                 )
             ]
         points = endpoint.split("/")
@@ -121,6 +122,8 @@ class QobuzTrackBrowser(TrackBrowser):
             return self._albums_to_browse_category(
                 self.qobuz_client.get_album_tracks(points[1])
             )
+
+        return []
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
         return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
@@ -154,7 +157,8 @@ class QobuzTrackBrowser(TrackBrowser):
                     name=track["title"],
                     subname=track["performer"]["name"] + " - " + album["title"],
                     can_browse=False,
-                    needs_input=False,
+                    can_add=True,
+                    url="/track/" + str(track["id"]),
                     image=album["image"],
                 )
             )
@@ -177,7 +181,9 @@ class QobuzTrackBrowser(TrackBrowser):
                 id=album["id"],
                 name=album["title"],
                 subname=album["artist"]["name"],
-                url="/browse/album/" + album["id"],
+                url="/album/" + album["id"],
+                can_browse=True,
+                can_add=True,
                 image=album["image"],
             )
             for album in albums

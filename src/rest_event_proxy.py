@@ -1,40 +1,31 @@
 from functools import partial
+from threading import Condition
 from src.events import EventType
-
-from uuid import uuid4
-from queue import Queue
-
 from src.rpiasync import EventListener
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EventStream:
     def __init__(self, event_listener: EventListener):
-        self.queues = {}
-        self.event_listener = event_listener
+        for event in EventType:
+            event_listener.subscribe(event, partial(self._callback, event))
+        self.condition = Condition()
+        self.last_event = None
 
-    def open_stream(self, event_types: list[EventType]):
-        subscription_id = str(uuid4())
-        self.queues[subscription_id] = Queue()
-        for event_type in event_types:
-            self.event_listener.subscribe(
-                event_type, partial(self._callback, subscription_id, event_type)
-            )
-        return subscription_id
+    def wait_for_state_change(self) -> dict:
+        with self.condition:
+            self.last_event = None
+            self.condition.wait(timeout=5)
 
-    def get_event(self, subscrition_id):
-        if subscrition_id not in self.queues:
-            return None
+        return self.last_event
 
-        return self.queues[subscrition_id].get(block=True)
-
-    def _callback(self, subscription_id, event_type, *args, **kwargs):
-        if subscription_id not in self.queues:
-            return
-
-        msg = {
-            "event_type": event_type,
-            "args": args,
-        }
-        for key, value in kwargs.items():
-            msg[key] = value
-        self.queues[subscription_id].put(msg)
+    def _callback(self, event_type: EventType, *args, **kwargs):
+        with self.condition:
+            self.last_event = {
+                "event_type": event_type.value,
+                "args": args,
+                "kwargs": kwargs,
+            }
+            self.condition.notify_all()

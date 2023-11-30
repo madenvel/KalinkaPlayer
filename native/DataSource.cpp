@@ -67,10 +67,13 @@ void HttpRequestNode::reader(std::stop_token token) {
     }
   } catch (curlpp::LibcurlRuntimeError &ex) {
     if (!token.stop_requested()) {
-      // TODO: Use StateMachine to set the error
-      std::cerr << "Libcurl failure: " << ex.what() << std::endl;
+      if (!out.expired()) {
+        out.lock()->setStreamError(std::make_exception_ptr(ex));
+      }
     }
-  } catch (std::runtime_error &ex) {
-    std::cerr << "Error: " << ex.what() << std::endl;
+  } catch (...) {
+    if (!out.expired()) {
+      out.lock()->setStreamError(std::current_exception());
+    }
   }
 }

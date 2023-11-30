@@ -11,6 +11,8 @@ size_t ProcessNode::read(void *data, size_t bytes, std::stop_token stopToken) {
 
 bool ProcessNode::eof() { throw NotImplemented(); }
 
+std::exception_ptr ProcessNode::error() const { return std::exception_ptr(); }
+
 void ProcessNode::start() { throw NotImplemented(); }
 
 void ProcessNode::stop() { throw NotImplemented(); }
@@ -23,3 +25,7 @@ void ProcessNode::connectOut(std::shared_ptr<ProcessNode> outputNode) {
 }
 
 void ProcessNode::setStreamFinished() { throw NotImplemented(); }
+
+void ProcessNode::setStreamError(std::exception_ptr error) {
+  throw NotImplemented();
+}

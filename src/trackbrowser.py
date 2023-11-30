@@ -9,10 +9,10 @@ class SourceType(Enum):
 
 
 class AlbumImage(BaseModel):
-    small: Optional[str]
-    thumbnail: Optional[str]
-    large: Optional[str]
-    back: Optional[str]
+    small: Optional[str] = ""
+    thumbnail: Optional[str] = ""
+    large: Optional[str] = ""
+    back: Optional[str] = ""
 
 
 class Label(BaseModel):
@@ -30,8 +30,8 @@ class Album(BaseModel):
     title: str
     duration: int = 0
     image: AlbumImage
-    label: Optional[Label]
-    genre: Optional[Genre]
+    label: Optional[Label] = None
+    genre: Optional[Genre] = None
 
 
 class Artist(BaseModel):
@@ -66,7 +66,9 @@ class BrowseCategory(BaseModel):
     subname: str = ""
     comment: str = ""
     url: str = ""
-    image: AlbumImage
+    can_browse: bool = False
+    can_add: bool = False
+    image: Optional[AlbumImage] = AlbumImage()
 
 
 class TrackBrowser(ABC):

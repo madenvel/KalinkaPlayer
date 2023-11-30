@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
+import asyncio
 from typing import Union
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
-from src.events import EventType
 import logging
+import json
 
 app = FastAPI()
 playqueue, event_listener, trackbrowser = setup()
@@ -22,21 +25,34 @@ def shutdown():
 
 
 @app.get("/queue/list")
-async def read_queue_list(offset: int = 0, limit: int = 10):
-    return {"items": playqueue.list(offset=offset, limit=limit)}
+def read_queue_list(offset: int = 0, limit: int = 10):
+    return playqueue.list(offset=offset, limit=limit)
 
 
 @app.post("/queue/add/tracks")
-async def add_to_queue(items: list[str]):
+def add_tracks_to_queue(items: list[str]):
     playqueue.add(trackbrowser.get_track_info(items))
-    return {"message": "Item added to the queue"}
+    return {"message": "Ok"}
+
+
+@app.get("/queue/add/{type}/{entity_id}")
+def add_to_queue(type: str, entity_id: str, replace: bool = False):
+    if type not in ["album", "playlist", "track"]:
+        return {"error": "Invalid entity type"}
+    if type == "track":
+        playqueue.add(trackbrowser.get_track_info([entity_id]), replace=replace)
+        return {"message": "Ok"}
+
+    tracks = [track.id for track in trackbrowser.browse(type + "/" + entity_id)]
+    playqueue.add(trackbrowser.get_track_info(tracks), replace=replace)
+    return {"message": "Ok"}
 
 
 @app.get("/queue/add/album/{album_id}")
-async def add_album_to_queue(album_id: str, replace: bool = False):
+def add_album_to_queue(album_id: str, replace: bool = False):
     tracks = [track.id for track in trackbrowser.browse("album/" + album_id)]
     playqueue.add(trackbrowser.get_track_info(tracks), replace=replace)
-    return {"message": "Item added to the queue"}
+    return {"message": "Ok"}
 
 
 @app.get("/queue/play")
@@ -70,10 +86,20 @@ async def read_queue_stop():
 
 
 @app.get("/browse/{type}/{entity_id}")
-async def browse(type: str, entity_id: str, offset: int = 0, limit: int = 10):
+def browse(type: str, entity_id: str, offset: int = 0, limit: int = 10):
     if type not in ["album", "playlist"]:
         return {"error": "Invalid browse type"}
     return trackbrowser.browse(type + "/" + entity_id, offset, limit)
+
+
+@app.get("/browse")
+async def browse_root(offset: int = 0, limit: int = 10):
+    return trackbrowser.browse("", offset, limit)
+
+
+@app.get("/browse/{toplevel_item}")
+async def browse_root(toplevel_item: str, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse(toplevel_item, offset, limit)
 
 
 @app.get("/search/{search_type}/{query}")
@@ -83,23 +109,19 @@ async def search(search_type: str, query: str, offset: int = 0, limit: int = 10)
     return trackbrowser.search(search_type, query, offset, limit)
 
 
-@app.get("/events/subscribe")
-async def subscribe(t: list[EventType] = []):
-    sid = event_stream.open_stream(t)
-    return {"subscription_id": sid}
-
-
-@app.get("/events/{stream_id}")
-async def stream(stream_id: str, request: Request):
+@app.get("/queue/events")
+async def stream(request: Request):
     async def process_events():
         while True:
             if await request.is_disconnected():
-                # TODO: clean up the subscription
                 break
+            event = await run_in_threadpool(event_stream.wait_for_state_change)
+            if event is not None:
+                yield json.dumps(event) + "\n"
 
-            message = event_stream.get_event(stream_id)
-            if message is None:
-                break
-            yield message
+    return StreamingResponse(process_events(), media_type="text/event-stream")
 
-    return EventSourceResponse(process_events())
+
+@app.get("/queue/state")
+async def state():
+    return playqueue.get_state()
