@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <functional>
+#include <string>
 
 enum State {
   IDLE = 0,

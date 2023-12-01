@@ -227,6 +227,8 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     fprintf(stderr, "cannot open audio device %s (%s)\n", device_name,
             snd_strerror(err));
     pcm_handle = NULL;
+    sm->updateState(State::ERROR);
+    sm->setStateComment(snd_strerror(err));
     return -1;
   }
 

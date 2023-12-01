@@ -41,7 +41,8 @@ private:
             ProgressUpdateCallback progressCb);
     ~Context() = default;
 
-    void prepare(size_t level1Buffer, size_t level2Buffer);
+    void prepare(size_t level1Buffer, size_t level2Buffer,
+                 std::stop_token token);
     void play();
     void pause(bool paused);
   };
@@ -49,6 +50,7 @@ private:
   StateCallback stateCb;
   ProgressUpdateCallback progressCb;
   std::map<int, std::unique_ptr<Context>> contexts;
+  ThreadPool cbThreadPool = ThreadPool(1);
   int currentContextId = -1;
   int newContextId = 0;
 

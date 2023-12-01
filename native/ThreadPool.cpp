@@ -3,13 +3,14 @@
 
 ThreadPool::ThreadPool(size_t numWorkers) {
   for (size_t i = 0; i < numWorkers; ++i) {
-    threads.push_back(std::move(std::thread(&ThreadPool::worker, this)));
+    threads.push_back(
+        std::move(std::jthread(std::bind_front(&ThreadPool::worker, this))));
   }
 }
 
 ThreadPool::~ThreadPool() { stop(); }
 
-void ThreadPool::enqueue(std::function<void()> task) {
+void ThreadPool::enqueue(std::function<void(std::stop_token)> task) {
   if (terminate) {
     return;
   }
@@ -30,7 +31,7 @@ void ThreadPool::stop() {
   }
 }
 
-void ThreadPool::worker() {
+void ThreadPool::worker(std::stop_token token) {
   std::unique_lock<std::mutex> lock(m);
   while (!terminate) {
     con.wait(lock, [this]() { return !queue.empty() || terminate; });
@@ -41,7 +42,7 @@ void ThreadPool::worker() {
     queue.pop();
     lock.unlock();
     try {
-      task();
+      task(token);
     } catch (std::exception &e) {
       std::cerr << "Exception caught in a thread: " << e.what() << std::endl;
     }

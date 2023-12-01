@@ -31,3 +31,7 @@ void BufferNode::setStreamError(std::exception_ptr error) {
   error_ = error;
   buffer.setEof();
 }
+
+void BufferNode::waitForFull(std::stop_token stopToken) {
+  buffer.waitForData(stopToken, buffer.max_size() / 2);
+}

@@ -30,6 +30,8 @@ public:
 
   virtual std::exception_ptr error() const override;
   virtual void setStreamError(std::exception_ptr error) override;
+
+  void waitForFull(std::stop_token stopToken = std::stop_token());
 };
 
 #endif

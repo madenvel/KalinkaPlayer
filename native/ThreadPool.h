@@ -9,21 +9,21 @@
 #include <thread>
 
 class ThreadPool {
-  std::queue<std::function<void()>> queue;
+  std::queue<std::function<void(std::stop_token)>> queue;
   std::mutex m;
   std::condition_variable con;
-  std::list<std::thread> threads;
+  std::list<std::jthread> threads;
   bool terminate = false;
 
 public:
   ThreadPool(size_t numWorkers = 1);
   ~ThreadPool();
 
-  void enqueue(std::function<void()> task);
+  void enqueue(std::function<void(std::stop_token)> task);
   void stop();
 
 private:
-  void worker();
+  void worker(std::stop_token token);
 };
 
 #endif
