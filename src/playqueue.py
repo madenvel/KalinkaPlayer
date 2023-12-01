@@ -21,17 +21,6 @@ def buffer_size(seconds: int, bits: int, sample_rate: int):
     return frames_per_second * seconds
 
 
-class State(Enum):
-    IDLE = 0
-    READY = 1
-    BUFFERING = 2
-    PLAYING = 3
-    PAUSED = 4
-    FINISHED = 5
-    STOPPED = 6
-    ERROR = 7
-
-
 class PlayQueue(AsyncExecutor):
     def __init__(self, event_emitter: EventEmitter):
         super().__init__()

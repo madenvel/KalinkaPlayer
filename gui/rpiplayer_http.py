@@ -24,7 +24,7 @@ class RpiPlayerHttp:
 
     def add(self, path, replace=False):
         return self.session.get(
-            urljoin(self.address, "/queue/add/", path),
+            urljoin(self.address, "/queue/add" + path),
             params={"replace": replace},
         ).json()
 
@@ -54,7 +54,6 @@ class RpiPlayerHttp:
         ).json()
 
     def browse(self, path, offset=0, limit=20):
-        logger.info("Browsing " + path)
         return self.session.get(
             urljoin(self.address, path), params={"offset": offset, "limit": limit}
         ).json()

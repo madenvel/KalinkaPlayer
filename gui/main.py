@@ -10,8 +10,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
-    player = RpiPlayerHttp(host="localhost", port=8000)
-    event_listener = SSEEventListener(host="localhost", port=8000)
+    player = RpiPlayerHttp(host="192.168.3.28", port=8000)
+    event_listener = SSEEventListener(host="192.168.3.28", port=8000)
     event_listener.start()
     try:
         run_app(player, event_listener)

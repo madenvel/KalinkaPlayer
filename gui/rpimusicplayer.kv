@@ -53,7 +53,7 @@
             padding: 5
     Button:
         on_press: root.on_play()
-        text: "Play" if root.playing_state != 1 else "Pause"
+        text: "Play" if root.playing_state != 'PLAYING' else "Pause"
         size_hint_x: None
         width: root.height
 
@@ -146,11 +146,10 @@
 
 
 <TrackListItem@ButtonBehavior+BoxLayout>:
-    selected: False
     image: {"small": ""}
     title: ""
     performer: ""
-    selected: 0
+    selected: ""
     index: 0
     orientation: 'vertical'
     on_press: root.on_item_clicked(root.index)
@@ -187,7 +186,7 @@
                 size_hint: 1.0, None
                 height: 5
         Image:
-            source: 'assets/pause.png' if root.selected == 1 else 'assets/transparent.png'
+            source: 'assets/pause.png' if root.selected == 'PLAYING' else 'assets/transparent.png'
             size_hint: None, None
             size: 64, 64
             color: (0.8125, 0.8125, 0.8125, 1.0)
