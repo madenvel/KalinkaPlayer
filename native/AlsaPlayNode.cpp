@@ -289,6 +289,9 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
   bool eof = false;
   bool error = false;
 
+  snd_pcm_prepare(pcm_handle);
+  snd_pcm_drop(pcm_handle);
+
   while (!token.stop_requested()) {
     err = wait_for_poll(pcm_handle, ufds, count);
     if (err < 0) {
