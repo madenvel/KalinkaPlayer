@@ -165,7 +165,6 @@ class RpiPlayQueue(TabbedPanelItem):
             self.ids.rv.data[self.current_track_id]["selected"] = self.playing_state
 
         self.ids.rv.refresh_from_data()
-        self.ids.rv.scroll_y = 1 - self.current_track_id / len(self.ids.rv.data)
 
     def track_to_data(self, track):
         return {
@@ -183,7 +182,6 @@ class RpiPlayQueue(TabbedPanelItem):
         self.current_track_id = track_info["index"]
         self.ids.rv.data[self.current_track_id]["selected"] = self.playing_state
         self.ids.rv.refresh_from_data()
-        self.ids.rv.scroll_y = 1 - self.current_track_id / len(self.ids.rv.data)
 
     @mainthread
     def on_track_added(self, tracks):
@@ -191,7 +189,6 @@ class RpiPlayQueue(TabbedPanelItem):
             track["on_item_clicked"] = self.on_item_clicked
         self.ids.rv.data.extend([self.track_to_data(track) for track in tracks])
         self.ids.rv.refresh_from_data()
-        self.ids.rv.scroll_y = 1 - self.current_track_id / len(self.ids.rv.data)
 
     @mainthread
     def on_track_removed(self, index):

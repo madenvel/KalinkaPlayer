@@ -42,6 +42,7 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer) {
     return;
   }
   sm->updateState(State::READY);
+  decoder->start();
 }
 
 void AudioPlayer::Context::play() {
@@ -53,8 +54,6 @@ void AudioPlayer::Context::play() {
       decoder->getStreamInfo().bits_per_sample,
       decoder->getStreamInfo().total_samples, sm, progressCb);
   alsaPlay->connectIn(decodedData);
-
-  decoder->start();
   alsaPlay->start();
 }
 
