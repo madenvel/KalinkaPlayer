@@ -8,6 +8,7 @@ from src.trackbrowser import TrackInfo
 from native.rpiplayer import RpiAudioPlayer
 
 from src.events import EventType
+from src.states import State
 
 
 def buffer_size(seconds: int, bits: int, sample_rate: int):
