@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <math.h>
 
@@ -291,6 +292,8 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
   bool eof = false;
   bool error = false;
 
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
   while (!token.stop_requested()) {
     err = wait_for_poll(pcm_handle, ufds, count);
     if (err < 0) {
@@ -332,8 +335,9 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
 
     err = snd_pcm_writei(pcm_handle, data.data(), framesToRead);
-    if (err == -EAGAIN)
+    if (err == -EAGAIN) {
       continue;
+    }
     if (err < 0) {
       std::cout << "XRUN" << std::endl;
       if (xrun_recovery(pcm_handle, err) < 0) {
@@ -347,7 +351,7 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
   }
 
-  if (token.stop_requested()) {
+  if (token.stop_requested() || error) {
     snd_pcm_drop(pcm_handle);
   } else {
     snd_pcm_drain(pcm_handle);
