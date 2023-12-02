@@ -25,7 +25,7 @@ bool BufferNode::eof() { return (buffer.empty() && buffer.isEof()); }
 
 void BufferNode::setStreamFinished() { buffer.setEof(); }
 
-std::exception_ptr BufferNode::error() const { return std::exception_ptr(); }
+std::exception_ptr BufferNode::error() const { return error_; }
 
 void BufferNode::setStreamError(std::exception_ptr error) {
   error_ = error;

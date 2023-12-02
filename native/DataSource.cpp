@@ -40,6 +40,12 @@ size_t HttpRequestNode::WriteCallback(void *contents, size_t size,
       sizeWritten = out.lock()->write(static_cast<uint8_t *>(contents),
                                       totalSize, readerThread.get_stop_token());
     }
+  } else {
+    if (!out.expired()) {
+      std::runtime_error ex("HTTP request failed with code " +
+                            std::to_string(responseCode));
+      out.lock()->setStreamError(std::make_exception_ptr(ex));
+    }
   }
 
   return sizeWritten;
@@ -67,7 +73,7 @@ void HttpRequestNode::reader(std::stop_token token) {
     }
   } catch (curlpp::LibcurlRuntimeError &ex) {
     if (!token.stop_requested()) {
-      if (!out.expired()) {
+      if (!out.expired() && !out.lock()->error()) {
         out.lock()->setStreamError(std::make_exception_ptr(ex));
       }
     }

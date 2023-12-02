@@ -80,7 +80,10 @@ public:
 
   bool empty() const { return data.empty(); }
 
-  void setEof() { eof.store(true); }
+  void setEof() {
+    eof.store(true);
+    hasDataCon.notify_all();
+  }
 
   bool isEof() { return eof.load(); }
 };

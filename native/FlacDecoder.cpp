@@ -16,8 +16,10 @@ void FlacDecoder::metadata_callback(const ::FLAC__StreamMetadata *pMetadata) {
 }
 
 void FlacDecoder::error_callback(::FLAC__StreamDecoderErrorStatus status) {
-  std::cerr << "Got error: " << FLAC__StreamDecoderErrorStatusString[status]
-            << std::endl;
+  if (!out.expired()) {
+    out.lock()->setStreamError(std::make_exception_ptr(
+        std::runtime_error("Flac decoder error: " + std::to_string(status))));
+  }
 }
 
 ::FLAC__StreamDecoderWriteStatus
@@ -58,12 +60,22 @@ FlacDecoder::write_callback(const ::FLAC__Frame *frame,
       *bytes = 0;
       return FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
     }
+    if (inNode->error()) {
+      *bytes = 0;
+      if (!out.expired()) {
+        out.lock()->setStreamError(inNode->error());
+      }
+      return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+    }
 
+    std::cerr << "Waiting for data in FlacDecoder, thread = "
+              << std::this_thread::get_id() << std::endl;
     *bytes = inNode->read(buffer, *bytes, token);
-  }
-  if (token.stop_requested()) {
-    *bytes = 0;
-    return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+
+    if (token.stop_requested() || inNode->error()) {
+      *bytes = 0;
+      return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+    }
   }
 
   return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;
@@ -97,6 +109,7 @@ void FlacDecoder::thread_run(std::stop_token token) {
         case FLAC__STREAM_DECODER_SEEK_ERROR:
         case FLAC__STREAM_DECODER_ABORTED:
         case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
+          std::cerr << "Decoder error" << std::endl;
           throw std::runtime_error("Flac decoder error: " +
                                    std::string(state.as_cstring()));
         }
