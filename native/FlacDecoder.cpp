@@ -68,8 +68,6 @@ FlacDecoder::write_callback(const ::FLAC__Frame *frame,
       return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
     }
 
-    std::cerr << "Waiting for data in FlacDecoder, thread = "
-              << std::this_thread::get_id() << std::endl;
     *bytes = inNode->read(buffer, *bytes, token);
 
     if (token.stop_requested() || inNode->error()) {
