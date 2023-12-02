@@ -114,6 +114,11 @@ void FlacDecoder::thread_run(std::stop_token token) {
     }
   } catch (...) {
     auto exception = std::current_exception();
+    try {
+      std::rethrow_exception(exception);
+    } catch (std::exception &ex) {
+      std::cout << "Flac decoder thread exception: " << ex.what() << std::endl;
+    }
     if (!out.expired()) {
       out.lock()->setStreamError(exception);
     }
