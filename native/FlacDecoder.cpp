@@ -93,7 +93,8 @@ void FlacDecoder::thread_run(std::stop_token token) {
     }
     while (!token.stop_requested()) {
       State state = get_state();
-      if (state == FLAC__STREAM_DECODER_END_OF_STREAM) {
+      if (state == FLAC__STREAM_DECODER_END_OF_STREAM ||
+          state == FLAC__STREAM_DECODER_ABORTED) {
         if (!out.expired()) {
           out.lock()->setStreamFinished();
         }
@@ -105,7 +106,6 @@ void FlacDecoder::thread_run(std::stop_token token) {
         switch (state) {
         case FLAC__STREAM_DECODER_OGG_ERROR:
         case FLAC__STREAM_DECODER_SEEK_ERROR:
-        case FLAC__STREAM_DECODER_ABORTED:
         case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
           throw std::runtime_error("Flac decoder error: " +
                                    std::string(state.as_cstring()));
