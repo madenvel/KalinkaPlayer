@@ -107,7 +107,6 @@ void FlacDecoder::thread_run(std::stop_token token) {
         case FLAC__STREAM_DECODER_SEEK_ERROR:
         case FLAC__STREAM_DECODER_ABORTED:
         case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
-          std::cerr << "Decoder error" << std::endl;
           throw std::runtime_error("Flac decoder error: " +
                                    std::string(state.as_cstring()));
         }
