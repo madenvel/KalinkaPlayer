@@ -347,7 +347,11 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
   }
 
-  snd_pcm_drain(pcm_handle);
+  if (token.stop_requested()) {
+    snd_pcm_drop(pcm_handle);
+  } else {
+    snd_pcm_drain(pcm_handle);
+  }
   snd_pcm_close(pcm_handle);
   delete[] ufds;
   if (error) {
