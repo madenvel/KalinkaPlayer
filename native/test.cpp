@@ -7,9 +7,9 @@ using namespace std;
 
 int main() {
   AudioPlayer player;
-  auto contextId =
-      player.prepare("https://getsamplefiles.com/download/flac/sample-1.flac",
-                     10 * 1024 * 1024, 64 * 1024);
+  // auto contextId =
+  //     player.prepare("https://getsamplefiles.com/download/flac/sample-1.flac",
+  //                    10 * 1024 * 1024, 64 * 1024);
 
   auto context2 = player.prepare(
       "https://streaming-qobuz-std.akamaized.net/"
@@ -25,10 +25,10 @@ int main() {
     std::cout << "Progress: " << progress << std::endl;
   });
 
-  player.play(contextId);
-  std::this_thread::sleep_for(std::chrono::seconds(3));
+  // player.play(contextId);
+  // std::this_thread::sleep_for(std::chrono::seconds(3));
   player.play(context2);
-  std::this_thread::sleep_for(std::chrono::seconds(3));
+  std::this_thread::sleep_for(std::chrono::seconds(30));
   player.stop();
 
   return 0;
