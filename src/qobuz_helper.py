@@ -129,8 +129,8 @@ class QobuzTrackBrowser(TrackBrowser):
         return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
 
     def _track_to_track_info(self, track_id: str):
-        # if track_id in TrackInfoCache:
-        #     return TrackInfoCache[track_id]
+        if track_id in TrackInfoCache:
+            return TrackInfoCache[track_id]
         track = self.qobuz_client.get_track_meta(track_id)
         track_info = TrackInfo(
             id=track_id,

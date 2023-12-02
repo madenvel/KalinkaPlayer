@@ -2,9 +2,33 @@ import requests
 import threading
 
 from typing import Callable, Dict
-from src.events import EventType
+
+# from src.events import EventType
+from enum import Enum
 
 import json
+
+
+class EventType(Enum):
+    Playing = "playing"
+    Paused = "paused"
+    Stopped = "stopped"
+    Progress = "current_progress"
+    TrackChanged = "change_track"
+    RequestMoreTracks = "request_more_tracks"
+    TracksAdded = "track_added"
+    TracksRemoved = "track_removed"
+
+
+class State(Enum):
+    IDLE = 0
+    READY = 1
+    BUFFERING = 2
+    PLAYING = 3
+    PAUSED = 4
+    FINISHED = 5
+    STOPPED = 6
+    ERROR = 7
 
 
 class SSEEventListener:

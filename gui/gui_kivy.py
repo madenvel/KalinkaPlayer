@@ -10,10 +10,10 @@ from kivy.uix.recycleview import RecycleView
 from kivy.uix.boxlayout import BoxLayout
 
 from kivy.config import Config
-from .event_listener_sse import SSEEventListener
-from .rpiplayer_http import RpiPlayerHttp
+from event_listener_sse import SSEEventListener, EventType
+from rpiplayer_http import RpiPlayerHttp
 
-from src.events import EventType
+# from src.events import EventType
 
 import time
 
@@ -50,7 +50,8 @@ class RpiMainScreen(BoxLayout):
     #     self.queue_data[self.track_index]["selected"] = True
 
 
-from src.states import State
+# from src.states import State
+from event_listener_sse import State
 
 
 class RpiPlaybar(BoxLayout):

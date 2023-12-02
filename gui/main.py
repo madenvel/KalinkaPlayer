@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
 import logging
-from .gui_kivy import run_app
+from gui_kivy import run_app
 
-from .rpiplayer_http import RpiPlayerHttp
-from .event_listener_sse import SSEEventListener
+from rpiplayer_http import RpiPlayerHttp
+from event_listener_sse import SSEEventListener
 import logging
 
 logger = logging.getLogger(__name__)

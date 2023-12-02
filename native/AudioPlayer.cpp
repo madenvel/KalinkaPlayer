@@ -41,13 +41,12 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   decoder->process_until_end_of_metadata();
 
   if (!decoder->hasStreamInfo()) {
-    std::cerr << "Stream info is not available" << std::endl;
+    sm->setStateComment("Stream info is not available");
     sm->updateState(State::ERROR);
     return;
   }
   sm->updateState(State::READY);
   decoder->start();
-  std::cerr << "Waiting for full buffer" << std::endl;
   decodedData->waitForFull(token);
 }
 

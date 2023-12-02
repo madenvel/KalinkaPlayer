@@ -10,3 +10,6 @@ native/rpiplayer.h
 .venv/
 .vscode/
 test
+.buildozer/
+bin/
+
