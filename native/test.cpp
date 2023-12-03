@@ -14,7 +14,7 @@ int main() {
   auto context2 = player.prepare(
       "https://streaming-qobuz-std.akamaized.net/"
       "file?uid=1040320&eid=26457483&fmt=7&profile=raw&app_id=950096963&cid="
-      "1178610&etsp=1701560809&hmac=KTdI2U7FQQCNfM4ISStV7lhUFog",
+      "1178610&etsp=1701570384&hmac=HsIgNbVPswnwXsa0_fN61uo0oyM",
       10 * 1024 * 1024, 64 * 1024);
 
   player.setStateCallback([](int context, State, State newState) {
