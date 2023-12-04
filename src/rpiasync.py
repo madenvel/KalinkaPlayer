@@ -8,6 +8,7 @@ import logging
 
 from functools import wraps
 import time
+from uuid import UUID, uuid4
 
 
 def timeit(func):
@@ -105,23 +106,44 @@ class RequestExecutor:
                 logging.warn("Failed to unpickle, data=", data)
 
 
+class Subscription:
+    uuid: UUID
+    event_name: str
+
+    def __init__(self, uuid, event_name, event_listener):
+        self.uuid = uuid
+        self.event_name = event_name
+        self.event_listener = event_listener
+
+    def unsubscribe(self):
+        self.event_listener.unsubscribe(self.event_name, self.uuid)
+
+
 class EventListener(AsyncLoop):
     def __init__(self, queue):
         self.subscribers = {}
         super().__init__(queue)
 
-    def subscribe(self, event_name, callback):
+    def subscribe(self, event_name, callback) -> UUID:
+        uuid = uuid4()
         self.subscribers.setdefault(event_name, [])
-        self.subscribers[event_name].append(callback)
+        self.subscribers[event_name].append({"uuid": uuid, "cb": callback})
+        return Subscription(uuid, event_name, self)
 
     def subscribe_all(self, map):
         for k, v in map.items():
             self.subscribe(k, v)
 
+    def unsubscribe(self, event_name, uuid):
+        for subscriber in self.subscribers.get(event_name, []):
+            if subscriber["uuid"] == uuid:
+                self.subscribers[event_name].remove(subscriber)
+
     def process(self, e):
         event = e["event_name"]
-        for callback in self.subscribers.get(event, []):
+        for subscriber in self.subscribers.get(event, []):
             try:
+                callback = subscriber["cb"]
                 callback(*e["args"], **e["kwargs"])
             except Exception as e:
                 logging.warn("Exception caught while processing event", event, e)

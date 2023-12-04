@@ -18,4 +18,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error("Exception caught:", e)
     finally:
-        event_listener.stop()
+        pass

@@ -13,7 +13,6 @@ import json
 
 app = FastAPI()
 playqueue, event_listener, trackbrowser = setup()
-event_stream = EventStream(event_listener)
 logger = logging.getLogger(__name__)
 
 
@@ -112,12 +111,15 @@ async def search(search_type: str, query: str, offset: int = 0, limit: int = 10)
 @app.get("/queue/events")
 async def stream(request: Request):
     async def process_events():
+        event_stream = EventStream(event_listener)
         while True:
             if await request.is_disconnected():
                 break
-            event = await run_in_threadpool(event_stream.wait_for_state_change)
+            event = await run_in_threadpool(event_stream.get_event)
             if event is not None:
                 yield json.dumps(event) + "\n"
+
+        event_stream.close()
 
     return StreamingResponse(process_events(), media_type="text/event-stream")
 
