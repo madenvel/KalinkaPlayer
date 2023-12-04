@@ -10,3 +10,4 @@ class EventType(Enum):
     RequestMoreTracks = "request_more_tracks"
     TracksAdded = "track_added"
     TracksRemoved = "track_removed"
+    NetworkError = "network_error"

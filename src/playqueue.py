@@ -1,3 +1,5 @@
+import requests
+import logging
 from src.event_loop import AsyncExecutor, enqueue
 
 from src.rpiasync import EventEmitter
@@ -9,6 +11,8 @@ from native.rpiplayer import RpiAudioPlayer
 
 from src.events import EventType
 from src.states import State
+
+logger = logging.getLogger(__name__)
 
 
 def buffer_size(seconds: int, bits: int, sample_rate: int):
@@ -64,7 +68,10 @@ class PlayQueue(AsyncExecutor):
             self.current_progress = 0
 
     @enqueue
-    def _progress_callback(self, progress):
+    def _progress_callback(self, context_id, progress):
+        if context_id != self.current_context_id:
+            return
+
         current_time = self.get_track_info(self.current_track_id)["duration"] * progress
         self.event_emitter.dispatch(
             EventType.Progress,
@@ -92,7 +99,11 @@ class PlayQueue(AsyncExecutor):
         if index not in self.prefetched_tracks and index < len(self.track_list):
             link_retriever = self.track_list[index].link_retriever
             track_id = self.track_list[index].metadata.id
-            track_info = link_retriever()
+            try:
+                track_info = link_retriever()
+            except requests.exceptions.RequestException as e:
+                logger.warn("Failed to pre-fetch track:", e)
+                return
             if track_id == self.track_list[index].metadata.id:
                 context_id = self.track_player.prepare(
                     track_info.url,
@@ -108,7 +119,14 @@ class PlayQueue(AsyncExecutor):
             -1,
         )
         if context_id == -1:
-            track_info = track.link_retriever()
+            try:
+                track_info = track.link_retriever()
+            except requests.exceptions.RequestException as e:
+                logger.warn("Failed to retrieve track link:", e)
+                self.event_emitter.dispatch(EventType.NetworkError, e.strerror)
+                self.stop()
+                return
+
             context_id = self.track_player.prepare(
                 track_info.url,
                 buffer_size(10, track_info.bit_depth, track_info.sample_rate),
