@@ -10,61 +10,69 @@
 #include <iostream>
 #include <math.h>
 
+#include <sstream>
+
 #include "AlsaPlayNode.h"
 #include "StateMachine.h"
 
-int init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
-                  unsigned int rate, snd_pcm_uframes_t &buffer_size,
-                  snd_pcm_uframes_t &period_size, snd_pcm_format_t format) {
+namespace {
+snd_pcm_format_t getFormat(int bitsPerSample) {
+  return bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
+}
+void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
+                   unsigned int rate, snd_pcm_uframes_t &buffer_size,
+                   snd_pcm_uframes_t &period_size, snd_pcm_format_t format) {
 
   unsigned int rrate;
   int err, dir = 0;
+  std::stringstream error;
 
   /* choose all parameters */
   err = snd_pcm_hw_params_any(pcm_handle, params);
   if (err < 0) {
-    printf(
-        "Broken configuration for playback: no configurations available: %s\n",
-        snd_strerror(err));
-    return err;
+    error << "Broken configuration for playback: no configurations available: "
+          << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* set the interleaved read/write format */
   err = snd_pcm_hw_params_set_access(pcm_handle, params,
                                      SND_PCM_ACCESS_RW_INTERLEAVED);
   if (err < 0) {
-    printf("Access type not available for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Access type not available for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* set the sample format */
   err = snd_pcm_hw_params_set_format(pcm_handle, params, format);
   if (err < 0) {
-    printf("Sample format not available for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Sample format not available for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* set the count of channels */
   err = snd_pcm_hw_params_set_channels(pcm_handle, params, 2);
   if (err < 0) {
-    printf("Channels count (%u) not available for playbacks: %s\n", 2,
-           snd_strerror(err));
-    return err;
+    error << "Channels count (" << 2
+          << ") not available for playbacks: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   // Enabled resampling
   err = snd_pcm_hw_params_set_rate_resample(pcm_handle, params, 1);
   if (err < 0) {
-    printf("Resampling setup failed for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Resampling setup failed for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* set the stream rate */
   rrate = rate;
   err = snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rrate, 0);
   if (err < 0) {
-    printf("Rate %uHz not available for playback: %s\n", rate,
-           snd_strerror(err));
-    return err;
+    error << "Rate " << rate
+          << "Hz not available for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   if (rrate != rate) {
-    printf("Rate doesn't match (requested %uHz, get %iHz)\n", rate, rrate);
-    // return -EINVAL;
+    error << "Rate doesn't match (requested " << rate << "Hz, get " << rrate
+          << "Hz)";
+    // Comment this out to be able to debug on a machine without resampling
+    // throw std::runtime_error(error.str());
   }
   // /* set the buffer time */
   // err = snd_pcm_hw_params_set_buffer_time_near(pcm_handle, params,
@@ -78,16 +86,16 @@ int init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   err =
       snd_pcm_hw_params_set_buffer_size_near(pcm_handle, params, &buffer_size);
   if (err < 0) {
-    printf("Unable to get buffer size for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Unable to get buffer size for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   // /* set the period size */
   err = snd_pcm_hw_params_set_period_size_near(pcm_handle, params, &period_size,
                                                &dir);
   if (err < 0) {
-    printf("Unable to set period time %lu for playback: %s\n", period_size,
-           snd_strerror(err));
-    return err;
+    error << "Unable to set period time " << period_size
+          << " for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   // err = snd_pcm_hw_params_get_period_size(params, &period_size, &dir);
   // if (err < 0) {
@@ -97,32 +105,32 @@ int init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   /* write the parameters to device */
   err = snd_pcm_hw_params(pcm_handle, params);
   if (err < 0) {
-    printf("Unable to set hw params for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Unable to set hw params for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
-  return 0;
 }
 
-static int set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
-                        snd_pcm_uframes_t buffer_size,
-                        snd_pcm_uframes_t period_size) {
+void set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
+                  snd_pcm_uframes_t buffer_size,
+                  snd_pcm_uframes_t period_size) {
   int err;
+  std::stringstream error;
 
   /* get the current swparams */
   err = snd_pcm_sw_params_current(handle, swparams);
   if (err < 0) {
-    printf("Unable to determine current swparams for playback: %s\n",
-           snd_strerror(err));
-    return err;
+    error << "Unable to determine current swparams for playback: "
+          << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* start the transfer when the buffer is almost full: */
   /* (buffer_size / avail_min) * avail_min */
   err = snd_pcm_sw_params_set_start_threshold(
       handle, swparams, (buffer_size / period_size) * period_size);
   if (err < 0) {
-    printf("Unable to set start threshold mode for playback: %s\n",
-           snd_strerror(err));
-    return err;
+    error << "Unable to set start threshold mode for playback: "
+          << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* allow the transfer when at least period_size samples can be processed */
   /* or disable this mechanism when period event is enabled (aka interrupt like
@@ -131,30 +139,26 @@ static int set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
   err = snd_pcm_sw_params_set_avail_min(
       handle, swparams, period_event ? buffer_size : period_size);
   if (err < 0) {
-    printf("Unable to set avail min for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Unable to set avail min for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
   /* enable period events when requested */
   if (period_event) {
     err = snd_pcm_sw_params_set_period_event(handle, swparams, 1);
     if (err < 0) {
-      printf("Unable to set period event: %s\n", snd_strerror(err));
-      return err;
+      error << "Unable to set period event: " << snd_strerror(err);
+      throw std::runtime_error(error.str());
     }
   }
   /* write the parameters to the playback device */
   err = snd_pcm_sw_params(handle, swparams);
   if (err < 0) {
-    printf("Unable to set sw params for playback: %s\n", snd_strerror(err));
-    return err;
+    error << "Unable to set sw params for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
-
-  return err;
 }
 
-static int xrun_recovery(snd_pcm_t *handle, int err) {
-  if (true)
-    printf("stream recovery\n");
+int xrun_recovery(snd_pcm_t *handle, int err) {
   if (err == -EPIPE) { /* under-run */
     err = snd_pcm_prepare(handle);
     if (err < 0)
@@ -187,6 +191,7 @@ int wait_for_poll(snd_pcm_t *handle, struct pollfd *ufds, unsigned int count) {
       return 0;
   }
 }
+} // namespace
 
 void AlsaPlayNode::start() {
   if (!playThread.joinable()) {
@@ -203,7 +208,6 @@ void AlsaPlayNode::connectIn(std::shared_ptr<ProcessNode> inputNode) {
 
 void AlsaPlayNode::stop() {
   if (playThread.joinable() && !playThread.get_stop_source().stop_requested()) {
-    std::cout << "Requesting alsa thread to stop" << std::endl;
     playThread.request_stop();
     playThread.join();
     playThread = std::jthread();
@@ -211,164 +215,225 @@ void AlsaPlayNode::stop() {
 }
 
 int AlsaPlayNode::workerThread(std::stop_token token) {
-  /* This holds the error code returned */
   int err = 0;
 
-  /* Our device handle */
-  snd_pcm_t *pcm_handle = NULL;
+  try {
+    if (alsaDevice.expired()) {
+      throw std::runtime_error("Alsa device is expired");
+    }
+    auto alsa = alsaDevice.lock();
+    snd_pcm_t *pcm_handle =
+        static_cast<snd_pcm_t *>(alsa->getHandle(sampleRate, bitsPerSample));
+    snd_pcm_format_t format = getFormat(alsa->getCurrentBitsPerSample());
+    int count = snd_pcm_poll_descriptors_count(pcm_handle);
+    if (count <= 0) {
+      printf("Invalid poll descriptors count\n");
+      return count;
+    }
 
-  /* The device name */
-  const char *device_name = "hw:0,0";
+    pollfd *ufds = new pollfd[count];
 
-  /* Open the device */
-  err = snd_pcm_open(&pcm_handle, device_name, SND_PCM_STREAM_PLAYBACK, 0);
+    if ((err = snd_pcm_poll_descriptors(pcm_handle, ufds, count)) < 0) {
+      printf("Unable to obtain poll descriptors for playback: %s\n",
+             snd_strerror(err));
+      return err;
+    }
 
-  /* Error check */
-  if (err < 0) {
-    fprintf(stderr, "cannot open audio device %s (%s)\n", device_name,
-            snd_strerror(err));
-    pcm_handle = NULL;
+    int pbits = snd_pcm_format_physical_width(format);
+    int pbytes = pbits / 8;
+
+    const auto framesToBytes = [pbytes](size_t frames) -> size_t {
+      return frames * pbytes * 2;
+    };
+
+    const auto bytesToFrames = [pbytes](size_t bytes) -> size_t {
+      return bytes / (pbytes * 2);
+    };
+
+    snd_pcm_uframes_t buffer_size;
+    snd_pcm_uframes_t period_size;
+
+    err = snd_pcm_get_params(pcm_handle, &buffer_size, &period_size);
+    if (err < 0) {
+      throw std::runtime_error("Unable to get params for playback: " +
+                               std::string(snd_strerror(err)));
+    }
+
+    std::vector<uint8_t> data(2 * period_size * pbytes);
+
+    bool prevPaused = paused = false;
+
+    size_t framesCount = 0;
+    size_t prevFramesCountProgressReported = -1;
+    bool eof = false;
+    bool error = false;
+    sm->updateState(State::PLAYING);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    while (!token.stop_requested()) {
+      err = wait_for_poll(pcm_handle, ufds, count);
+      if (err < 0) {
+        throw std::runtime_error("Poll failed for playback");
+      }
+      snd_pcm_sframes_t frames = snd_pcm_avail_update(pcm_handle);
+      if (frames < 0) {
+        throw std::runtime_error("Can't get avail update for playback: " +
+                                 std::string(snd_strerror(frames)));
+      }
+      if (static_cast<unsigned long>(frames) < period_size) {
+        continue;
+      }
+      size_t framesToRead = std::min((long)bytesToFrames(data.size()), frames);
+      size_t bytesToRead = framesToBytes(framesToRead);
+
+      if (prevPaused != paused) {
+        sm->updateState(paused ? State::PAUSED : State::PLAYING);
+        prevPaused = paused;
+      }
+
+      if (paused) {
+        memset(data.data(), 0, bytesToRead);
+      } else {
+        if (!in.expired()) {
+          auto inNode = in.lock();
+          // Streaming error - will not recover
+          if (inNode->error()) {
+            error = true;
+            break;
+          }
+          size_t read = inNode->read(data.data(), bytesToRead, token);
+          framesCount += bytesToFrames(read);
+          if (framesCount - prevFramesCountProgressReported >
+                  sampleRate / 2UL ||
+              (inNode->eof())) {
+            prevFramesCountProgressReported = framesCount;
+            progressCb((float)framesCount / totalFrames);
+          }
+          if (read < bytesToRead) {
+            memset(data.data() + read, 0, bytesToRead - read);
+          }
+        }
+      }
+
+      err = snd_pcm_writei(pcm_handle, data.data(), framesToRead);
+      if (err == -EAGAIN) {
+        continue;
+      }
+      if (err < 0) {
+        std::cout << "XRUN" << std::endl;
+        if (xrun_recovery(pcm_handle, err) < 0) {
+          printf("Write error: %s\n", snd_strerror(err));
+          break;
+        }
+      }
+      if (!in.expired() && in.lock()->eof()) {
+        eof = true;
+        break;
+      }
+    }
+
+    if (token.stop_requested() || error) {
+      snd_pcm_drop(pcm_handle);
+    } else {
+      snd_pcm_drain(pcm_handle);
+    }
+    delete[] ufds;
+    if (error) {
+      sm->updateState(State::ERROR);
+      if (!in.expired()) {
+        try {
+          std::rethrow_exception(in.lock()->error());
+        } catch (const std::exception &ex) {
+          sm->setStateComment(ex.what());
+        }
+      }
+      return -1;
+    }
+    sm->updateState(eof ? State::FINISHED : State::STOPPED);
+  } catch (const std::exception &ex) {
     sm->updateState(State::ERROR);
-    sm->setStateComment(snd_strerror(err));
+    sm->setStateComment(ex.what());
     return -1;
   }
+  return 0;
+}
 
-  unsigned int rrate = sampleRate;
-  snd_pcm_format_t format =
-      bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
+AlsaDevice::AlsaDevice() { openDevice(); }
 
-  int pbits = snd_pcm_format_physical_width(format);
-  int pbytes = pbits / 8;
+AlsaDevice::~AlsaDevice() {
+  if (pcmHandle) {
+    snd_pcm_close(static_cast<snd_pcm_t *>(pcmHandle));
+  }
+}
+
+void *AlsaDevice::getHandle(int sampleRate, int bitsPerSample) {
+  if (currentSampleRate != sampleRate ||
+      currentBitsPerSample != bitsPerSample || !pcmHandle) {
+    init(sampleRate, bitsPerSample);
+  } else {
+    snd_pcm_prepare(static_cast<snd_pcm_t *>(pcmHandle));
+  }
+  return pcmHandle;
+}
+
+void AlsaDevice::init(int sampleRate, int bitsPerSample) {
+  int err = 0;
+
+  currentSampleRate = sampleRate;
+  currentBitsPerSample = bitsPerSample;
+  snd_pcm_format_t format = getFormat(bitsPerSample);
 
   snd_pcm_uframes_t buffer_size = 16384;
   snd_pcm_uframes_t period_size = 1024;
 
-  const auto framesToBytes = [pbytes](size_t frames) -> size_t {
-    return frames * pbytes * 2;
-  };
-
-  const auto bytesToFrames = [pbytes](size_t bytes) -> size_t {
-    return bytes / (pbytes * 2);
-  };
-
   snd_pcm_hw_params_t *hw_params;
   snd_pcm_hw_params_malloc(&hw_params);
-  err = init_hwparams(pcm_handle, hw_params, rrate, buffer_size, period_size,
-                      format);
+  try {
+    init_hwparams(static_cast<snd_pcm_t *>(pcmHandle), hw_params, sampleRate,
+                  buffer_size, period_size, format);
+  } catch (const std::exception &ex) {
+    snd_pcm_hw_params_free(hw_params);
+    throw ex;
+  }
   snd_pcm_hw_params_free(hw_params);
 
   if (err < 0) {
-    fprintf(stderr, "cannot set hw params %s (%s)\n", device_name,
-            snd_strerror(err));
-    return err;
+    std::stringstream error;
+    error << "Unable to set hw params for playback: " << snd_strerror(err);
+    throw std::runtime_error(error.str());
   }
 
   snd_pcm_sw_params_t *sw_params;
   snd_pcm_sw_params_malloc(&sw_params);
-  set_swparams(pcm_handle, sw_params, buffer_size, period_size);
+  try {
+    set_swparams(static_cast<snd_pcm_t *>(pcmHandle), sw_params, buffer_size,
+                 period_size);
+  } catch (const std::exception &ex) {
+    snd_pcm_sw_params_free(sw_params);
+    throw ex;
+  }
   snd_pcm_sw_params_free(sw_params);
 
-  int count = snd_pcm_poll_descriptors_count(pcm_handle);
-  if (count <= 0) {
-    printf("Invalid poll descriptors count\n");
-    return count;
+  std::cerr << "Sleeping to make sure RPi is ready to play" << std::endl;
+  // Sleep to make sure RPi is ready to play
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+}
+
+void AlsaDevice::openDevice() {
+  const char *device_name = "hw:0,0";
+  // auto handle = &static_cast<snd_pcm_t *>(pcmHandle);
+
+  /* Open the device */
+  int err = snd_pcm_open((snd_pcm_t **)&pcmHandle, device_name,
+                         SND_PCM_STREAM_PLAYBACK, 0);
+
+  /* Error check */
+  if (err < 0) {
+    std::stringstream stream;
+    stream << "Cannot open audio device " << device_name << " ("
+           << snd_strerror(err) << ")";
+    pcmHandle = nullptr;
+    throw std::runtime_error(stream.str());
   }
-
-  pollfd *ufds = new pollfd[count];
-
-  if ((err = snd_pcm_poll_descriptors(pcm_handle, ufds, count)) < 0) {
-    printf("Unable to obtain poll descriptors for playback: %s\n",
-           snd_strerror(err));
-    return err;
-  }
-
-  std::vector<uint8_t> data(2 * period_size * pbytes);
-
-  sm->updateState(State::PLAYING);
-  bool prevPaused = paused = false;
-
-  size_t framesCount = 0;
-  size_t prevFramesCountProgressReported = -1;
-  bool eof = false;
-  bool error = false;
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-  while (!token.stop_requested()) {
-    err = wait_for_poll(pcm_handle, ufds, count);
-    if (err < 0) {
-      break;
-    }
-    snd_pcm_sframes_t frames = snd_pcm_avail_update(pcm_handle);
-    if (frames < period_size) {
-      continue;
-    }
-    size_t framesToRead = std::min((long)bytesToFrames(data.size()), frames);
-    size_t bytesToRead = framesToBytes(framesToRead);
-
-    if (prevPaused != paused) {
-      sm->updateState(paused ? State::PAUSED : State::PLAYING);
-      prevPaused = paused;
-    }
-
-    if (paused) {
-      memset(data.data(), 0, bytesToRead);
-    } else {
-      if (!in.expired()) {
-        auto inNode = in.lock();
-        // Streaming error - will not recover
-        if (inNode->error()) {
-          error = true;
-          break;
-        }
-        size_t read = inNode->read(data.data(), bytesToRead, token);
-        framesCount += bytesToFrames(read);
-        if (framesCount - prevFramesCountProgressReported > sampleRate / 2 ||
-            (inNode->eof())) {
-          prevFramesCountProgressReported = framesCount;
-          progressCb((float)framesCount / totalFrames);
-        }
-        if (read < bytesToRead) {
-          memset(data.data() + read, 0, bytesToRead - read);
-        }
-      }
-    }
-
-    err = snd_pcm_writei(pcm_handle, data.data(), framesToRead);
-    if (err == -EAGAIN) {
-      continue;
-    }
-    if (err < 0) {
-      std::cout << "XRUN" << std::endl;
-      if (xrun_recovery(pcm_handle, err) < 0) {
-        printf("Write error: %s\n", snd_strerror(err));
-        break;
-      }
-    }
-    if (!in.expired() && in.lock()->eof()) {
-      eof = true;
-      break;
-    }
-  }
-
-  if (token.stop_requested() || error) {
-    snd_pcm_drop(pcm_handle);
-  } else {
-    snd_pcm_drain(pcm_handle);
-  }
-  snd_pcm_close(pcm_handle);
-  delete[] ufds;
-  if (error) {
-    sm->updateState(State::ERROR);
-    if (!in.expired()) {
-      try {
-        std::rethrow_exception(in.lock()->error());
-      } catch (const std::exception &ex) {
-        sm->setStateComment(ex.what());
-      }
-    }
-    return -1;
-  }
-  sm->updateState(eof ? State::FINISHED : State::STOPPED);
-  return 0;
 }

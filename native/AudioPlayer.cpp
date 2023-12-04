@@ -8,8 +8,7 @@
 
 using namespace std::placeholders;
 
-AudioPlayer::AudioPlayer()
-    : ThreadPool(1), stateCb([](int, State, State) {}), progressCb(nullptr) {}
+AudioPlayer::AudioPlayer() {}
 
 AudioPlayer::~AudioPlayer() {
   cbThreadPool.stop();
@@ -17,10 +16,12 @@ AudioPlayer::~AudioPlayer() {
 }
 
 AudioPlayer::Context::Context(std::string url, ContextStateCallback stateCb,
-                              ProgressUpdateCallback progressCb)
+                              ProgressUpdateCallback progressCb,
+                              std::shared_ptr<AlsaDevice> alsaDevice)
     : httpNode(std::make_shared<HttpRequestNode>(url)),
-      decoder(std::make_shared<FlacDecoder>()), stateCb(stateCb),
-      sm(std::make_shared<StateMachine>(stateCb)), progressCb(progressCb) {}
+      decoder(std::make_shared<FlacDecoder>()), alsaDevice(alsaDevice),
+      stateCb(stateCb), sm(std::make_shared<StateMachine>(stateCb)),
+      progressCb(progressCb) {}
 
 void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
                                    std::stop_token token) {
@@ -55,7 +56,7 @@ void AudioPlayer::Context::play() {
     return;
   }
   alsaPlay = std::make_shared<AlsaPlayNode>(
-      decoder->getStreamInfo().sample_rate,
+      alsaDevice, decoder->getStreamInfo().sample_rate,
       decoder->getStreamInfo().bits_per_sample,
       decoder->getStreamInfo().total_samples, sm, progressCb);
   alsaPlay->connectIn(decodedData);
@@ -78,7 +79,8 @@ int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
         urlCopy,
         std::bind(&AudioPlayer::onStateChangeCb_internal, this, contextId, _1,
                   _2),
-        std::bind(&AudioPlayer::onProgressUpdateCb_internal, this, _1));
+        std::bind(&AudioPlayer::onProgressUpdateCb_internal, this, _1),
+        alsaDevice);
     auto &context = contexts[contextId];
     context->prepare(level1BufferSize, level2BufferSize, token);
   };

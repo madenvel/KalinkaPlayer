@@ -31,7 +31,10 @@ public:
     return oldState;
   }
 
-  void setStateComment(std::string comment) { stateComment = comment; }
+  void setStateComment(std::string comment) {
+    std::cerr << "Error state: " << comment << std::endl;
+    stateComment = comment;
+  }
 
   State state() const { return static_cast<State>(st.load()); }
 };

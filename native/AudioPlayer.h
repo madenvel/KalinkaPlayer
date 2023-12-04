@@ -30,6 +30,7 @@ private:
     std::shared_ptr<FlacDecoder> decoder;
     std::shared_ptr<BufferNode> decodedData;
     std::shared_ptr<AlsaPlayNode> alsaPlay;
+    std::shared_ptr<AlsaDevice> alsaDevice;
 
     ContextStateCallback stateCb;
     std::shared_ptr<StateMachine> sm;
@@ -38,7 +39,8 @@ private:
 
   public:
     Context(std::string url, ContextStateCallback stateCb,
-            ProgressUpdateCallback progressCb);
+            ProgressUpdateCallback progressCb,
+            std::shared_ptr<AlsaDevice> alsaDevice);
     ~Context() = default;
 
     void prepare(size_t level1Buffer, size_t level2Buffer,
@@ -47,8 +49,9 @@ private:
     void pause(bool paused);
   };
 
-  StateCallback stateCb;
-  ProgressUpdateCallback progressCb;
+  StateCallback stateCb = [](int, State, State) {};
+  ProgressUpdateCallback progressCb = [](float) {};
+  std::shared_ptr<AlsaDevice> alsaDevice = std::make_shared<AlsaDevice>();
   std::map<int, std::unique_ptr<Context>> contexts;
   ThreadPool cbThreadPool = ThreadPool(1);
   int currentContextId = -1;

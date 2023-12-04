@@ -11,10 +11,31 @@
 
 class StateMachine;
 
-class AlsaPlayNode : public ProcessNode {
-  using ProgressUpdateCallback = std::function<void(float)>;
+using ProgressUpdateCallback = std::function<void(float)>;
+
+class AlsaDevice {
+public:
+  AlsaDevice();
+  ~AlsaDevice();
+
+  void *getHandle(int sampleRate, int bitsPerSample);
+  int getCurrentSampleRate() const { return currentSampleRate; }
+
+  int getCurrentBitsPerSample() const { return currentBitsPerSample; }
 
 private:
+  void *pcmHandle = nullptr;
+  int currentSampleRate = 0;
+  int currentBitsPerSample = 0;
+
+  void init(int sampleRate, int bitsPerSample);
+  void openDevice();
+};
+
+class AlsaPlayNode : public ProcessNode {
+
+private:
+  std::weak_ptr<AlsaDevice> alsaDevice;
   int sampleRate;
   int bitsPerSample;
   std::shared_ptr<StateMachine> sm;
@@ -26,11 +47,13 @@ private:
   std::weak_ptr<ProcessNode> in;
 
 public:
-  AlsaPlayNode(int sampleRate, int bitsPerSample, size_t totalFrames,
+  AlsaPlayNode(std::shared_ptr<AlsaDevice> alsaDevice, int sampleRate,
+               int bitsPerSample, size_t totalFrames,
                std::shared_ptr<StateMachine> sm,
                ProgressUpdateCallback progressCb)
-      : sampleRate(sampleRate), bitsPerSample(bitsPerSample), sm(sm),
-        progressCb(progressCb), totalFrames(totalFrames) {}
+      : alsaDevice(alsaDevice), sampleRate(sampleRate),
+        bitsPerSample(bitsPerSample), sm(sm), progressCb(progressCb),
+        totalFrames(totalFrames) {}
 
   ~AlsaPlayNode() = default;
 

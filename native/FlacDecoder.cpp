@@ -109,6 +109,8 @@ void FlacDecoder::thread_run(std::stop_token token) {
         case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
           throw std::runtime_error("Flac decoder error: " +
                                    std::string(state.as_cstring()));
+        default:
+          break;
         }
       }
     }
