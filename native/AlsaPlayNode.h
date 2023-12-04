@@ -11,7 +11,7 @@
 
 class StateMachine;
 
-using ProgressUpdateCallback = std::function<void(float)>;
+using ContextProgressUpdateCallback = std::function<void(float)>;
 
 class AlsaDevice {
 public:
@@ -39,7 +39,7 @@ private:
   int sampleRate;
   int bitsPerSample;
   std::shared_ptr<StateMachine> sm;
-  ProgressUpdateCallback progressCb;
+  ContextProgressUpdateCallback progressCb;
   size_t totalFrames;
   std::jthread playThread;
   bool paused = false;
@@ -50,7 +50,7 @@ public:
   AlsaPlayNode(std::shared_ptr<AlsaDevice> alsaDevice, int sampleRate,
                int bitsPerSample, size_t totalFrames,
                std::shared_ptr<StateMachine> sm,
-               ProgressUpdateCallback progressCb)
+               ContextProgressUpdateCallback progressCb)
       : alsaDevice(alsaDevice), sampleRate(sampleRate),
         bitsPerSample(bitsPerSample), sm(sm), progressCb(progressCb),
         totalFrames(totalFrames) {}

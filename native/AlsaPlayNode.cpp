@@ -415,14 +415,12 @@ void AlsaDevice::init(int sampleRate, int bitsPerSample) {
   }
   snd_pcm_sw_params_free(sw_params);
 
-  std::cerr << "Sleeping to make sure RPi is ready to play" << std::endl;
   // Sleep to make sure RPi is ready to play
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 
 void AlsaDevice::openDevice() {
   const char *device_name = "hw:0,0";
-  // auto handle = &static_cast<snd_pcm_t *>(pcmHandle);
 
   /* Open the device */
   int err = snd_pcm_open((snd_pcm_t **)&pcmHandle, device_name,

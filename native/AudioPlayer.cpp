@@ -16,7 +16,7 @@ AudioPlayer::~AudioPlayer() {
 }
 
 AudioPlayer::Context::Context(std::string url, ContextStateCallback stateCb,
-                              ProgressUpdateCallback progressCb,
+                              ContextProgressUpdateCallback progressCb,
                               std::shared_ptr<AlsaDevice> alsaDevice)
     : httpNode(std::make_shared<HttpRequestNode>(url)),
       decoder(std::make_shared<FlacDecoder>()), alsaDevice(alsaDevice),
@@ -79,7 +79,8 @@ int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
         urlCopy,
         std::bind(&AudioPlayer::onStateChangeCb_internal, this, contextId, _1,
                   _2),
-        std::bind(&AudioPlayer::onProgressUpdateCb_internal, this, _1),
+        std::bind(&AudioPlayer::onProgressUpdateCb_internal, this, contextId,
+                  _1),
         alsaDevice);
     auto &context = contexts[contextId];
     context->prepare(level1BufferSize, level2BufferSize, token);
@@ -133,12 +134,14 @@ void AudioPlayer::onStateChangeCb_internal(int contextId, State oldState,
   cbThreadPool.enqueue(task);
 }
 
-void AudioPlayer::onProgressUpdateCb_internal(float progress) {
+void AudioPlayer::onProgressUpdateCb_internal(int contextId, float progress) {
   if (progressCb == nullptr) {
     return;
   }
 
-  auto task = [this, progress](std::stop_token) { progressCb(progress); };
+  auto task = [this, contextId, progress](std::stop_token) {
+    progressCb(contextId, progress);
+  };
   cbThreadPool.enqueue(task);
 }
 

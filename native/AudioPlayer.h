@@ -20,7 +20,8 @@
 
 using StateCallback = std::function<void(int, State, State)>;
 using ContextStateCallback = std::function<void(State, State)>;
-using ProgressUpdateCallback = std::function<void(float)>;
+using ContextProgressUpdateCallback = std::function<void(float)>;
+using ProgressUpdateCallback = std::function<void(int, float)>;
 
 class AudioPlayer : private ThreadPool {
 private:
@@ -34,12 +35,12 @@ private:
 
     ContextStateCallback stateCb;
     std::shared_ptr<StateMachine> sm;
-    ProgressUpdateCallback progressCb;
+    ContextProgressUpdateCallback progressCb;
     size_t bufferSize;
 
   public:
     Context(std::string url, ContextStateCallback stateCb,
-            ProgressUpdateCallback progressCb,
+            ContextProgressUpdateCallback progressCb,
             std::shared_ptr<AlsaDevice> alsaDevice);
     ~Context() = default;
 
@@ -50,7 +51,7 @@ private:
   };
 
   StateCallback stateCb = [](int, State, State) {};
-  ProgressUpdateCallback progressCb = [](float) {};
+  ProgressUpdateCallback progressCb = [](int, float) {};
   std::shared_ptr<AlsaDevice> alsaDevice = std::make_shared<AlsaDevice>();
   std::map<int, std::unique_ptr<Context>> contexts;
   ThreadPool cbThreadPool = ThreadPool(1);
@@ -73,7 +74,7 @@ public:
 
 private:
   void onStateChangeCb_internal(int contextId, State oldState, State newState);
-  void onProgressUpdateCb_internal(float progress);
+  void onProgressUpdateCb_internal(int contextId, float progress);
 };
 
 #endif

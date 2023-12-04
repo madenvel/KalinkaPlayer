@@ -2,7 +2,7 @@ from libcpp.functional cimport function
 from libcpp cimport bool
 
 ctypedef function[void(int, int, int)] StateCallback
-ctypedef function[void(float)] ProgressCallback
+ctypedef function[void(int, float)] ProgressCallback
 
 cdef extern from "AudioPlayer.cpp":
     pass

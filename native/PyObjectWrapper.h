@@ -1,3 +1,6 @@
+#ifndef PY_OBJ_WRAPPER_H
+#define PY_OBJ_WRAPPER_H
+
 #include "call_obj.h"
 #include <Python.h>
 #include <string>
@@ -57,3 +60,5 @@ public:
 private:
   PyObject *held;
 };
+
+#endif
