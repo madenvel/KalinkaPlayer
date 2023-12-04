@@ -71,13 +71,25 @@ class RpiPlaybar(BoxLayout):
                 EventType.Playing: self.on_playing,
                 EventType.Paused: self.on_paused,
                 EventType.Stopped: self.on_stopped,
+                EventType.ConnectionFailed: self.on_connection_failed,
+                EventType.ConnectionRestored: self.on_connection_restored,
             }
         )
+        self.on_connection_restored()
+
+    @mainthread
+    def on_connection_failed(self):
+        pass
+
+    @mainthread
+    def on_connection_restored(self):
         state = rpiplayer.get_state()
         self.playing_state = state.get("state", State.IDLE.name)
         current_track = state.get("current_track", None)
         if current_track is not None:
             self.on_change_track(current_track)
+            logger.warn("Updating the progress to " + str(state["progress"]))
+            self.current_time = state["progress"]
 
     @mainthread
     def on_play(self):
@@ -140,8 +152,18 @@ class RpiPlayQueue(TabbedPanelItem):
                 EventType.Playing: self.on_playing,
                 EventType.Paused: self.on_paused,
                 EventType.Stopped: self.on_stopped,
+                EventType.ConnectionFailed: self.on_connection_failed,
+                EventType.ConnectionRestored: self.on_connection_restored,
             }
         )
+        self.on_connection_restored()
+
+    @mainthread
+    def on_connection_failed(self):
+        pass
+
+    @mainthread
+    def on_connection_restored(self):
         state = rpiplayer.get_state()
         self.playing_state = state["state"]
         if state.get("current_track", None) is not None:
