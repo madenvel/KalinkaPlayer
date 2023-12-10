@@ -74,6 +74,10 @@ class PlayQueue(AsyncExecutor):
         if context_id != self.current_context_id:
             return
 
+        track_info = self.get_track_info(self.current_track_id)
+        if track_info is None:
+            return
+
         current_time = self.get_track_info(self.current_track_id)["duration"] * progress
         self.event_emitter.dispatch(
             EventType.Progress,
@@ -231,12 +235,18 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def remove(self, tracks: list[int]):
+        if self.current_track_id in tracks:
+            self.track_player.stop()
+
         tracks.sort(reverse=True)
         for track in tracks:
             if track in self.prefetched_tracks:
                 item = self.prefetched_tracks[track]
                 self.track_player.remove_context(item["context"])
                 del self.prefetched_tracks[track]
+
+            if track < self.current_track_id:
+                self.current_track_id -= 1
 
             del self.track_list[track]
 
@@ -252,6 +262,8 @@ class PlayQueue(AsyncExecutor):
         ]
 
     def get_track_info(self, index: int):
+        if index not in range(0, len(self.track_list)):
+            return None
         track_info: TrackInfo = self.track_list[index]
         return {
             "index": index,
@@ -273,8 +285,6 @@ class PlayQueue(AsyncExecutor):
         self._clean_prefetched()
         self.track_list = []
         self.current_track_id = 0
-        self.current_context_id = -1
-        self.current_progress = 0
         self.event_emitter.dispatch(
             EventType.TracksRemoved, range(len(self.track_list) - 1, -1, -1)
         )
