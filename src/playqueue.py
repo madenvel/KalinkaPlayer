@@ -249,7 +249,9 @@ class PlayQueue(AsyncExecutor):
                 self.current_track_id -= 1
 
             del self.track_list[track]
-
+        self.current_track_id = min(self.current_track_id, len(self.track_list) - 1)
+        if self.current_track_id < 0:
+            self.current_track_id = 0
         self.event_emitter.dispatch(EventType.TracksRemoved, tracks)
 
     def list(self, offset: int, limit: int):
