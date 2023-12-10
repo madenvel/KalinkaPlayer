@@ -55,17 +55,19 @@ class PlayQueue(AsyncExecutor):
         if new_state == State.FINISHED:
             return self._finished_playing()
 
+        self.state = new_state
+        if self.state == State.STOPPED:
+            self.current_progress = 0
+
         stateMap = {
             State.PLAYING: EventType.Playing,
             State.PAUSED: EventType.Paused,
             State.STOPPED: EventType.Stopped,
+            State.BUFFERING: EventType.Bufferring,
+            State.ERROR: EventType.Error,
         }
         if new_state in stateMap:
             self.event_emitter.dispatch(stateMap[new_state])
-
-        self.state = new_state
-        if self.state == State.STOPPED:
-            self.current_progress = 0
 
     @enqueue
     def _progress_callback(self, context_id, progress):
@@ -203,10 +205,10 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def add(self, tracks: list, replace=False):
-        if replace is True:
+        if replace is True and len(self.track_list) > 0:
             self._clean_prefetched()
             self.event_emitter.dispatch(
-                EventType.TracksRemoved, range(len(self.track_list))
+                EventType.TracksRemoved, range(len(self.track_list) - 1, -1, -1)
             )
             self.track_list = []
 
@@ -229,6 +231,7 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def remove(self, tracks: list[int]):
+        tracks.sort(reverse=True)
         for track in tracks:
             if track in self.prefetched_tracks:
                 item = self.prefetched_tracks[track]

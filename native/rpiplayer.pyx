@@ -48,5 +48,8 @@ cdef class RpiAudioPlayer:
         cdef PyObjWrapper2 wrappedCb = PyObjWrapper2(cb)
         self.c_instance.setProgressUpdateCallback(<ProgressCallback>wrappedCb)
 
+    def get_last_error(self, context_id):
+        return self.c_instance.getLastError(context_id)
+
     def __dealloc__(self):
         del self.c_instance

@@ -1,5 +1,7 @@
 from libcpp.functional cimport function
 from libcpp cimport bool
+from libcpp.string cimport string
+
 
 ctypedef function[void(int, int, int)] StateCallback
 ctypedef function[void(int, float)] ProgressCallback
@@ -19,3 +21,4 @@ cdef extern from "AudioPlayer.h":
         void seek(int time);
         void setStateCallback(StateCallback cb);
         void setProgressUpdateCallback(ProgressCallback cb);
+        string getLastError(int contextId);        

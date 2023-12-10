@@ -48,6 +48,7 @@ private:
                  std::stop_token token);
     void play();
     void pause(bool paused);
+    std::string getLastError();
   };
 
   StateCallback stateCb = [](int, State, State) {};
@@ -57,6 +58,7 @@ private:
   ThreadPool cbThreadPool = ThreadPool(1);
   int currentContextId = -1;
   int newContextId = 0;
+  std::pair<int, std::string> lastErrorForContext = {-1, ""};
 
 public:
   AudioPlayer();
@@ -69,6 +71,7 @@ public:
   void stop();
   void pause(bool paused);
   void seek(int time);
+  std::string getLastError(int contextId);
   void setStateCallback(StateCallback cb);
   void setProgressUpdateCallback(ProgressUpdateCallback cb);
 

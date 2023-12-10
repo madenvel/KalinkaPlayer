@@ -36,6 +36,8 @@ public:
     stateComment = comment;
   }
 
+  std::string getStateComment() { return stateComment; }
+
   State state() const { return static_cast<State>(st.load()); }
 };
 

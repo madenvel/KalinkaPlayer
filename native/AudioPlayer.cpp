@@ -37,9 +37,13 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   decoder->connectIn(flacBuffer);
   decoder->connectOut(decodedData);
   httpNode->connectOut(flacBuffer);
-  httpNode->start();
   sm->updateState(State::BUFFERING);
+  httpNode->start();
   decoder->process_until_end_of_metadata();
+
+  if (sm->state() == State::ERROR) {
+    return;
+  }
 
   if (!decoder->hasStreamInfo()) {
     sm->setStateComment("Stream info is not available");
@@ -67,6 +71,13 @@ void AudioPlayer::Context::pause(bool paused) {
   if (alsaPlay) {
     alsaPlay->pause(paused);
   }
+}
+
+std::string AudioPlayer::Context::getLastError() {
+  if (sm->state() == State::ERROR) {
+    return sm->getStateComment();
+  }
+  return std::string();
 }
 
 int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
@@ -121,6 +132,15 @@ void AudioPlayer::pause(bool paused) {
 }
 void AudioPlayer::seek(int time) {}
 
+std::string AudioPlayer::getLastError(int contextId) {
+  if (lastErrorForContext.first == contextId) {
+    return lastErrorForContext.second;
+  } else {
+    lastErrorForContext = {-1, ""};
+  }
+  return {};
+}
+
 void AudioPlayer::removeContext(int contextId) {
   auto task = [this, contextId](std::stop_token) { contexts.erase(contextId); };
   enqueue(task);
@@ -128,6 +148,7 @@ void AudioPlayer::removeContext(int contextId) {
 
 void AudioPlayer::onStateChangeCb_internal(int contextId, State oldState,
                                            State newState) {
+  lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
   auto task = [this, contextId, oldState, newState](std::stop_token) {
     stateCb(contextId, oldState, newState);
   };

@@ -6,6 +6,8 @@ class EventType(Enum):
     Paused = "paused"
     Stopped = "stopped"
     Progress = "current_progress"
+    Error = "error"
+    Bufferring = "buffering"
     TrackChanged = "change_track"
     RequestMoreTracks = "request_more_tracks"
     TracksAdded = "track_added"

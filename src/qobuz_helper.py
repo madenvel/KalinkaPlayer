@@ -155,7 +155,7 @@ class QobuzTrackBrowser(TrackBrowser):
                 BrowseCategory(
                     id=str(track["id"]),
                     name=track["title"],
-                    subname=track["performer"]["name"] + " - " + album["title"],
+                    subname=track["performer"]["name"],
                     can_browse=False,
                     can_add=True,
                     url="/track/" + str(track["id"]),

@@ -17,11 +17,15 @@ int main() {
       "1178610&etsp=1701655289&hmac=Qjay6_soTpBvp7mo3jxwBMd4Zhc",
       10 * 1024 * 1024, 64 * 1024);
 
-  player.setStateCallback([](int context, State, State newState) {
+  player.setStateCallback([&player](int context, State, State newState) {
     std::cout << "State changed to " << newState << ", context = " << context
               << std::endl;
+
+    if (newState == State::ERROR) {
+      std::cout << "Last error: " << player.getLastError(context) << std::endl;
+    }
   });
-  player.setProgressUpdateCallback([](float progress) {
+  player.setProgressUpdateCallback([](int context, float progress) {
     std::cout << "Progress: " << progress << std::endl;
   });
 
