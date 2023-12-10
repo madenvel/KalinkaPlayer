@@ -127,3 +127,15 @@ async def stream(request: Request):
 @app.get("/queue/state")
 async def state():
     return playqueue.get_state()
+
+
+@app.get("/queue/clear")
+async def clear():
+    playqueue.clear()
+    return {"message": "Ok"}
+
+
+@app.get("/queue/remove")
+async def remove(index: int):
+    playqueue.remove([index])
+    return {"message": "Ok"}
