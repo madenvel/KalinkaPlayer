@@ -31,10 +31,7 @@ public:
     return oldState;
   }
 
-  void setStateComment(std::string comment) {
-    std::cerr << "Error state: " << comment << std::endl;
-    stateComment = comment;
-  }
+  void setStateComment(std::string comment) { stateComment = comment; }
 
   std::string getStateComment() { return stateComment; }
 

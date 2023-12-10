@@ -7,16 +7,6 @@ using namespace std;
 
 int main() {
   AudioPlayer player;
-  // auto contextId =
-  //     player.prepare("https://getsamplefiles.com/download/flac/sample-1.flac",
-  //                    10 * 1024 * 1024, 64 * 1024);
-
-  auto context2 = player.prepare(
-      "https://streaming-qobuz-std.akamaized.net/"
-      "file?uid=1040320&eid=26457483&fmt=7&profile=raw&app_id=950096963&cid="
-      "1178610&etsp=1701655289&hmac=Qjay6_soTpBvp7mo3jxwBMd4Zhc",
-      10 * 1024 * 1024, 64 * 1024);
-
   player.setStateCallback([&player](int context, State, State newState) {
     std::cout << "State changed to " << newState << ", context = " << context
               << std::endl;
@@ -28,9 +18,16 @@ int main() {
   player.setProgressUpdateCallback([](int context, float progress) {
     std::cout << "Progress: " << progress << std::endl;
   });
+  auto contextId =
+      player.prepare("https://getsamplefiles.com/download/flac/sample-1.flac",
+                     10 * 1024 * 1024, 64 * 1024);
 
-  // player.play(contextId);
-  // std::this_thread::sleep_for(std::chrono::seconds(3));
+  auto context2 =
+      player.prepare("https://getsamplefiles.com/download/flac/sample-2.flac",
+                     10 * 1024 * 1024, 64 * 1024);
+
+  player.play(contextId);
+  std::this_thread::sleep_for(std::chrono::seconds(3));
   player.play(context2);
   std::this_thread::sleep_for(std::chrono::seconds(30));
   player.stop();

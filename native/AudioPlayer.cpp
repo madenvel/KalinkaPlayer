@@ -148,7 +148,14 @@ void AudioPlayer::removeContext(int contextId) {
 
 void AudioPlayer::onStateChangeCb_internal(int contextId, State oldState,
                                            State newState) {
-  lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
+  if (newState == State::ERROR) {
+    lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
+  }
+
+  if (stateCb == nullptr) {
+    return;
+  }
+
   auto task = [this, contextId, oldState, newState](std::stop_token) {
     stateCb(contextId, oldState, newState);
   };
