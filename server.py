@@ -35,15 +35,15 @@ def add_tracks_to_queue(items: list[str]):
 
 
 @app.get("/queue/add/{type}/{entity_id}")
-def add_to_queue(type: str, entity_id: str, replace: bool = False):
+def add_to_queue(type: str, entity_id: str):
     if type not in ["album", "playlist", "track"]:
         return {"error": "Invalid entity type"}
     if type == "track":
-        playqueue.add(trackbrowser.get_track_info([entity_id]), replace=replace)
+        playqueue.add(trackbrowser.get_track_info([entity_id]))
         return {"message": "Ok"}
 
     tracks = [track.id for track in trackbrowser.browse(type + "/" + entity_id)]
-    playqueue.add(trackbrowser.get_track_info(tracks), replace=replace)
+    playqueue.add(trackbrowser.get_track_info(tracks))
     return {"message": "Ok"}
 
 
