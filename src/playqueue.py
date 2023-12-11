@@ -238,6 +238,8 @@ class PlayQueue(AsyncExecutor):
         if self.current_track_id in tracks:
             self.track_player.stop()
 
+        prev_track_id = self.current_track_id
+
         tracks.sort(reverse=True)
         for track in tracks:
             if track in self.prefetched_tracks:
@@ -253,6 +255,8 @@ class PlayQueue(AsyncExecutor):
         if self.current_track_id < 0:
             self.current_track_id = 0
         self.event_emitter.dispatch(EventType.TracksRemoved, tracks)
+        if prev_track_id != self.current_track_id or prev_track_id in tracks:
+            self._notify_track_change()
 
     def list(self, offset: int, limit: int):
         if offset not in range(0, len(self.track_list)):
