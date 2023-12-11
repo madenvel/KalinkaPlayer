@@ -208,14 +208,7 @@ class PlayQueue(AsyncExecutor):
         # self.track_player.set_pos(pos)
 
     @enqueue
-    def add(self, tracks: list, replace=False):
-        if replace is True and len(self.track_list) > 0:
-            self._clean_prefetched()
-            self.event_emitter.dispatch(
-                EventType.TracksRemoved, range(len(self.track_list) - 1, -1, -1)
-            )
-            self.track_list = []
-
+    def add(self, tracks: list):
         index = len(self.track_list)
         self.track_list.extend(tracks)
         self.event_emitter.dispatch(
@@ -226,6 +219,9 @@ class PlayQueue(AsyncExecutor):
             self.track_player.remove_context(self._prefetched_tracks[index])
             del self._prefetched_tracks[index]
             self._prepare_track(self.current_track_id + 1)
+
+        if index == 0:
+            self._notify_track_change()
 
     def _clean_prefetched(self):
         for context in self.prefetched_tracks.values():
@@ -285,8 +281,7 @@ class PlayQueue(AsyncExecutor):
             "progress": self.current_progress,
         }
 
-    @enqueue
-    def clear(self):
+    def _clear(self):
         self.track_player.stop()
         self._clean_prefetched()
         self.track_list = []
@@ -294,3 +289,7 @@ class PlayQueue(AsyncExecutor):
         self.event_emitter.dispatch(
             EventType.TracksRemoved, range(len(self.track_list) - 1, -1, -1)
         )
+
+    @enqueue
+    def clear(self):
+        self._clear()
