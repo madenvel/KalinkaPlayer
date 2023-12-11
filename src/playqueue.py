@@ -284,11 +284,12 @@ class PlayQueue(AsyncExecutor):
     def _clear(self):
         self.track_player.stop()
         self._clean_prefetched()
+        list_len = len(self.track_list)
         self.track_list = []
         self.current_track_id = 0
         self.event_emitter.dispatch(
             EventType.TracksRemoved,
-            [i for i in range(len(self.track_list) - 1, -1, -1)],
+            [i for i in range(list_len - 1, -1, -1)],
         )
 
     @enqueue
