@@ -287,7 +287,8 @@ class PlayQueue(AsyncExecutor):
         self.track_list = []
         self.current_track_id = 0
         self.event_emitter.dispatch(
-            EventType.TracksRemoved, range(len(self.track_list) - 1, -1, -1)
+            EventType.TracksRemoved,
+            [i for i in range(len(self.track_list) - 1, -1, -1)],
         )
 
     @enqueue
