@@ -99,7 +99,14 @@ class QobuzTrackBrowser(TrackBrowser):
                     url="/myweeklyq",
                     can_browse=True,
                     can_add=True,
-                )
+                ),
+                BrowseCategory(
+                    id="favorite",
+                    name="My Favorite",
+                    url="/favorite",
+                    can_browse=True,
+                    can_add=False,
+                ),
             ]
         points = endpoint.split("/")
         if points[0] == "myweeklyq":
@@ -123,6 +130,45 @@ class QobuzTrackBrowser(TrackBrowser):
                 self.qobuz_client.get_album_tracks(points[1])
             )
 
+        if points[0] == "favorite":
+            if len(points) > 1 and points[1] in ["albums", "tracks", "artists"]:
+                return self.get_user_favorites(points[1], offset, limit)
+            else:
+                return [
+                    BrowseCategory(
+                        id="favorite",
+                        name="My Favorite Albums",
+                        url="/favorite/albums",
+                        can_browse=True,
+                        can_add=False,
+                    ),
+                    BrowseCategory(
+                        id="favorite",
+                        name="My Favorite Tracks",
+                        url="/favorite/tracks",
+                        can_browse=True,
+                        can_add=True,
+                    ),
+                ]
+
+        return []
+
+    def get_user_favorites(self, item_type, offset, limit):
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "favorite/getUserFavorites",
+            params={"type": item_type, "offset": offset, "limit": limit},
+        )
+
+        if response.ok == True:
+            if item_type == "tracks":
+                return self._tracks_to_browse_categories(
+                    response.json()["tracks"]["items"]
+                )
+
+            if item_type == "albums":
+                return self._albums_to_browse_category(
+                    response.json()["albums"]["items"]
+                )
         return []
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
