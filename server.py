@@ -84,6 +84,13 @@ async def read_queue_stop():
     return {"message": "Ok"}
 
 
+@app.get("/browse/favorite/{type}")
+async def browse_favorites(type: str, offset: int = 0, limit: int = 10):
+    if type not in ["albums", "tracks"]:
+        return {"message", "The endpoint must be albums or tracks"}
+    return trackbrowser.browse(f"favorite/{type}", offset, limit)
+
+
 @app.get("/browse/{type}/{entity_id}")
 def browse(type: str, entity_id: str, offset: int = 0, limit: int = 10):
     if type not in ["album", "playlist"]:
@@ -139,10 +146,3 @@ async def clear():
 async def remove(index: int):
     playqueue.remove([index])
     return {"message": "Ok"}
-
-
-@app.get("/favorite/{type}")
-async def get_favorites(type: str, offset: int = 0, limit: int = 10):
-    if type not in ["albums", "tracks"]:
-        return {"message", "The endpoint must be albums or tracks"}
-    return trackbrowser.browse(f"favorite/{type}", offset, limit)
