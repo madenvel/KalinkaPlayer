@@ -18,9 +18,7 @@ def setup_autoplay(
     event_listener: EventListener,
 ):
     autoplay = QobuzAutoplay(client, playqueue, track_browser)
-    event_listener.subscribe(
-        EventType.RequestMoreTracks, partial(autoplay.add_recommendations, 1)
-    )
+    event_listener.subscribe(EventType.RequestMoreTracks, autoplay.add_recommendation)
     event_listener.subscribe(EventType.TracksAdded, autoplay.add_tracks)
     event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
 

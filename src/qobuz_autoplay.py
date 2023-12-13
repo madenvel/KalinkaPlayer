@@ -86,46 +86,41 @@ class QobuzAutoplay:
         qobuz_client: Client,
         playqueue: PlayQueue,
         track_browser: TrackBrowser,
-        amount_to_request: int = 10,
+        amount_to_request: int = 50,
     ):
         self.qobuz_client = qobuz_client
         self.playqueue = playqueue
         self.track_browser = track_browser
         self.remaining_tracks: list[TrackInfo] = []
-        self.listened_tracks = set()
         self.amount_to_request = amount_to_request
-        self.tracks_to_analyze = []
+        self.tracks = []
+        self.can_request_new = True
 
     def _track_meta_to_autoplay(self, track):
         return {
-            "track_id": track["id"],
-            "artist_id": track["album"]["artist"]["id"],
-            "label_id": track["album"]["label"]["id"],
-            "genre_id": track["album"]["genre"]["id"],
+            "artist_id": int(track["performer"]["id"]),
+            "genre_id": int(track["album"]["genre"]["id"]),
+            "label_id": int(track["album"]["label"]["id"]),
+            "track_id": int(track["id"]),
         }
 
     def add_tracks(self, tracks):
-        tracks_to_analyze = [
-            self._track_meta_to_autoplay(self.qobuz_client.get_track_meta(track["id"]))
-            for track in tracks
-            if track["id"] not in self.listened_tracks
-        ]
-        self.tracks_to_analyze.extend(tracks_to_analyze)
+        self.tracks.extend(tracks)
 
     def remove_tracks(self, tracks: list[int]):
         for track in tracks:
-            del self.tracks_to_analyze[track]
+            del self.tracks[track]
 
-    def add_recommendations(self, count=1):
-        while len(self.remaining_tracks) < count:
-            self._retrieve_new_recommendations()
+    def add_recommendation(self):
+        if not self.remaining_tracks:
+            if self.can_request_new:
+                self._retrieve_new_recommendations()
+            else:
+                return
 
-        (tracks, self.remaining_tracks) = (
-            self.remaining_tracks[:count],
-            self.remaining_tracks[count:],
-        )
+        recommended_track = self.remaining_tracks.pop(0)
 
-        self.playqueue.add(tracks)
+        self.playqueue.add(self.track_browser.get_track_info([recommended_track]))
 
     def _track_to_trackinfo(self, track) -> TrackInfo:
         return TrackInfo(
@@ -134,18 +129,32 @@ class QobuzAutoplay:
         )
 
     def _retrieve_new_recommendations(self):
+        if not self.tracks:
+            return
+
+        tracks_to_analyze = [
+            self._track_meta_to_autoplay(track) for track in self.tracks[-5:]
+        ]
+        listened_tracks = [track["id"] for track in self.tracks[:-5]]
+        params = {
+            "limit": self.amount_to_request,
+            "listened_tracks_ids": listened_tracks,
+            "track_to_analysed": tracks_to_analyze,
+        }
+
+        print(json.dumps(params, indent=2))
         req = self.qobuz_client.session.post(
             self.qobuz_client.base + "dynamic/suggest",
-            json={
-                "limit": self.amount_to_request,
-                "listened_tracks_ids": list(self.listened_tracks),
-                "track_to_analysed": self.tracks_to_analyze,
-            },
+            json=params,
         )
 
         track_ids = [track["id"] for track in req.json()["tracks"]["items"]]
 
-        logging.info("Retrieved " + str(len(track_ids)) + " new recommendation(s)")
+        logging.info(
+            "Retrieved "
+            + str(len(track_ids))
+            + " new recommendation(s) using algorithm "
+            + req.json()["algorithm"]
+        )
 
-        self.remaining_tracks.extend(self.track_browser.get_track_info(track_ids))
-        self.listened_tracks.update(track_ids)
+        self.remaining_tracks = track_ids
