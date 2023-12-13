@@ -92,6 +92,7 @@ class QobuzAutoplay:
         self.playqueue = playqueue
         self.track_browser = track_browser
         self.remaining_tracks: list[TrackInfo] = []
+        self.suggested_tracks: set[int] = set()
         self.amount_to_request = amount_to_request
         self.tracks = []
         self.can_request_new = True
@@ -106,19 +107,28 @@ class QobuzAutoplay:
 
     def add_tracks(self, tracks):
         self.tracks.extend(tracks)
+        self.can_request_new = True
 
     def remove_tracks(self, tracks: list[int]):
         for track in tracks:
             del self.tracks[track]
 
+        if not self.tracks:
+            self.can_request_new = True
+            self.suggested_tracks.clear()
+            self.remaining_tracks.clear()
+
     def add_recommendation(self):
         if not self.remaining_tracks:
-            if self.can_request_new:
+            if self.can_request_new is True:
                 self._retrieve_new_recommendations()
-            else:
-                return
+
+        if not self.remaining_tracks:
+            print("No tracks to recommend")
+            return
 
         recommended_track = self.remaining_tracks.pop(0)
+        self.suggested_tracks.add(recommended_track)
 
         self.playqueue.add(self.track_browser.get_track_info([recommended_track]))
 
@@ -132,17 +142,30 @@ class QobuzAutoplay:
         if not self.tracks:
             return
 
+        five_tracks_to_analyse = []
+
+        for i in range(len(self.tracks) - 1, -1, -1):
+            if len(five_tracks_to_analyse) == 5:
+                break
+
+            if self.tracks[i]["id"] not in self.suggested_tracks:
+                five_tracks_to_analyse.append(self.tracks[i])
+
         tracks_to_analyze = [
-            self._track_meta_to_autoplay(track) for track in self.tracks[-5:]
+            self._track_meta_to_autoplay(track) for track in five_tracks_to_analyse
         ]
-        listened_tracks = [track["id"] for track in self.tracks[:-5]]
+
+        tta_ids = [track["id"] for track in five_tracks_to_analyse]
+
+        listened_tracks = [
+            int(track["id"]) for track in self.tracks if track["id"] not in tta_ids
+        ]
         params = {
             "limit": self.amount_to_request,
             "listened_tracks_ids": listened_tracks,
             "track_to_analysed": tracks_to_analyze,
         }
 
-        print(json.dumps(params, indent=2))
         req = self.qobuz_client.session.post(
             self.qobuz_client.base + "dynamic/suggest",
             json=params,
@@ -158,3 +181,5 @@ class QobuzAutoplay:
         )
 
         self.remaining_tracks = track_ids
+
+        self.can_request_new = False
