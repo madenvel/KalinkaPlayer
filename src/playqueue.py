@@ -107,7 +107,7 @@ class PlayQueue(AsyncExecutor):
             track_id = self.track_list[index].metadata.id
             try:
                 track_info = link_retriever()
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 logger.warn("Failed to pre-fetch track:", e)
                 return
             if track_id == self.track_list[index].metadata.id:
@@ -127,7 +127,7 @@ class PlayQueue(AsyncExecutor):
         if context_id == -1:
             try:
                 track_info = track.link_retriever()
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 logger.warn("Failed to retrieve track link:", e)
                 self.event_emitter.dispatch(EventType.NetworkError, e.strerror)
                 self.stop()
