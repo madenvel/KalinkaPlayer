@@ -129,7 +129,7 @@ class PlayQueue(AsyncExecutor):
                 track_info = track.link_retriever()
             except Exception as e:
                 logger.warn("Failed to retrieve track link:", e)
-                self.event_emitter.dispatch(EventType.NetworkError, e.strerror)
+                self.event_emitter.dispatch(EventType.NetworkError, str(e))
                 self.stop()
                 return
 
