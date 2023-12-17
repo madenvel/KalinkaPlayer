@@ -258,10 +258,15 @@ class PlayQueue(AsyncExecutor):
         if offset not in range(0, len(self.track_list)):
             return []
 
-        return [
-            self.get_track_info(i)
-            for i in range(offset, min(offset + limit, len(self.track_list)))
-        ]
+        return {
+            "offset": offset,
+            "limit": limit,
+            "total": len(self.track_list),
+            "items": [
+                self.get_track_info(i)
+                for i in range(offset, min(offset + limit, len(self.track_list)))
+            ],
+        }
 
     def get_track_info(self, index: int):
         if index not in range(0, len(self.track_list)):
@@ -269,7 +274,6 @@ class PlayQueue(AsyncExecutor):
         track_info: TrackInfo = self.track_list[index]
         return {
             "index": index,
-            "selected": index == self.current_track_id,
         } | track_info.metadata.model_dump()
 
     def get_state(self):

@@ -11,6 +11,8 @@ from src.rest_event_proxy import EventStream
 import logging
 import json
 
+from src.trackbrowser import SearchType
+
 app = FastAPI()
 playqueue, event_listener, trackbrowser = setup()
 logger = logging.getLogger(__name__)
@@ -85,33 +87,32 @@ async def read_queue_stop():
 
 
 @app.get("/browse/favorite/{type}")
-async def browse_favorites(type: str, offset: int = 0, limit: int = 10):
-    if type not in ["albums", "tracks"]:
-        return {"message", "The endpoint must be albums or tracks"}
-    return trackbrowser.browse(f"favorite/{type}", offset, limit)
+async def browse_favorite(type: SearchType, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_favorite(type, offset, limit)
 
 
-@app.get("/browse/{type}/{entity_id}")
-def browse(type: str, entity_id: str, offset: int = 0, limit: int = 10):
-    if type not in ["album", "playlist"]:
-        return {"error": "Invalid browse type"}
-    return trackbrowser.browse(type + "/" + entity_id, offset, limit)
+@app.get("/browse/album/{entity_id}")
+def browse_album(entity_id: str, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_album(entity_id, offset, limit)
 
 
-@app.get("/browse")
-async def browse_root(offset: int = 0, limit: int = 10):
-    return trackbrowser.browse("", offset, limit)
+@app.get("/browse/playlist/{entity_id}")
+def browse_playlist(entity_id: str, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_playlist(entity_id, offset, limit)
 
 
-@app.get("/browse/{toplevel_item}")
-async def browse_root(toplevel_item: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse(toplevel_item, offset, limit)
+@app.get("/browse/catalog")
+def browse_catalog(offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_catalog("", offset, limit)
+
+
+@app.get("/browse/catalog/{endpoint}")
+def browse_catalog(endpoint: str, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_catalog(endpoint, offset, limit)
 
 
 @app.get("/search/{search_type}/{query}")
-async def search(search_type: str, query: str, offset: int = 0, limit: int = 10):
-    if search_type not in ["album", "track", "playlist"]:
-        return {"error": "Invalid search type"}
+async def search(search_type: SearchType, query: str, offset: int = 0, limit: int = 10):
     return trackbrowser.search(search_type, query, offset, limit)
 
 

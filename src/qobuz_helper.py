@@ -1,4 +1,4 @@
-import time
+from typing import List
 from qobuz_dl.qopy import Client
 from qobuz_dl.bundle import Bundle
 
@@ -8,9 +8,11 @@ from src.trackbrowser import (
     Album,
     AlbumImage,
     Artist,
+    BrowseCategoryList,
+    EmptyList,
     Genre,
     Label,
-    SourceType,
+    SearchType,
     TrackBrowser,
     TrackInfo,
     BrowseCategory,
@@ -85,91 +87,200 @@ class QobuzTrackBrowser(TrackBrowser):
     def __init__(self, qobuz_client: Client):
         self.qobuz_client = qobuz_client
 
-    def search(self, type: str, query: str, offset=0, limit=50) -> list[BrowseCategory]:
+    def search(
+        self, type: SearchType, query: str, offset=0, limit=50
+    ) -> list[BrowseCategory]:
         return self._search_items(type, query, offset, limit)
 
-    def browse(
+    def browse_album(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseCategoryList:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "album/get",
+            params={"album_id": id, "offset": offset, "limit": limit},
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        album_meta = rjson.copy()
+        del album_meta["tracks"]
+
+        return {
+            "offset": offset,
+            "limit": limit,
+            "total": rjson["tracks"]["total"],
+            "items": self._tracks_to_browse_categories(
+                rjson["tracks"]["items"],
+                album_meta=album_meta,
+            ),
+        }
+
+    def browse_playlist(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseCategoryList:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "playlist/get",
+            params={
+                "playlist_id": id,
+                "offset": offset,
+                "limit": limit,
+                "extra": "tracks",
+            },
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=rjson["tracks"]["total"],
+            items=self._tracks_to_browse_categories(
+                rjson["tracks"]["items"],
+            ),
+        )
+
+    def browse_favorite(
+        self, type: SearchType, offset: int = 0, limit: int = 50
+    ) -> BrowseCategoryList:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "favorite/getUserFavorites",
+            params={"type": type.value + "s", "offset": offset, "limit": limit},
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        if type == SearchType.track:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["tracks"]["total"],
+                items=self._tracks_to_browse_categories(
+                    response.json()["tracks"]["items"]
+                ),
+            )
+
+        if type == SearchType.album:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["albums"]["total"],
+                items=self._albums_to_browse_category(
+                    response.json()["albums"]["items"]
+                ),
+            )
+
+    def browse_catalog(
         self, endpoint: str, offset: int = 0, limit: int = 50
-    ) -> list[BrowseCategory]:
+    ) -> BrowseCategoryList:
         if endpoint == "":
-            return [
-                BrowseCategory(
-                    id="myweeklyq",
-                    name="My Weekly Q",
-                    url="/myweeklyq",
-                    can_browse=True,
-                    can_add=True,
-                ),
-                BrowseCategory(
-                    id="favorite",
-                    name="My Favorite",
-                    url="/favorite",
-                    can_browse=True,
-                    can_add=False,
-                ),
-            ]
-        points = endpoint.split("/")
-        if points[0] == "myweeklyq":
-            return self._tracks_to_browse_categories(
-                self._get_curated_tracks()["tracks"]["items"]
-            )
-        if points[0] in ["album", "playlist"]:
-            req = self.qobuz_client.api_call(
-                points[0] + "/get", id=points[1], offset=offset, limit=limit
-            )
-
-            if points[0] == "album":
-                album_meta = req.copy()
-                del album_meta["tracks"]
-                return self._tracks_to_browse_categories(
-                    req["tracks"]["items"],
-                    album_meta=album_meta,
-                )
-
-            return self._albums_to_browse_category(
-                self.qobuz_client.get_album_tracks(points[1])
-            )
-
-        if points[0] == "favorite":
-            if len(points) > 1 and points[1] in ["albums", "tracks", "artists"]:
-                return self.get_user_favorites(points[1], offset, limit)
-            else:
-                return [
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=4,
+                items=[
                     BrowseCategory(
-                        id="favorite",
-                        name="My Favorite Albums",
-                        url="/favorite/albums",
+                        id="new-releases",
+                        name="New Releases",
+                        url="/catalog/new-releases",
                         can_browse=True,
                         can_add=False,
                     ),
                     BrowseCategory(
-                        id="favorite",
-                        name="My Favorite Tracks",
-                        url="/favorite/tracks",
+                        id="qobuz-playlists",
+                        name="Qobuz Playlists",
+                        url="/catalog/qobuz-playlists",
+                        can_browse=True,
+                        can_add=False,
+                    ),
+                    # BrowseCategory(
+                    #     id="playlist-by-category",
+                    #     name="Playlist By Category",
+                    #     url="/catalog/playlist-by-category",
+                    #     can_browse=True,
+                    #     can_add=False,
+                    # ),
+                    BrowseCategory(
+                        id="myweeklyq",
+                        name="My Weekly Q",
+                        description="Every Friday, a selection of discoveries curated especially for you.",
+                        url="/catalog/myweeklyq",
                         can_browse=True,
                         can_add=True,
+                        sub_categories_count=30,
+                        image=AlbumImage(
+                            small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
+                            large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
+                        ),
                     ),
-                ]
+                    BrowseCategory(
+                        id="recent-releases",
+                        name="Still Trending",
+                        url="/catalog/recent-releases",
+                        can_browse=True,
+                        can_add=False,
+                    ),
+                ],
+            )
+        elif endpoint == "new-releases":
+            return self._get_new_releases("new-releases-full", offset, limit)
+        elif endpoint == "qobuz-playlists":
+            return self._get_qobuz_playlists(offset, limit)
+        elif endpoint == "recent-releases":
+            return self._get_new_releases("recent-releases", offset, limit)
+        elif endpoint == "myweeklyq":
+            return self._get_curated_tracks(offset, limit)
 
-        return []
-
-    def get_user_favorites(self, item_type, offset, limit):
+    def _get_new_releases(
+        self,
+        type: str,
+        offset: int = 0,
+        limit: int = 10,
+    ) -> BrowseCategoryList:
         response = self.qobuz_client.session.get(
-            self.qobuz_client.base + "favorite/getUserFavorites",
-            params={"type": item_type, "offset": offset, "limit": limit},
+            self.qobuz_client.base + "/album/getFeatured",
+            params={"type": type, "offset": offset, "limit": limit},
         )
 
-        if response.ok == True:
-            if item_type == "tracks":
-                return self._tracks_to_browse_categories(
-                    response.json()["tracks"]["items"]
-                )
+        if response.ok != True:
+            return EmptyList(offset, limit)
 
-            if item_type == "albums":
-                return self._albums_to_browse_category(
-                    response.json()["albums"]["items"]
-                )
-        return []
+        rjson = response.json()
+
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=rjson["albums"]["total"],
+            items=self._albums_to_browse_category(response.json()["albums"]["items"]),
+        )
+
+    def _get_qobuz_playlists(self, offset: int = 0, limit: int = 10):
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "/playlist/getFeatured",
+            params={"type": "editor-picks", "offset": offset, "limit": limit},
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=rjson["playlists"]["total"],
+            items=self._playlists_to_browse_category(
+                response.json()["playlists"]["items"]
+            ),
+        )
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
         return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
@@ -204,6 +315,7 @@ class QobuzTrackBrowser(TrackBrowser):
                     subname=track["performer"]["name"],
                     can_browse=False,
                     can_add=True,
+                    sub_categories_count=0,
                     url="/track/" + str(track["id"]),
                     image=album["image"],
                 )
@@ -211,15 +323,39 @@ class QobuzTrackBrowser(TrackBrowser):
         return result
 
     def _search_items(self, item_type, query, offset, limit):
-        req = self.qobuz_client.api_call(
-            item_type + "/search", query=query, limit=limit, offset=offset
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + item_type.value + "/search",
+            params={"query": query, "limit": limit, "offset": offset},
         )
 
-        if item_type == "track":
-            return self._tracks_to_browse_categories(req["tracks"]["items"])
+        if response.ok != True:
+            return EmptyList(offset, limit)
 
-        if item_type == "album":
-            return self._albums_to_browse_category(req["albums"]["items"])
+        rjson = response.json()
+
+        if item_type == SearchType.track:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["tracks"]["total"],
+                items=self._tracks_to_browse_categories(rjson["tracks"]["items"]),
+            )
+
+        if item_type == SearchType.album:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["albums"]["total"],
+                items=self._albums_to_browse_category(rjson["albums"]["items"]),
+            )
+
+        if item_type == SearchType.playlist:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["playlists"]["total"],
+                items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
+            )
 
     def _albums_to_browse_category(self, albums):
         return [
@@ -230,14 +366,35 @@ class QobuzTrackBrowser(TrackBrowser):
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
+                sub_categories_count=album["tracks_count"],
                 image=album["image"],
             )
             for album in albums
         ]
 
+    def _playlists_to_browse_category(self, playlists):
+        return [
+            BrowseCategory(
+                id=str(playlist["id"]),
+                name=playlist["name"],
+                subname=playlist["owner"]["name"],
+                description=playlist["description"],
+                url="/playlist/" + str(playlist["id"]),
+                can_browse=True,
+                can_add=True,
+                sub_categories_count=playlist["tracks_count"],
+                image={
+                    "small": playlist["images150"][0],
+                    "large": playlist["image_rectangle"][0],
+                    "thumbnail": playlist["image_rectangle_mini"][0],
+                },
+            )
+            for playlist in playlists
+        ]
+
     def _get_curated_tracks(
-        self, limit: int = None, offset: int = None
-    ) -> list[dict[str, any]]:
+        self, offset: int = 0, limit: int = 30
+    ) -> BrowseCategoryList:
         """
         Get weekly curated tracks for the user.
 
@@ -263,7 +420,18 @@ class QobuzTrackBrowser(TrackBrowser):
         epoint = "dynamic-tracks/get"
         params = {"type": "weekly", "limit": limit, "offset": offset}
 
-        r = self.qobuz_client.session.get(
+        response = self.qobuz_client.session.get(
             self.qobuz_client.base + epoint, params=params
         )
-        return r.json()
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=len(rjson["tracks"]["items"]),
+            items=self._tracks_to_browse_categories(rjson["tracks"]["items"]),
+        )
