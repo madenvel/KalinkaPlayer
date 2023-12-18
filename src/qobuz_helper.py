@@ -356,6 +356,8 @@ class QobuzTrackBrowser(TrackBrowser):
                 total=rjson["playlists"]["total"],
                 items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
             )
+        
+        return EmptyList(offset, limit)
 
     def _albums_to_browse_category(self, albums):
         return [
