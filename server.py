@@ -11,7 +11,7 @@ from src.rest_event_proxy import EventStream
 import logging
 import json
 
-from src.trackbrowser import SearchType
+from src.trackbrowser import BrowseCategory, SearchType
 
 app = FastAPI()
 playqueue, event_listener, trackbrowser = setup()
@@ -36,23 +36,27 @@ def add_tracks_to_queue(items: list[str]):
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/{type}/{entity_id}")
-def add_to_queue(type: str, entity_id: str):
-    if type not in ["album", "playlist", "track"]:
-        return {"error": "Invalid entity type"}
-    if type == "track":
-        playqueue.add(trackbrowser.get_track_info([entity_id]))
-        return {"message": "Ok"}
+@app.get("/queue/add/track/{entity_id}")
+def add_track_to_queue(entity_id: str):
+    playqueue.add(trackbrowser.get_track_info([entity_id]))
+    return {"message": "Ok"}
 
-    tracks = [track.id for track in trackbrowser.browse(type + "/" + entity_id)]
+
+@app.get("/queue/add/album/{entity_id}")
+def add_album_to_queue(entity_id: str):
+    tracks = [
+        track.id for track in trackbrowser.browse_album(entity_id, limit=500).items
+    ]
     playqueue.add(trackbrowser.get_track_info(tracks))
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/album/{album_id}")
-def add_album_to_queue(album_id: str, replace: bool = False):
-    tracks = [track.id for track in trackbrowser.browse("album/" + album_id)]
-    playqueue.add(trackbrowser.get_track_info(tracks), replace=replace)
+@app.get("/queue/add/playlist/{entity_id}")
+def add_playlist_to_queue(entity_id: str):
+    tracks = [
+        track.id for track in trackbrowser.browse_playlist(entity_id, limit=5000).items
+    ]
+    playqueue.add(trackbrowser.get_track_info(tracks))
     return {"message": "Ok"}
 
 

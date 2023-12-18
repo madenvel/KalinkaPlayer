@@ -108,15 +108,15 @@ class QobuzTrackBrowser(TrackBrowser):
         album_meta = rjson.copy()
         del album_meta["tracks"]
 
-        return {
-            "offset": offset,
-            "limit": limit,
-            "total": rjson["tracks"]["total"],
-            "items": self._tracks_to_browse_categories(
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=rjson["tracks"]["total"],
+            items=self._tracks_to_browse_categories(
                 rjson["tracks"]["items"],
                 album_meta=album_meta,
             ),
-        }
+        )
 
     def browse_playlist(
         self, id: str, offset: int = 0, limit: int = 50
