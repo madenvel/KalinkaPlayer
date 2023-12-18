@@ -256,7 +256,12 @@ class PlayQueue(AsyncExecutor):
 
     def list(self, offset: int, limit: int):
         if offset not in range(0, len(self.track_list)):
-            return []
+            return {
+                "offset": offset,
+                "limit": limit,
+                "total": len(self.track_list),
+                "items": [],
+            }
 
         return {
             "offset": offset,
