@@ -148,10 +148,16 @@ class QobuzTrackBrowser(TrackBrowser):
     def browse_favorite(
         self, type: SearchType, offset: int = 0, limit: int = 50
     ) -> BrowseCategoryList:
-        response = self.qobuz_client.session.get(
-            self.qobuz_client.base + "favorite/getUserFavorites",
-            params={"type": type.value + "s", "offset": offset, "limit": limit},
-        )
+        if type == SearchType.playlist:
+            response = self.qobuz_client.session.get(
+                self.qobuz_client.base + "playlist/getUserPlaylists",
+                params={"offset": offset, "limit": limit},
+            )
+        else:
+            response = self.qobuz_client.session.get(
+                self.qobuz_client.base + "favorite/getUserFavorites",
+                params={"type": type.value + "s", "offset": offset, "limit": limit},
+            )
 
         if response.ok != True:
             return EmptyList(offset, limit)
@@ -177,6 +183,16 @@ class QobuzTrackBrowser(TrackBrowser):
                     response.json()["albums"]["items"]
                 ),
             )
+
+        if type == SearchType.playlist:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=rjson["playlists"]["total"],
+                items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
+            )
+
+        return EmptyList(offset, limit)
 
     def browse_catalog(
         self, endpoint: str, offset: int = 0, limit: int = 50
@@ -356,7 +372,7 @@ class QobuzTrackBrowser(TrackBrowser):
                 total=rjson["playlists"]["total"],
                 items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
             )
-        
+
         return EmptyList(offset, limit)
 
     def _albums_to_browse_category(self, albums):
