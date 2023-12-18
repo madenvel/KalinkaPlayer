@@ -70,6 +70,7 @@ class BrowseCategory(BaseModel):
     can_add: bool = False
     sub_categories_count: int = 0
     tags: Optional[List[str]] = None
+    # TODO: Make a list of images instead of a single image for playlists
     image: Optional[AlbumImage] = AlbumImage()
 
 

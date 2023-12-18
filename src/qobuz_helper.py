@@ -385,8 +385,10 @@ class QobuzTrackBrowser(TrackBrowser):
                 sub_categories_count=playlist["tracks_count"],
                 image={
                     "small": playlist["images150"][0],
-                    "large": playlist["image_rectangle"][0],
-                    "thumbnail": playlist["image_rectangle_mini"][0],
+                    "large": playlist.get("image_rectangle", playlist["images300"])[0],
+                    "thumbnail": playlist.get(
+                        "image_rectangle_mini", playlist["images"]
+                    )[0],
                 },
             )
             for playlist in playlists
