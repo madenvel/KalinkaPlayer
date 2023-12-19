@@ -105,6 +105,11 @@ def browse_playlist(entity_id: str, offset: int = 0, limit: int = 10):
     return trackbrowser.browse_playlist(entity_id, offset, limit)
 
 
+@app.get("/browse/artist/{entity_id}")
+def browse_artist(entity_id: str, offset: int = 0, limit: int = 10):
+    return trackbrowser.browse_artist(entity_id, offset, limit)
+
+
 @app.get("/browse/catalog")
 def browse_catalog(offset: int = 0, limit: int = 10):
     return trackbrowser.browse_catalog("", offset, limit)
