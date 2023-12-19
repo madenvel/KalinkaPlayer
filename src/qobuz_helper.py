@@ -145,6 +145,31 @@ class QobuzTrackBrowser(TrackBrowser):
             ),
         )
 
+    def browse_artist(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseCategoryList:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "artist/get",
+            params={
+                "artist_id": id,
+                "offset": offset,
+                "limit": limit,
+                "extra": "albums",
+            },
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+
+        return BrowseCategoryList(
+            offset=offset,
+            limit=limit,
+            total=rjson["albums"]["total"],
+            items=self._albums_to_browse_category(response.json()["albums"]["items"]),
+        )
+
     def browse_favorite(
         self, type: SearchType, offset: int = 0, limit: int = 50
     ) -> BrowseCategoryList:

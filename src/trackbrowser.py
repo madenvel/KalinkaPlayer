@@ -117,6 +117,12 @@ class TrackBrowser(ABC):
         pass
 
     @abstractmethod
+    def browse_artist(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseCategoryList:
+        pass
+
+    @abstractmethod
     def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         pass
 
