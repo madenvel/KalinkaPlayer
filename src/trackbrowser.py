@@ -12,7 +12,6 @@ class AlbumImage(BaseModel):
     small: Optional[str] = ""
     thumbnail: Optional[str] = ""
     large: Optional[str] = ""
-    back: Optional[str] = ""
 
 
 class Label(BaseModel):
@@ -63,8 +62,8 @@ class TrackUrl(BaseModel):
 class BrowseCategory(BaseModel):
     id: str
     name: str
-    subname: str = ""
-    description: str = ""
+    subname: Optional[str] = None
+    description: Optional[str] = None
     url: str = ""
     can_browse: bool = False
     can_add: bool = False

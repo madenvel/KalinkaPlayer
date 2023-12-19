@@ -162,37 +162,7 @@ class QobuzTrackBrowser(TrackBrowser):
         if response.ok != True:
             return EmptyList(offset, limit)
 
-        rjson = response.json()
-
-        if type == SearchType.track:
-            return BrowseCategoryList(
-                offset=offset,
-                limit=limit,
-                total=rjson["tracks"]["total"],
-                items=self._tracks_to_browse_categories(
-                    response.json()["tracks"]["items"]
-                ),
-            )
-
-        if type == SearchType.album:
-            return BrowseCategoryList(
-                offset=offset,
-                limit=limit,
-                total=rjson["albums"]["total"],
-                items=self._albums_to_browse_category(
-                    response.json()["albums"]["items"]
-                ),
-            )
-
-        if type == SearchType.playlist:
-            return BrowseCategoryList(
-                offset=offset,
-                limit=limit,
-                total=rjson["playlists"]["total"],
-                items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
-            )
-
-        return EmptyList(offset, limit)
+        return self._format_list_response(response.json(), offset, limit)
 
     def browse_catalog(
         self, endpoint: str, offset: int = 0, limit: int = 50
@@ -347,33 +317,63 @@ class QobuzTrackBrowser(TrackBrowser):
         if response.ok != True:
             return EmptyList(offset, limit)
 
-        rjson = response.json()
+        return self._format_list_response(response.json(), offset, limit)
 
-        if item_type == SearchType.track:
+    def _format_list_response(self, items, offset, limit):
+        if "tracks" in items:
             return BrowseCategoryList(
                 offset=offset,
                 limit=limit,
-                total=rjson["tracks"]["total"],
-                items=self._tracks_to_browse_categories(rjson["tracks"]["items"]),
+                total=items["tracks"]["total"],
+                items=self._tracks_to_browse_categories(items["tracks"]["items"]),
             )
 
-        if item_type == SearchType.album:
+        if "albums" in items:
             return BrowseCategoryList(
                 offset=offset,
                 limit=limit,
-                total=rjson["albums"]["total"],
-                items=self._albums_to_browse_category(rjson["albums"]["items"]),
+                total=items["albums"]["total"],
+                items=self._albums_to_browse_category(items["albums"]["items"]),
             )
 
-        if item_type == SearchType.playlist:
+        if "playlists" in items:
             return BrowseCategoryList(
                 offset=offset,
                 limit=limit,
-                total=rjson["playlists"]["total"],
-                items=self._playlists_to_browse_category(rjson["playlists"]["items"]),
+                total=items["playlists"]["total"],
+                items=self._playlists_to_browse_category(items["playlists"]["items"]),
+            )
+
+        if "artists" in items:
+            return BrowseCategoryList(
+                offset=offset,
+                limit=limit,
+                total=items["artists"]["total"],
+                items=self._artists_to_browse_category(items["artists"]["items"]),
             )
 
         return EmptyList(offset, limit)
+
+    def _artists_to_browse_category(self, artists):
+        return [
+            BrowseCategory(
+                id=str(artist["id"]),
+                name=artist["name"],
+                subname=None,
+                url="/artist/" + str(artist["id"]),
+                can_browse=True,
+                can_add=False,
+                sub_categories_count=artist["albums_count"],
+                image=AlbumImage(
+                    thumbnail=artist["image"].get("small", None),
+                    small=artist["image"].get("medium", None),
+                    large=artist["image"].get("large", None),
+                )
+                if artist["image"]
+                else None,
+            )
+            for artist in artists
+        ]
 
     def _albums_to_browse_category(self, albums):
         return [
@@ -385,7 +385,13 @@ class QobuzTrackBrowser(TrackBrowser):
                 can_browse=True,
                 can_add=True,
                 sub_categories_count=album["tracks_count"],
-                image=album["image"],
+                image=AlbumImage(
+                    thumbnail=album["image"].get("thumbnail", None),
+                    small=album["image"].get("small", None),
+                    large=album["image"].get("large", None),
+                )
+                if "image" in album and album["image"]
+                else None,
             )
             for album in albums
         ]
@@ -402,10 +408,12 @@ class QobuzTrackBrowser(TrackBrowser):
                 can_add=True,
                 sub_categories_count=playlist["tracks_count"],
                 image={
-                    "small": playlist["images150"][0],
-                    "large": playlist.get("image_rectangle", playlist["images300"])[0],
+                    "small": playlist.get("images150", [None])[0],
+                    "large": playlist.get(
+                        "image_rectangle", playlist.get("images300", [None])
+                    )[0],
                     "thumbnail": playlist.get(
-                        "image_rectangle_mini", playlist["images"]
+                        "image_rectangle_mini", playlist.get("images", [None])
                     )[0],
                 },
             )
