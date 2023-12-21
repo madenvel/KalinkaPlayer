@@ -3,8 +3,12 @@ import logging
 import time
 from src.rpiasync import EventEmitter, EventListener
 from queue import Queue
-from src.qobuz_autoplay import QobuzAutoplay
-from src.qobuz_helper import QobuzTrackBrowser, get_client, get_track_url
+from addons.music_source.qobuz_autoplay import QobuzAutoplay
+from addons.music_source.qobuz_helper import (
+    QobuzTrackBrowser,
+    get_client,
+    get_track_url,
+)
 
 from src.playqueue import EventType, PlayQueue
 from src.track_url_retriever import TrackUrlRetriever

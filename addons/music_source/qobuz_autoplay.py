@@ -3,7 +3,7 @@ import logging
 from qobuz_dl.qopy import Client
 
 from src.playqueue import PlayQueue
-from src.qobuz_helper import get_track_url, metadata_from_track
+from .qobuz_helper import get_track_url, metadata_from_track
 from src.trackbrowser import TrackBrowser, TrackInfo
 
 import json
