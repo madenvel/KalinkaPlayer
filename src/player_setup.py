@@ -13,6 +13,7 @@ from addons.music_source.qobuz_helper import (
 from src.playqueue import EventType, PlayQueue
 from src.track_url_retriever import TrackUrlRetriever
 from src.trackbrowser import SourceType, TrackBrowser
+from addons.device.musiccast import Device
 
 
 def setup_autoplay(
@@ -27,6 +28,15 @@ def setup_autoplay(
     event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
 
 
+def setup_device(playqueue: PlayQueue, event_listener: EventListener):
+    device = Device()
+    event_listener.subscribe(EventType.Playing, device._on_playing)
+    event_listener.subscribe(EventType.Paused, device._on_paused_or_stopped)
+    event_listener.subscribe(EventType.Stopped, device._on_paused_or_stopped)
+
+    return device
+
+
 def setup():
     client = get_client()
     trackbrowser = QobuzTrackBrowser(client)
@@ -37,5 +47,6 @@ def setup():
     url_retriever.register(SourceType.QOBUZ, partial(get_track_url, client))
     playqueue = PlayQueue(event_emitter)
     setup_autoplay(client, playqueue, trackbrowser, event_listener)
+    device = setup_device(playqueue, event_listener)
 
-    return playqueue, event_listener, trackbrowser
+    return playqueue, event_listener, trackbrowser, device

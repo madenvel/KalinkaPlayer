@@ -14,7 +14,7 @@ import json
 from src.trackbrowser import BrowseCategory, SearchType
 
 app = FastAPI()
-playqueue, event_listener, trackbrowser = setup()
+playqueue, event_listener, trackbrowser, device = setup()
 logger = logging.getLogger(__name__)
 
 
@@ -155,4 +155,32 @@ async def clear():
 @app.get("/queue/remove")
 async def remove(index: int):
     playqueue.remove([index])
+    return {"message": "Ok"}
+
+
+@app.get("/device/list")
+async def set_device_params():
+    return device.supported_functions()
+
+
+@app.get("/device/get_volume")
+async def get_volume(device_id: str):
+    return {"volume": device.get_volume()}
+
+
+@app.get("/device/set_volume")
+async def set_volume(device_id: str, volume: float):
+    device.set_volume(volume)
+    return {"message": "Ok"}
+
+
+@app.get("/device/power_on")
+async def power_on(device_id: str):
+    device.power_on()
+    return {"message": "Ok"}
+
+
+@app.get("/device/power_off")
+async def power_off(device_id: str):
+    device.power_off()
     return {"message": "Ok"}

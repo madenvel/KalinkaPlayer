@@ -1,18 +1,45 @@
 import requests
 import logging
+from src.events import EventType
 
 from src.ext_device import SupportedFunction
+from src.playqueue import PlayQueue
+from src.rpiasync import EventListener
+import threading
 
 logger = logging.getLogger(__name__)
 
 
-class ExternalOutputDevice:
-    def __init__(self, device_addr, device_port, connected_input):
-        self.connected_output = connected_input
+class Device:
+    def __init__(self):
+        self.connected_input = "optical2"
+        device_addr = "192.168.3.33"
+        device_port = 80
         self.session = requests.Session()
         self.base_url = f"http://{device_addr}:{device_port}/YamahaExtendedControl/v1"
         status = self._get_status()
         self.volume_limits = (0, status["max_volume"])
+        self.timer = None
+
+    def _on_paused_or_stopped(self):
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+
+        self.timer = threading.Timer(60.0, self._self_power_off)
+        self.timer.start()
+
+    def _self_power_off(self):
+        status = self._get_status()
+        if status["input"] == self.connected_input:
+            self.power_off()
+
+    def _on_playing(self):
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+
+        self.power_on()
 
     def _get_status(self):
         response = self._request_musiccast("/main/getStatus")
@@ -36,12 +63,13 @@ class ExternalOutputDevice:
         if "volume" not in status:
             return 0
 
-        return status["volume"] / self.volume_limits[1] * 100
+        return (status["volume"] - self.volume_limits[0]) / self.volume_limits[1]
 
     def set_volume(self, volume: float) -> None:
-        self._request_musiccast(
-            f"/main/setVolume?volume={self.volume_limits[0] + self.volume_limits[1] * volume / 100}"
+        response = self._request_musiccast(
+            f"/main/setVolume?volume={int(self.volume_limits[0] + self.volume_limits[1] * volume)}"
         )
+        logger.info(response)
 
     def power_on(self) -> None:
         if self.is_power_on():
