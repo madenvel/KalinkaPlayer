@@ -60,6 +60,17 @@ def add_playlist_to_queue(entity_id: str):
     return {"message": "Ok"}
 
 
+@app.get("/queue/add/catalog/{entity_id}")
+def add_catalog_entry_to_queue(entity_id: str):
+    tracks = [
+        track.id
+        for track in trackbrowser.browse_catalog(entity_id, limit=5000).items
+        if track.can_add is True
+    ]
+    playqueue.add(trackbrowser.get_track_info(tracks))
+    return {"message": "Ok"}
+
+
 @app.get("/queue/play")
 async def queue_play(index: Union[int, None] = None):
     playqueue.play(index)
