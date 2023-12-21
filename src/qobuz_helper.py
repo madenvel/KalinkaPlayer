@@ -67,6 +67,10 @@ def metadata_from_track(track, album_meta={}):
         "title": track["title"],
         "performer": Artist(
             name=track["performer"]["name"], id=str(track["performer"]["id"])
+        )
+        if "performer" in track
+        else Artist(
+            name=album_info.get("name", None), id=str(album_info.get("id", None))
         ),
         "duration": track["duration"],
         "album": Album(
@@ -323,7 +327,9 @@ class QobuzTrackBrowser(TrackBrowser):
                 BrowseCategory(
                     id=str(track["id"]),
                     name=track["title"],
-                    subname=track["performer"]["name"],
+                    subname=track["performer"]["name"]
+                    if "performer" in track
+                    else album.get("artist", {"name": None})["name"],
                     can_browse=False,
                     can_add=True,
                     sub_categories_count=0,

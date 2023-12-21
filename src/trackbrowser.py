@@ -34,8 +34,8 @@ class Album(BaseModel):
 
 
 class Artist(BaseModel):
-    name: str
-    id: str
+    name: Optional[str] = None
+    id: Optional[str] = None
 
 
 class TrackMetadata(BaseModel):
