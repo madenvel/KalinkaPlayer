@@ -131,8 +131,10 @@ class Device:
             state.get("volume", self.volume.current_volume)
             != self.volume.current_volume
         ):
-            self.current_volume = state["volume"]
-            self.event_emitter.dispatch(EventType.VolumeChanged, self.volume)
+            self.volume.current_volume = state["volume"]
+            self.event_emitter.dispatch(
+                EventType.VolumeChanged, self.volume.current_volume
+            )
 
         if (
             state.get("power", None) == "standby"
