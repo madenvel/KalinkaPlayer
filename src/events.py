@@ -13,3 +13,6 @@ class EventType(Enum):
     TracksAdded = "track_added"
     TracksRemoved = "track_removed"
     NetworkError = "network_error"
+    FavoriteAdded = "favorite_added"
+    FavoriteRemoved = "favorite_removed"
+    VolumeChanged = "volume_changed"

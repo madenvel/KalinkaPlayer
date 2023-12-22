@@ -1,33 +1,150 @@
+import time
 import requests
 import logging
 from src.events import EventType
 
 from src.ext_device import SupportedFunction
 from src.playqueue import PlayQueue
-from src.rpiasync import EventListener
+from src.rpiasync import EventEmitter
+
 import threading
+
+import socket
+import random
+import json
 
 logger = logging.getLogger(__name__)
 
 
+def is_port_available(port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    sock.settimeout(1)
+
+    try:
+        # Try to bind to the specified port
+        sock.bind(("0.0.0.0", port))
+        return True
+    except socket.error:
+        return False
+    finally:
+        # Close the socket
+        sock.close()
+
+
+def find_available_port(start_range=49152, end_range=65535):
+    # We expect that we will find an available port within 100 tries
+    for _ in range(100):
+        port = random.randint(start_range, end_range)
+
+        logger.info(f"Checking port {port}")
+        if is_port_available(port):
+            return port
+
+        logger.info(f"Port {port} is not available")
+
+    # If no available port is found, return None
+    return None
+
+
 class Device:
-    def __init__(self):
+    def __init__(self, playqueue: PlayQueue, event_emitter: EventEmitter):
+        self.playqueue = playqueue
+        self.event_emitter = event_emitter
         self.connected_input = "optical2"
-        device_addr = "192.168.3.33"
-        device_port = 80
+        self.device_addr = "192.168.3.33"
+        self.device_port = 80
         self.session = requests.Session()
-        self.base_url = f"http://{device_addr}:{device_port}/YamahaExtendedControl/v1"
+        self.base_url = (
+            f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
+        )
         status = self._get_status()
         self.volume_limits = (0, status["max_volume"])
-        self.timer = None
+        state = self._get_status()
+        self.volume = state["volume"]
+
+        self.poweroff_timer = None
+        self.udp_port = find_available_port()
+        if self.udp_port is None:
+            raise Exception("Could not find available UDP port")
+        logger.info(f"Using UDP port {self.udp_port}")
+        self.terminate = False
+        self.event_loop_thread = threading.Thread(target=self._event_loop, daemon=True)
+        self.event_loop_thread.start()
+        self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+        self.timer_thread.start()
+
+    def _timer_loop(self):
+        # Recommended poll time for main zone is 5 seconds
+        # But we do not poll and instead rely on events
+        while self.terminate is False:
+            try:
+                self._get_status(
+                    headers={
+                        "X-AppName": "MusicCast/1.0(Linux)",
+                        "X-AppPort": str(self.udp_port),
+                    }
+                )
+
+                time.sleep(300)
+            except Exception as e:
+                logger.error(e)
+                time.sleep(10)
+
+    def _event_loop(self):
+        while self.terminate is False:
+            try:
+                udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+                # Bind the socket to a specific address and port
+                address = "0.0.0.0"
+                udp_socket.bind((address, self.udp_port))
+                logger.info(
+                    f"Listening for MusicCast events on {address}:{self.udp_port}"
+                )
+
+                while self.terminate is False:
+                    # Receive data from the client
+                    data, client_address = udp_socket.recvfrom(1024)
+                    event_json = json.loads(data.decode("utf-8"))
+                    self._handle_event(event_json)
+
+            except Exception as e:
+                logger.error(f"Caught an exception, restarting: {e}")
+                udp_socket.close()
+                time.sleep(10)
+
+    def _handle_event(self, event_json):
+        # "main":{
+        # "power":"on",
+        # "input":"optical2",
+        # "volume":30,
+        # "mute":false,
+        # "status_updated":true
+        # }
+        if "main" not in event_json:
+            return
+
+        state = event_json["main"]
+
+        if state.get("volume", self.volume) != self.volume:
+            self.volume = state["volume"]
+            self.event_emitter.dispatch(EventType.VolumeChanged, self.get_volume())
+
+        if (
+            state.get("power", None) == "standby"
+            or state.get("input", self.connected_input) != self.connected_input
+        ):
+            self.playqueue.stop()
+            return
 
     def _on_paused_or_stopped(self):
-        if self.timer is not None:
-            self.timer.cancel()
-            self.timer = None
+        if self.poweroff_timer is not None:
+            self.poweroff_timer.cancel()
+            self.poweroff_timer = None
 
-        self.timer = threading.Timer(60.0, self._self_power_off)
-        self.timer.start()
+        self.poweroff_timer = threading.Timer(60.0, self._self_power_off)
+        self.poweroff_timer.start()
 
     def _self_power_off(self):
         status = self._get_status()
@@ -35,14 +152,13 @@ class Device:
             self.power_off()
 
     def _on_playing(self):
-        if self.timer is not None:
-            self.timer.cancel()
-            self.timer = None
-
+        if self.poweroff_timer is not None:
+            self.poweroff_timer.cancel()
+            self.poweroff_timer = None
         self.power_on()
 
-    def _get_status(self):
-        response = self._request_musiccast("/main/getStatus")
+    def _get_status(self, headers=None):
+        response = self._request_musiccast("/main/getStatus", headers=headers)
         if response["response_code"] != 0:
             logger.warn("MusicCast returned error code %d", response["response_code"])
 
@@ -51,25 +167,21 @@ class Device:
     def _set_input(self):
         self._request_musiccast(f"/main/setInput?input={self.connected_input}")
 
-    def _request_musiccast(self, endpoint):
-        response = self.session.get(self.base_url + endpoint)
+    def _request_musiccast(self, endpoint, headers=None):
+        response = self.session.get(self.base_url + endpoint, headers=headers)
         if response.status_code != 200:
             raise Exception(f"MusicCast returned {response.status_code}")
 
         return response.json()
 
     def get_volume(self) -> float:
-        status = self._get_status()
-        if "volume" not in status:
-            return 0
-
-        return (status["volume"] - self.volume_limits[0]) / self.volume_limits[1]
+        return (self.volume - self.volume_limits[0]) / self.volume_limits[1]
 
     def set_volume(self, volume: float) -> None:
-        response = self._request_musiccast(
-            f"/main/setVolume?volume={int(self.volume_limits[0] + self.volume_limits[1] * volume)}"
-        )
-        logger.info(response)
+        new_volume = int(self.volume_limits[0] + self.volume_limits[1] * volume)
+        if new_volume != self.volume:
+            self.volume = new_volume
+            self._request_musiccast(f"/main/setVolume?volume={new_volume}")
 
     def power_on(self) -> None:
         if self.is_power_on():

@@ -28,8 +28,10 @@ def setup_autoplay(
     event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
 
 
-def setup_device(playqueue: PlayQueue, event_listener: EventListener):
-    device = Device()
+def setup_device(
+    playqueue: PlayQueue, event_listener: EventListener, event_emitter: EventEmitter
+):
+    device = Device(playqueue, event_emitter)
     event_listener.subscribe(EventType.Playing, device._on_playing)
     event_listener.subscribe(EventType.Paused, device._on_paused_or_stopped)
     event_listener.subscribe(EventType.Stopped, device._on_paused_or_stopped)
@@ -47,6 +49,6 @@ def setup():
     url_retriever.register(SourceType.QOBUZ, partial(get_track_url, client))
     playqueue = PlayQueue(event_emitter)
     setup_autoplay(client, playqueue, trackbrowser, event_listener)
-    device = setup_device(playqueue, event_listener)
+    device = setup_device(playqueue, event_listener, event_emitter)
 
     return playqueue, event_listener, trackbrowser, device
