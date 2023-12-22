@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 
-import asyncio
 from typing import Union
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from sse_starlette.sse import EventSourceResponse
+from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
 import logging
 import json
 
-from src.trackbrowser import BrowseCategory, SearchType
+from src.trackbrowser import SearchType
 
 app = FastAPI()
 playqueue, event_listener, trackbrowser, device = setup()
@@ -175,23 +174,11 @@ async def set_device_params():
 
 
 @app.get("/device/get_volume")
-async def get_volume(device_id: str):
-    return {"volume": device.get_volume()}
+async def get_volume(device_id: str) -> Volume:
+    return device.get_volume()
 
 
 @app.get("/device/set_volume")
-async def set_volume(device_id: str, volume: float):
+async def set_volume(device_id: str, volume: int):
     device.set_volume(volume)
-    return {"message": "Ok"}
-
-
-@app.get("/device/power_on")
-async def power_on(device_id: str):
-    device.power_on()
-    return {"message": "Ok"}
-
-
-@app.get("/device/power_off")
-async def power_off(device_id: str):
-    device.power_off()
     return {"message": "Ok"}

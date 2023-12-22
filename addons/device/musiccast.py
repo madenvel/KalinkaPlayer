@@ -3,7 +3,7 @@ import requests
 import logging
 from src.events import EventType
 
-from src.ext_device import SupportedFunction
+from src.ext_device import SupportedFunction, Volume
 from src.playqueue import PlayQueue
 from src.rpiasync import EventEmitter
 
@@ -59,9 +59,9 @@ class Device:
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
         )
         status = self._get_status()
-        self.volume_limits = (0, status["max_volume"])
-        state = self._get_status()
-        self.volume = state["volume"]
+        self.volume = Volume(
+            max_volume=status["max_volume"], current_volume=status["volume"]
+        )
 
         self.poweroff_timer = None
         self.udp_port = find_available_port()
@@ -127,9 +127,12 @@ class Device:
 
         state = event_json["main"]
 
-        if state.get("volume", self.volume) != self.volume:
-            self.volume = state["volume"]
-            self.event_emitter.dispatch(EventType.VolumeChanged, self.get_volume())
+        if (
+            state.get("volume", self.volume.current_volume)
+            != self.volume.current_volume
+        ):
+            self.current_volume = state["volume"]
+            self.event_emitter.dispatch(EventType.VolumeChanged, self.volume)
 
         if (
             state.get("power", None) == "standby"
@@ -174,14 +177,13 @@ class Device:
 
         return response.json()
 
-    def get_volume(self) -> float:
-        return (self.volume - self.volume_limits[0]) / self.volume_limits[1]
+    def get_volume(self) -> Volume:
+        return self.volume
 
-    def set_volume(self, volume: float) -> None:
-        new_volume = int(self.volume_limits[0] + self.volume_limits[1] * volume)
-        if new_volume != self.volume:
-            self.volume = new_volume
-            self._request_musiccast(f"/main/setVolume?volume={new_volume}")
+    def set_volume(self, volume: int) -> None:
+        if volume != self.volume.current_volume:
+            self.volume.current_volume = volume
+            self._request_musiccast(f"/main/setVolume?volume={volume}")
 
     def power_on(self) -> None:
         if self.is_power_on():

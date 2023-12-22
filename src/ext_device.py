@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
+from pydantic import BaseModel
 
 
 class SupportedFunction(Enum):
@@ -10,13 +11,18 @@ class SupportedFunction(Enum):
     POWER_OFF = "power_off"
 
 
+class Volume(BaseModel):
+    max_volume: int
+    current_volume: int
+
+
 class ExternalOutputDevice(ABC):
     @abstractmethod
-    def get_volume(self) -> float:
+    def get_volume(self) -> Volume:
         pass
 
     @abstractmethod
-    def set_volume(self, volume: float) -> None:
+    def set_volume(self, volume: int) -> None:
         pass
 
     @abstractmethod
