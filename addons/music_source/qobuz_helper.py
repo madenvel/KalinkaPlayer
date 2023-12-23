@@ -70,7 +70,8 @@ def metadata_from_track(track, album_meta={}):
         )
         if "performer" in track
         else Artist(
-            name=album_info.get("name", None), id=str(album_info.get("id", None))
+            name=album_info["artist"].get("name", None),
+            id=str(album_info["artist"].get("id", None)),
         ),
         "duration": track["duration"],
         "album": Album(
