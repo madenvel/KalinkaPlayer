@@ -5,18 +5,27 @@ from qobuz_dl.bundle import Bundle
 from functools import partial
 
 from src.trackbrowser import (
-    Album,
-    AlbumImage,
-    Artist,
-    BrowseCategoryList,
-    EmptyList,
-    Genre,
-    Label,
     SearchType,
     TrackBrowser,
     TrackInfo,
-    BrowseCategory,
     TrackUrl,
+)
+
+from data_model.datamodel import (
+    Album,
+    AlbumImage,
+    Artist,
+    BrowseItem,
+    BrowseItemList,
+    Catalog,
+    CatalogImage,
+    EmptyList,
+    Genre,
+    Label,
+    Owner,
+    Playlist,
+    PlaylistImage,
+    Track,
 )
 
 import json
@@ -94,12 +103,10 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
-    ) -> list[BrowseCategory]:
+    ) -> list[BrowseItem]:
         return self._search_items(type, query, offset, limit)
 
-    def browse_album(
-        self, id: str, offset: int = 0, limit: int = 50
-    ) -> BrowseCategoryList:
+    def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "album/get",
             params={"album_id": id, "offset": offset, "limit": limit},
@@ -113,7 +120,7 @@ class QobuzTrackBrowser(TrackBrowser):
         album_meta = rjson.copy()
         del album_meta["tracks"]
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=rjson["tracks"]["total"],
@@ -125,7 +132,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def browse_playlist(
         self, id: str, offset: int = 0, limit: int = 50
-    ) -> BrowseCategoryList:
+    ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "playlist/get",
             params={
@@ -141,7 +148,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
         rjson = response.json()
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=rjson["tracks"]["total"],
@@ -152,7 +159,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def browse_artist(
         self, id: str, offset: int = 0, limit: int = 50
-    ) -> BrowseCategoryList:
+    ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "artist/get",
             params={
@@ -168,7 +175,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
         rjson = response.json()
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=rjson["albums"]["total"],
@@ -177,7 +184,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def browse_favorite(
         self, type: SearchType, offset: int = 0, limit: int = 50
-    ) -> BrowseCategoryList:
+    ) -> BrowseItemList:
         if type == SearchType.playlist:
             response = self.qobuz_client.session.get(
                 self.qobuz_client.base + "playlist/getUserPlaylists",
@@ -196,26 +203,28 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def browse_catalog(
         self, endpoint: str, offset: int = 0, limit: int = 50
-    ) -> BrowseCategoryList:
+    ) -> BrowseItemList:
         if endpoint == "":
-            return BrowseCategoryList(
+            return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=4,
                 items=[
-                    BrowseCategory(
+                    BrowseItem(
                         id="new-releases",
                         name="New Releases",
                         url="/catalog/new-releases",
                         can_browse=True,
                         can_add=False,
+                        catalog=Catalog(id="new-releases", title="New Releases"),
                     ),
-                    BrowseCategory(
+                    BrowseItem(
                         id="qobuz-playlists",
                         name="Qobuz Playlists",
                         url="/catalog/qobuz-playlists",
                         can_browse=True,
                         can_add=False,
+                        catalog=Catalog(id="qobuz-playlists", title="Qobuz Playlists"),
                     ),
                     # BrowseCategory(
                     #     id="playlist-by-category",
@@ -224,25 +233,29 @@ class QobuzTrackBrowser(TrackBrowser):
                     #     can_browse=True,
                     #     can_add=False,
                     # ),
-                    BrowseCategory(
+                    BrowseItem(
                         id="myweeklyq",
                         name="My Weekly Q",
-                        description="Every Friday, a selection of discoveries curated especially for you.",
                         url="/catalog/myweeklyq",
                         can_browse=True,
                         can_add=True,
-                        sub_categories_count=30,
-                        image=AlbumImage(
-                            small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
-                            large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
+                        catalog=Catalog(
+                            id="myweeklyq",
+                            title="My Weekly Q",
+                            description="Every Friday, a selection of discoveries curated especially for you.",
+                            image=CatalogImage(
+                                small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
+                                large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
+                            ),
                         ),
                     ),
-                    BrowseCategory(
+                    BrowseItem(
                         id="recent-releases",
                         name="Still Trending",
                         url="/catalog/recent-releases",
                         can_browse=True,
                         can_add=False,
+                        catalog=Catalog(id="recent-releases", title="Still Trending"),
                     ),
                 ],
             )
@@ -260,7 +273,7 @@ class QobuzTrackBrowser(TrackBrowser):
         type: str,
         offset: int = 0,
         limit: int = 10,
-    ) -> BrowseCategoryList:
+    ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/album/getFeatured",
             params={"type": type, "offset": offset, "limit": limit},
@@ -271,7 +284,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
         rjson = response.json()
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=rjson["albums"]["total"],
@@ -289,7 +302,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
         rjson = response.json()
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=rjson["playlists"]["total"],
@@ -325,7 +338,7 @@ class QobuzTrackBrowser(TrackBrowser):
             )
             album = track.get("album", album_meta)
             result.append(
-                BrowseCategory(
+                BrowseItem(
                     id=str(track["id"]),
                     name=track["title"],
                     subname=track["performer"]["name"]
@@ -333,9 +346,27 @@ class QobuzTrackBrowser(TrackBrowser):
                     else album.get("artist", {"name": None})["name"],
                     can_browse=False,
                     can_add=True,
-                    sub_categories_count=0,
                     url="/track/" + str(track["id"]),
-                    image=album["image"],
+                    track=Track(
+                        id=str(track["id"]),
+                        title=track["title"],
+                        duration=track["duration"],
+                        performer=Artist(
+                            id=str(track["performer"]["id"]),
+                            name=track["performer"]["name"],
+                        )
+                        if "performer" in track
+                        else None,
+                        album=Album(
+                            id=str(album["id"]),
+                            title=album["title"],
+                            artist=Artist(
+                                name=album["artist"]["name"],
+                                id=str(album["artist"]["id"]),
+                            ),
+                            image=AlbumImage(**album["image"]),
+                        ),
+                    ),
                 )
             )
         return result
@@ -353,7 +384,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def _format_list_response(self, items, offset, limit):
         if "tracks" in items:
-            return BrowseCategoryList(
+            return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=items["tracks"]["total"],
@@ -361,7 +392,7 @@ class QobuzTrackBrowser(TrackBrowser):
             )
 
         if "albums" in items:
-            return BrowseCategoryList(
+            return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=items["albums"]["total"],
@@ -369,7 +400,7 @@ class QobuzTrackBrowser(TrackBrowser):
             )
 
         if "playlists" in items:
-            return BrowseCategoryList(
+            return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=items["playlists"]["total"],
@@ -377,7 +408,7 @@ class QobuzTrackBrowser(TrackBrowser):
             )
 
         if "artists" in items:
-            return BrowseCategoryList(
+            return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=items["artists"]["total"],
@@ -388,7 +419,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def _artists_to_browse_category(self, artists):
         return [
-            BrowseCategory(
+            BrowseItem(
                 id=str(artist["id"]),
                 name=artist["name"],
                 subname=None,
@@ -409,52 +440,72 @@ class QobuzTrackBrowser(TrackBrowser):
 
     def _albums_to_browse_category(self, albums):
         return [
-            BrowseCategory(
-                id=album["id"],
+            BrowseItem(
+                id=str(album["id"]),
                 name=album["title"],
                 subname=album["artist"]["name"],
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
-                sub_categories_count=album["tracks_count"],
-                image=AlbumImage(
-                    thumbnail=album["image"].get("thumbnail", None),
-                    small=album["image"].get("small", None),
-                    large=album["image"].get("large", None),
-                )
-                if "image" in album and album["image"]
-                else None,
+                album=Album(
+                    id=str(album["id"]),
+                    title=album["title"],
+                    artist=Artist(
+                        name=album["artist"]["name"], id=str(album["artist"]["id"])
+                    ),
+                    image=AlbumImage(
+                        thumbnail=album["image"].get("thumbnail", None),
+                        small=album["image"].get("small", None),
+                        large=album["image"].get("large", None),
+                    )
+                    if "image" in album and album["image"]
+                    else None,
+                    duration=album["duration"],
+                    track_count=album["tracks_count"],
+                    genre=Genre(
+                        id=str(album["genre"]["id"]), name=album["genre"]["name"]
+                    ),
+                ),
             )
             for album in albums
         ]
 
     def _playlists_to_browse_category(self, playlists):
         return [
-            BrowseCategory(
+            BrowseItem(
                 id=str(playlist["id"]),
                 name=playlist["name"],
                 subname=playlist["owner"]["name"],
-                description=playlist["description"],
                 url="/playlist/" + str(playlist["id"]),
                 can_browse=True,
                 can_add=True,
-                sub_categories_count=playlist["tracks_count"],
-                image={
-                    "small": playlist.get("images150", [None])[0],
-                    "large": playlist.get(
-                        "image_rectangle", playlist.get("images300", [None])
-                    )[0],
-                    "thumbnail": playlist.get(
-                        "image_rectangle_mini", playlist.get("images", [None])
-                    )[0],
-                },
+                playlist=self._qobuz_playlist_to_playlist(playlist),
             )
             for playlist in playlists
         ]
 
-    def _get_curated_tracks(
-        self, offset: int = 0, limit: int = 30
-    ) -> BrowseCategoryList:
+    def _qobuz_playlist_to_playlist(self, playlist):
+        return Playlist(
+            id=str(playlist["id"]),
+            name=playlist["name"],
+            owner=Owner(
+                name=playlist["owner"]["name"],
+                id=str(playlist["owner"]["id"]),
+            ),
+            image=PlaylistImage(
+                small=playlist.get("images150", [None])[0],
+                large=playlist.get(
+                    "image_rectangle", playlist.get("images300", [None])
+                )[0],
+                thumbnail=playlist.get(
+                    "image_rectangle_mini", playlist.get("images", [None])
+                )[0],
+            ),
+            description=playlist["description"],
+            track_count=playlist["tracks_count"],
+        )
+
+    def _get_curated_tracks(self, offset: int = 0, limit: int = 30) -> BrowseItemList:
         """
         Get weekly curated tracks for the user.
 
@@ -489,7 +540,7 @@ class QobuzTrackBrowser(TrackBrowser):
 
         rjson = response.json()
 
-        return BrowseCategoryList(
+        return BrowseItemList(
             offset=offset,
             limit=limit,
             total=len(rjson["tracks"]["items"]),

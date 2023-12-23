@@ -268,7 +268,7 @@ class PlayQueue(AsyncExecutor):
             "limit": limit,
             "total": len(self.track_list),
             "items": [
-                self.get_track_info(i)
+                {"track": self.get_track_info(i)}
                 for i in range(offset, min(offset + limit, len(self.track_list)))
             ],
         }
@@ -277,9 +277,7 @@ class PlayQueue(AsyncExecutor):
         if index not in range(0, len(self.track_list)):
             return None
         track_info: TrackInfo = self.track_list[index]
-        return {
-            "index": index,
-        } | track_info.metadata.model_dump()
+        return track_info.metadata.model_dump(exclude_unset=True)
 
     def get_state(self):
         return {
