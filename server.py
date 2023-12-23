@@ -102,37 +102,49 @@ async def read_queue_stop():
 
 @app.get("/browse/favorite/{type}")
 async def browse_favorite(type: SearchType, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_favorite(type, offset, limit)
+    return trackbrowser.browse_favorite(type, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/browse/album/{entity_id}")
 def browse_album(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_album(entity_id, offset, limit)
+    return trackbrowser.browse_album(entity_id, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/browse/playlist/{entity_id}")
 def browse_playlist(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_playlist(entity_id, offset, limit)
+    return trackbrowser.browse_playlist(entity_id, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/browse/artist/{entity_id}")
 def browse_artist(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_artist(entity_id, offset, limit)
+    return trackbrowser.browse_artist(entity_id, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/browse/catalog")
 def browse_catalog(offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_catalog("", offset, limit)
+    return trackbrowser.browse_catalog("", offset, limit).model_dump(exclude_unset=True)
 
 
 @app.get("/browse/catalog/{endpoint}")
 def browse_catalog(endpoint: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_catalog(endpoint, offset, limit)
+    return trackbrowser.browse_catalog(endpoint, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/search/{search_type}/{query}")
 async def search(search_type: SearchType, query: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.search(search_type, query, offset, limit)
+    return trackbrowser.search(search_type, query, offset, limit).model_dump(
+        exclude_unset=True
+    )
 
 
 @app.get("/queue/events")
