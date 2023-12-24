@@ -285,6 +285,7 @@ class PlayQueue(AsyncExecutor):
             "current_track": self.get_track_info(self.current_track_id)
             if self.current_track_id in range(0, len(self.track_list))
             else None,
+            "index": self.current_track_id,
             "progress": self.current_progress,
         }
 
