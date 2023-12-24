@@ -268,7 +268,7 @@ class PlayQueue(AsyncExecutor):
             "limit": limit,
             "total": len(self.track_list),
             "items": [
-                {"track": self.get_track_info(i)}
+                self.get_track_info(i)
                 for i in range(offset, min(offset + limit, len(self.track_list)))
             ],
         }

@@ -27,9 +27,10 @@ class PlaylistImage(BaseModel):
 
 
 class Artist(BaseModel):
-    name: str
     id: str
+    name: str
     image: Optional[ArtistImage] = None
+    album_count: Optional[int] = None
 
 
 class Label(BaseModel):

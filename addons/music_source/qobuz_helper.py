@@ -15,6 +15,7 @@ from data_model.datamodel import (
     Album,
     AlbumImage,
     Artist,
+    ArtistImage,
     BrowseItem,
     BrowseItemList,
     Catalog,
@@ -426,14 +427,18 @@ class QobuzTrackBrowser(TrackBrowser):
                 url="/artist/" + str(artist["id"]),
                 can_browse=True,
                 can_add=False,
-                sub_categories_count=artist["albums_count"],
-                image=AlbumImage(
-                    thumbnail=artist["image"].get("small", None),
-                    small=artist["image"].get("medium", None),
-                    large=artist["image"].get("large", None),
-                )
-                if artist["image"]
-                else None,
+                artist=Artist(
+                    id=str(artist["id"]),
+                    name=artist["name"],
+                    image=ArtistImage(
+                        thumbnail=artist["image"].get("small", None),
+                        small=artist["image"].get("medium", None),
+                        large=artist["image"].get("large", None),
+                    )
+                    if artist["image"]
+                    else None,
+                    album_count=artist["albums_count"],
+                ),
             )
             for artist in artists
         ]
