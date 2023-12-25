@@ -4,7 +4,7 @@ from typing import Union
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from data_model.response_model import PlayerState
+from data_model.response_model import FavoriteIds, PlayerState
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
@@ -203,3 +203,8 @@ async def add_favorite(type: SearchType, id: str):
 @app.get("/favorite/remove/{type}/{id}")
 async def remove_favorite(type: SearchType, id: str):
     return inputmodule.remove_from_favorite(type, id)
+
+
+@app.get("/favorite/ids")
+async def get_favorite_ids() -> FavoriteIds:
+    return inputmodule.get_favorite_ids()

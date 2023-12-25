@@ -580,12 +580,12 @@ class QobuzInputModule(InputModule):
 
     def _get_favorite_playlist_ids(self) -> list[str]:
         response = self.qobuz_client.session.get(
-            self.qobuz_client.base + "favorite/getUserPlaylists",
+            self.qobuz_client.base + "playlist/getUserPlaylists",
             params={"limit": 500},
         )
 
         if response.ok != True:
-            return FavoriteIds()
+            return []
 
         rjson = response.json()
 

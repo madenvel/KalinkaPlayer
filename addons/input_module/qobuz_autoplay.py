@@ -6,8 +6,6 @@ from src.playqueue import PlayQueue
 from .qobuz_helper import get_track_url, metadata_from_track
 from src.inputmodule import InputModule, TrackInfo
 
-import json
-
 # req = client.session.post(client.base + 'dynamic/suggest', json={
 #                           'limit': 15, 'listened_tracks_ids': [], 'track_to_analysed': [{
 #                               "track_id": 211741639,
