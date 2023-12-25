@@ -32,9 +32,7 @@ def setup_device(
     playqueue: PlayQueue, event_listener: EventListener, event_emitter: EventEmitter
 ):
     device = Device(playqueue, event_emitter)
-    event_listener.subscribe(EventType.Playing, device._on_playing)
-    event_listener.subscribe(EventType.Paused, device._on_paused_or_stopped)
-    event_listener.subscribe(EventType.Stopped, device._on_paused_or_stopped)
+    event_listener.subscribe(EventType.StateChanged, device._on_state_changed)
 
     return device
 

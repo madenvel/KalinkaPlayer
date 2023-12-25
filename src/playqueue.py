@@ -1,10 +1,8 @@
-import requests
 import logging
+from data_model.datamodel import PlayerState
 from src.event_loop import AsyncExecutor, enqueue
 
 from src.rpiasync import EventEmitter
-from enum import Enum
-from src.track_url_retriever import TrackUrlRetriever
 
 from src.trackbrowser import TrackInfo
 from native.rpiplayer import RpiAudioPlayer
@@ -59,15 +57,10 @@ class PlayQueue(AsyncExecutor):
         if self.state == State.STOPPED:
             self.current_progress = 0
 
-        stateMap = {
-            State.PLAYING: EventType.Playing,
-            State.PAUSED: EventType.Paused,
-            State.STOPPED: EventType.Stopped,
-            State.BUFFERING: EventType.Bufferring,
-            State.ERROR: EventType.Error,
-        }
-        if new_state in stateMap:
-            self.event_emitter.dispatch(stateMap[new_state])
+        self.event_emitter.dispatch(
+            EventType.StateChanged,
+            PlayerState(state=new_state.name).model_dump(exclude_unset=True),
+        )
 
     @enqueue
     def _progress_callback(self, context_id, progress):
@@ -80,8 +73,8 @@ class PlayQueue(AsyncExecutor):
 
         current_time = self.get_track_info(self.current_track_id)["duration"] * progress
         self.event_emitter.dispatch(
-            EventType.Progress,
-            current_time,
+            EventType.StateChanged,
+            PlayerState(progress=current_time).model_dump(exclude_unset=True),
         )
         remaining = (1 - progress) * self.get_track_info(self.current_track_id)[
             "duration"
@@ -97,7 +90,11 @@ class PlayQueue(AsyncExecutor):
 
     def _notify_track_change(self):
         self.event_emitter.dispatch(
-            EventType.TrackChanged, self.get_track_info(self.current_track_id)
+            EventType.StateChanged,
+            PlayerState(
+                current_track=self.get_track_info(self.current_track_id),
+                index=self.current_track_id,
+            ).model_dump(exclude_unset=True),
         )
 
     @enqueue
@@ -155,8 +152,8 @@ class PlayQueue(AsyncExecutor):
         if index is not None:
             self.current_track_id = index
 
-        self._notify_track_change()
         self._play_track()
+        self._notify_track_change()
         self._request_more_tracks()
 
     @enqueue
@@ -169,9 +166,8 @@ class PlayQueue(AsyncExecutor):
             return
 
         self.current_track_id += 1
-        self._notify_track_change()
-
         self._play_track()
+        self._notify_track_change()
         self._request_more_tracks()
 
     @enqueue
@@ -186,8 +182,8 @@ class PlayQueue(AsyncExecutor):
 
         self.current_track_id -= 1
 
-        self._notify_track_change()
         self._play_track()
+        self._notify_track_change()
 
     @enqueue
     def stop(self):
@@ -279,15 +275,15 @@ class PlayQueue(AsyncExecutor):
         track_info: TrackInfo = self.track_list[index]
         return track_info.metadata.model_dump(exclude_unset=True)
 
-    def get_state(self):
-        return {
-            "state": self.state.name,
-            "current_track": self.get_track_info(self.current_track_id)
+    def get_state(self) -> PlayerState:
+        return PlayerState(
+            state=self.state.name,
+            current_track=self.get_track_info(self.current_track_id)
             if self.current_track_id in range(0, len(self.track_list))
             else None,
-            "index": self.current_track_id,
-            "progress": self.current_progress,
-        }
+            index=self.current_track_id,
+            progress=self.current_progress,
+        )
 
     def _clear(self):
         self.track_player.stop()

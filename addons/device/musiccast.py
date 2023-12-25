@@ -143,12 +143,22 @@ class Device:
             self.playqueue.stop()
             return
 
+    def _on_state_changed(self, state):
+        if "state" not in state:
+            return
+        if state["state"] == "PLAYING":
+            self._on_playing()
+        elif state["state"] == "PAUSED" or state["state"] == "STOPPED":
+            self._on_paused_or_stopped()
+
     def _on_paused_or_stopped(self):
         if self.poweroff_timer is not None:
             self.poweroff_timer.cancel()
             self.poweroff_timer = None
 
         self.poweroff_timer = threading.Timer(60.0, self._self_power_off)
+        # Make sure the timer does not prevent the program from exiting
+        self.poweroff_timer.daemon = True
         self.poweroff_timer.start()
 
     def _self_power_off(self):

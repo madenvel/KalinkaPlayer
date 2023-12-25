@@ -4,6 +4,7 @@ from typing import Union
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
+from data_model.datamodel import PlayerState
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
@@ -164,7 +165,7 @@ async def stream(request: Request):
 
 
 @app.get("/queue/state")
-async def state():
+async def state() -> PlayerState:
     return playqueue.get_state()
 
 
