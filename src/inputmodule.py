@@ -4,10 +4,7 @@ from enum import Enum
 from typing import Callable, List, Optional
 
 from data_model.datamodel import Track, BrowseItemList
-
-
-class SourceType(Enum):
-    QOBUZ = "qobuz"
+from data_model.response_model import FavoriteIds
 
 
 class TrackInfo(BaseModel):
@@ -30,7 +27,7 @@ class SearchType(str, Enum):
     artist = "artist"
 
 
-class TrackBrowser(ABC):
+class InputModule(ABC):
     @abstractmethod
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
@@ -64,11 +61,19 @@ class TrackBrowser(ABC):
         pass
 
     @abstractmethod
-    def browse_favorite(
+    def list_favorite(
         self, type: SearchType, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         pass
 
-    # @abstractmethod
-    # def get_favorite_ids(self):
-    #     pass
+    @abstractmethod
+    def get_favorite_ids(self) -> FavoriteIds:
+        pass
+
+    @abstractmethod
+    def add_to_favorite(self, type: SearchType, id: str):
+        pass
+
+    @abstractmethod
+    def remove_from_favorite(self, type: SearchType, id: str):
+        pass

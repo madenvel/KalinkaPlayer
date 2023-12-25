@@ -3,10 +3,17 @@ from qobuz_dl.qopy import Client
 from qobuz_dl.bundle import Bundle
 
 from functools import partial
+from data_model.response_model import (
+    FavoriteAddedEvent,
+    FavoriteRemovedEvent,
+    FavoriteIds,
+)
+from src.events import EventType
+from src.rpiasync import EventEmitter
 
-from src.trackbrowser import (
+from src.inputmodule import (
     SearchType,
-    TrackBrowser,
+    InputModule,
     TrackInfo,
     TrackUrl,
 )
@@ -98,9 +105,10 @@ def metadata_from_track(track, album_meta={}):
     }
 
 
-class QobuzTrackBrowser(TrackBrowser):
-    def __init__(self, qobuz_client: Client):
+class QobuzInputModule(InputModule):
+    def __init__(self, qobuz_client: Client, event_emitter: EventEmitter):
         self.qobuz_client = qobuz_client
+        self.event_emitter = event_emitter
 
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
@@ -183,7 +191,7 @@ class QobuzTrackBrowser(TrackBrowser):
             items=self._albums_to_browse_category(response.json()["albums"]["items"]),
         )
 
-    def browse_favorite(
+    def list_favorite(
         self, type: SearchType, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         if type == SearchType.playlist:
@@ -551,3 +559,88 @@ class QobuzTrackBrowser(TrackBrowser):
             total=len(rjson["tracks"]["items"]),
             items=self._tracks_to_browse_categories(rjson["tracks"]["items"]),
         )
+
+    def get_favorite_ids(self) -> FavoriteIds:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "favorite/getUserFavoriteIds",
+            params={"limit": 5000},
+        )
+
+        if response.ok != True:
+            return FavoriteIds()
+
+        rjson = response.json()
+
+        return FavoriteIds(
+            albums=rjson["albums"],
+            artists=[str(id) for id in rjson["artists"]],
+            tracks=[str(id) for id in rjson["tracks"]],
+            playlists=self._get_favorite_playlist_ids(),
+        )
+
+    def _get_favorite_playlist_ids(self) -> list[str]:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "favorite/getUserPlaylists",
+            params={"limit": 500},
+        )
+
+        if response.ok != True:
+            return FavoriteIds()
+
+        rjson = response.json()
+
+        return [str(playlist["id"]) for playlist in rjson["playlists"]["items"]]
+
+    def add_to_favorite(self, type: SearchType, id: str):
+        if type == SearchType.playlist:
+            endpoint = "playlist/subscribe"
+            params = {"playlist_id": id}
+        else:
+            endpoint = "favorite/create"
+            params = {type.value + "_ids": id}
+
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + endpoint, params=params
+        )
+
+        if response.ok != True:
+            return {"message": response.text}
+
+        rjson = response.json()
+
+        if "status" not in rjson or rjson["status"] != "success":
+            return {"message": response.text}
+
+        self.event_emitter.dispatch(
+            EventType.FavoriteAdded,
+            FavoriteAddedEvent(id=id, type=type.value).model_dump(),
+        )
+
+        return {"message": "Ok"}
+
+    def remove_from_favorite(self, type: SearchType, id: str):
+        if type == SearchType.playlist:
+            endpoint = "playlist/unsubscribe"
+            params = {"playlist_id": id}
+        else:
+            endpoint = "favorite/delete"
+            params = {type.value + "_ids": id}
+
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + endpoint, params=params
+        )
+
+        if response.ok != True:
+            return {"message": response.text}
+
+        rjson = response.json()
+
+        if "status" not in rjson or rjson["status"] != "success":
+            return {"message": response.text}
+
+        self.event_emitter.dispatch(
+            EventType.FavoriteRemoved,
+            FavoriteRemovedEvent(id=id, type=type.value).model_dump(),
+        )
+
+        return {"message": "Ok"}

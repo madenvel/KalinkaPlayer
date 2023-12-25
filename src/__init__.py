@@ -1,2 +1,2 @@
-from . import trackbrowser
+from . import inputmodule
 from . import events

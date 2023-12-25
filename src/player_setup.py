@@ -1,25 +1,20 @@
-from functools import partial
-import logging
-import time
 from src.rpiasync import EventEmitter, EventListener
 from queue import Queue
-from addons.music_source.qobuz_autoplay import QobuzAutoplay
-from addons.music_source.qobuz_helper import (
-    QobuzTrackBrowser,
+from addons.input_module.qobuz_autoplay import QobuzAutoplay
+from addons.input_module.qobuz_helper import (
+    QobuzInputModule,
     get_client,
-    get_track_url,
 )
 
 from src.playqueue import EventType, PlayQueue
-from src.track_url_retriever import TrackUrlRetriever
-from src.trackbrowser import SourceType, TrackBrowser
+from src.inputmodule import InputModule
 from addons.device.musiccast import Device
 
 
 def setup_autoplay(
     client,
     playqueue: PlayQueue,
-    track_browser: TrackBrowser,
+    track_browser: InputModule,
     event_listener: EventListener,
 ):
     autoplay = QobuzAutoplay(client, playqueue, track_browser)
@@ -39,14 +34,12 @@ def setup_device(
 
 def setup():
     client = get_client()
-    trackbrowser = QobuzTrackBrowser(client)
     queue = Queue()
     event_emitter = EventEmitter(queue)
     event_listener = EventListener(queue)
-    url_retriever = TrackUrlRetriever()
-    url_retriever.register(SourceType.QOBUZ, partial(get_track_url, client))
+    inputmodule = QobuzInputModule(client, event_emitter)
     playqueue = PlayQueue(event_emitter)
-    setup_autoplay(client, playqueue, trackbrowser, event_listener)
+    setup_autoplay(client, playqueue, inputmodule, event_listener)
     device = setup_device(playqueue, event_listener, event_emitter)
 
-    return playqueue, event_listener, trackbrowser, device
+    return playqueue, event_listener, inputmodule, device

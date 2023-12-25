@@ -4,7 +4,7 @@ from qobuz_dl.qopy import Client
 
 from src.playqueue import PlayQueue
 from .qobuz_helper import get_track_url, metadata_from_track
-from src.trackbrowser import TrackBrowser, TrackInfo
+from src.inputmodule import InputModule, TrackInfo
 
 import json
 
@@ -85,7 +85,7 @@ class QobuzAutoplay:
         self,
         qobuz_client: Client,
         playqueue: PlayQueue,
-        track_browser: TrackBrowser,
+        track_browser: InputModule,
         amount_to_request: int = 50,
     ):
         self.qobuz_client = qobuz_client

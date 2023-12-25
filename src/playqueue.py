@@ -1,10 +1,10 @@
 import logging
-from data_model.datamodel import PlayerState
+from data_model.response_model import PlayerState
 from src.event_loop import AsyncExecutor, enqueue
 
 from src.rpiasync import EventEmitter
 
-from src.trackbrowser import TrackInfo
+from src.inputmodule import TrackInfo
 from native.rpiplayer import RpiAudioPlayer
 
 from src.events import EventType

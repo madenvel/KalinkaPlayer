@@ -106,10 +106,3 @@ class BrowseItemList(BaseModel):
 
 def EmptyList(offset, limit) -> BrowseItemList:
     return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
-
-
-class PlayerState(BaseModel):
-    state: Optional[str] = None
-    current_track: Optional[Track] = None
-    index: Optional[int] = None
-    progress: Optional[float] = None

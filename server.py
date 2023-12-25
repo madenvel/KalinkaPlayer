@@ -4,17 +4,17 @@ from typing import Union
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from data_model.datamodel import PlayerState
+from data_model.response_model import PlayerState
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
 import logging
 import json
 
-from src.trackbrowser import SearchType
+from src.inputmodule import SearchType
 
 app = FastAPI()
-playqueue, event_listener, trackbrowser, device = setup()
+playqueue, event_listener, inputmodule, device = setup()
 logger = logging.getLogger(__name__)
 
 
@@ -32,31 +32,31 @@ def read_queue_list(offset: int = 0, limit: int = 10):
 
 @app.post("/queue/add/tracks")
 def add_tracks_to_queue(items: list[str]):
-    playqueue.add(trackbrowser.get_track_info(items))
+    playqueue.add(inputmodule.get_track_info(items))
     return {"message": "Ok"}
 
 
 @app.get("/queue/add/track/{entity_id}")
 def add_track_to_queue(entity_id: str):
-    playqueue.add(trackbrowser.get_track_info([entity_id]))
+    playqueue.add(inputmodule.get_track_info([entity_id]))
     return {"message": "Ok"}
 
 
 @app.get("/queue/add/album/{entity_id}")
 def add_album_to_queue(entity_id: str):
     tracks = [
-        track.id for track in trackbrowser.browse_album(entity_id, limit=500).items
+        track.id for track in inputmodule.browse_album(entity_id, limit=500).items
     ]
-    playqueue.add(trackbrowser.get_track_info(tracks))
+    playqueue.add(inputmodule.get_track_info(tracks))
     return {"message": "Ok"}
 
 
 @app.get("/queue/add/playlist/{entity_id}")
 def add_playlist_to_queue(entity_id: str):
     tracks = [
-        track.id for track in trackbrowser.browse_playlist(entity_id, limit=5000).items
+        track.id for track in inputmodule.browse_playlist(entity_id, limit=5000).items
     ]
-    playqueue.add(trackbrowser.get_track_info(tracks))
+    playqueue.add(inputmodule.get_track_info(tracks))
     return {"message": "Ok"}
 
 
@@ -64,10 +64,10 @@ def add_playlist_to_queue(entity_id: str):
 def add_catalog_entry_to_queue(entity_id: str):
     tracks = [
         track.id
-        for track in trackbrowser.browse_catalog(entity_id, limit=5000).items
+        for track in inputmodule.browse_catalog(entity_id, limit=5000).items
         if track.can_add is True
     ]
-    playqueue.add(trackbrowser.get_track_info(tracks))
+    playqueue.add(inputmodule.get_track_info(tracks))
     return {"message": "Ok"}
 
 
@@ -101,49 +101,42 @@ async def read_queue_stop():
     return {"message": "Ok"}
 
 
-@app.get("/browse/favorite/{type}")
-async def browse_favorite(type: SearchType, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_favorite(type, offset, limit).model_dump(
-        exclude_unset=True
-    )
-
-
 @app.get("/browse/album/{entity_id}")
 def browse_album(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_album(entity_id, offset, limit).model_dump(
+    return inputmodule.browse_album(entity_id, offset, limit).model_dump(
         exclude_unset=True
     )
 
 
 @app.get("/browse/playlist/{entity_id}")
 def browse_playlist(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_playlist(entity_id, offset, limit).model_dump(
+    return inputmodule.browse_playlist(entity_id, offset, limit).model_dump(
         exclude_unset=True
     )
 
 
 @app.get("/browse/artist/{entity_id}")
 def browse_artist(entity_id: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_artist(entity_id, offset, limit).model_dump(
+    return inputmodule.browse_artist(entity_id, offset, limit).model_dump(
         exclude_unset=True
     )
 
 
 @app.get("/browse/catalog")
 def browse_catalog(offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_catalog("", offset, limit).model_dump(exclude_unset=True)
+    return inputmodule.browse_catalog("", offset, limit).model_dump(exclude_unset=True)
 
 
 @app.get("/browse/catalog/{endpoint}")
 def browse_catalog(endpoint: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.browse_catalog(endpoint, offset, limit).model_dump(
+    return inputmodule.browse_catalog(endpoint, offset, limit).model_dump(
         exclude_unset=True
     )
 
 
 @app.get("/search/{search_type}/{query}")
 async def search(search_type: SearchType, query: str, offset: int = 0, limit: int = 10):
-    return trackbrowser.search(search_type, query, offset, limit).model_dump(
+    return inputmodule.search(search_type, query, offset, limit).model_dump(
         exclude_unset=True
     )
 
@@ -195,3 +188,18 @@ async def get_volume(device_id: str) -> Volume:
 async def set_volume(device_id: str, volume: int):
     device.set_volume(volume)
     return {"message": "Ok"}
+
+
+@app.get("/favorite/list/{type}")
+async def list_favorite(type: SearchType, offset: int = 0, limit: int = 10):
+    return inputmodule.list_favorite(type, offset, limit).model_dump(exclude_unset=True)
+
+
+@app.get("/favorite/add/{type}/{id}")
+async def add_favorite(type: SearchType, id: str):
+    return inputmodule.add_to_favorite(type, id)
+
+
+@app.get("/favorite/remove/{type}/{id}")
+async def remove_favorite(type: SearchType, id: str):
+    return inputmodule.remove_from_favorite(type, id)
