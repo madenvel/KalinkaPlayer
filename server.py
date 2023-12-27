@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-from typing import Union
-from fastapi import FastAPI, Request
+from typing import List, Union
+from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from data_model.response_model import FavoriteIds, PlayerState
+from data_model.response_model import FavoriteIds, GenreList, PlayerState
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
@@ -127,9 +127,11 @@ def browse_catalog(offset: int = 0, limit: int = 10):
     return inputmodule.browse_catalog("", offset, limit).model_dump(exclude_unset=True)
 
 
-@app.get("/browse/catalog/{endpoint}")
-def browse_catalog(endpoint: str, offset: int = 0, limit: int = 10):
-    return inputmodule.browse_catalog(endpoint, offset, limit).model_dump(
+@app.get("/browse/catalog/{endpoint:path}")
+def browse_catalog(
+    endpoint: str, offset: int = 0, limit: int = 10, genre_ids: List[int] = Query([])
+):
+    return inputmodule.browse_catalog(endpoint, offset, limit, genre_ids).model_dump(
         exclude_unset=True
     )
 
@@ -208,3 +210,8 @@ async def remove_favorite(type: SearchType, id: str):
 @app.get("/favorite/ids")
 async def get_favorite_ids() -> FavoriteIds:
     return inputmodule.get_favorite_ids()
+
+
+@app.get("/genre/list")
+async def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
+    return inputmodule.list_genre(offset=offset, limit=limit)

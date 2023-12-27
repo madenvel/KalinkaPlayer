@@ -7,6 +7,7 @@ from data_model.response_model import (
     FavoriteAddedEvent,
     FavoriteRemovedEvent,
     FavoriteIds,
+    GenreList,
 )
 from src.events import EventType
 from src.rpiasync import EventEmitter
@@ -211,7 +212,11 @@ class QobuzInputModule(InputModule):
         return self._format_list_response(response.json(), offset, limit)
 
     def browse_catalog(
-        self, endpoint: str, offset: int = 0, limit: int = 50
+        self,
+        endpoint: str,
+        offset: int = 0,
+        limit: int = 50,
+        genre_ids: List[int] = [],
     ) -> BrowseItemList:
         if endpoint == "":
             return BrowseItemList(
@@ -225,7 +230,11 @@ class QobuzInputModule(InputModule):
                         url="/catalog/new-releases",
                         can_browse=True,
                         can_add=False,
-                        catalog=Catalog(id="new-releases", title="New Releases"),
+                        catalog=Catalog(
+                            id="new-releases",
+                            title="New Releases",
+                            can_genre_filter=True,
+                        ),
                     ),
                     BrowseItem(
                         id="qobuz-playlists",
@@ -233,15 +242,24 @@ class QobuzInputModule(InputModule):
                         url="/catalog/qobuz-playlists",
                         can_browse=True,
                         can_add=False,
-                        catalog=Catalog(id="qobuz-playlists", title="Qobuz Playlists"),
+                        catalog=Catalog(
+                            id="qobuz-playlists",
+                            title="Qobuz Playlists",
+                            can_genre_filter=True,
+                        ),
                     ),
-                    # BrowseCategory(
-                    #     id="playlist-by-category",
-                    #     name="Playlist By Category",
-                    #     url="/catalog/playlist-by-category",
-                    #     can_browse=True,
-                    #     can_add=False,
-                    # ),
+                    BrowseItem(
+                        id="playlist-by-category",
+                        name="Playlist By Category",
+                        url="/catalog/playlists-by-category",
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="playlists-by-category",
+                            title="Playlist By Category",
+                            can_genre_filter=True,
+                        ),
+                    ),
                     BrowseItem(
                         id="myweeklyq",
                         name="My Weekly Q",
@@ -252,6 +270,7 @@ class QobuzInputModule(InputModule):
                             id="myweeklyq",
                             title="My Weekly Q",
                             description="Every Friday, a selection of discoveries curated especially for you.",
+                            can_genre_filter=False,
                             image=CatalogImage(
                                 small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
                                 large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
@@ -264,28 +283,40 @@ class QobuzInputModule(InputModule):
                         url="/catalog/recent-releases",
                         can_browse=True,
                         can_add=False,
-                        catalog=Catalog(id="recent-releases", title="Still Trending"),
+                        catalog=Catalog(
+                            id="recent-releases",
+                            title="Still Trending",
+                            can_genre_filter=True,
+                        ),
                     ),
                 ],
             )
         elif endpoint == "new-releases":
-            return self._get_new_releases("new-releases-full", offset, limit)
+            return self._get_new_releases("new-releases-full", offset, limit, genre_ids)
         elif endpoint == "qobuz-playlists":
-            return self._get_qobuz_playlists(offset, limit)
+            return self._get_qobuz_playlists(offset, limit, genre_ids)
         elif endpoint == "recent-releases":
-            return self._get_new_releases("recent-releases", offset, limit)
+            return self._get_new_releases("recent-releases", offset, limit, genre_ids)
         elif endpoint == "myweeklyq":
             return self._get_curated_tracks(offset, limit)
+        elif endpoint == "playlists-by-category":
+            return self._get_playists_by_category(offset, limit, genre_ids)
+        else:
+            ep = endpoint.split("/")
+            if len(ep) > 1 and ep[0] == "playlists-by-category":
+                return self._get_qobuz_playlists(offset, limit, genre_ids, ep[1])
 
     def _get_new_releases(
-        self,
-        type: str,
-        offset: int = 0,
-        limit: int = 10,
+        self, type: str, offset: int, limit: int, genre_ids: list[int]
     ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/album/getFeatured",
-            params={"type": type, "offset": offset, "limit": limit},
+            params={
+                "type": type,
+                "offset": offset,
+                "limit": limit,
+                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
+            },
         )
 
         if response.ok != True:
@@ -300,10 +331,18 @@ class QobuzInputModule(InputModule):
             items=self._albums_to_browse_category(response.json()["albums"]["items"]),
         )
 
-    def _get_qobuz_playlists(self, offset: int = 0, limit: int = 10):
+    def _get_qobuz_playlists(
+        self, offset: int, limit: int, genre_ids: list[int], tags: str = None
+    ):
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/playlist/getFeatured",
-            params={"type": "editor-picks", "offset": offset, "limit": limit},
+            params={
+                "type": "editor-picks",
+                "offset": offset,
+                "limit": limit,
+                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
+                "tags": tags,
+            },
         )
 
         if response.ok != True:
@@ -318,6 +357,38 @@ class QobuzInputModule(InputModule):
             items=self._playlists_to_browse_category(
                 response.json()["playlists"]["items"]
             ),
+        )
+
+    def _get_playists_by_category(self, offset: int, limit: int, genre_ids: List[int]):
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "/playlist/getTags",
+            params={offset: offset, limit: limit},
+        )
+
+        if response.ok != True:
+            return EmptyList(offset, limit)
+
+        tags = response.json()["tags"]
+
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=len(tags),
+            can_browse=True,
+            can_add=False,
+            items=[
+                BrowseItem(
+                    id=tags[i]["slug"],
+                    name=json.loads(tags[i]["name_json"])["en"],
+                    url="/catalog/playlists-by-category/" + tags[i]["slug"],
+                    can_browse=False,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=tags[i]["slug"], title=json.loads(tags[i]["name_json"])["en"]
+                    ),
+                )
+                for i in range(offset, min(len(tags), limit))
+            ],
         )
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
@@ -644,3 +715,22 @@ class QobuzInputModule(InputModule):
         )
 
         return {"message": "Ok"}
+
+    def list_genre(self, offset: int, limit: int) -> GenreList:
+        endpoint = "genre/list"
+        response = self.qobuz_client.session.get(self.qobuz_client.base + endpoint)
+
+        if response.ok != True:
+            return {"message": response.text}
+
+        rjson = response.json()
+
+        return GenreList(
+            offset=offset,
+            limit=limit,
+            total=rjson["genres"]["total"],
+            items=[
+                Genre(id=str(genre["id"]), name=genre["name"])
+                for genre in rjson["genres"]["items"]
+            ],
+        )

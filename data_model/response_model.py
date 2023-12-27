@@ -1,7 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel
 
-from data_model.datamodel import Track
+from data_model.datamodel import Genre, Track
 
 
 class FavoriteIds(BaseModel):
@@ -37,3 +37,10 @@ class ErrorResponse(BaseModel):
 class SuccessResponse(BaseModel):
     message: str
     status_code: int
+
+
+class GenreList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[Genre]

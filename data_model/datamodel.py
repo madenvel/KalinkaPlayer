@@ -80,6 +80,7 @@ class Catalog(BaseModel):
     id: str
     title: str
     image: Optional[CatalogImage] = None
+    can_genre_filter: bool = False
     description: Optional[str] = ""
 
 

@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Callable, List, Optional
 
 from data_model.datamodel import Track, BrowseItemList
-from data_model.response_model import FavoriteIds
+from data_model.response_model import FavoriteIds, GenreList
 
 
 class TrackInfo(BaseModel):
@@ -36,7 +36,11 @@ class InputModule(ABC):
 
     @abstractmethod
     def browse_catalog(
-        self, endpoint: str, offset: int = 0, limit: int = 50
+        self,
+        endpoint: str,
+        offset: int = 0,
+        limit: int = 50,
+        genre_ids: List[int] = [],
     ) -> BrowseItemList:
         pass
 
@@ -76,4 +80,8 @@ class InputModule(ABC):
 
     @abstractmethod
     def remove_from_favorite(self, type: SearchType, id: str):
+        pass
+
+    @abstractmethod
+    def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
         pass
