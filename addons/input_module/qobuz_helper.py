@@ -381,7 +381,7 @@ class QobuzInputModule(InputModule):
                     id=tags[i]["slug"],
                     name=json.loads(tags[i]["name_json"])["en"],
                     url="/catalog/playlists-by-category/" + tags[i]["slug"],
-                    can_browse=False,
+                    can_browse=True,
                     can_add=False,
                     catalog=Catalog(
                         id=tags[i]["slug"], title=json.loads(tags[i]["name_json"])["en"]
