@@ -58,7 +58,7 @@ class Track(BaseModel):
     id: str
     title: str
     duration: int
-    performer: Artist
+    performer: Optional[Artist] = None
     album: Album
 
 
