@@ -362,7 +362,11 @@ class QobuzInputModule(InputModule):
     def _get_playists_by_category(self, offset: int, limit: int, genre_ids: List[int]):
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/playlist/getTags",
-            params={offset: offset, limit: limit},
+            params={
+                "offset": offset,
+                "limit": limit,
+                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids])
+            },
         )
 
         if response.ok != True:
