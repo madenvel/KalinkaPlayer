@@ -384,7 +384,9 @@ class QobuzInputModule(InputModule):
                     can_browse=True,
                     can_add=False,
                     catalog=Catalog(
-                        id=tags[i]["slug"], title=json.loads(tags[i]["name_json"])["en"]
+                        id=tags[i]["slug"],
+                        title=json.loads(tags[i]["name_json"])["en"],
+                        can_genre_filter=True,
                     ),
                 )
                 for i in range(offset, min(len(tags), limit))
