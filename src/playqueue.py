@@ -59,7 +59,7 @@ class PlayQueue(AsyncExecutor):
 
         self.event_emitter.dispatch(
             EventType.StateChanged,
-            PlayerState(state=new_state.name).model_dump(exclude_unset=True),
+            PlayerState(state=new_state.name).model_dump(exclude_none=True),
         )
 
     @enqueue
@@ -74,7 +74,7 @@ class PlayQueue(AsyncExecutor):
         current_time = self.get_track_info(self.current_track_id)["duration"] * progress
         self.event_emitter.dispatch(
             EventType.StateChanged,
-            PlayerState(progress=current_time).model_dump(exclude_unset=True),
+            PlayerState(progress=current_time).model_dump(exclude_none=True),
         )
         remaining = (1 - progress) * self.get_track_info(self.current_track_id)[
             "duration"
@@ -94,7 +94,7 @@ class PlayQueue(AsyncExecutor):
             PlayerState(
                 current_track=self.get_track_info(self.current_track_id),
                 index=self.current_track_id,
-            ).model_dump(exclude_unset=True),
+            ).model_dump(exclude_none=True),
         )
 
     @enqueue
