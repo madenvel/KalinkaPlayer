@@ -173,8 +173,8 @@ class QobuzClient:
         return r.json()
 
     def get_user_playlists(self, offset: int = 0, limit: int = 50):
-        r = self.qobuz_client.session.get(
-            self.qobuz_client.base + "playlist/getUserPlaylists",
+        r = self.session.get(
+            self.base + "playlist/getUserPlaylists",
             params={"offset": offset, "limit": limit},
         )
 
@@ -182,8 +182,8 @@ class QobuzClient:
         return r.json()
 
     def get_user_favorites(self, type: SearchType, offset: int = 0, limit: int = 50):
-        r = self.qobuz_client.session.get(
-            self.qobuz_client.base + "favorite/getUserFavorites",
+        r = self.session.get(
+            self.base + "favorite/getUserFavorites",
             params={"type": type.value + "s", "offset": offset, "limit": limit},
         )
 
