@@ -1,5 +1,6 @@
+import hashlib
+import time
 from typing import List
-from qobuz_dl.qopy import Client
 from qobuz_dl.bundle import Bundle
 
 from functools import partial
@@ -38,10 +39,156 @@ from data_model.datamodel import (
 )
 
 import json
+import logging
+import requests
+
+logger = logging.getLogger(__name__)
 
 
 TrackInfoCache: dict[str, TrackInfo] = {}
 AlbumInfoCache: dict[str, Album] = {}
+
+
+class AuthenticationError(Exception):
+    pass
+
+
+class IneligibleError(Exception):
+    pass
+
+
+class InvalidAppIdError(Exception):
+    pass
+
+
+class InvalidAppSecretError(Exception):
+    pass
+
+
+class InvalidQuality(Exception):
+    pass
+
+
+class NonStreamable(Exception):
+    pass
+
+
+class QobuzClient:
+    def __init__(self, email, pwd, app_id, secrets):
+        logger.info(f"Logging...")
+        self.secrets = secrets
+        self.id = str(app_id)
+        self.session = requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0",
+                "X-App-Id": self.id,
+            }
+        )
+        self.base = "https://www.qobuz.com/api.json/0.2/"
+        self.sec = None
+        self.track_url_response_cache = {}
+        self.auth(email, pwd)
+        self.cfg_setup()
+        # a short living cache to be used for reporting purposes
+
+    def auth(self, email, pwd):
+        params = {
+            "email": email,
+            "password": pwd,
+            "app_id": self.id,
+        }
+        r = self.session.get(self.base + "user/login", params=params)
+        if r.status_code == 401:
+            raise AuthenticationError("Invalid credentials.")
+        elif r.status_code == 400:
+            raise InvalidAppIdError("Invalid app id.")
+        else:
+            logger.info("Logged: OK")
+
+        r.raise_for_status()
+        usr_info = r.json()
+
+        if not usr_info["user"]["credential"]["parameters"]:
+            raise IneligibleError("Free accounts are not eligible to download tracks.")
+        self.uat = usr_info["user_auth_token"]
+        self.session.headers.update({"X-User-Auth-Token": self.uat})
+        self.label = usr_info["user"]["credential"]["parameters"]["short_label"]
+        logger.info(f"Membership: {self.label}")
+        self.credential_id = usr_info["user"]["credential"]["id"]
+        self.user_id = usr_info["user"]["id"]
+
+    def test_secret(self, sec):
+        try:
+            self.get_track_url(track_id=5966783, fmt_id=5, sec=sec)
+            return True
+        except InvalidAppSecretError:
+            return False
+
+    def cfg_setup(self):
+        for secret in self.secrets:
+            # Falsy secrets
+            if not secret:
+                continue
+
+            if self.test_secret(secret):
+                self.sec = secret
+                break
+
+        if self.sec is None:
+            raise InvalidAppSecretError("Can't find any valid app secret.")
+
+    def get_track_url(self, track_id, fmt_id=5, sec=None):
+        epoint = "track/getFileUrl"
+        unix = time.time()
+        if int(fmt_id) not in (5, 6, 7, 27):
+            raise InvalidQuality("Invalid quality id: choose between 5, 6, 7 or 27")
+        r_sig = "trackgetFileUrlformat_id{}intentstreamtrack_id{}{}{}".format(
+            fmt_id, track_id, unix, self.sec if sec is None else sec
+        )
+        r_sig_hashed = hashlib.md5(r_sig.encode("utf-8")).hexdigest()
+        params = {
+            "request_ts": unix,
+            "request_sig": r_sig_hashed,
+            "track_id": track_id,
+            "format_id": fmt_id,
+            "intent": "stream",
+        }
+        r = self.session.get(self.base + epoint, params=params)
+        if r.status_code == 400:
+            raise InvalidAppSecretError(f"Invalid app secret: {r.json()}.")
+
+        r.raise_for_status()
+        self.track_url_response_cache[str(track_id)] = r.json()
+        return r.json()
+
+    def get_track_meta(self, track_id):
+        epoint = "track/get"
+        params = {"track_id": track_id}
+        r = self.session.get(self.base + epoint, params=params)
+        if r.status_code == 400:
+            raise InvalidAppSecretError(f"Invalid app secret: {r.json()}.")
+
+        r.raise_for_status()
+        return r.json()
+
+    def get_user_playlists(self, offset: int = 0, limit: int = 50):
+        r = self.qobuz_client.session.get(
+            self.qobuz_client.base + "playlist/getUserPlaylists",
+            params={"offset": offset, "limit": limit},
+        )
+
+        r.raise_for_status()
+        return r.json()
+
+    def get_user_favorites(self, type: SearchType, offset: int = 0, limit: int = 50):
+        r = self.qobuz_client.session.get(
+            self.qobuz_client.base + "favorite/getUserFavorites",
+            params={"type": type.value + "s", "offset": offset, "limit": limit},
+        )
+
+        r.raise_for_status()
+        return r.json()
 
 
 def get_config():
@@ -49,7 +196,7 @@ def get_config():
         return json.load(fp=f)
 
 
-def get_client():
+def get_client() -> QobuzClient:
     config = get_config()
     email = config["qobuz"]["email"]
     password = config["qobuz"]["password_hash"]
@@ -57,7 +204,7 @@ def get_client():
 
     app_id = bundle.get_app_id()
     secrets = [secret for secret in bundle.get_secrets().values() if secret]
-    client = Client(email, password, app_id, secrets)
+    client = QobuzClient(email, password, app_id, secrets)
     return client
 
 
@@ -69,7 +216,7 @@ def extract_track_format(track):
     return (mime_type, sampling_rate, bit_depth)
 
 
-def get_track_url(qobuz_client, id) -> str:
+def qobuz_link_retriever(qobuz_client, id) -> str:
     track = qobuz_client.get_track_url(id, fmt_id=27)
     (format, sample_rate, bit_depth) = extract_track_format(track)
     track_url = TrackUrl(
@@ -107,7 +254,7 @@ def metadata_from_track(track, album_meta={}):
 
 
 class QobuzInputModule(InputModule):
-    def __init__(self, qobuz_client: Client, event_emitter: EventEmitter):
+    def __init__(self, qobuz_client: QobuzClient, event_emitter: EventEmitter):
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
 
@@ -196,20 +343,13 @@ class QobuzInputModule(InputModule):
         self, type: SearchType, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         if type == SearchType.playlist:
-            response = self.qobuz_client.session.get(
-                self.qobuz_client.base + "playlist/getUserPlaylists",
-                params={"offset": offset, "limit": limit},
-            )
+            rjson = self.qobuz_client.get_user_playlists(offset=offset, limit=limit)
         else:
-            response = self.qobuz_client.session.get(
-                self.qobuz_client.base + "favorite/getUserFavorites",
-                params={"type": type.value + "s", "offset": offset, "limit": limit},
+            rjson = self.qobuz_client.get_user_favorites(
+                type, offset=offset, limit=limit
             )
 
-        if response.ok != True:
-            return EmptyList(offset, limit)
-
-        return self._format_list_response(response.json(), offset, limit)
+        return self._format_list_response(rjson, offset, limit)
 
     def browse_catalog(
         self,
@@ -365,7 +505,7 @@ class QobuzInputModule(InputModule):
             params={
                 "offset": offset,
                 "limit": limit,
-                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids])
+                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
             },
         )
 
@@ -406,7 +546,9 @@ class QobuzInputModule(InputModule):
         track = self.qobuz_client.get_track_meta(track_id)
         track_info = TrackInfo(
             id=track_id,
-            link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
+            link_retriever=partial(
+                qobuz_link_retriever, self.qobuz_client, track["id"]
+            ),
             metadata=metadata_from_track(track),
         )
 
@@ -419,7 +561,9 @@ class QobuzInputModule(InputModule):
             track_id = str(track["id"])
             TrackInfoCache[track_id] = TrackInfo(
                 id=track_id,
-                link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
+                link_retriever=partial(
+                    qobuz_link_retriever, self.qobuz_client, track["id"]
+                ),
                 metadata=metadata_from_track(track, album_meta),
             )
             album = track.get("album", album_meta)
@@ -656,15 +800,7 @@ class QobuzInputModule(InputModule):
         )
 
     def _get_favorite_playlist_ids(self) -> list[str]:
-        response = self.qobuz_client.session.get(
-            self.qobuz_client.base + "playlist/getUserPlaylists",
-            params={"limit": 500},
-        )
-
-        if response.ok != True:
-            return []
-
-        rjson = response.json()
+        rjson = self.qobuz_client.get_user_playlists(limit=500)
 
         return [str(playlist["id"]) for playlist in rjson["playlists"]["items"]]
 

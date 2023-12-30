@@ -10,6 +10,8 @@ from functools import wraps
 import time
 from uuid import UUID, uuid4
 
+logger = logging.getLogger(__name__)
+
 
 def timeit(func):
     @wraps(func)
@@ -103,7 +105,7 @@ class RequestExecutor:
             if op is not None:
                 op()
             else:
-                logging.warn("Failed to unpickle, data=", data)
+                logger.warn(f"Failed to unpickle, data={data}")
 
 
 class Subscription:
@@ -145,8 +147,10 @@ class EventListener(AsyncLoop):
             try:
                 callback = subscriber["cb"]
                 callback(*e["args"], **e["kwargs"])
-            except Exception as e:
-                logging.warn("Exception caught while processing event", event, e)
+            except Exception as ex:
+                logger.warn(
+                    f"Exception caught while processing event {event}, exception: {ex}"
+                )
 
 
 class EventEmitter:

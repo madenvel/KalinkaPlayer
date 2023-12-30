@@ -1,8 +1,6 @@
 qobuz-dl
 requests
-kivy[base]
 cython
 pydantic
 fastapi
 uvicorn
-sse_starlette

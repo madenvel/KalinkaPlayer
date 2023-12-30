@@ -3,7 +3,7 @@ import logging
 from qobuz_dl.qopy import Client
 
 from src.playqueue import PlayQueue
-from .qobuz_helper import get_track_url, metadata_from_track
+from .qobuz import qobuz_link_retriever, metadata_from_track
 from src.inputmodule import InputModule, TrackInfo
 
 # req = client.session.post(client.base + 'dynamic/suggest', json={
@@ -133,7 +133,9 @@ class QobuzAutoplay:
     def _track_to_trackinfo(self, track) -> TrackInfo:
         return TrackInfo(
             metadata=metadata_from_track(track),
-            link_retriever=partial(get_track_url, self.qobuz_client, track["id"]),
+            link_retriever=partial(
+                qobuz_link_retriever, self.qobuz_client, track["id"]
+            ),
         )
 
     def _retrieve_new_recommendations(self):

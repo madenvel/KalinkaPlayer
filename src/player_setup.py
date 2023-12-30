@@ -1,7 +1,8 @@
+from addons.input_module.qobuz_reporter import QobuzReporter
 from src.rpiasync import EventEmitter, EventListener
 from queue import Queue
 from addons.input_module.qobuz_autoplay import QobuzAutoplay
-from addons.input_module.qobuz_helper import (
+from addons.input_module.qobuz import (
     QobuzInputModule,
     get_client,
 )
@@ -23,6 +24,14 @@ def setup_autoplay(
     event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
 
 
+def setup_reporter(
+    client,
+    event_listener: EventListener,
+):
+    reporter = QobuzReporter(client)
+    event_listener.subscribe(EventType.StateChanged, reporter.on_state_changed)
+
+
 def setup_device(
     playqueue: PlayQueue, event_listener: EventListener, event_emitter: EventEmitter
 ):
@@ -39,6 +48,7 @@ def setup():
     event_listener = EventListener(queue)
     inputmodule = QobuzInputModule(client, event_emitter)
     playqueue = PlayQueue(event_emitter)
+    setup_reporter(client, event_listener)
     setup_autoplay(client, playqueue, inputmodule, event_listener)
     device = setup_device(playqueue, event_listener, event_emitter)
 
