@@ -429,6 +429,42 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=True,
                         ),
                     ),
+                    BrowseItem(
+                        id="recent-releases",
+                        name="Still Trending",
+                        url="/catalog/recent-releases",
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="recent-releases",
+                            title="Still Trending",
+                            can_genre_filter=True,
+                        ),
+                    ),
+                    BrowseItem(
+                        id="press-awards",
+                        name="Press Awards",
+                        url="/catalog/press-awards",
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="press-awards",
+                            title="Press Awards",
+                            can_genre_filter=True,
+                        ),
+                    ),
+                    BrowseItem(
+                        id="most-streamed",
+                        name="Most Streamed",
+                        url="/catalog/most-streamed",
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="most-streamed",
+                            title="Most Streamed",
+                            can_genre_filter=True,
+                        ),
+                    ),
                 ],
             )
         elif endpoint == "new-releases":
@@ -441,6 +477,10 @@ class QobuzInputModule(InputModule):
             return self._get_curated_tracks(offset, limit)
         elif endpoint == "playlists-by-category":
             return self._get_playists_by_category(offset, limit, genre_ids)
+        elif endpoint == "press-awards":
+            return self._get_new_releases("press-awards", offset, limit, genre_ids)
+        elif endpoint == "most-streamed":
+            return self._get_new_releases("most-streamed", offset, limit, genre_ids)
         else:
             ep = endpoint.split("/")
             if len(ep) > 1 and ep[0] == "playlists-by-category":

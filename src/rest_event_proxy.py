@@ -1,5 +1,4 @@
 from functools import partial
-from threading import Condition
 from src.events import EventType
 from src.rpiasync import EventListener
 from queue import Empty, Queue
