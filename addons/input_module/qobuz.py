@@ -430,18 +430,6 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="recent-releases",
-                        name="Still Trending",
-                        url="/catalog/recent-releases",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id="recent-releases",
-                            title="Still Trending",
-                            can_genre_filter=True,
-                        ),
-                    ),
-                    BrowseItem(
                         id="press-awards",
                         name="Press Awards",
                         url="/catalog/press-awards",
