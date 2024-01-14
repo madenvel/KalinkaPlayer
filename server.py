@@ -215,3 +215,23 @@ async def get_favorite_ids() -> FavoriteIds:
 @app.get("/genre/list")
 async def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
     return inputmodule.list_genre(offset=offset, limit=limit)
+
+
+@app.get("/get/album/{entity_id}")
+async def album_get(entity_id: str):
+    return inputmodule.album_get(entity_id).model_dump(exclude_unset=True)
+
+
+@app.get("/get/artist/{entity_id}")
+async def artist_get(entity_id: str):
+    return inputmodule.artist_get(entity_id).model_dump(exclude_unset=True)
+
+
+@app.get("/get/track/{entity_id}")
+async def track_get(entity_id: str):
+    return inputmodule.track_get(entity_id).model_dump(exclude_unset=True)
+
+
+@app.get("/get/playlist/{entity_id}")
+async def playlist_get(entity_id: str):
+    return inputmodule.playlist_get(entity_id).model_dump(exclude_unset=True)

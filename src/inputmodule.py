@@ -3,7 +3,7 @@ from pydantic import BaseModel, PositiveInt
 from enum import Enum
 from typing import Callable, List, Optional
 
-from data_model.datamodel import Track, BrowseItemList
+from data_model.datamodel import BrowseItem, Track, BrowseItemList
 from data_model.response_model import FavoriteIds, GenreList
 
 
@@ -84,4 +84,20 @@ class InputModule(ABC):
 
     @abstractmethod
     def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
+        pass
+
+    @abstractmethod
+    def album_get(self, id: str) -> BrowseItem:
+        pass
+
+    @abstractmethod
+    def playlist_get(self, id: str) -> BrowseItem:
+        pass
+
+    @abstractmethod
+    def artist_get(self, id: str) -> BrowseItem:
+        pass
+
+    @abstractmethod
+    def track_get(self, id: str) -> BrowseItem:
         pass

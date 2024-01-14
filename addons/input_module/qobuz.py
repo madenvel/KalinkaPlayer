@@ -924,3 +924,58 @@ class QobuzInputModule(InputModule):
                 for genre in rjson["genres"]["items"]
             ],
         )
+
+    def album_get(self, id: str) -> BrowseItem:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "album/get",
+            params={"album_id": id, "offset": 0, "limit": 0},
+        )
+
+        response.raise_for_status()
+
+        if response.ok != True:
+            return None
+
+        rjson = response.json()
+
+        return self._albums_to_browse_category([rjson])[0]
+
+    def playlist_get(self, id: str) -> BrowseItem:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "playlist/get",
+            params={
+                "playlist_id": id,
+                "offset": 0,
+                "limit": 0,
+            },
+        )
+
+        response.raise_for_status()
+
+        if response.ok != True:
+            return None
+
+        rjson = response.json()
+
+        return self._playlists_to_browse_category([rjson])[0]
+
+    def artist_get(self, id: str) -> BrowseItem:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "artist/get",
+            params={
+                "artist_id": id,
+            },
+        )
+
+        response.raise_for_status()
+
+        if response.ok != True:
+            return None
+
+        rjson = response.json()
+
+        return self._artists_to_browse_category([rjson])[0]
+
+    def track_get(self, id: str) -> BrowseItem:
+        rjson = self.qobuz_client.get_track_meta(id)
+        return self._tracks_to_browse_categories([rjson])[0]
