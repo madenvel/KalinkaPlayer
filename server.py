@@ -164,7 +164,7 @@ async def state() -> PlayerState:
     return playqueue.get_state()
 
 
-@app.delete("/queue/clear")
+@app.put("/queue/clear")
 async def clear():
     playqueue.clear()
     return {"message": "Ok"}
