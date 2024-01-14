@@ -227,9 +227,11 @@ def qobuz_link_retriever(qobuz_client, id) -> str:
 
 def metadata_from_track(track, album_meta={}):
     album_info = track.get("album", album_meta)
+    version = album_info.get("version", None)
     return {
         "id": str(track["id"]),
-        "title": track["title"],
+        "title": track["title"]
+        + ("(" + track["version"] + ")" if track.get("version", None) else ""),
         "performer": Artist(
             name=track["performer"]["name"], id=str(track["performer"]["id"])
         )
@@ -241,7 +243,7 @@ def metadata_from_track(track, album_meta={}):
         "duration": track["duration"],
         "album": Album(
             id=str(album_info["id"]),
-            title=album_info["title"],
+            title=album_info["title"] + ("(" + version + ")" if version else ""),
             image=album_info["image"],
             label=Label(
                 id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
@@ -595,10 +597,16 @@ class QobuzInputModule(InputModule):
                 metadata=metadata_from_track(track, album_meta),
             )
             album = track.get("album", album_meta)
+            album_version = album.get("version", None)
             result.append(
                 BrowseItem(
                     id=str(track["id"]),
-                    name=track["title"],
+                    name=track["title"]
+                    + (
+                        "(" + track["version"] + ")"
+                        if track.get("version", None)
+                        else ""
+                    ),
                     subname=track["performer"]["name"]
                     if "performer" in track
                     else album.get("artist", {"name": None})["name"],
@@ -607,7 +615,12 @@ class QobuzInputModule(InputModule):
                     url="/track/" + str(track["id"]),
                     track=Track(
                         id=str(track["id"]),
-                        title=track["title"],
+                        title=track["title"]
+                        + (
+                            "(" + track["version"] + ")"
+                            if track.get("version", None)
+                            else ""
+                        ),
                         duration=track["duration"],
                         performer=Artist(
                             id=str(track["performer"]["id"]),
@@ -617,7 +630,8 @@ class QobuzInputModule(InputModule):
                         else None,
                         album=Album(
                             id=str(album["id"]),
-                            title=album["title"],
+                            title=album["title"]
+                            + ("(" + album_version + ")" if album_version else ""),
                             artist=Artist(
                                 name=album["artist"]["name"],
                                 id=str(album["artist"]["id"]),
@@ -704,14 +718,20 @@ class QobuzInputModule(InputModule):
         return [
             BrowseItem(
                 id=str(album["id"]),
-                name=album["title"],
+                name=album["title"]
+                + ("(" + album["version"] + ")" if album.get("version", None) else ""),
                 subname=album["artist"]["name"],
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
                 album=Album(
                     id=str(album["id"]),
-                    title=album["title"],
+                    title=album["title"]
+                    + (
+                        "(" + album["version"] + ")"
+                        if album.get("version", None)
+                        else ""
+                    ),
                     artist=Artist(
                         name=album["artist"]["name"], id=str(album["artist"]["id"])
                     ),
