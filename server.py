@@ -36,13 +36,13 @@ def add_tracks_to_queue(items: list[str]):
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/track/{entity_id}")
+@app.post("/queue/add/track/{entity_id}")
 def add_track_to_queue(entity_id: str):
     playqueue.add(inputmodule.get_track_info([entity_id]))
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/album/{entity_id}")
+@app.post("/queue/add/album/{entity_id}")
 def add_album_to_queue(entity_id: str):
     tracks = [
         track.id for track in inputmodule.browse_album(entity_id, limit=500).items
@@ -51,7 +51,7 @@ def add_album_to_queue(entity_id: str):
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/playlist/{entity_id}")
+@app.post("/queue/add/playlist/{entity_id}")
 def add_playlist_to_queue(entity_id: str):
     tracks = [
         track.id for track in inputmodule.browse_playlist(entity_id, limit=5000).items
@@ -60,7 +60,7 @@ def add_playlist_to_queue(entity_id: str):
     return {"message": "Ok"}
 
 
-@app.get("/queue/add/catalog/{entity_id}")
+@app.post("/queue/add/catalog/{entity_id}")
 def add_catalog_entry_to_queue(entity_id: str):
     tracks = [
         track.id
@@ -71,31 +71,31 @@ def add_catalog_entry_to_queue(entity_id: str):
     return {"message": "Ok"}
 
 
-@app.get("/queue/play")
+@app.put("/queue/play")
 async def queue_play(index: Union[int, None] = None):
     playqueue.play(index)
     return {"message": "Ok"}
 
 
-@app.get("/queue/pause")
+@app.put("/queue/pause")
 async def queue_pause(paused: bool = True):
     playqueue.pause(paused)
     return {"message": "Ok"}
 
 
-@app.get("/queue/next")
+@app.put("/queue/next")
 async def read_queue_next():
     playqueue.next()
     return {"message": "Ok"}
 
 
-@app.get("/queue/prev")
+@app.put("/queue/prev")
 async def read_queue_prev():
     playqueue.prev()
     return {"message": "Ok"}
 
 
-@app.get("/queue/stop")
+@app.put("/queue/stop")
 async def read_queue_stop():
     playqueue.stop()
     return {"message": "Ok"}
@@ -164,13 +164,13 @@ async def state() -> PlayerState:
     return playqueue.get_state()
 
 
-@app.get("/queue/clear")
+@app.delete("/queue/clear")
 async def clear():
     playqueue.clear()
     return {"message": "Ok"}
 
 
-@app.get("/queue/remove")
+@app.post("/queue/remove")
 async def remove(index: int):
     playqueue.remove([index])
     return {"message": "Ok"}
@@ -186,7 +186,7 @@ async def get_volume(device_id: str) -> Volume:
     return device.get_volume()
 
 
-@app.get("/device/set_volume")
+@app.put("/device/set_volume")
 async def set_volume(device_id: str, volume: int):
     device.set_volume(volume)
     return {"message": "Ok"}
@@ -197,12 +197,12 @@ async def list_favorite(type: SearchType, offset: int = 0, limit: int = 10):
     return inputmodule.list_favorite(type, offset, limit).model_dump(exclude_unset=True)
 
 
-@app.get("/favorite/add/{type}/{id}")
+@app.put("/favorite/add/{type}/{id}")
 async def add_favorite(type: SearchType, id: str):
     return inputmodule.add_to_favorite(type, id)
 
 
-@app.get("/favorite/remove/{type}/{id}")
+@app.delete("/favorite/remove/{type}/{id}")
 async def remove_favorite(type: SearchType, id: str):
     return inputmodule.remove_from_favorite(type, id)
 
