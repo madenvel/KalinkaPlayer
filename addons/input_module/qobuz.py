@@ -225,13 +225,19 @@ def qobuz_link_retriever(qobuz_client, id) -> str:
     return track_url
 
 
+def append_str(s1: str, s2: str) -> str:
+    if not s2:
+        return s1
+    else:
+        return s1.strip() + f" ({s2.strip()})"
+
+
 def metadata_from_track(track, album_meta={}):
     album_info = track.get("album", album_meta)
     version = album_info.get("version", None)
     return {
         "id": str(track["id"]),
-        "title": track["title"]
-        + ("(" + track["version"] + ")" if track.get("version", None) else ""),
+        "title": append_str(track["title"], track.get("version", None)),
         "performer": Artist(
             name=track["performer"]["name"], id=str(track["performer"]["id"])
         )
@@ -243,7 +249,7 @@ def metadata_from_track(track, album_meta={}):
         "duration": track["duration"],
         "album": Album(
             id=str(album_info["id"]),
-            title=album_info["title"] + ("(" + version + ")" if version else ""),
+            title=append_str(album_info["title"], version),
             image=album_info["image"],
             label=Label(
                 id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
@@ -601,12 +607,7 @@ class QobuzInputModule(InputModule):
             result.append(
                 BrowseItem(
                     id=str(track["id"]),
-                    name=track["title"]
-                    + (
-                        "(" + track["version"] + ")"
-                        if track.get("version", None)
-                        else ""
-                    ),
+                    name=append_str(track["title"], track.get("version", None)),
                     subname=track["performer"]["name"]
                     if "performer" in track
                     else album.get("artist", {"name": None})["name"],
@@ -615,12 +616,7 @@ class QobuzInputModule(InputModule):
                     url="/track/" + str(track["id"]),
                     track=Track(
                         id=str(track["id"]),
-                        title=track["title"]
-                        + (
-                            "(" + track["version"] + ")"
-                            if track.get("version", None)
-                            else ""
-                        ),
+                        title=append_str(track["title"], track.get("version", None)),
                         duration=track["duration"],
                         performer=Artist(
                             id=str(track["performer"]["id"]),
@@ -630,8 +626,7 @@ class QobuzInputModule(InputModule):
                         else None,
                         album=Album(
                             id=str(album["id"]),
-                            title=album["title"]
-                            + ("(" + album_version + ")" if album_version else ""),
+                            title=append_str(album["title"], album_version),
                             artist=Artist(
                                 name=album["artist"]["name"],
                                 id=str(album["artist"]["id"]),
@@ -718,20 +713,14 @@ class QobuzInputModule(InputModule):
         return [
             BrowseItem(
                 id=str(album["id"]),
-                name=album["title"]
-                + ("(" + album["version"] + ")" if album.get("version", None) else ""),
+                name=append_str(album["title"], album.get("version", None)),
                 subname=album["artist"]["name"],
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
                 album=Album(
                     id=str(album["id"]),
-                    title=album["title"]
-                    + (
-                        "(" + album["version"] + ")"
-                        if album.get("version", None)
-                        else ""
-                    ),
+                    title=append_str(album["title"], album.get("version", None)),
                     artist=Artist(
                         name=album["artist"]["name"], id=str(album["artist"]["id"])
                     ),
