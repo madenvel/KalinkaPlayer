@@ -81,6 +81,7 @@ class PlayQueue(AsyncExecutor):
         ]
         self.current_progress = current_time
         if remaining < 5:
+            logger.info(f"Pre-fetching track index ${self.current_track_id + 1}")
             self._prepare_track(self.current_track_id + 1)
 
     @enqueue
