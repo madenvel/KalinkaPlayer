@@ -113,15 +113,18 @@ class QobuzReporter:
 
     def _sender_worker(self):
         while True:
-            message = self.mqueue.get()
-            response = self.qobuz_client.session.post(
-                self.qobuz_client.base + message["endpoint"],
-                params={"events": json.dumps(message["params"])},
-            )
+            try:
+                message = self.mqueue.get()
+                response = self.qobuz_client.session.post(
+                    self.qobuz_client.base + message["endpoint"],
+                    params={"events": json.dumps(message["params"])},
+                )
 
-            if not response.ok:
-                logger.warn('Failed to send event to Qobuz: "%s"', response.text)
+                if not response.ok:
+                    logger.warn('Failed to send event to Qobuz: "%s"', response.text)
 
-            logger.info(
-                f"Sent event to Qobuz: {message['endpoint']}, message={message['params']}, status: {response.json()['status']}"
-            )
+                logger.info(
+                    f"Sent event to Qobuz: {message['endpoint']}, message={message['params']}, status: {response.json()['status']}"
+                )
+            except Exception as e:
+                logger.warn("Exception while sending event to Qobuz:", e)
