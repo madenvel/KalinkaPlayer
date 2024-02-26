@@ -122,9 +122,9 @@ class QobuzReporter:
 
                 if not response.ok:
                     logger.warn('Failed to send event to Qobuz: "%s"', response.text)
-
-                logger.info(
-                    f"Sent event to Qobuz: {message['endpoint']}, message={message['params']}, status: {response.json()['status']}"
-                )
+                else:
+                    logger.info(
+                        f"Sent event to Qobuz: {message['endpoint']}, message={message['params']}, status: {response.json()['status']}"
+                    )
             except Exception as e:
                 logger.warn("Exception while sending event to Qobuz:", e)
