@@ -5,3 +5,5 @@ pydantic
 fastapi
 uvicorn
 zeroconf
+setuptools
+pyyaml
