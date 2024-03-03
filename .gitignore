@@ -1,5 +1,5 @@
 __pycache__
-rpi.conf
+rpi_conf.yaml
 *.so
 *.o
 build/
@@ -12,4 +12,3 @@ native/rpiplayer.h
 test
 .buildozer/
 bin/
-
