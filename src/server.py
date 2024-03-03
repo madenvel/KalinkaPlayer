@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-
+from contextlib import asynccontextmanager
 from typing import List, Union
 from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -8,21 +7,29 @@ from data_model.response_model import FavoriteIds, GenreList, PlayerState
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
+
 import logging
 import json
 
 from src.inputmodule import SearchType
+from src.service_discovery import ServiceDiscovery
 
-app = FastAPI()
 playqueue, event_listener, inputmodule, device = setup()
-logger = logging.getLogger(__name__)
 
 
-@app.on_event("shutdown")
-def shutdown():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    sd = ServiceDiscovery()
+    await sd.register_service()
+    yield
     logger.info("Shutting down...")
+    await sd.unregister_service()
     event_listener.terminate()
     playqueue.terminate()
+
+
+logger = logging.getLogger(__name__)
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/queue/list")

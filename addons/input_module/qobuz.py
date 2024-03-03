@@ -192,14 +192,15 @@ class QobuzClient:
 
 
 def get_config():
-    with open("rpi.conf", "r") as f:
-        return json.load(fp=f)
+    from src.config import config
+
+    return config["addons"]["input_module"]["qobuz"]
 
 
 def get_client() -> QobuzClient:
     config = get_config()
-    email = config["qobuz"]["email"]
-    password = config["qobuz"]["password_hash"]
+    email = config["email"]
+    password = config["password_hash"]
     bundle = Bundle()
 
     app_id = bundle.get_app_id()
@@ -238,13 +239,13 @@ def metadata_from_track(track, album_meta={}):
     return {
         "id": str(track["id"]),
         "title": append_str(track["title"], track.get("version", None)),
-        "performer": Artist(
-            name=track["performer"]["name"], id=str(track["performer"]["id"])
-        )
-        if "performer" in track
-        else Artist(
-            name=album_info["artist"].get("name", None),
-            id=str(album_info["artist"].get("id", None)),
+        "performer": (
+            Artist(name=track["performer"]["name"], id=str(track["performer"]["id"]))
+            if "performer" in track
+            else Artist(
+                name=album_info["artist"].get("name", None),
+                id=str(album_info["artist"].get("id", None)),
+            )
         ),
         "duration": track["duration"],
         "album": Album(
@@ -608,9 +609,11 @@ class QobuzInputModule(InputModule):
                 BrowseItem(
                     id=str(track["id"]),
                     name=append_str(track["title"], track.get("version", None)),
-                    subname=track["performer"]["name"]
-                    if "performer" in track
-                    else album.get("artist", {"name": None})["name"],
+                    subname=(
+                        track["performer"]["name"]
+                        if "performer" in track
+                        else album.get("artist", {"name": None})["name"]
+                    ),
                     can_browse=False,
                     can_add=True,
                     url="/track/" + str(track["id"]),
@@ -618,12 +621,14 @@ class QobuzInputModule(InputModule):
                         id=str(track["id"]),
                         title=append_str(track["title"], track.get("version", None)),
                         duration=track["duration"],
-                        performer=Artist(
-                            id=str(track["performer"]["id"]),
-                            name=track["performer"]["name"],
-                        )
-                        if "performer" in track
-                        else None,
+                        performer=(
+                            Artist(
+                                id=str(track["performer"]["id"]),
+                                name=track["performer"]["name"],
+                            )
+                            if "performer" in track
+                            else None
+                        ),
                         album=Album(
                             id=str(album["id"]),
                             title=append_str(album["title"], album_version),
@@ -696,13 +701,15 @@ class QobuzInputModule(InputModule):
                 artist=Artist(
                     id=str(artist["id"]),
                     name=artist["name"],
-                    image=ArtistImage(
-                        thumbnail=artist["image"].get("small", None),
-                        small=artist["image"].get("medium", None),
-                        large=artist["image"].get("large", None),
-                    )
-                    if artist["image"]
-                    else None,
+                    image=(
+                        ArtistImage(
+                            thumbnail=artist["image"].get("small", None),
+                            small=artist["image"].get("medium", None),
+                            large=artist["image"].get("large", None),
+                        )
+                        if artist["image"]
+                        else None
+                    ),
                     album_count=artist["albums_count"],
                 ),
             )
@@ -724,13 +731,15 @@ class QobuzInputModule(InputModule):
                     artist=Artist(
                         name=album["artist"]["name"], id=str(album["artist"]["id"])
                     ),
-                    image=AlbumImage(
-                        thumbnail=album["image"].get("thumbnail", None),
-                        small=album["image"].get("small", None),
-                        large=album["image"].get("large", None),
-                    )
-                    if "image" in album and album["image"]
-                    else None,
+                    image=(
+                        AlbumImage(
+                            thumbnail=album["image"].get("thumbnail", None),
+                            small=album["image"].get("small", None),
+                            large=album["image"].get("large", None),
+                        )
+                        if "image" in album and album["image"]
+                        else None
+                    ),
                     duration=album["duration"],
                     track_count=album["tracks_count"],
                     genre=Genre(

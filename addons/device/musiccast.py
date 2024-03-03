@@ -6,6 +6,7 @@ from src.events import EventType
 from src.ext_device import SupportedFunction, Volume
 from src.playqueue import PlayQueue
 from src.rpiasync import EventEmitter
+from src.config import config
 
 import threading
 
@@ -51,9 +52,11 @@ class Device:
     def __init__(self, playqueue: PlayQueue, event_emitter: EventEmitter):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
-        self.connected_input = "optical2"
-        self.device_addr = "192.168.3.33"
-        self.device_port = 80
+        self.connected_input = config["addons"]["device"]["musiccast"][
+            "connected_input"
+        ]
+        self.device_addr = config["addons"]["device"]["musiccast"]["device_addr"]
+        self.device_port = config["addons"]["device"]["musiccast"]["device_port"]
         self.session = requests.Session()
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"

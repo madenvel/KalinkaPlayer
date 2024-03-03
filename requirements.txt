@@ -4,3 +4,4 @@ cython
 pydantic
 fastapi
 uvicorn
+zeroconf
