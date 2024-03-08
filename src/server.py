@@ -154,6 +154,7 @@ async def search(search_type: SearchType, query: str, offset: int = 0, limit: in
 async def stream(request: Request):
     async def process_events():
         event_stream = EventStream(event_listener)
+        playqueue.replay()
         while True:
             if await request.is_disconnected():
                 break

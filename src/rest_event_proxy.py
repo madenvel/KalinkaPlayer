@@ -10,11 +10,12 @@ logger = logging.getLogger(__name__)
 class EventStream:
     def __init__(self, event_listener: EventListener):
         self.subscriptions = []
+        self.queue = Queue()
+        self.replay_complete = False
         for event in EventType:
             self.subscriptions.append(
                 event_listener.subscribe(event, partial(self._callback, event))
             )
-        self.queue = Queue()
 
     def get_event(self) -> dict:
         try:
@@ -25,6 +26,18 @@ class EventStream:
         return last_event
 
     def _callback(self, event_type: EventType, *args, **kwargs):
+        # Ignore state changing events
+        # until replay event is issued
+        if self.replay_complete is False and event_type in [
+            EventType.StateChanged,
+            EventType.TracksAdded,
+            EventType.TracksRemoved,
+        ]:
+            return
+
+        if event_type == EventType.StateReplay:
+            self.replay_complete = True
+
         self.queue.put(
             {
                 "event_type": event_type.value,

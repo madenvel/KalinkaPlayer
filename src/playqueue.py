@@ -279,11 +279,30 @@ class PlayQueue(AsyncExecutor):
     def get_state(self) -> PlayerState:
         return PlayerState(
             state=self.state.name,
-            current_track=self.get_track_info(self.current_track_id)
-            if self.current_track_id in range(0, len(self.track_list))
-            else None,
+            current_track=(
+                self.get_track_info(self.current_track_id)
+                if self.current_track_id in range(0, len(self.track_list))
+                else None
+            ),
             index=self.current_track_id,
             progress=self.current_progress,
+        )
+
+    @enqueue
+    def replay(self) -> PlayerState:
+        self.event_emitter.dispatch(
+            EventType.StateReplay,
+            PlayerState(
+                state=self.state.name,
+                current_track=(
+                    self.get_track_info(self.current_track_id)
+                    if self.current_track_id in range(0, len(self.track_list))
+                    else None
+                ),
+                index=self.current_track_id,
+                progress=self.current_progress,
+            ).model_dump(exclude_none=True),
+            self.list(0, len(self.track_list)),
         )
 
     def _clear(self):

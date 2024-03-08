@@ -10,3 +10,4 @@ class EventType(Enum):
     FavoriteAdded = "favorite_added"
     FavoriteRemoved = "favorite_removed"
     VolumeChanged = "volume_changed"
+    StateReplay = "state_replay"
