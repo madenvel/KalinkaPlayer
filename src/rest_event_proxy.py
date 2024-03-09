@@ -36,7 +36,10 @@ class EventStream:
             return
 
         if event_type == EventType.StateReplay:
-            self.replay_complete = True
+            if self.replay_complete is False:
+                self.replay_complete = True
+            else:
+                return
 
         self.queue.put(
             {
