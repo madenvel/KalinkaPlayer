@@ -6,6 +6,7 @@
 #include <string>
 
 enum State {
+  INVALID = -1,
   IDLE = 0,
   READY,
   BUFFERING,
@@ -19,16 +20,15 @@ enum State {
 class StateMachine {
   std::atomic<int> st;
   std::string stateComment;
-  std::function<void(State, State)> callback;
+  std::function<void(State, long)> callback;
 
 public:
-  StateMachine(std::function<void(State, State)> cb) : st(IDLE), callback(cb) {}
+  StateMachine(std::function<void(State, long)> cb)
+      : st(INVALID), callback(cb) {}
 
-  State updateState(State newState) {
-    State oldState = static_cast<State>(st.exchange(newState));
-    callback(oldState, newState);
-
-    return oldState;
+  void updateState(State newState, long position) {
+    st.store(newState);
+    callback(newState, position);
   }
 
   void setStateComment(std::string comment) { stateComment = comment; }

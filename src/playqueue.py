@@ -1,4 +1,5 @@
 import logging
+import time
 from data_model.response_model import PlayerState
 from src.event_loop import AsyncExecutor, enqueue
 
@@ -29,7 +30,6 @@ class PlayQueue(AsyncExecutor):
         super().__init__()
         self.event_emitter = event_emitter
         self.track_player = RpiAudioPlayer()
-        self.track_player.set_progress_callback(self._progress_callback)
         self.track_player.set_state_callback(self._state_callback)
 
         self.current_track_id = 0
@@ -38,51 +38,35 @@ class PlayQueue(AsyncExecutor):
         self.track_list: list[TrackInfo] = []
         self.prefetched_tracks = {}
         self.current_progress = 0
+        self.last_progress_update_ts = 0
 
         # properties
         self.advance = True
         self.state = State.IDLE
 
     @enqueue
-    def _state_callback(self, context_id, old_state, new_state):
-        if context_id != self.current_context_id:
+    def _state_callback(self, context_id, new_state, position):
+        if context_id != self.current_context_id and new_state != State.STOPPED:
             return
 
         new_state = State(new_state)
 
         if new_state == State.FINISHED:
-            return self._finished_playing()
+            if self.current_track_id == len(self.track_list) - 1:
+                new_state == State.STOPPED
+            else:
+                return self._finished_playing()
 
         self.state = new_state
-        if self.state == State.STOPPED:
-            self.current_progress = 0
-
+        self.current_progress = position
+        self.last_progress_update_ts = time.monotonic_ns()
         self.event_emitter.dispatch(
             EventType.StateChanged,
-            PlayerState(state=new_state.name).model_dump(exclude_none=True),
+            PlayerState(
+                state=new_state.name,
+                position=position,
+            ).model_dump(exclude_none=True),
         )
-
-    @enqueue
-    def _progress_callback(self, context_id, progress):
-        if context_id != self.current_context_id:
-            return
-
-        track_info = self.get_track_info(self.current_track_id)
-        if track_info is None:
-            return
-
-        current_time = self.get_track_info(self.current_track_id)["duration"] * progress
-        self.event_emitter.dispatch(
-            EventType.StateChanged,
-            PlayerState(progress=current_time).model_dump(exclude_none=True),
-        )
-        remaining = (1 - progress) * self.get_track_info(self.current_track_id)[
-            "duration"
-        ]
-        self.current_progress = current_time
-        if remaining < 5 and self.current_track_id + 1 not in self.prefetched_tracks:
-            logger.info(f"Pre-fetching track index {self.current_track_id + 1}")
-            self._prepare_track(self.current_track_id + 1)
 
     @enqueue
     def _finished_playing(self):
@@ -90,11 +74,14 @@ class PlayQueue(AsyncExecutor):
             self.next()
 
     def _notify_track_change(self):
+        self.state = State.IDLE
         self.event_emitter.dispatch(
             EventType.StateChanged,
             PlayerState(
                 current_track=self.get_track_info(self.current_track_id),
                 index=self.current_track_id,
+                state=State.IDLE.name,
+                position=0,
             ).model_dump(exclude_none=True),
         )
 
@@ -150,11 +137,15 @@ class PlayQueue(AsyncExecutor):
         if index is not None and index not in range(0, len(self.track_list)):
             return
 
+        prev_index = self.current_track_id
+
         if index is not None:
             self.current_track_id = index
 
+        if prev_index != self.current_track_id:
+            self._notify_track_change()
+
         self._play_track()
-        self._notify_track_change()
         self._request_more_tracks()
 
     @enqueue
@@ -167,8 +158,8 @@ class PlayQueue(AsyncExecutor):
             return
 
         self.current_track_id += 1
-        self._play_track()
         self._notify_track_change()
+        self._play_track()
         self._request_more_tracks()
 
     @enqueue
@@ -285,8 +276,18 @@ class PlayQueue(AsyncExecutor):
                 else None
             ),
             index=self.current_track_id,
-            progress=self.current_progress,
+            position=self._estimated_progress(),
         )
+
+    def _estimated_progress(self) -> int:
+        if self.state != State.PLAYING:
+            return self.current_progress
+
+        progress = self.current_progress + int(
+            (time.monotonic_ns() - self.last_progress_update_ts) / 1_000_000
+        )
+
+        return progress
 
     @enqueue
     def replay(self) -> PlayerState:
@@ -300,7 +301,7 @@ class PlayQueue(AsyncExecutor):
                     else None
                 ),
                 index=self.current_track_id,
-                progress=self.current_progress,
+                position=self._estimated_progress(),
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
         )

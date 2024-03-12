@@ -16,12 +16,10 @@ AudioPlayer::~AudioPlayer() {
 }
 
 AudioPlayer::Context::Context(std::string url, ContextStateCallback stateCb,
-                              ContextProgressUpdateCallback progressCb,
                               std::shared_ptr<AlsaDevice> alsaDevice)
     : httpNode(std::make_shared<HttpRequestNode>(url)),
       decoder(std::make_shared<FlacDecoder>()), alsaDevice(alsaDevice),
-      stateCb(stateCb), sm(std::make_shared<StateMachine>(stateCb)),
-      progressCb(progressCb) {}
+      stateCb(stateCb), sm(std::make_shared<StateMachine>(stateCb)) {}
 
 void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
                                    std::stop_token token) {
@@ -37,7 +35,7 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   decoder->connectIn(flacBuffer);
   decoder->connectOut(decodedData);
   httpNode->connectOut(flacBuffer);
-  sm->updateState(State::BUFFERING);
+  sm->updateState(State::BUFFERING, 0);
   httpNode->start();
   decoder->process_until_end_of_metadata();
 
@@ -47,10 +45,10 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
 
   if (!decoder->hasStreamInfo()) {
     sm->setStateComment("Stream info is not available");
-    sm->updateState(State::ERROR);
+    sm->updateState(State::ERROR, 0);
     return;
   }
-  sm->updateState(State::READY);
+  sm->updateState(State::READY, 0);
   decoder->start();
   decodedData->waitForFull(token);
 }
@@ -62,7 +60,7 @@ void AudioPlayer::Context::play() {
   alsaPlay = std::make_shared<AlsaPlayNode>(
       alsaDevice, decoder->getStreamInfo().sample_rate,
       decoder->getStreamInfo().bits_per_sample,
-      decoder->getStreamInfo().total_samples, sm, progressCb);
+      decoder->getStreamInfo().total_samples, sm);
   alsaPlay->connectIn(decodedData);
   alsaPlay->start();
 }
@@ -90,8 +88,6 @@ int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
         urlCopy,
         std::bind(&AudioPlayer::onStateChangeCb_internal, this, contextId, _1,
                   _2),
-        std::bind(&AudioPlayer::onProgressUpdateCb_internal, this, contextId,
-                  _1),
         alsaDevice);
     auto &context = contexts[contextId];
     context->prepare(level1BufferSize, level2BufferSize, token);
@@ -146,8 +142,8 @@ void AudioPlayer::removeContext(int contextId) {
   enqueue(task);
 }
 
-void AudioPlayer::onStateChangeCb_internal(int contextId, State oldState,
-                                           State newState) {
+void AudioPlayer::onStateChangeCb_internal(int contextId, State newState,
+                                           long position) {
   // if (newState == State::ERROR) {
   //   lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
   // }
@@ -156,29 +152,13 @@ void AudioPlayer::onStateChangeCb_internal(int contextId, State oldState,
     return;
   }
 
-  auto task = [this, contextId, oldState, newState](std::stop_token) {
-    stateCb(contextId, oldState, newState);
-  };
-  cbThreadPool.enqueue(task);
-}
-
-void AudioPlayer::onProgressUpdateCb_internal(int contextId, float progress) {
-  if (progressCb == nullptr) {
-    return;
-  }
-
-  auto task = [this, contextId, progress](std::stop_token) {
-    progressCb(contextId, progress);
+  auto task = [this, contextId, newState, position](std::stop_token) {
+    stateCb(contextId, newState, position);
   };
   cbThreadPool.enqueue(task);
 }
 
 void AudioPlayer::setStateCallback(StateCallback cb) {
   auto task = [this, cb](std::stop_token) { stateCb = cb; };
-  enqueue(task);
-}
-
-void AudioPlayer::setProgressUpdateCallback(ProgressUpdateCallback cb) {
-  auto task = [this, cb](std::stop_token) { progressCb = cb; };
   enqueue(task);
 }

@@ -14,7 +14,7 @@ class QobuzReporter:
     def __init__(self, qobuz_client):
         self.qobuz_client = qobuz_client
         self.current_state = None
-        self.progress_started = 0
+        self.state_update_time = 0
         self.mqueue = Queue()
         threading.Thread(target=self._sender_worker, daemon=True).start()
 
@@ -22,45 +22,47 @@ class QobuzReporter:
         state = PlayerState(**state)
         if state.current_track:
             # Track changed
-            if (
-                self.current_state
-                and self.current_state.current_track
-                and self.current_state.state == "PLAYING"
-            ):
+            if self.current_state and self.current_state.state == "PLAYING":
+                current_time = time.monotonic_ns()
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingEnd",
-                        "params": self._make_end_report_message(),
+                        # We estimate the time here there's no state update sent
+                        # for the old context from playqueue at the moment.
+                        # This number is not entirely accurate and doesn't include
+                        # buffering time of the next track due to gapless playback.
+                        # However, in most cases it is more than enough.
+                        "params": self._make_end_report_message(
+                            (current_time - self.state_update_time) / 1_000_000
+                        ),
                     }
                 )
 
-            self.current_state = PlayerState(
-                current_track=state.current_track.model_copy(), progress=0
-            )
-            self.progress_started = 0
+            self.current_state = state.model_copy()
 
-        if state.state:
-            if self.current_state != None:
-                self.current_state.state = state.state
-                if state.state == "PLAYING":
-                    self.progress_started = self.current_state.progress
-                    self.mqueue.put(
-                        {
-                            "endpoint": "track/reportStreamingStart",
-                            "params": self._make_start_report_message(),
-                        }
-                    )
+        if state.state and self.current_state:
+            if state.state == "PLAYING":
+                self.position_started = self.current_state.position
+                self.mqueue.put(
+                    {
+                        "endpoint": "track/reportStreamingStart",
+                        "params": self._make_start_report_message(),
+                    }
+                )
 
-                if state.state == "PAUSED" or state.state == "STOPPED":
-                    self.mqueue.put(
-                        {
-                            "endpoint": "track/reportStreamingEnd",
-                            "params": self._make_end_report_message(),
-                        }
-                    )
+            if state.state == "PAUSED" or state.state == "STOPPED":
+                self.mqueue.put(
+                    {
+                        "endpoint": "track/reportStreamingEnd",
+                        "params": self._make_end_report_message(
+                            duration=(state.position - self.current_state.position)
+                        ),
+                    }
+                )
 
-        if state.progress and self.current_state:
-            self.current_state.progress = state.progress
+        self.current_state.state = state.state
+        self.current_state.position = state.position
+        self.state_update_time = time.monotonic_ns()
 
     def _make_start_report_message(self):
         if (
@@ -89,7 +91,7 @@ class QobuzReporter:
             "totalTrackDuration": track_cache["duration"],
         }
 
-    def _make_end_report_message(self):
+    def _make_end_report_message(self, duration):
         track_id = self.current_state.current_track.id
         if track_id not in self.qobuz_client.track_url_response_cache:
             raise Exception("Track not found in cache")
@@ -102,7 +104,7 @@ class QobuzReporter:
             "date": int(time.time()),
             "track_id": self.current_state.current_track.id,
             "format_id": track_cache["format_id"],
-            "duration": int(self.current_state.progress - self.progress_started),
+            "duration": int(duration / 1000),
             "online": True,
             "intent": "streaming",
             "local": False,

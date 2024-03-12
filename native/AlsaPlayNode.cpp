@@ -20,7 +20,7 @@ snd_pcm_format_t getFormat(int bitsPerSample) {
   return bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
 }
 void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
-                   unsigned int rate, snd_pcm_uframes_t &buffer_size,
+                   unsigned int &rate, snd_pcm_uframes_t &buffer_size,
                    snd_pcm_uframes_t &period_size, snd_pcm_format_t format) {
 
   unsigned int rrate;
@@ -74,6 +74,8 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
     // Comment this out to be able to debug on a machine without resampling
     // throw std::runtime_error(error.str());
   }
+
+  rate = rrate;
   // /* set the buffer time */
   // err = snd_pcm_hw_params_set_buffer_time_near(pcm_handle, params,
   // &buffer_time,
@@ -264,12 +266,12 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     bool prevPaused = paused = false;
 
     size_t framesCount = 0;
-    size_t prevFramesCountProgressReported = -1;
     bool eof = false;
     bool error = false;
-    sm->updateState(State::PLAYING);
+    sm->updateState(State::PLAYING, 0);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // Why do I have this? It's likely not needed and breaks gapless playback
+    // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     while (!token.stop_requested()) {
       err = wait_for_poll(pcm_handle, ufds, count);
@@ -288,7 +290,8 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
       size_t bytesToRead = framesToBytes(framesToRead);
 
       if (prevPaused != paused) {
-        sm->updateState(paused ? State::PAUSED : State::PLAYING);
+        sm->updateState(paused ? State::PAUSED : State::PLAYING,
+                        (framesCount * 1000) / alsa->getCurrentSampleRate());
         prevPaused = paused;
       }
 
@@ -304,12 +307,6 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
           }
           size_t read = inNode->read(data.data(), bytesToRead, token);
           framesCount += bytesToFrames(read);
-          if (framesCount - prevFramesCountProgressReported >
-                  sampleRate / 2UL ||
-              (inNode->eof())) {
-            prevFramesCountProgressReported = framesCount;
-            progressCb((float)framesCount / totalFrames);
-          }
           if (read < bytesToRead) {
             memset(data.data() + read, 0, bytesToRead - read);
           }
@@ -340,7 +337,7 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
     delete[] ufds;
     if (error) {
-      sm->updateState(State::ERROR);
+      sm->updateState(State::ERROR, 0);
       if (!in.expired()) {
         try {
           std::rethrow_exception(in.lock()->error());
@@ -350,9 +347,11 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
       }
       return -1;
     }
-    sm->updateState(eof ? State::FINISHED : State::STOPPED);
+    sm->updateState(eof ? State::FINISHED : State::STOPPED,
+                    eof ? totalFrames * 1000 / alsa->getCurrentSampleRate()
+                        : (framesCount * 1000) / alsa->getCurrentSampleRate());
   } catch (const std::exception &ex) {
-    sm->updateState(State::ERROR);
+    sm->updateState(State::ERROR, 0);
     sm->setStateComment(ex.what());
     return -1;
   }
@@ -367,7 +366,8 @@ AlsaDevice::~AlsaDevice() {
   }
 }
 
-void *AlsaDevice::getHandle(int sampleRate, int bitsPerSample) {
+void *AlsaDevice::getHandle(unsigned int sampleRate,
+                            unsigned int bitsPerSample) {
   if (currentSampleRate != sampleRate ||
       currentBitsPerSample != bitsPerSample || !pcmHandle) {
     init(sampleRate, bitsPerSample);
@@ -377,7 +377,7 @@ void *AlsaDevice::getHandle(int sampleRate, int bitsPerSample) {
   return pcmHandle;
 }
 
-void AlsaDevice::init(int sampleRate, int bitsPerSample) {
+void AlsaDevice::init(unsigned int sampleRate, unsigned int bitsPerSample) {
   int err = 0;
 
   currentSampleRate = sampleRate;
@@ -390,8 +390,8 @@ void AlsaDevice::init(int sampleRate, int bitsPerSample) {
   snd_pcm_hw_params_t *hw_params;
   snd_pcm_hw_params_malloc(&hw_params);
   try {
-    init_hwparams(static_cast<snd_pcm_t *>(pcmHandle), hw_params, sampleRate,
-                  buffer_size, period_size, format);
+    init_hwparams(static_cast<snd_pcm_t *>(pcmHandle), hw_params,
+                  currentSampleRate, buffer_size, period_size, format);
   } catch (const std::exception &ex) {
     snd_pcm_hw_params_free(hw_params);
     throw ex;
@@ -415,6 +415,7 @@ void AlsaDevice::init(int sampleRate, int bitsPerSample) {
   }
   snd_pcm_sw_params_free(sw_params);
 
+  // Hack for Raspberry Pi HiFiBerry
   // Sleep to make sure RPi is ready to play
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }

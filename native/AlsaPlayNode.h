@@ -18,17 +18,17 @@ public:
   AlsaDevice();
   ~AlsaDevice();
 
-  void *getHandle(int sampleRate, int bitsPerSample);
-  int getCurrentSampleRate() const { return currentSampleRate; }
+  void *getHandle(unsigned int sampleRate, unsigned int bitsPerSample);
+  unsigned int getCurrentSampleRate() const { return currentSampleRate; }
 
-  int getCurrentBitsPerSample() const { return currentBitsPerSample; }
+  unsigned int getCurrentBitsPerSample() const { return currentBitsPerSample; }
 
 private:
   void *pcmHandle = nullptr;
-  int currentSampleRate = 0;
-  int currentBitsPerSample = 0;
+  unsigned int currentSampleRate = 0;
+  unsigned int currentBitsPerSample = 0;
 
-  void init(int sampleRate, int bitsPerSample);
+  void init(unsigned int sampleRate, unsigned int bitsPerSample);
   void openDevice();
 };
 
@@ -36,10 +36,9 @@ class AlsaPlayNode : public ProcessNode {
 
 private:
   std::weak_ptr<AlsaDevice> alsaDevice;
-  int sampleRate;
-  int bitsPerSample;
+  const int sampleRate;
+  const int bitsPerSample;
   std::shared_ptr<StateMachine> sm;
-  ContextProgressUpdateCallback progressCb;
   size_t totalFrames;
   std::jthread playThread;
   bool paused = false;
@@ -49,11 +48,9 @@ private:
 public:
   AlsaPlayNode(std::shared_ptr<AlsaDevice> alsaDevice, int sampleRate,
                int bitsPerSample, size_t totalFrames,
-               std::shared_ptr<StateMachine> sm,
-               ContextProgressUpdateCallback progressCb)
+               std::shared_ptr<StateMachine> sm)
       : alsaDevice(alsaDevice), sampleRate(sampleRate),
-        bitsPerSample(bitsPerSample), sm(sm), progressCb(progressCb),
-        totalFrames(totalFrames) {}
+        bitsPerSample(bitsPerSample), sm(sm), totalFrames(totalFrames) {}
 
   ~AlsaPlayNode() = default;
 

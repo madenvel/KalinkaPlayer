@@ -15,7 +15,7 @@ class PlayerState(BaseModel):
     state: Optional[str] = None
     current_track: Optional[Track] = None
     index: Optional[int] = None
-    progress: Optional[float] = None
+    position: Optional[int] = None
 
 
 class FavoriteAddedEvent(BaseModel):

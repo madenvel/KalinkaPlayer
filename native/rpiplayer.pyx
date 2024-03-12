@@ -1,15 +1,11 @@
 # distutils: language = c++
 
-from AudioPlayer cimport AudioPlayer, StateCallback, ProgressCallback
+from AudioPlayer cimport AudioPlayer, StateCallback
 
 cdef extern from "PyObjectWrapper.h":
     cdef cppclass PyObjWrapper:
         PyObjWrapper()
         PyObjWrapper(object)
-
-    cdef cppclass PyObjWrapper2:
-        PyObjWrapper2()
-        PyObjWrapper2(object)
 
 
 cdef class RpiAudioPlayer:
@@ -43,10 +39,6 @@ cdef class RpiAudioPlayer:
     def set_state_callback(self, cb):
         cdef PyObjWrapper wrappedCb = PyObjWrapper(cb)
         self.c_instance.setStateCallback(<StateCallback>wrappedCb)
-
-    def set_progress_callback(self, cb):
-        cdef PyObjWrapper2 wrappedCb = PyObjWrapper2(cb)
-        self.c_instance.setProgressUpdateCallback(<ProgressCallback>wrappedCb)
 
     def get_last_error(self, context_id):
         return self.c_instance.getLastError(context_id)
