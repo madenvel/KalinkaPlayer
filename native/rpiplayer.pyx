@@ -1,6 +1,6 @@
 # distutils: language = c++
 
-from AudioPlayer cimport AudioPlayer, StateCallback
+from AudioPlayer cimport AudioPlayer, StateCallback, AudioInfo
 
 cdef extern from "PyObjectWrapper.h":
     cdef cppclass PyObjWrapper:
@@ -42,6 +42,17 @@ cdef class RpiAudioPlayer:
 
     def get_last_error(self, context_id):
         return self.c_instance.getLastError(context_id)
+
+    def get_audio_info(self, context_id):
+        caudio_info = self.c_instance.getAudioInfo(context_id)
+        result = {
+            'sample_rate': caudio_info.sampleRate,
+            'channels': caudio_info.channels,
+            'bits_per_sample': caudio_info.bitsPerSample,
+            'duration_ms': caudio_info.durationMs
+        }
+
+        return result
 
     def __dealloc__(self):
         del self.c_instance

@@ -10,15 +10,21 @@ ThreadPool::ThreadPool(size_t numWorkers) {
 
 ThreadPool::~ThreadPool() { stop(); }
 
-void ThreadPool::enqueue(std::function<void(std::stop_token)> task) {
+std::future<void>
+ThreadPool::enqueue(std::function<void(std::stop_token)> task) {
   if (terminate) {
-    return;
+    return std::future<void>();
   }
+  std::promise<void> *promisePtr = nullptr;
   {
     std::lock_guard<std::mutex> lock(m);
     queue.push(task);
+    promises.push(std::promise<void>());
+    promisePtr = &promises.back();
   }
   con.notify_one();
+
+  return promisePtr->get_future();
 }
 
 void ThreadPool::stop() {
@@ -39,12 +45,16 @@ void ThreadPool::worker(std::stop_token token) {
       break;
     }
     auto task = queue.front();
+    auto promise = std::move(promises.front());
+    promises.pop();
     queue.pop();
     lock.unlock();
     try {
       task(token);
+      promise.set_value();
     } catch (std::exception &e) {
       std::cerr << "Exception caught in a thread: " << e.what() << std::endl;
+      promise.set_exception(std::current_exception());
     }
     lock.lock();
   }

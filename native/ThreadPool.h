@@ -3,6 +3,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <list>
 #include <mutex>
 #include <queue>
@@ -10,6 +11,7 @@
 
 class ThreadPool {
   std::queue<std::function<void(std::stop_token)>> queue;
+  std::queue<std::promise<void>> promises;
   std::mutex m;
   std::condition_variable con;
   std::list<std::jthread> threads;
@@ -19,7 +21,7 @@ public:
   ThreadPool(size_t numWorkers = 1);
   ~ThreadPool();
 
-  void enqueue(std::function<void(std::stop_token)> task);
+  std::future<void> enqueue(std::function<void(std::stop_token)> task);
   void stop();
 
 private:

@@ -1,3 +1,4 @@
+from functools import partial
 import logging
 import time
 from data_model.response_model import PlayerState
@@ -10,6 +11,8 @@ from native.rpiplayer import RpiAudioPlayer
 
 from src.events import EventType
 from src.states import State
+
+from threading import Timer
 
 logger = logging.getLogger(__name__)
 
@@ -43,19 +46,25 @@ class PlayQueue(AsyncExecutor):
         # properties
         self.advance = True
         self.state = State.IDLE
+        self.timer_thread = None
 
     @enqueue
     def _state_callback(self, context_id, new_state, position):
+        new_state = State(new_state)
+        if new_state == State.READY:
+            self.context_map[context_id] = self.track_player.get_audio_info(context_id)
+
         if context_id != self.current_context_id and new_state != State.STOPPED:
             return
-
-        new_state = State(new_state)
 
         if new_state == State.FINISHED:
             if self.current_track_id == len(self.track_list) - 1:
                 new_state == State.STOPPED
             else:
                 return self._finished_playing()
+
+        if new_state == State.STOPPED:
+            del self.context_map[context_id]
 
         self.state = new_state
         self.current_progress = position
@@ -67,6 +76,30 @@ class PlayQueue(AsyncExecutor):
                 position=position,
             ).model_dump(exclude_none=True),
         )
+
+        if new_state == State.PLAYING:
+            self._setup_prefetch_timer()
+        else:
+            self._cancel_prefetch_timer()
+
+    def _setup_prefetch_timer(self):
+        self._cancel_prefetch_timer()
+        next_track_id = self.current_track_id + 1
+        audio_info = self.context_map[self.current_context_id]
+        time_to_prefetch_s = (
+            audio_info["duration_ms"] - self.current_progress - 5000
+        ) / 1000
+        logger.info(f"Prefetching next track in {time_to_prefetch_s} seconds")
+        self.timer_thread = Timer(
+            time_to_prefetch_s,
+            partial(self._prepare_track, next_track_id),
+        )
+        self.timer_thread.start()
+
+    def _cancel_prefetch_timer(self):
+        if self.timer_thread is not None:
+            self.timer_thread.cancel()
+            self.timer_thread = None
 
     @enqueue
     def _finished_playing(self):
@@ -88,6 +121,7 @@ class PlayQueue(AsyncExecutor):
     @enqueue
     def _prepare_track(self, index):
         if index not in self.prefetched_tracks and index < len(self.track_list):
+            logger.info(f"Prepare next track index {index}")
             link_retriever = self.track_list[index].link_retriever
             track_id = self.track_list[index].metadata.id
             try:

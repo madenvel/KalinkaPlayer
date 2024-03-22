@@ -2,6 +2,7 @@
 #define AUDIO_PLAYER_H
 
 #include "AlsaPlayNode.h"
+#include "AudioInfo.h"
 #include "BufferNode.h"
 #include "DataSource.h"
 #include "FlacDecoder.h"
@@ -45,6 +46,7 @@ private:
                  std::stop_token token);
     void play();
     void pause(bool paused);
+    AudioInfo getStreamInfo();
     std::string getLastError();
   };
 
@@ -69,6 +71,7 @@ public:
   void seek(int time);
   std::string getLastError(int contextId);
   void setStateCallback(StateCallback cb);
+  AudioInfo getAudioInfo(int contextId);
 
 private:
   void onStateChangeCb_internal(int contextId, State oldState, long position);

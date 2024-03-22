@@ -53,6 +53,19 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   decodedData->waitForFull(token);
 }
 
+AudioInfo AudioPlayer::Context::getStreamInfo() {
+  if (decoder->hasStreamInfo()) {
+    return AudioInfo{
+        .sampleRate = static_cast<int>(decoder->getStreamInfo().sample_rate),
+        .channels = static_cast<int>(decoder->getStreamInfo().channels),
+        .bitsPerSample =
+            static_cast<int>(decoder->getStreamInfo().bits_per_sample),
+        .durationMs =
+            static_cast<int>(decoder->getStreamInfo().total_samples * 1000 /
+                             decoder->getStreamInfo().sample_rate)};
+  }
+}
+
 void AudioPlayer::Context::play() {
   if (sm->state() != State::READY) {
     return;
@@ -161,4 +174,17 @@ void AudioPlayer::onStateChangeCb_internal(int contextId, State newState,
 void AudioPlayer::setStateCallback(StateCallback cb) {
   auto task = [this, cb](std::stop_token) { stateCb = cb; };
   enqueue(task);
+}
+
+AudioInfo AudioPlayer::getAudioInfo(int contextId) {
+  AudioInfo info;
+  auto task = [this, &info](std::stop_token) {
+    if (contexts.count(currentContextId)) {
+      info = contexts[currentContextId]->getStreamInfo();
+    }
+  };
+
+  enqueue(task).get();
+
+  return info;
 }

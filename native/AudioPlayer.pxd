@@ -4,7 +4,14 @@ from libcpp.string cimport string
 
 
 ctypedef function[void(int, int, int)] StateCallback
-ctypedef function[void(int, float)] ProgressCallback
+
+cdef extern from "AudioInfo.h":
+    cdef cppclass AudioInfo:
+        int sampleRate;
+        int channels;
+        int bitsPerSample;
+        int durationMs;
+
 
 cdef extern from "AudioPlayer.cpp":
     pass
@@ -20,5 +27,5 @@ cdef extern from "AudioPlayer.h":
         void pause(bool paused);
         void seek(int time);
         void setStateCallback(StateCallback cb);
-        void setProgressUpdateCallback(ProgressCallback cb);
-        string getLastError(int contextId);        
+        string getLastError(int contextId);
+        AudioInfo getAudioInfo(int contextId);        
