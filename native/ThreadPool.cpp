@@ -15,16 +15,17 @@ ThreadPool::enqueue(std::function<void(std::stop_token)> task) {
   if (terminate) {
     return std::future<void>();
   }
-  std::promise<void> *promisePtr = nullptr;
+  std::future<void> future;
   {
     std::lock_guard<std::mutex> lock(m);
     queue.push(task);
-    promises.push(std::promise<void>());
-    promisePtr = &promises.back();
+    auto promise = std::promise<void>();
+    future = promise.get_future();
+    promises.push(std::move(promise));
   }
   con.notify_one();
 
-  return promisePtr->get_future();
+  return future;
 }
 
 void ThreadPool::stop() {

@@ -64,6 +64,9 @@ AudioInfo AudioPlayer::Context::getStreamInfo() {
             static_cast<int>(decoder->getStreamInfo().total_samples * 1000 /
                              decoder->getStreamInfo().sample_rate)};
   }
+
+  return AudioInfo{
+      .sampleRate = 0, .channels = 0, .bitsPerSample = 0, .durationMs = 0};
 }
 
 void AudioPlayer::Context::play() {
