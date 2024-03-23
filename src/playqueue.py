@@ -53,6 +53,7 @@ class PlayQueue(AsyncExecutor):
         new_state = State(new_state)
         if new_state == State.READY:
             self.context_map[context_id] = self.track_player.get_audio_info(context_id)
+            logger.info(f"Track ready: {self.context_map[context_id]}")
 
         if context_id != self.current_context_id and new_state != State.STOPPED:
             return
@@ -64,7 +65,7 @@ class PlayQueue(AsyncExecutor):
                 return self._finished_playing()
 
         if new_state == State.STOPPED:
-            del self.context_map[context_id]
+            self.context_map.pop(context_id, None)
 
         self.state = new_state
         self.current_progress = position
@@ -89,6 +90,8 @@ class PlayQueue(AsyncExecutor):
         time_to_prefetch_s = (
             audio_info["duration_ms"] - self.current_progress - 5000
         ) / 1000
+        if time_to_prefetch_s < 0:
+            return
         logger.info(f"Prefetching next track in {time_to_prefetch_s} seconds")
         self.timer_thread = Timer(
             time_to_prefetch_s,
@@ -157,6 +160,7 @@ class PlayQueue(AsyncExecutor):
                 buffer_size(10, track_info.bit_depth, track_info.sample_rate),
                 64 * 1024,
             )
+        self.context_map.pop(self.current_context_id, None)
         self.current_context_id = context_id
         self.track_player.play(self.current_context_id)
         for stale_context_id in self.prefetched_tracks.values():
