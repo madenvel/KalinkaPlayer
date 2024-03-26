@@ -88,7 +88,7 @@ class PlayQueue(AsyncExecutor):
         next_track_id = self.current_track_id + 1
         audio_info = self.context_map[self.current_context_id]
         time_to_prefetch_s = (
-            audio_info["duration_ms"] - self.current_progress - 5000
+            audio_info["duration_ms"] - self.current_progress - 3000
         ) / 1000
         if time_to_prefetch_s < 0:
             return
