@@ -31,7 +31,10 @@ public:
     callback(newState, position);
   }
 
-  void setStateComment(std::string comment) { stateComment = comment; }
+  void setStateComment(std::string comment) {
+    std::cerr << "State comment: " << comment << std::endl;
+    stateComment = comment;
+  }
 
   std::string getStateComment() { return stateComment; }
 
