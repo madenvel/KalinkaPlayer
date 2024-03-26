@@ -181,9 +181,9 @@ void AudioPlayer::setStateCallback(StateCallback cb) {
 
 AudioInfo AudioPlayer::getAudioInfo(int contextId) {
   AudioInfo info;
-  auto task = [this, &info](std::stop_token) {
-    if (contexts.count(currentContextId)) {
-      info = contexts[currentContextId]->getStreamInfo();
+  auto task = [this, &info, contextId](std::stop_token) {
+    if (contexts.count(contextId)) {
+      info = contexts[contextId]->getStreamInfo();
     }
   };
 
