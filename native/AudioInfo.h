@@ -2,10 +2,10 @@
 #define AUDIO_INFO_H
 
 struct AudioInfo {
-  int sampleRate;
-  int channels;
-  int bitsPerSample;
-  int durationMs;
+  int sampleRate = 0;
+  int channels = 0;
+  int bitsPerSample = 0;
+  int durationMs = 0;
 };
 
 #endif
