@@ -22,3 +22,8 @@ $(TARGET): $(OBJS)
 
 clean:
 	rm -f $(OBJS) $(TARGET)
+	rm -rf build/*
+	rm -f *.so
+
+python:
+	python setup.py build_ext --inplace
