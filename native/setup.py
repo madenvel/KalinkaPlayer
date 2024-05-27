@@ -2,6 +2,8 @@ from setuptools import setup, Extension
 
 from Cython.Build import build_ext, cythonize
 
+compile_flags = ["-O2", "--std=c++20"]
+
 extensions = [
     Extension(
         "rpiplayer",
@@ -18,14 +20,14 @@ extensions = [
         ],
         libraries=["curlpp", "curl", "FLAC++", "FLAC", "asound"],
         language="c++",
-        extra_compile_args=["-O2", "--std=c++20"],
+        extra_compile_args=compile_flags,
         # , "-fsanitize=address"],
     ),
     Extension(
         "state_info",
         sources=["state_info.pyx", "StateMachine.cpp"],
         language="c++",
-        extra_compile_args=["-O2", "--std=c++20"],
+        extra_compile_args=compile_flags,
     ),
 ]
 
