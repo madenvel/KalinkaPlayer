@@ -1,32 +1,36 @@
-from setuptools import setup
+from setuptools import setup, Extension
 
-from Cython.Build import build_ext
+from Cython.Build import build_ext, cythonize
 
-from distutils.extension import Extension
-
+extensions = [
+    Extension(
+        "rpiplayer",
+        sources=[
+            "rpiplayer.pyx",
+            "call_obj.pyx",
+            "FlacDecoder.cpp",
+            "DataSource.cpp",
+            "AlsaPlayNode.cpp",
+            "ThreadPool.cpp",
+            "ProcessNode.cpp",
+            "BufferNode.cpp",
+            "AudioFormat.cpp",
+        ],
+        libraries=["curlpp", "curl", "FLAC++", "FLAC", "asound"],
+        language="c++",
+        extra_compile_args=["-O2", "--std=c++20"],
+        # , "-fsanitize=address"],
+    ),
+    Extension(
+        "state_info",
+        sources=["state_info.pyx", "StateMachine.cpp"],
+        language="c++",
+        extra_compile_args=["-O2", "--std=c++20"],
+    ),
+]
 
 setup(
+    name="rpiplayer",
     cmdclass={"build_ext": build_ext},
-    ext_modules=[
-        Extension(
-            "rpiplayer",
-            sources=[
-                "FlacDecoder.cpp",
-                "DataSource.cpp",
-                "AlsaPlayNode.cpp",
-                "ThreadPool.cpp",
-                "StateMachine.cpp",
-                "ProcessNode.cpp",
-                "BufferNode.cpp",
-                "AudioFormat.cpp",
-                "rpiplayer.pyx",
-                "call_obj.pyx",
-            ],
-            # libraries=["externlib"],  # refers to "libexternlib.so"
-            language="c++",  # remove this if C and not C++
-            extra_compile_args=["-O2", "--std=c++20"],
-            # , "-fsanitize=address"],
-            extra_link_args=["-lcurlpp", "-lcurl", "-lFLAC++", "-lFLAC", "-lasound"],
-        )
-    ],
+    ext_modules=cythonize(extensions),
 )

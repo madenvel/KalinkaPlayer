@@ -102,8 +102,7 @@ int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
                level2BufferSize](std::stop_token token) {
     contexts[contextId] = std::make_unique<Context>(
         urlCopy,
-        std::bind(&AudioPlayer::onStateChangeCb_internal, this, contextId, _1,
-                  _2),
+        std::bind(&AudioPlayer::onStateChangeCb_internal, this, contextId, _1),
         alsaDevice);
     auto &context = contexts[contextId];
     context->prepare(level1BufferSize, level2BufferSize, token);
@@ -158,8 +157,8 @@ void AudioPlayer::removeContext(int contextId) {
   enqueue(task);
 }
 
-void AudioPlayer::onStateChangeCb_internal(int contextId, State newState,
-                                           long position) {
+void AudioPlayer::onStateChangeCb_internal(int contextId,
+                                           const StateInfo *state) {
   // if (newState == State::ERROR) {
   //   lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
   // }
@@ -168,8 +167,8 @@ void AudioPlayer::onStateChangeCb_internal(int contextId, State newState,
     return;
   }
 
-  auto task = [this, contextId, newState, position](std::stop_token) {
-    stateCb(contextId, newState, position);
+  auto task = [this, contextId, state](std::stop_token) {
+    stateCb(contextId, state);
   };
   cbThreadPool.enqueue(task);
 }

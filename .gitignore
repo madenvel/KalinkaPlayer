@@ -7,6 +7,8 @@ native/call_obj.h
 native/call_obj.cpp
 native/rpiplayer.cpp
 native/rpiplayer.h
+native/state_info.h
+native/state_info.cpp
 .venv/
 .vscode/
 test

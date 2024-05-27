@@ -11,8 +11,6 @@
 
 class StateMachine;
 
-using ContextProgressUpdateCallback = std::function<void(float)>;
-
 class AlsaDevice {
 public:
   AlsaDevice();

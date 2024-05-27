@@ -1,12 +1,7 @@
 # distutils: language = c++
 
 from AudioPlayer cimport AudioPlayer, StateCallback, AudioInfo
-
-cdef extern from "PyObjectWrapper.h":
-    cdef cppclass PyObjWrapper:
-        PyObjWrapper()
-        PyObjWrapper(object)
-
+from call_obj cimport PyObjWrapper
 
 cdef class RpiAudioPlayer:
     cdef AudioPlayer* c_instance

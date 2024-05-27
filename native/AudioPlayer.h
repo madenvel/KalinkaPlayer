@@ -19,9 +19,8 @@
  * 3. On Finished Playback
  */
 
-using StateCallback = std::function<void(int, State, long)>;
-using ContextStateCallback = std::function<void(State, long)>;
-using ContextProgressUpdateCallback = std::function<void(float)>;
+using StateCallback = std::function<void(int, const StateInfo *)>;
+using ContextStateCallback = std::function<void(const StateInfo *)>;
 
 class AudioPlayer : private ThreadPool {
 private:
@@ -50,7 +49,7 @@ private:
     std::string getLastError();
   };
 
-  StateCallback stateCb = [](int, State, long) {};
+  StateCallback stateCb = [](int, const StateInfo *) {};
   std::shared_ptr<AlsaDevice> alsaDevice = std::make_shared<AlsaDevice>();
   std::map<int, std::unique_ptr<Context>> contexts;
   ThreadPool cbThreadPool = ThreadPool(1);
@@ -74,7 +73,7 @@ public:
   AudioInfo getAudioInfo(int contextId);
 
 private:
-  void onStateChangeCb_internal(int contextId, State oldState, long position);
+  void onStateChangeCb_internal(int contextId, const StateInfo *state);
 };
 
 #endif

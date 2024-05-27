@@ -49,8 +49,8 @@ class PlayQueue(AsyncExecutor):
         self.timer_thread = None
 
     @enqueue
-    def _state_callback(self, context_id, new_state, position):
-        new_state = State(new_state)
+    def _state_callback(self, context_id, state_info):
+        new_state = State(state_info.state)
         if new_state == State.READY:
             self.context_map[context_id] = self.track_player.get_audio_info(context_id)
             logger.info(f"Track ready: {self.context_map[context_id]}")
@@ -68,13 +68,13 @@ class PlayQueue(AsyncExecutor):
             self.context_map.pop(context_id, None)
 
         self.state = new_state
-        self.current_progress = position
+        self.current_progress = state_info.position
         self.last_progress_update_ts = time.monotonic_ns()
         self.event_emitter.dispatch(
             EventType.StateChanged,
             PlayerState(
                 state=new_state.name,
-                position=position,
+                position=state_info.position,
             ).model_dump(exclude_none=True),
         )
 

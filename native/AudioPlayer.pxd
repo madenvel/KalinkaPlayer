@@ -1,9 +1,10 @@
 from libcpp.functional cimport function
 from libcpp cimport bool
 from libcpp.string cimport string
+from state_info cimport StateInfo
 
 
-ctypedef function[void(int, int, int)] StateCallback
+ctypedef function[void(int, const StateInfo*)] StateCallback
 
 cdef extern from "AudioInfo.h":
     cdef cppclass AudioInfo:

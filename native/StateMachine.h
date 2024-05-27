@@ -17,24 +17,30 @@ enum State {
   ERROR
 };
 
+struct StateInfo {
+  State state;
+  long position;
+
+  StateInfo(State state, long position) : state(state), position(position) {}
+  StateInfo() = default;
+};
+
 class StateMachine {
   std::atomic<int> st;
   std::string stateComment;
-  std::function<void(State, long)> callback;
+  std::function<void(const StateInfo *)> callback;
 
 public:
-  StateMachine(std::function<void(State, long)> cb)
+  StateMachine(std::function<void(const StateInfo *)> cb)
       : st(INVALID), callback(cb) {}
 
   void updateState(State newState, long position) {
     st.store(newState);
-    callback(newState, position);
+    auto state = StateInfo(newState, position);
+    callback(&state);
   }
 
-  void setStateComment(std::string comment) {
-    std::cerr << "State comment: " << comment << std::endl;
-    stateComment = comment;
-  }
+  void setStateComment(std::string comment) { stateComment = comment; }
 
   std::string getStateComment() { return stateComment; }
 
