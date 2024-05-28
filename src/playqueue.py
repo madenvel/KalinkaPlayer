@@ -45,6 +45,7 @@ class PlayQueue(AsyncExecutor):
         # properties
         self.advance = True
         self.state = State.IDLE
+        self.last_message = None
         self.timer_thread = None
 
     @enqueue
@@ -67,6 +68,7 @@ class PlayQueue(AsyncExecutor):
             self.context_map.pop(context_id, None)
 
         self.state = new_state
+        self.last_message = state_info.message if len(state_info.message) > 0 else None
         self.current_progress = state_info.position
         self.last_progress_update_ts = time.monotonic_ns()
         self.event_emitter.dispatch(
@@ -74,6 +76,7 @@ class PlayQueue(AsyncExecutor):
             PlayerState(
                 state=new_state.name,
                 position=state_info.position,
+                message=self.last_message,
             ).model_dump(exclude_none=True),
         )
 
@@ -314,6 +317,7 @@ class PlayQueue(AsyncExecutor):
             ),
             index=self.current_track_id,
             position=self._estimated_progress(),
+            message=self.last_message,
         )
 
     def _estimated_progress(self) -> int:

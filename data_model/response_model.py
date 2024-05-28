@@ -16,6 +16,7 @@ class PlayerState(BaseModel):
     current_track: Optional[Track] = None
     index: Optional[int] = None
     position: Optional[int] = None
+    message: Optional[str] = None
 
 
 class FavoriteAddedEvent(BaseModel):
