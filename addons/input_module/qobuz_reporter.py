@@ -1,6 +1,5 @@
 import time
 from data_model.response_model import PlayerState
-from src.rpiasync import EventListener
 import threading
 from queue import Queue
 import json
@@ -92,6 +91,10 @@ class QobuzReporter:
         }
 
     def _make_end_report_message(self, duration):
+        if duration < 0:
+            logger.warn("Negative for qobuz report end message, duration: %d", duration)
+            duration = 0
+
         track_id = self.current_state.current_track.id
         if track_id not in self.qobuz_client.track_url_response_cache:
             raise Exception("Track not found in cache")

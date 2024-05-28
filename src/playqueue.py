@@ -55,17 +55,17 @@ class PlayQueue(AsyncExecutor):
             self.context_map[context_id] = self.track_player.get_audio_info(context_id)
             logger.info(f"Track ready: {self.context_map[context_id]}")
 
-        if context_id != self.current_context_id and new_state != State.STOPPED:
+        if context_id != self.current_context_id:
+            if new_state == State.STOPPED:
+                self.context_map.pop(context_id, None)
             return
 
         if new_state == State.FINISHED:
             if self.current_track_id == len(self.track_list) - 1:
+                self.context_map.pop(context_id, None)
                 new_state == State.STOPPED
             else:
                 return self._finished_playing()
-
-        if new_state == State.STOPPED:
-            self.context_map.pop(context_id, None)
 
         self.state = new_state
         self.last_message = state_info.message if len(state_info.message) > 0 else None

@@ -87,10 +87,10 @@ class QobuzClient:
         )
         self.base = "https://www.qobuz.com/api.json/0.2/"
         self.sec = None
+        # a short living cache to be used for reporting purposes
         self.track_url_response_cache = {}
         self.auth(email, pwd)
         self.cfg_setup()
-        # a short living cache to be used for reporting purposes
 
     def auth(self, email, pwd):
         params = {
@@ -110,7 +110,7 @@ class QobuzClient:
         usr_info = r.json()
 
         if not usr_info["user"]["credential"]["parameters"]:
-            raise IneligibleError("Free accounts are not eligible to download tracks.")
+            raise IneligibleError("Free accounts are not eligible to play tracks.")
         self.uat = usr_info["user_auth_token"]
         self.session.headers.update({"X-User-Auth-Token": self.uat})
         self.label = usr_info["user"]["credential"]["parameters"]["short_label"]
