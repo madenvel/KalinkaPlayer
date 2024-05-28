@@ -19,7 +19,7 @@
  * 3. On Finished Playback
  */
 
-using StateCallback = std::function<void(int, const StateInfo *)>;
+using StateCallback = std::function<void(int, const StateInfo)>;
 using ContextStateCallback = std::function<void(const StateInfo)>;
 
 namespace pybind11 {
@@ -52,7 +52,7 @@ private:
     AudioInfo getStreamInfo();
   };
 
-  StateCallback stateCb = [](int, const StateInfo *) {};
+  StateCallback stateCb = [](int, const StateInfo) {};
   std::shared_ptr<AlsaDevice> alsaDevice = std::make_shared<AlsaDevice>();
   std::map<int, std::unique_ptr<Context>> contexts;
   ThreadPool cbThreadPool = ThreadPool(1);

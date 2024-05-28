@@ -147,7 +147,7 @@ void AudioPlayer::onStateChangeCb_internal(int contextId,
   }
 
   auto task = [this, contextId, state](std::stop_token) {
-    stateCb(contextId, &state);
+    stateCb(contextId, state);
   };
   cbThreadPool.enqueue(task);
 }

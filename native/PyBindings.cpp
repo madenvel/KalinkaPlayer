@@ -6,7 +6,7 @@
 namespace py = pybind11;
 
 void AudioPlayer::setPythonStateCallback(py::function cb) {
-  this->setStateCallback([cb](int context, const StateInfo *state) {
+  this->setStateCallback([cb](int context, const StateInfo state) {
     py::gil_scoped_acquire acquire;
     cb(context, state);
   });
