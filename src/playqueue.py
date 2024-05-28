@@ -7,10 +7,9 @@ from src.event_loop import AsyncExecutor, enqueue
 from src.rpiasync import EventEmitter
 
 from src.inputmodule import TrackInfo
-from native.rpiplayer import RpiAudioPlayer
+from native.rpiplayer import AudioPlayer, State
 
 from src.events import EventType
-from src.states import State
 
 from threading import Timer
 
@@ -25,14 +24,14 @@ def buffer_size(seconds: int, bits: int, sample_rate: int):
     frame_size = bytes * 2
     frames_per_second = sample_rate * frame_size
 
-    return frames_per_second * seconds
+    return int(frames_per_second * seconds)
 
 
 class PlayQueue(AsyncExecutor):
     def __init__(self, event_emitter: EventEmitter):
         super().__init__()
         self.event_emitter = event_emitter
-        self.track_player = RpiAudioPlayer()
+        self.track_player = AudioPlayer()
         self.track_player.set_state_callback(self._state_callback)
 
         self.current_track_id = 0
@@ -88,7 +87,7 @@ class PlayQueue(AsyncExecutor):
         next_track_id = self.current_track_id + 1
         audio_info = self.context_map[self.current_context_id]
         time_to_prefetch_s = (
-            audio_info["duration_ms"] - self.current_progress - 3000
+            audio_info.duration_ms - self.current_progress - 3000
         ) / 1000
         if time_to_prefetch_s < 0:
             return

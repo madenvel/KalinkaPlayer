@@ -337,22 +337,22 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
     delete[] ufds;
     if (error) {
-      sm->updateState(State::ERROR, 0);
+      std::string errorMessage;
       if (!in.expired()) {
         try {
           std::rethrow_exception(in.lock()->error());
         } catch (const std::exception &ex) {
-          sm->setStateComment(ex.what());
+          errorMessage = ex.what();
         }
       }
+      sm->updateState(State::ERROR, 0, errorMessage);
       return -1;
     }
     sm->updateState(eof ? State::FINISHED : State::STOPPED,
                     eof ? totalFrames * 1000 / alsa->getCurrentSampleRate()
                         : (framesCount * 1000) / alsa->getCurrentSampleRate());
   } catch (const std::exception &ex) {
-    sm->updateState(State::ERROR, 0);
-    sm->setStateComment(ex.what());
+    sm->updateState(State::ERROR, 0, ex.what());
     return -1;
   }
   return 0;

@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
 
-from rpiplayer import RpiAudioPlayer
+from rpiplayer import AudioPlayer, StateInfo
 
 import time
 
-player = RpiAudioPlayer()
+
+def state_cb(context_id: int, state: StateInfo):
+    print(
+        "State callback, context_id:",
+        context_id,
+        "state:",
+        state.state,
+        "message:",
+        state.message,
+    )
+
+
+player = AudioPlayer()
+player.set_state_callback(state_cb)
 
 context_1 = player.prepare(
     "https://getsamplefiles.com/download/flac/sample-2.flac",
@@ -23,11 +36,19 @@ time.sleep(3)
 print("Start playback, time=", time.time())
 player.play(context_1)
 info = player.get_audio_info(context_1)
-print("Audio info=", info)
+print("Audio info=", info.sample_rate, info.channels, info.bits_per_sample)
 time.sleep(3)
 print("Start playback 2, time=", time.time())
 player.play(context_2)
 time.sleep(3)
 player.stop()
+
+context_3 = player.prepare(
+    "http:://www.google.com",
+    10 * 1024 * 1024,
+    64 * 1024,
+)
+
+time.sleep(3)
 
 print("End playback, time=", time.time())

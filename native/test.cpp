@@ -16,7 +16,7 @@ int main() {
               << ", time=" << (eventTime - start) << std::endl;
 
     if (state->state == State::ERROR) {
-      std::cout << "Last error: " << player.getLastError(context) << std::endl;
+      std::cout << "Message: " << state->message << std::endl;
     }
   });
   auto context1 =
@@ -54,6 +54,10 @@ int main() {
   std::this_thread::sleep_for(std::chrono::seconds(3));
   cout << "Stopped at " << (std::chrono::steady_clock::now() - start) << endl;
   player.stop();
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+
+  player.prepare("http://www.google.com", 10 * 1024 * 1024, 64 * 1024);
+
   std::this_thread::sleep_for(std::chrono::seconds(3));
 
   return 0;

@@ -18,33 +18,29 @@ enum State {
 };
 
 struct StateInfo {
-  State state;
-  long position;
+  State state = INVALID;
+  long position = 0;
+  std::string message;
 
-  StateInfo(State state, long position) : state(state), position(position) {}
+  StateInfo(State state, long position, std::string message = {})
+      : state(state), position(position), message(message) {}
   StateInfo() = default;
 };
 
 class StateMachine {
   std::atomic<int> st;
-  std::string stateComment;
-  std::function<void(const StateInfo *)> callback;
+  std::function<void(const StateInfo)> callback;
 
 public:
-  StateMachine(std::function<void(const StateInfo *)> cb)
+  StateMachine(std::function<void(const StateInfo)> cb)
       : st(INVALID), callback(cb) {}
 
-  void updateState(State newState, long position) {
+  void updateState(State newState, long position, std::string message = {}) {
     st.store(newState);
-    auto state = StateInfo(newState, position);
-    callback(&state);
+    callback({newState, position, message});
   }
 
-  void setStateComment(std::string comment) { stateComment = comment; }
-
-  std::string getStateComment() { return stateComment; }
-
-  State state() const { return static_cast<State>(st.load()); }
+  State lastState() const { return static_cast<State>(st.load()); }
 };
 
 #endif

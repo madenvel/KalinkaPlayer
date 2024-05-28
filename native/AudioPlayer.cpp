@@ -39,13 +39,12 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   httpNode->start();
   decoder->process_until_end_of_metadata();
 
-  if (sm->state() == State::ERROR) {
+  if (sm->lastState() == State::ERROR) {
     return;
   }
 
   if (!decoder->hasStreamInfo()) {
-    sm->setStateComment("Stream info is not available");
-    sm->updateState(State::ERROR, 0);
+    sm->updateState(State::ERROR, 0, "Stream info is not available");
     return;
   }
   sm->updateState(State::READY, 0);
@@ -70,7 +69,7 @@ AudioInfo AudioPlayer::Context::getStreamInfo() {
 }
 
 void AudioPlayer::Context::play() {
-  if (sm->state() != State::READY) {
+  if (sm->lastState() != State::READY) {
     return;
   }
   alsaPlay = std::make_shared<AlsaPlayNode>(
@@ -85,13 +84,6 @@ void AudioPlayer::Context::pause(bool paused) {
   if (alsaPlay) {
     alsaPlay->pause(paused);
   }
-}
-
-std::string AudioPlayer::Context::getLastError() {
-  if (sm->state() == State::ERROR) {
-    return sm->getStateComment();
-  }
-  return std::string();
 }
 
 int AudioPlayer::prepare(const char *url, size_t level1BufferSize,
@@ -143,32 +135,19 @@ void AudioPlayer::pause(bool paused) {
 }
 void AudioPlayer::seek(int time) {}
 
-std::string AudioPlayer::getLastError(int contextId) {
-  if (lastErrorForContext.first == contextId) {
-    return lastErrorForContext.second;
-  } else {
-    lastErrorForContext = {-1, ""};
-  }
-  return {};
-}
-
 void AudioPlayer::removeContext(int contextId) {
   auto task = [this, contextId](std::stop_token) { contexts.erase(contextId); };
   enqueue(task);
 }
 
 void AudioPlayer::onStateChangeCb_internal(int contextId,
-                                           const StateInfo *state) {
-  // if (newState == State::ERROR) {
-  //   lastErrorForContext = {contextId, contexts[contextId]->getLastError()};
-  // }
-
+                                           const StateInfo state) {
   if (stateCb == nullptr) {
     return;
   }
 
   auto task = [this, contextId, state](std::stop_token) {
-    stateCb(contextId, state);
+    stateCb(contextId, &state);
   };
   cbThreadPool.enqueue(task);
 }

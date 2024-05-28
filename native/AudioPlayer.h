@@ -20,7 +20,11 @@
  */
 
 using StateCallback = std::function<void(int, const StateInfo *)>;
-using ContextStateCallback = std::function<void(const StateInfo *)>;
+using ContextStateCallback = std::function<void(const StateInfo)>;
+
+namespace pybind11 {
+class function;
+}
 
 class AudioPlayer : private ThreadPool {
 private:
@@ -46,7 +50,6 @@ private:
     void play();
     void pause(bool paused);
     AudioInfo getStreamInfo();
-    std::string getLastError();
   };
 
   StateCallback stateCb = [](int, const StateInfo *) {};
@@ -68,12 +71,12 @@ public:
   void stop();
   void pause(bool paused);
   void seek(int time);
-  std::string getLastError(int contextId);
   void setStateCallback(StateCallback cb);
+  void setPythonStateCallback(pybind11::function cb);
   AudioInfo getAudioInfo(int contextId);
 
 private:
-  void onStateChangeCb_internal(int contextId, const StateInfo *state);
+  void onStateChangeCb_internal(int contextId, const StateInfo state);
 };
 
 #endif

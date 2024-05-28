@@ -1,9 +1,9 @@
 qobuz-dl
 requests
-cython
 pydantic
 fastapi
 uvicorn
 zeroconf
 setuptools
 pyyaml
+pybind11

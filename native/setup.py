@@ -1,6 +1,5 @@
 from setuptools import setup, Extension
-
-from Cython.Build import build_ext, cythonize
+import pybind11
 
 compile_flags = ["-O2", "--std=c++20"]
 
@@ -8,8 +7,8 @@ extensions = [
     Extension(
         "rpiplayer",
         sources=[
-            "rpiplayer.pyx",
-            "call_obj.pyx",
+            "PyBindings.cpp",
+            "AudioPlayer.cpp",
             "FlacDecoder.cpp",
             "DataSource.cpp",
             "AlsaPlayNode.cpp",
@@ -18,21 +17,15 @@ extensions = [
             "BufferNode.cpp",
             "AudioFormat.cpp",
         ],
+        include_dirs=[pybind11.get_include()],
         libraries=["curlpp", "curl", "FLAC++", "FLAC", "asound"],
         language="c++",
         extra_compile_args=compile_flags,
         # , "-fsanitize=address"],
-    ),
-    Extension(
-        "state_info",
-        sources=["state_info.pyx", "StateMachine.cpp"],
-        language="c++",
-        extra_compile_args=compile_flags,
-    ),
+    )
 ]
 
 setup(
     name="rpiplayer",
-    cmdclass={"build_ext": build_ext},
-    ext_modules=cythonize(extensions),
+    ext_modules=extensions,
 )
