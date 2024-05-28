@@ -8,15 +8,14 @@ using namespace std;
 int main() {
   AudioPlayer player;
   auto start = std::chrono::steady_clock::now();
-  player.setStateCallback([&player, start](int context,
-                                           const StateInfo *state) {
+  player.setStateCallback([start](int context, const StateInfo state) {
     auto eventTime = std::chrono::steady_clock::now();
-    std::cout << "State changed to " << state->state
-              << ", context = " << context << ", position = " << state->position
+    std::cout << "State changed to " << state.state << ", context = " << context
+              << ", position = " << state.position
               << ", time=" << (eventTime - start) << std::endl;
 
-    if (state->state == State::ERROR) {
-      std::cout << "Message: " << state->message << std::endl;
+    if (state.state == State::ERROR) {
+      std::cout << "Message: " << state.message << std::endl;
     }
   });
   auto context1 =
