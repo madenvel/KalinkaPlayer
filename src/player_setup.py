@@ -1,7 +1,7 @@
-from addons.input_module.qobuz_reporter import QobuzReporter
+from addons.input_module.qobuz.qobuz_reporter import QobuzReporter
 from src.rpiasync import EventEmitter, EventListener
 from queue import Queue
-from addons.input_module.qobuz_autoplay import QobuzAutoplay
+from addons.input_module.qobuz.qobuz_autoplay import QobuzAutoplay
 from addons.input_module.qobuz import (
     QobuzInputModule,
     get_client,
@@ -9,7 +9,7 @@ from addons.input_module.qobuz import (
 
 from src.playqueue import EventType, PlayQueue
 from src.inputmodule import InputModule
-from addons.device.musiccast import Device
+from addons.device.musiccast.musiccast import Device
 
 
 def setup_autoplay(
