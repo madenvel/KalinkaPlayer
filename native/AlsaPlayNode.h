@@ -34,21 +34,16 @@ class AlsaPlayNode : public ProcessNode {
 
 private:
   std::weak_ptr<AlsaDevice> alsaDevice;
-  const int sampleRate;
-  const int bitsPerSample;
   std::shared_ptr<StateMachine> sm;
-  size_t totalFrames;
   std::jthread playThread;
   bool paused = false;
 
   std::weak_ptr<ProcessNode> in;
 
 public:
-  AlsaPlayNode(std::shared_ptr<AlsaDevice> alsaDevice, int sampleRate,
-               int bitsPerSample, size_t totalFrames,
+  AlsaPlayNode(std::shared_ptr<AlsaDevice> alsaDevice,
                std::shared_ptr<StateMachine> sm)
-      : alsaDevice(alsaDevice), sampleRate(sampleRate),
-        bitsPerSample(bitsPerSample), sm(sm), totalFrames(totalFrames) {}
+      : alsaDevice(alsaDevice), sm(sm) {}
 
   ~AlsaPlayNode() = default;
 

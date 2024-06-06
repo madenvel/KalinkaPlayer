@@ -10,9 +10,9 @@ int main() {
   auto start = std::chrono::steady_clock::now();
   player.setStateCallback([start](int context, const StateInfo state) {
     auto eventTime = std::chrono::steady_clock::now();
-    std::cout << "State changed to " << state.state << ", context = " << context
-              << ", position = " << state.position
-              << ", time=" << (eventTime - start) << std::endl;
+    std::cout << "State changed to " << state.toString()
+              << ", context = " << context << ", time=" << (eventTime - start)
+              << std::endl;
 
     if (state.state == State::ERROR) {
       std::cout << "Message: " << state.message << std::endl;

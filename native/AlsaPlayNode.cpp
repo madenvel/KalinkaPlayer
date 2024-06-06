@@ -224,8 +224,9 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
       throw std::runtime_error("Alsa device is expired");
     }
     auto alsa = alsaDevice.lock();
-    snd_pcm_t *pcm_handle =
-        static_cast<snd_pcm_t *>(alsa->getHandle(sampleRate, bitsPerSample));
+    snd_pcm_t *pcm_handle = static_cast<snd_pcm_t *>(
+        alsa->getHandle(sm->lastState().audioInfo.sampleRate,
+                        sm->lastState().audioInfo.bitsPerSample));
     snd_pcm_format_t format = getFormat(alsa->getCurrentBitsPerSample());
     int count = snd_pcm_poll_descriptors_count(pcm_handle);
     if (count <= 0) {
@@ -269,9 +270,6 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     bool eof = false;
     bool error = false;
     sm->updateState(State::PLAYING, 0);
-
-    // Why do I have this? It's likely not needed and breaks gapless playback
-    // std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     while (!token.stop_requested()) {
       err = wait_for_poll(pcm_handle, ufds, count);
@@ -348,9 +346,10 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
       sm->updateState(State::ERROR, 0, errorMessage);
       return -1;
     }
-    sm->updateState(eof ? State::FINISHED : State::STOPPED,
-                    eof ? totalFrames * 1000 / alsa->getCurrentSampleRate()
-                        : (framesCount * 1000) / alsa->getCurrentSampleRate());
+    sm->updateState(
+        eof ? State::FINISHED : State::STOPPED,
+        ((eof ? sm->lastState().audioInfo.totalSamples : framesCount) * 1000) /
+            alsa->getCurrentSampleRate());
   } catch (const std::exception &ex) {
     sm->updateState(State::ERROR, 0, ex.what());
     return -1;

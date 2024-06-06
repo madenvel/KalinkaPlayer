@@ -5,6 +5,9 @@
 #include <functional>
 #include <string>
 
+#include "AudioInfo.h"
+#include <optional>
+
 enum State {
   INVALID = -1,
   IDLE = 0,
@@ -21,26 +24,39 @@ struct StateInfo {
   State state = INVALID;
   long position = 0;
   std::string message;
+  AudioInfo audioInfo;
 
-  StateInfo(State state, long position, std::string message = {})
+  StateInfo(State state, long position = 0, std::string message = {})
       : state(state), position(position), message(message) {}
   StateInfo() = default;
+
+  std::string toString() const {
+    return "<StateInfo state=" + std::to_string(state) +
+           ", position=" + std::to_string(position) + ", message=" + message +
+           ", audioInfo=" + audioInfo.toString() + ">";
+  }
 };
 
 class StateMachine {
-  std::atomic<int> st;
+  StateInfo state;
   std::function<void(const StateInfo)> callback;
 
 public:
   StateMachine(std::function<void(const StateInfo)> cb)
-      : st(INVALID), callback(cb) {}
+      : state(INVALID), callback(cb) {}
 
-  void updateState(State newState, long position, std::string message = {}) {
-    st.store(newState);
-    callback({newState, position, message});
+  void updateState(State newState, std::optional<long> position = std::nullopt,
+                   std::optional<std::string> message = std::nullopt,
+                   std::optional<AudioInfo> audioInfo = std::nullopt) {
+    state.state = newState;
+    state.position = position.value_or(state.position);
+    state.message = message.value_or(state.message);
+    state.audioInfo = audioInfo.value_or(state.audioInfo);
+
+    callback(state);
   }
 
-  State lastState() const { return static_cast<State>(st.load()); }
+  const StateInfo &lastState() const { return state; }
 };
 
 #endif

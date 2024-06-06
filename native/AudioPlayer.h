@@ -73,7 +73,6 @@ public:
   void seek(int time);
   void setStateCallback(StateCallback cb);
   void setPythonStateCallback(pybind11::function cb);
-  AudioInfo getAudioInfo(int contextId);
 
 private:
   void onStateChangeCb_internal(int contextId, const StateInfo state);

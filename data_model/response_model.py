@@ -11,12 +11,20 @@ class FavoriteIds(BaseModel):
     playlists: List[str] = []
 
 
+class AudioInfo(BaseModel):
+    sample_rate: int
+    bits_per_sample: int
+    channels: int
+    duration_ms: int
+
+
 class PlayerState(BaseModel):
     state: Optional[str] = None
     current_track: Optional[Track] = None
     index: Optional[int] = None
     position: Optional[int] = None
     message: Optional[str] = None
+    audio_info: Optional[AudioInfo] = None
 
 
 class FavoriteAddedEvent(BaseModel):

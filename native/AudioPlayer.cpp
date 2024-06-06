@@ -39,7 +39,7 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
   httpNode->start();
   decoder->process_until_end_of_metadata();
 
-  if (sm->lastState() == State::ERROR) {
+  if (sm->lastState().state == State::ERROR) {
     return;
   }
 
@@ -47,35 +47,27 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
     sm->updateState(State::ERROR, 0, "Stream info is not available");
     return;
   }
-  sm->updateState(State::READY, 0);
+  const auto &streamInfo = decoder->getStreamInfo();
+  sm->updateState(
+      State::READY, 0, std::nullopt,
+      AudioInfo{streamInfo.sample_rate, streamInfo.channels,
+                streamInfo.bits_per_sample, streamInfo.total_samples,
+                streamInfo.total_samples * 1000 /
+                    static_cast<unsigned long long>(streamInfo.sample_rate)});
   decoder->start();
   decodedData->waitForFull(token);
 }
 
 AudioInfo AudioPlayer::Context::getStreamInfo() {
-  if (decoder->hasStreamInfo()) {
-    return AudioInfo{
-        .sampleRate = static_cast<int>(decoder->getStreamInfo().sample_rate),
-        .channels = static_cast<int>(decoder->getStreamInfo().channels),
-        .bitsPerSample =
-            static_cast<int>(decoder->getStreamInfo().bits_per_sample),
-        .durationMs =
-            static_cast<int>(decoder->getStreamInfo().total_samples * 1000 /
-                             decoder->getStreamInfo().sample_rate)};
-  }
-
   return AudioInfo{
       .sampleRate = 0, .channels = 0, .bitsPerSample = 0, .durationMs = 0};
 }
 
 void AudioPlayer::Context::play() {
-  if (sm->lastState() != State::READY) {
+  if (sm->lastState().state != State::READY) {
     return;
   }
-  alsaPlay = std::make_shared<AlsaPlayNode>(
-      alsaDevice, decoder->getStreamInfo().sample_rate,
-      decoder->getStreamInfo().bits_per_sample,
-      decoder->getStreamInfo().total_samples, sm);
+  alsaPlay = std::make_shared<AlsaPlayNode>(alsaDevice, sm);
   alsaPlay->connectIn(decodedData);
   alsaPlay->start();
 }
@@ -155,17 +147,4 @@ void AudioPlayer::onStateChangeCb_internal(int contextId,
 void AudioPlayer::setStateCallback(StateCallback cb) {
   auto task = [this, cb](std::stop_token) { stateCb = cb; };
   enqueue(task);
-}
-
-AudioInfo AudioPlayer::getAudioInfo(int contextId) {
-  AudioInfo info;
-  auto task = [this, &info, contextId](std::stop_token) {
-    if (contexts.count(contextId)) {
-      info = contexts[contextId]->getStreamInfo();
-    }
-  };
-
-  enqueue(task).get();
-
-  return info;
 }

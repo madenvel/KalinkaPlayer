@@ -1,7 +1,7 @@
 from functools import partial
 import logging
 import time
-from data_model.response_model import PlayerState
+from data_model.response_model import AudioInfo, PlayerState
 from src.event_loop import AsyncExecutor, enqueue
 
 from src.rpiasync import EventEmitter
@@ -50,9 +50,9 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def _state_callback(self, context_id, state_info):
-        new_state = State(state_info.state)
+        new_state = state_info.state
         if new_state == State.READY:
-            self.context_map[context_id] = self.track_player.get_audio_info(context_id)
+            self.context_map[context_id] = state_info.audio_info
             logger.info(f"Track ready: {self.context_map[context_id]}")
 
         if context_id != self.current_context_id:
@@ -77,6 +77,16 @@ class PlayQueue(AsyncExecutor):
                 state=new_state.name,
                 position=state_info.position,
                 message=self.last_message,
+                audio_info=(
+                    AudioInfo(
+                        sample_rate=state_info.audio_info.sample_rate,
+                        channels=state_info.audio_info.channels,
+                        bits_per_sample=state_info.audio_info.bits_per_sample,
+                        duration_ms=state_info.audio_info.duration_ms,
+                    )
+                    if state_info.audio_info is not None
+                    else None
+                ),
             ).model_dump(exclude_none=True),
         )
 
