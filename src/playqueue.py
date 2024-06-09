@@ -68,7 +68,7 @@ class PlayQueue(AsyncExecutor):
                 return self._finished_playing()
 
         self.state = new_state
-        self.last_message = state_info.message if len(state_info.message) > 0 else None
+        self.last_message = state_info.message if state_info.message else None
         self.current_progress = state_info.position
         self.last_progress_update_ts = time.monotonic_ns()
         self.event_emitter.dispatch(
@@ -76,7 +76,7 @@ class PlayQueue(AsyncExecutor):
             PlayerState(
                 state=new_state.name,
                 position=state_info.position,
-                message=self.last_message,
+                message=self.last_message if self.last_message else None,
                 audio_info=(
                     AudioInfo(
                         sample_rate=state_info.audio_info.sample_rate,
@@ -84,7 +84,7 @@ class PlayQueue(AsyncExecutor):
                         bits_per_sample=state_info.audio_info.bits_per_sample,
                         duration_ms=state_info.audio_info.duration_ms,
                     )
-                    if state_info.audio_info is not None
+                    if state_info.audio_info is not None and new_state == State.READY
                     else None
                 ),
             ).model_dump(exclude_none=True),
@@ -318,6 +318,7 @@ class PlayQueue(AsyncExecutor):
         return track_info.metadata.model_dump(exclude_unset=True)
 
     def get_state(self) -> PlayerState:
+        context_info = self.context_map.get(self.current_context_id, None)
         return PlayerState(
             state=self.state.name,
             current_track=(
@@ -328,6 +329,16 @@ class PlayQueue(AsyncExecutor):
             index=self.current_track_id,
             position=self._estimated_progress(),
             message=self.last_message,
+            audio_info=(
+                AudioInfo(
+                    sample_rate=context_info.sample_rate,
+                    channels=context_info.channels,
+                    bits_per_sample=context_info.bits_per_sample,
+                    duration_ms=context_info.duration_ms,
+                )
+                if context_info is not None
+                else None
+            ),
         )
 
     def _estimated_progress(self) -> int:
@@ -342,6 +353,7 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def replay(self) -> PlayerState:
+        context_info = self.context_map.get(self.current_context_id, None)
         self.event_emitter.dispatch(
             EventType.StateReplay,
             PlayerState(
@@ -353,6 +365,17 @@ class PlayQueue(AsyncExecutor):
                 ),
                 index=self.current_track_id,
                 position=self._estimated_progress(),
+                message=self.last_message,
+                audio_info=(
+                    AudioInfo(
+                        sample_rate=context_info.sample_rate,
+                        channels=context_info.channels,
+                        bits_per_sample=context_info.bits_per_sample,
+                        duration_ms=context_info.duration_ms,
+                    )
+                    if context_info is not None
+                    else None
+                ),
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
         )

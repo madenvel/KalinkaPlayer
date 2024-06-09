@@ -2,6 +2,7 @@
 #include "AudioPlayer.h"
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 namespace py = pybind11;
 
@@ -18,6 +19,7 @@ PYBIND11_MODULE(rpiplayer, m) {
       .def_readonly("sample_rate", &AudioInfo::sampleRate)
       .def_readonly("channels", &AudioInfo::channels)
       .def_readonly("bits_per_sample", &AudioInfo::bitsPerSample)
+      .def_readonly("total_samples", &AudioInfo::totalSamples)
       .def_readonly("duration_ms", &AudioInfo::durationMs)
       .def("__repr__", [](const AudioInfo &a) { return a.toString(); });
 

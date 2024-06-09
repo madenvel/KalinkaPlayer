@@ -52,8 +52,9 @@ void AudioPlayer::Context::prepare(size_t level1Buffer, size_t level2Buffer,
       State::READY, 0, std::nullopt,
       AudioInfo{streamInfo.sample_rate, streamInfo.channels,
                 streamInfo.bits_per_sample, streamInfo.total_samples,
-                streamInfo.total_samples * 1000 /
-                    static_cast<unsigned long long>(streamInfo.sample_rate)});
+                static_cast<unsigned int>(
+                    streamInfo.total_samples * 1000 /
+                    static_cast<unsigned long long>(streamInfo.sample_rate))});
   decoder->start();
   decodedData->waitForFull(token);
 }

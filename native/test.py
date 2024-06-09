@@ -7,6 +7,7 @@ import time
 
 def state_cb(context_id: int, state: StateInfo):
     print("State callback, context_id:", context_id, "state:", state)
+    print("AudioInfo:", state.audio_info)
 
 
 player = AudioPlayer()

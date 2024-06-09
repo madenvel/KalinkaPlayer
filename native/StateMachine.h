@@ -3,10 +3,10 @@
 
 #include <atomic>
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "AudioInfo.h"
-#include <optional>
 
 enum State {
   INVALID = -1,
@@ -24,7 +24,7 @@ struct StateInfo {
   State state = INVALID;
   long position = 0;
   std::string message;
-  AudioInfo audioInfo;
+  std::optional<AudioInfo> audioInfo;
 
   StateInfo(State state, long position = 0, std::string message = {})
       : state(state), position(position), message(message) {}
@@ -33,7 +33,9 @@ struct StateInfo {
   std::string toString() const {
     return "<StateInfo state=" + std::to_string(state) +
            ", position=" + std::to_string(position) + ", message=" + message +
-           ", audioInfo=" + audioInfo.toString() + ">";
+           ", audioInfo=" +
+           (audioInfo.has_value() ? audioInfo.value().toString() : "null") +
+           ">";
   }
 };
 
@@ -51,7 +53,7 @@ public:
     state.state = newState;
     state.position = position.value_or(state.position);
     state.message = message.value_or(state.message);
-    state.audioInfo = audioInfo.value_or(state.audioInfo);
+    state.audioInfo = audioInfo.has_value() ? audioInfo : state.audioInfo;
 
     callback(state);
   }

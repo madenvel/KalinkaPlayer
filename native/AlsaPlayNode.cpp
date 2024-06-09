@@ -224,9 +224,9 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
       throw std::runtime_error("Alsa device is expired");
     }
     auto alsa = alsaDevice.lock();
-    snd_pcm_t *pcm_handle = static_cast<snd_pcm_t *>(
-        alsa->getHandle(sm->lastState().audioInfo.sampleRate,
-                        sm->lastState().audioInfo.bitsPerSample));
+    snd_pcm_t *pcm_handle = static_cast<snd_pcm_t *>(alsa->getHandle(
+        sm->lastState().audioInfo.value_or(AudioInfo()).sampleRate,
+        sm->lastState().audioInfo.value_or(AudioInfo()).bitsPerSample));
     snd_pcm_format_t format = getFormat(alsa->getCurrentBitsPerSample());
     int count = snd_pcm_poll_descriptors_count(pcm_handle);
     if (count <= 0) {
@@ -348,7 +348,9 @@ int AlsaPlayNode::workerThread(std::stop_token token) {
     }
     sm->updateState(
         eof ? State::FINISHED : State::STOPPED,
-        ((eof ? sm->lastState().audioInfo.totalSamples : framesCount) * 1000) /
+        ((eof ? sm->lastState().audioInfo.value_or(AudioInfo()).totalSamples
+              : framesCount) *
+         1000) /
             alsa->getCurrentSampleRate());
   } catch (const std::exception &ex) {
     sm->updateState(State::ERROR, 0, ex.what());
