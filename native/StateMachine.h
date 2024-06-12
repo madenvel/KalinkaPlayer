@@ -9,7 +9,6 @@
 #include "AudioInfo.h"
 
 enum State {
-  INVALID = -1,
   IDLE = 0,
   READY,
   BUFFERING,
@@ -21,19 +20,23 @@ enum State {
 };
 
 struct StateInfo {
-  State state = INVALID;
+  State state = IDLE;
   long position = 0;
-  std::string message;
+  std::optional<std::string> message;
   std::optional<AudioInfo> audioInfo;
 
-  StateInfo(State state, long position = 0, std::string message = {})
+  StateInfo(State state, long position = 0,
+            std::optional<std::string> message = std::nullopt)
       : state(state), position(position), message(message) {}
   StateInfo() = default;
 
+  bool operator==(const StateInfo &other) const = default;
+  bool operator!=(const StateInfo &other) const = default;
+
   std::string toString() const {
     return "<StateInfo state=" + std::to_string(state) +
-           ", position=" + std::to_string(position) + ", message=" + message +
-           ", audioInfo=" +
+           ", position=" + std::to_string(position) +
+           ", message=" + message.value_or("null") + ", audioInfo=" +
            (audioInfo.has_value() ? audioInfo.value().toString() : "null") +
            ">";
   }
@@ -45,14 +48,14 @@ class StateMachine {
 
 public:
   StateMachine(std::function<void(const StateInfo)> cb)
-      : state(INVALID), callback(cb) {}
+      : state(IDLE), callback(cb) {}
 
   void updateState(State newState, std::optional<long> position = std::nullopt,
                    std::optional<std::string> message = std::nullopt,
                    std::optional<AudioInfo> audioInfo = std::nullopt) {
     state.state = newState;
     state.position = position.value_or(state.position);
-    state.message = message.value_or(state.message);
+    state.message = message;
     state.audioInfo = audioInfo.has_value() ? audioInfo : state.audioInfo;
 
     callback(state);

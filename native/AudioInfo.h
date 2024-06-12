@@ -10,6 +10,9 @@ struct AudioInfo {
   unsigned long long totalSamples = 0;
   unsigned int durationMs = 0;
 
+  bool operator==(const AudioInfo &other) const = default;
+  bool operator!=(const AudioInfo &other) const = default;
+
   std::string toString() const {
     return "<AudioInfo sampleRate=" + std::to_string(sampleRate) +
            ", channels=" + std::to_string(channels) +
