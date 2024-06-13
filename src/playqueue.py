@@ -1,19 +1,36 @@
-from functools import partial
 import logging
 import time
-from data_model.response_model import AudioInfo, PlayerState
-from src.event_loop import AsyncExecutor, enqueue
 
-from src.rpiasync import EventEmitter
-
-from src.inputmodule import TrackInfo
-from native.rpiplayer import AudioPlayer, State, StateInfo
-
-from src.events import EventType
-
+from functools import partial
+from typing import Optional
+from pydantic import BaseModel
 from threading import Timer
 
+from data_model.response_model import AudioInfo, PlayerState
+from data_model.datamodel import Track
+
+from src.event_loop import AsyncExecutor, enqueue
+from src.rpiasync import EventEmitter
+from src.inputmodule import TrackInfo
+from src.events import EventType
+
+from native.rpiplayer import AudioPlayer, State, StateInfo
+
+
 logger = logging.getLogger(__name__)
+
+
+def to_audio_info(audio_info: AudioInfo):
+    return (
+        AudioInfo(
+            sample_rate=audio_info.sample_rate,
+            channels=audio_info.channels,
+            bits_per_sample=audio_info.bits_per_sample,
+            duration_ms=audio_info.duration_ms,
+        )
+        if audio_info
+        else None
+    )
 
 
 def buffer_size(seconds: int, bits: int, sample_rate: int):
@@ -27,6 +44,20 @@ def buffer_size(seconds: int, bits: int, sample_rate: int):
     return int(frames_per_second * seconds)
 
 
+class PlayQueueState(BaseModel):
+    state_info: StateInfo
+    current_track: Optional[Track] = None
+    index: Optional[int] = None
+    timestamp: int = 0
+
+    @staticmethod
+    def empty():
+        return PlayQueueState(state_info=StateInfo())
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class PlayQueue(AsyncExecutor):
     def __init__(self, event_emitter: EventEmitter):
         super().__init__()
@@ -38,18 +69,11 @@ class PlayQueue(AsyncExecutor):
         self.current_context_id = -1
         self.track_list: list[TrackInfo] = []
         self.prefetched_tracks = {}
-        self.current_progress = 0
-        self.current_context_state_ts = 0
-        self.context_state_map = {}
+        self.context_state_map: dict[PlayQueueState] = {}
         self.timer_thread = None
 
     @enqueue
     def _state_callback(self, context_id, state_info):
-        context_state = self.context_state_map.get(context_id, StateInfo())
-
-        if context_state == state_info:
-            return
-
         if state_info.state == State.STOPPED:
             self.context_state_map.pop(context_id, None)
 
@@ -58,29 +82,38 @@ class PlayQueue(AsyncExecutor):
 
         if state_info.state == State.FINISHED:
             if self.current_track_id == len(self.track_list) - 1:
-                self.context_state_map.pop(context_id, None)
-                state_info.state = State.STOPPED
+                return self.stop()
             else:
                 return self.next()
 
-        self.current_context_state_ts = time.monotonic_ns()
+        if context_id not in self.context_state_map:
+            self.context_state_map[context_id] = PlayQueueState.empty()
+        context_state = self.context_state_map[context_id]
+
+        current_context_state_ts = time.monotonic_ns()
 
         new_audio_info = (
-            AudioInfo(
-                sample_rate=state_info.audio_info.sample_rate,
-                channels=state_info.audio_info.channels,
-                bits_per_sample=state_info.audio_info.bits_per_sample,
-                duration_ms=state_info.audio_info.duration_ms,
-            )
-            if state_info.audio_info != context_state.audio_info
+            to_audio_info(state_info.audio_info)
+            if context_state.state_info.audio_info != state_info.audio_info
             else None
         )
-        logger.info(f"State: {new_audio_info} {state_info.state.name}")
+
+        current_track = self.get_track_info(self.current_track_id)
+        new_current_track = (
+            current_track if context_state.current_track != current_track else None
+        )
+        new_index = (
+            self.current_track_id
+            if context_state.index != self.current_track_id
+            else None
+        )
 
         self.event_emitter.dispatch(
             EventType.StateChanged,
             PlayerState(
                 state=state_info.state.name,
+                current_track=new_current_track,
+                index=new_index,
                 position=state_info.position,
                 message=state_info.message,
                 audio_info=new_audio_info,
@@ -88,7 +121,10 @@ class PlayQueue(AsyncExecutor):
         )
 
         if state_info.state != State.STOPPED:
-            self.context_state_map[context_id] = state_info
+            context_state.state_info = state_info
+            context_state.current_track = current_track
+            context_state.index = self.current_track_id
+            context_state.timestamp = current_context_state_ts
 
         if state_info.state == State.PLAYING:
             self._setup_prefetch_timer()
@@ -98,9 +134,9 @@ class PlayQueue(AsyncExecutor):
     def _setup_prefetch_timer(self):
         self._cancel_prefetch_timer()
         next_track_id = self.current_track_id + 1
-        audio_info = self.context_state_map[self.current_context_id].audio_info
+        state_info = self.context_state_map[self.current_context_id].state_info
         time_to_prefetch_s = (
-            audio_info.duration_ms - self.current_progress - 3000
+            state_info.audio_info.duration_ms - state_info.position - 3000
         ) / 1000
         if time_to_prefetch_s < 0:
             return
@@ -180,13 +216,8 @@ class PlayQueue(AsyncExecutor):
         if index is not None and index not in range(0, len(self.track_list)):
             return
 
-        prev_index = self.current_track_id
-
         if index is not None:
             self.current_track_id = index
-
-        if prev_index != self.current_track_id:
-            self._notify_track_change()
 
         self._play_track()
         self._request_more_tracks()
@@ -201,7 +232,6 @@ class PlayQueue(AsyncExecutor):
             return
 
         self.current_track_id += 1
-        self._notify_track_change()
         self._play_track()
         self._request_more_tracks()
 
@@ -216,9 +246,7 @@ class PlayQueue(AsyncExecutor):
             return
 
         self.current_track_id -= 1
-
         self._play_track()
-        self._notify_track_change()
 
     @enqueue
     def stop(self):
@@ -311,9 +339,11 @@ class PlayQueue(AsyncExecutor):
         return track_info.metadata.model_dump(exclude_unset=True)
 
     def get_state(self) -> PlayerState:
-        context_info = self.context_state_map.get(self.current_context_id, StateInfo())
+        context_info = self.context_state_map.get(
+            self.current_context_id, PlayQueueState.empty()
+        )
         return PlayerState(
-            state=context_info.state.name,
+            state=context_info.state_info.state.name,
             current_track=(
                 self.get_track_info(self.current_track_id)
                 if self.current_track_id in range(0, len(self.track_list))
@@ -321,37 +351,32 @@ class PlayQueue(AsyncExecutor):
             ),
             index=self.current_track_id,
             position=self._estimated_progress(),
-            message=context_info.message,
-            audio_info=(
-                AudioInfo(
-                    sample_rate=context_info.audio_info.sample_rate,
-                    channels=context_info.audio_info.channels,
-                    bits_per_sample=context_info.audio_info.bits_per_sample,
-                    duration_ms=context_info.audio_info.duration_ms,
-                )
-                if context_info.audio_info
-                else None
-            ),
+            message=context_info.state_info.message,
+            audio_info=to_audio_info(context_info.state_info.audio_info),
         )
 
     def _estimated_progress(self) -> int:
-        context_state = self.context_state_map.get(self.current_context_id, StateInfo())
-        if context_state.state != State.PLAYING:
-            return context_state.position
+        context_state = self.context_state_map.get(
+            self.current_context_id, PlayQueueState.empty()
+        )
+        if context_state.state_info.state != State.PLAYING:
+            return context_state.state_info.position
 
-        progress = context_state.position + int(
-            (time.monotonic_ns() - self.current_context_state_ts) / 1_000_000
+        progress = context_state.state_info.position + int(
+            (time.monotonic_ns() - context_state.timestamp) / 1_000_000
         )
 
         return progress
 
     @enqueue
     def replay(self) -> PlayerState:
-        context_info = self.context_state_map.get(self.current_context_id, StateInfo())
+        context_info = self.context_state_map.get(
+            self.current_context_id, PlayQueueState.empty()
+        )
         self.event_emitter.dispatch(
             EventType.StateReplay,
             PlayerState(
-                state=context_info.state.name,
+                state=context_info.state_info.state.name,
                 current_track=(
                     self.get_track_info(self.current_track_id)
                     if self.current_track_id in range(0, len(self.track_list))
@@ -359,17 +384,8 @@ class PlayQueue(AsyncExecutor):
                 ),
                 index=self.current_track_id,
                 position=self._estimated_progress(),
-                message=context_info.message,
-                audio_info=(
-                    AudioInfo(
-                        sample_rate=context_info.audio_info.sample_rate,
-                        channels=context_info.audio_info.channels,
-                        bits_per_sample=context_info.audio_info.bits_per_sample,
-                        duration_ms=context_info.audio_info.duration_ms,
-                    )
-                    if context_info.audio_info is not None
-                    else None
-                ),
+                message=context_info.state_info.message,
+                audio_info=to_audio_info(context_info.state_info.audio_info),
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
         )
