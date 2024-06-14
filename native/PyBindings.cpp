@@ -32,6 +32,7 @@ PYBIND11_MODULE(rpiplayer, m) {
       .def_readwrite("position", &StateInfo::position)
       .def_readwrite("message", &StateInfo::message)
       .def_readwrite("audio_info", &StateInfo::audioInfo)
+      .def_readwrite("timestamp", &StateInfo::timestamp)
       .def("__repr__", [](const StateInfo &s) { return s.toString(); })
       .def(pybind11::self == pybind11::self)
       .def(pybind11::self != pybind11::self);

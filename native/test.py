@@ -8,6 +8,7 @@ import time
 def state_cb(context_id: int, state: StateInfo):
     print("State callback, context_id:", context_id, "state:", state)
     print("AudioInfo:", state.audio_info)
+    print(f"Timestamp: {state.timestamp}, current time: {time.monotonic_ns()}")
 
 
 player = AudioPlayer()

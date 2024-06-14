@@ -2,6 +2,7 @@
 #define STATE_MACHINE_H
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -19,16 +20,21 @@ enum State {
   ERROR
 };
 
+inline long long getTimestampNs() {
+  return std::chrono::steady_clock::now().time_since_epoch().count();
+}
+
 struct StateInfo {
-  State state = IDLE;
-  long position = 0;
+  State state;
+  long position;
   std::optional<std::string> message;
   std::optional<AudioInfo> audioInfo;
+  unsigned long long timestamp;
 
-  StateInfo(State state, long position = 0,
+  StateInfo(State state = IDLE, long position = 0,
             std::optional<std::string> message = std::nullopt)
-      : state(state), position(position), message(message) {}
-  StateInfo() = default;
+      : state(state), position(position), message(message),
+        timestamp(getTimestampNs()) {}
 
   bool operator==(const StateInfo &other) const = default;
   bool operator!=(const StateInfo &other) const = default;
@@ -38,7 +44,7 @@ struct StateInfo {
            ", position=" + std::to_string(position) +
            ", message=" + message.value_or("null") + ", audioInfo=" +
            (audioInfo.has_value() ? audioInfo.value().toString() : "null") +
-           ">";
+           ", timestamp=" + std::to_string(timestamp) + ">";
   }
 };
 
@@ -57,6 +63,7 @@ public:
     state.position = position.value_or(state.position);
     state.message = message;
     state.audioInfo = audioInfo.has_value() ? audioInfo : state.audioInfo;
+    state.timestamp = getTimestampNs();
 
     callback(state);
   }
