@@ -48,7 +48,6 @@ class PlayQueueState(BaseModel):
     state_info: StateInfo
     current_track: Optional[Track] = None
     index: Optional[int] = None
-    timestamp: int = 0
 
     @staticmethod
     def empty():
@@ -90,8 +89,6 @@ class PlayQueue(AsyncExecutor):
             self.context_state_map[context_id] = PlayQueueState.empty()
         context_state = self.context_state_map[context_id]
 
-        current_context_state_ts = time.monotonic_ns()
-
         new_audio_info = (
             to_audio_info(state_info.audio_info)
             if context_state.state_info.audio_info != state_info.audio_info
@@ -108,13 +105,19 @@ class PlayQueue(AsyncExecutor):
             else None
         )
 
+        # Compensate delay between state state change and callback
+        position_diff = 0
+        if state_info.state == State.PLAYING:
+            position_diff = int((time.monotonic_ns() - state_info.timestamp) / 1000)
+            logger.info("Time drift: %d ms", position_diff)
+
         self.event_emitter.dispatch(
             EventType.StateChanged,
             PlayerState(
                 state=state_info.state.name,
                 current_track=new_current_track,
                 index=new_index,
-                position=state_info.position,
+                position=state_info.position + position_diff,
                 message=state_info.message,
                 audio_info=new_audio_info,
             ).model_dump(exclude_none=True),
@@ -124,7 +127,6 @@ class PlayQueue(AsyncExecutor):
             context_state.state_info = state_info
             context_state.current_track = current_track
             context_state.index = self.current_track_id
-            context_state.timestamp = current_context_state_ts
 
         if state_info.state == State.PLAYING:
             self._setup_prefetch_timer()
@@ -363,7 +365,7 @@ class PlayQueue(AsyncExecutor):
             return context_state.state_info.position
 
         progress = context_state.state_info.position + int(
-            (time.monotonic_ns() - context_state.timestamp) / 1_000_000
+            (time.monotonic_ns() - context_state.state_info.timestamp) / 1_000_000
         )
 
         return progress
