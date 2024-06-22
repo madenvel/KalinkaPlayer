@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <thread>
 
 enum class AudioGraphNodeState {
   ERROR = -1,
