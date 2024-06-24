@@ -49,15 +49,15 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
 }
 
 void AudioGraphHttpStream::emptyBufferCallback(DequeBuffer<uint8_t> &buffer) {
-  if (buffer.isEof() && getState() != AudioGraphNodeState::ERROR) {
-    setState(AudioGraphNodeState::FINISHED);
+  if (buffer.isEof() && getState().state != AudioGraphNodeState::ERROR) {
+    setState(StreamState(AudioGraphNodeState::FINISHED));
   }
 }
 
 void AudioGraphHttpStream::reader(std::stop_token token) {
   using namespace std::placeholders;
   try {
-    setState(AudioGraphNodeState::STREAMING);
+    setState(StreamState(AudioGraphNodeState::STREAMING));
     curlpp::options::Url myUrl(url);
     request.setOpt(myUrl);
     curlpp::types::WriteFunctionFunctor functor =
@@ -69,14 +69,16 @@ void AudioGraphHttpStream::reader(std::stop_token token) {
     long responseCode = 0;
     curlpp::Info<CURLINFO_RESPONSE_CODE, long>::get(request, responseCode);
     if (responseCode != 200) {
-      std::cerr << "HTTP request failed with code " +
-                       std::to_string(responseCode);
-      setState(AudioGraphNodeState::ERROR);
+      std::string message =
+          "HTTP request failed with code " + std::to_string(responseCode);
+      std::cerr << message << std::endl;
+      setState({AudioGraphNodeState::ERROR, message});
     }
   } catch (curlpp::LibcurlRuntimeError &ex) {
     if (!token.stop_requested()) {
-      std::cerr << "Libcurl exception: " << ex.what() << std::endl;
-      setState(AudioGraphNodeState::ERROR);
+      std::string message = std::string("Libcurl exception: ") + ex.what();
+      std::cerr << message << std::endl;
+      setState({AudioGraphNodeState::ERROR, message});
     }
   }
 }
@@ -89,5 +91,3 @@ size_t AudioGraphHttpStream::waitForData(std::stop_token stopToken,
                                          size_t size) {
   return buffer.waitForData(stopToken, size);
 }
-
-StreamInfo AudioGraphHttpStream::getStreamInfo() { return StreamInfo(); }

@@ -11,37 +11,38 @@ FlacStreamDecoder::FlacStreamDecoder(size_t bufferSize)
   init();
 }
 
-void FlacStreamDecoder::connectTo(AudioGraphOutputNode *inputNode) {
+void FlacStreamDecoder::connectTo(
+    std::shared_ptr<AudioGraphOutputNode> inputNode) {
   if (inputNode == nullptr) {
     throw std::runtime_error("Input node is null");
   }
+
+  if (this->inputNode != nullptr) {
+    throw std::runtime_error("Input node is already connected");
+  }
+
   this->inputNode = inputNode;
 
-  setState(AudioGraphNodeState::PREPARING);
-  decodingThread =
-      std::jthread(std::bind_front(&FlacStreamDecoder::thread_run, this));
+  if (!decodingThread.joinable()) {
+    setState(StreamState(AudioGraphNodeState::PREPARING));
+    decodingThread =
+        std::jthread(std::bind_front(&FlacStreamDecoder::thread_run, this));
+  }
 }
 
-void FlacStreamDecoder::disconnect(AudioGraphOutputNode *inputNode) {
+void FlacStreamDecoder::disconnect(
+    std::shared_ptr<AudioGraphOutputNode> inputNode) {
+  if (inputNode != this->inputNode) {
+    return;
+  }
+
   if (decodingThread.joinable()) {
     decodingThread.request_stop();
-    setState(AudioGraphNodeState::STOPPED);
+    setState(StreamState(AudioGraphNodeState::STOPPED));
     decodingThread.join();
-    this->inputNode = nullptr;
   }
-}
 
-void FlacStreamDecoder::metadata_callback(
-    const ::FLAC__StreamMetadata *pMetadata) {
-  /* print some stats */
-  if (pMetadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
-    streamInfo = pMetadata->data.stream_info;
-  }
-}
-
-void FlacStreamDecoder::error_callback(
-    ::FLAC__StreamDecoderErrorStatus status) {
-  setState(AudioGraphNodeState::ERROR);
+  this->inputNode = nullptr;
 }
 
 ::FLAC__StreamDecoderWriteStatus
@@ -78,7 +79,7 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
 FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
   std::stop_token token = decodingThread.get_stop_token();
   *bytes = inputNode->read(buffer, *bytes);
-  auto inputNodeStatus = inputNode->getState();
+  auto inputNodeStatus = inputNode->getState().state;
   if (token.stop_requested()) {
     return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
   }
@@ -87,6 +88,20 @@ FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
   }
 
   return FLAC__STREAM_DECODER_READ_STATUS_CONTINUE;
+}
+
+void FlacStreamDecoder::error_callback(
+    ::FLAC__StreamDecoderErrorStatus status) {
+  setState({AudioGraphNodeState::ERROR,
+            std::string("Flac decoder error: ") +
+                FLAC__StreamDecoderErrorStatusString[status]});
+}
+
+void FlacStreamDecoder::metadata_callback(
+    const ::FLAC__StreamMetadata *metadata) {
+  if (metadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
+    flacStreamInfo = metadata->data.stream_info;
+  }
 }
 
 void FlacStreamDecoder::throwOnFlacError(bool retval) {
@@ -104,8 +119,33 @@ void FlacStreamDecoder::throwOnFlacError(bool retval) {
   }
 }
 
+void FlacStreamDecoder::setStreamingState() {
+  if (!flacStreamInfo.has_value()) {
+    throw std::runtime_error("Stream info not available");
+  }
+
+  StreamInfo streamInfo = {
+      .format =
+          StreamAudioFormat{.sampleRate = flacStreamInfo.value().sample_rate,
+                            .channels = flacStreamInfo.value().channels,
+                            .bitsPerSample =
+                                flacStreamInfo.value().bits_per_sample},
+      .totalSamples = flacStreamInfo.value().total_samples,
+      .durationMs = static_cast<unsigned int>(
+          flacStreamInfo.value().total_samples * 1000 /
+          static_cast<unsigned long long>(flacStreamInfo.value().sample_rate))};
+
+  uint64_t decodePosition = 0;
+  if (!get_decode_position(&decodePosition)) {
+    decodePosition = 0;
+  }
+
+  setState({AudioGraphNodeState::STREAMING, static_cast<long>(decodePosition),
+            streamInfo});
+}
+
 void FlacStreamDecoder::thread_run(std::stop_token token) {
-  if (waitForStatus(token, AudioGraphNodeState::PREPARING) !=
+  if (waitForStatus(token, AudioGraphNodeState::PREPARING).state !=
       AudioGraphNodeState::PREPARING) {
     return;
   }
@@ -117,10 +157,9 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       return;
     }
 
-    bool retval = process_until_end_of_metadata() && streamInfo.has_value();
+    bool retval = process_until_end_of_metadata();
     throwOnFlacError(retval);
-
-    setState(AudioGraphNodeState::STREAMING);
+    setStreamingState();
 
     while (!token.stop_requested()) {
       State state = get_state();
@@ -132,15 +171,24 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       throwOnFlacError(retval);
     }
   } catch (std::exception &ex) {
-    std::cerr << "Flac decoder thread exception: " << ex.what() << std::endl;
-    setState(AudioGraphNodeState::ERROR);
+    std::string message =
+        std::string("Flac decoder thread exception: ") + ex.what();
+    std::cerr << message << std::endl;
+    if (getState().state != AudioGraphNodeState::ERROR) {
+      setState({AudioGraphNodeState::ERROR, message});
+    }
   }
   buffer.setEof();
 }
 
 void FlacStreamDecoder::onEmptyBuffer(DequeBuffer<uint8_t> &buffer) {
-  if (buffer.isEof() && getState() != AudioGraphNodeState::ERROR) {
-    setState(AudioGraphNodeState::FINISHED);
+  if (buffer.isEof() && getState().state != AudioGraphNodeState::ERROR) {
+    uint64_t decodePosition = 0;
+    if (!get_decode_position(&decodePosition)) {
+      decodePosition = 0;
+    }
+    setState(
+        {AudioGraphNodeState::FINISHED, static_cast<long>(decodePosition)});
   }
 }
 

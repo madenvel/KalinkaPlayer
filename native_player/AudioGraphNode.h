@@ -3,6 +3,7 @@
 
 #include "AudioInfo.h"
 #include "Buffer.h"
+#include "StreamState.h"
 
 #include <condition_variable>
 #include <iostream>
@@ -12,38 +13,29 @@
 #include <queue>
 #include <thread>
 
-enum class AudioGraphNodeState {
-  ERROR = -1,
-  STOPPED,
-  PREPARING,
-  STREAMING,
-  PAUSED,
-  FINISHED,
-  SOURCE_CHANGED
-};
-
 class StateMonitor;
 
 class AudioGraphNode {
 public:
   AudioGraphNode() : state(AudioGraphNodeState::STOPPED) {}
 
-  virtual AudioGraphNodeState getState();
+  virtual StreamState getState();
 
-  virtual AudioGraphNodeState
+  virtual StreamState
   waitForStatus(std::stop_token stopToken,
                 std::optional<AudioGraphNodeState> nextState = std::nullopt);
 
-  virtual ~AudioGraphNode() = default;
+  virtual ~AudioGraphNode();
 
 protected:
   friend class StateMonitor;
-  void setState(AudioGraphNodeState newState);
+  void setState(const StreamState &newState);
 
 private:
-  AudioGraphNodeState state;
+  StreamState state;
   std::mutex mutex;
   std::condition_variable_any cv;
+  bool done = false;
 
   std::list<StateMonitor *> monitors;
 };
@@ -52,17 +44,22 @@ class StateMonitor {
 public:
   friend class AudioGraphNode;
 
-  StateMonitor(AudioGraphNode &ptr);
-
+  StateMonitor(AudioGraphNode *ptr);
+  StateMonitor(const StateMonitor &) = delete;
+  StateMonitor &operator=(const StateMonitor &) = delete;
   ~StateMonitor();
 
-  AudioGraphNodeState waitState();
+  StreamState waitState();
 
   bool hasData();
 
-private:
-  std::queue<AudioGraphNodeState> queue_;
-  AudioGraphNode &ptr;
+  void stop();
+
+protected:
+  std::queue<StreamState> queue_;
+  AudioGraphNode *ptr;
+
+  bool stopped = false;
 };
 
 class AudioGraphOutputNode : public virtual AudioGraphNode {
@@ -74,29 +71,19 @@ public:
   virtual size_t read(void *data, size_t size) = 0;
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),
                              size_t size = 1) = 0;
-  virtual StreamInfo getStreamInfo() = 0;
   virtual ~AudioGraphOutputNode() = default;
 };
 
 class AudioGraphInputNode : public virtual AudioGraphNode {
 public:
-  virtual void connectTo(AudioGraphOutputNode *outputNode) = 0;
-  virtual void disconnect(AudioGraphOutputNode *outputNode) = 0;
+  virtual void connectTo(std::shared_ptr<AudioGraphOutputNode> outputNode) = 0;
+  virtual void disconnect(std::shared_ptr<AudioGraphOutputNode> outputNode) = 0;
   virtual ~AudioGraphInputNode() = default;
 };
 
 class AudioGraphEmitterNode : public AudioGraphInputNode {
 public:
-  virtual void pause(bool paused) {
-    if (paused) {
-      setState(AudioGraphNodeState::PAUSED);
-    } else {
-      setState(AudioGraphNodeState::STREAMING);
-    }
-  }
-
-  virtual long getPosition() = 0;
-  virtual StreamInfo getStreamInfo() = 0;
+  virtual void pause(bool paused) = 0;
 };
 
 #endif

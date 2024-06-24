@@ -11,7 +11,6 @@ public:
   AudioGraphHttpStream(const std::string &url, size_t bufferSize);
   virtual size_t read(void *data, size_t size) override;
   virtual size_t waitForData(std::stop_token stopToken, size_t size) override;
-  virtual StreamInfo getStreamInfo() override;
 
   virtual ~AudioGraphHttpStream();
 
@@ -20,6 +19,7 @@ private:
   std::jthread readerThread;
   std::string url;
   DequeBuffer<uint8_t> buffer;
+  std::stop_source stopSource;
 
   void reader(std::stop_token token);
   size_t WriteCallback(void *contents, size_t size, size_t nmemb);

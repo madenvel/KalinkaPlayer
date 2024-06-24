@@ -1,4 +1,5 @@
 #include "AlsaAudioEmitter.h"
+#include "StreamState.h"
 
 #include <iostream>
 #include <sstream>
@@ -203,14 +204,6 @@ AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
   }
 }
 
-// TODO: thread-safety
-StreamInfo AlsaAudioEmitter::getStreamInfo() {
-  auto streamInfo = inputNode->getStreamInfo();
-  streamInfo.format = currentStreamAudioFormat;
-
-  return streamInfo;
-}
-
 AlsaAudioEmitter::~AlsaAudioEmitter() {
   stop();
   if (pcmHandle != nullptr) {
@@ -218,7 +211,8 @@ AlsaAudioEmitter::~AlsaAudioEmitter() {
   }
 }
 
-void AlsaAudioEmitter::connectTo(AudioGraphOutputNode *outputNode) {
+void AlsaAudioEmitter::connectTo(
+    std::shared_ptr<AudioGraphOutputNode> outputNode) {
   if (inputNode != nullptr && inputNode != outputNode) {
     throw std::runtime_error("AlsaAudioEmitter is already connected to an "
                              "AudioGraphOutputNode node");
@@ -227,10 +221,26 @@ void AlsaAudioEmitter::connectTo(AudioGraphOutputNode *outputNode) {
   start();
 }
 
-void AlsaAudioEmitter::disconnect(AudioGraphOutputNode *outputNode) {
+void AlsaAudioEmitter::disconnect(
+    std::shared_ptr<AudioGraphOutputNode> outputNode) {
   if (inputNode == outputNode) {
     stop();
     inputNode = nullptr;
+  }
+}
+
+void AlsaAudioEmitter::pause(bool paused) {
+  auto state = getState();
+  auto stateToSet = state.state == AudioGraphNodeState::STREAMING
+                        ? AudioGraphNodeState::PAUSED
+                        : AudioGraphNodeState::STREAMING;
+
+  if ((state.state == AudioGraphNodeState::STREAMING ||
+       state.state == AudioGraphNodeState::PAUSED) &&
+      state.state != stateToSet) {
+    StreamState newState(stateToSet, 0, state.streamInfo);
+    newState.position = (newState.timestamp - state.timestamp) / 1000;
+    setState(newState);
   }
 }
 
@@ -251,7 +261,7 @@ void AlsaAudioEmitter::stop() {
     playbackThread.request_stop();
     playbackThread.join();
     playbackThread = std::jthread();
-    setState(AudioGraphNodeState::STOPPED);
+    setState(StreamState(AudioGraphNodeState::STOPPED));
   }
 }
 
@@ -261,14 +271,33 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
   }
 
   while (!token.stop_requested()) {
-    if (inputNode->waitForStatus(token, AudioGraphNodeState::STREAMING) !=
+    auto inputNodeState = inputNode->getState().state;
+    bool shouldNotChangeState =
+        inputNodeState == AudioGraphNodeState::FINISHED ||
+        inputNodeState == AudioGraphNodeState::ERROR;
+
+    if (not shouldNotChangeState) {
+      setState(StreamState(AudioGraphNodeState::PREPARING));
+    }
+
+    if (inputNode->waitForStatus(token, AudioGraphNodeState::STREAMING).state !=
         AudioGraphNodeState::STREAMING) {
-      setState(AudioGraphNodeState::FINISHED);
+      setState(StreamState(AudioGraphNodeState::FINISHED));
       break;
     }
 
-    setState(AudioGraphNodeState::PREPARING);
-    setupAudioFormat(inputNode->getStreamInfo().format);
+    if (shouldNotChangeState) {
+      setState(StreamState(AudioGraphNodeState::PREPARING));
+    }
+
+    auto streamInfo = inputNode->getState().streamInfo;
+    if (!streamInfo.has_value()) {
+      std::cerr << "No format information available" << std::endl;
+      setState({AudioGraphNodeState::ERROR, "No format information available"});
+      return;
+    }
+
+    setupAudioFormat(streamInfo.value().format);
     const auto dataToRequest = framesToBytes(bufferSize / 2);
     auto dataAvailable = inputNode->waitForData(token, dataToRequest);
     if (dataAvailable < dataToRequest) {
@@ -276,11 +305,27 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
                 << dataToRequest << " received " << dataAvailable
                 << " - expect XRUN" << std::endl;
     }
-    setState(AudioGraphNodeState::STREAMING);
+    streamInfo.value().format = currentStreamAudioFormat;
+    setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
 
-    AudioGraphNodeState nodeStatus = AudioGraphNodeState::STOPPED;
+    StreamState nodeState(AudioGraphNodeState::STOPPED);
+    std::optional<std::chrono::steady_clock::time_point> setStreamingStateAfter;
 
     while (!token.stop_requested()) {
+
+      // Update streaming state
+      if (setStreamingStateAfter.has_value() &&
+          std::chrono::steady_clock::now() >= setStreamingStateAfter.value()) {
+        setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+        setState({AudioGraphNodeState::STREAMING,
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() -
+                      setStreamingStateAfter.value())
+                      .count(),
+                  inputNode->getState().streamInfo});
+        setStreamingStateAfter.reset();
+      }
+
       int err = wait_for_poll((snd_pcm_t *)pcmHandle, ufds.data(), ufds.size());
       if (err < 0) {
         throw std::runtime_error("Poll failed for playback");
@@ -298,7 +343,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
           std::min((long)bytesToFrames(buffer.size()), frames);
       size_t bytesToRead = framesToBytes(framesToRead);
 
-      if (getState() == AudioGraphNodeState::PAUSED) {
+      if (getState().state == AudioGraphNodeState::PAUSED) {
         memset(buffer.data(), 0, bytesToRead);
         err =
             snd_pcm_writei((snd_pcm_t *)pcmHandle, buffer.data(), framesToRead);
@@ -317,25 +362,32 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
       size_t read = inputNode->read(buffer.data(), bytesToRead);
 
-      bool newFormat = false;
-      nodeStatus = inputNode->getState();
+      nodeState = inputNode->getState();
+      bool newAudioFormat = false;
 
-      if (nodeStatus == AudioGraphNodeState::SOURCE_CHANGED) {
-        setState(AudioGraphNodeState::SOURCE_CHANGED);
-        if (inputNode->getStreamInfo().format != currentStreamAudioFormat) {
-          newFormat = true;
+      if (nodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
+        // Request new state to get new stream info
+        // It should only be present if the state is STREAMING
+        auto newStreamInfo = inputNode->getState().streamInfo;
+        if (!newStreamInfo.has_value() ||
+            newStreamInfo.value().format != currentStreamAudioFormat) {
+          newAudioFormat = true;
         } else if (read < bytesToRead) {
-          setState(AudioGraphNodeState::STREAMING);
+          int timeToReportPosition =
+              1000 * framesToRead / currentStreamAudioFormat.sampleRate;
+          setStreamingStateAfter =
+              std::chrono::steady_clock::now() +
+              std::chrono::milliseconds(timeToReportPosition);
           read += inputNode->read(buffer.data() + read, bytesToRead - read);
         }
       }
 
       if (read < bytesToRead) {
-        if (nodeStatus != AudioGraphNodeState::FINISHED) {
+        if (nodeState.state != AudioGraphNodeState::FINISHED &&
+            !newAudioFormat) {
           std::cerr << "XRUN - read " << read << " but expected " << bytesToRead
                     << std::endl;
         }
-
         memset(buffer.data() + read, 0, bytesToRead - read);
       }
 
@@ -351,7 +403,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         }
       }
 
-      if (newFormat || nodeStatus == AudioGraphNodeState::FINISHED) {
+      if (newAudioFormat || nodeState.state == AudioGraphNodeState::FINISHED ||
+          nodeState.state == AudioGraphNodeState::ERROR) {
         break;
       }
     }
@@ -362,7 +415,13 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       snd_pcm_drain((snd_pcm_t *)pcmHandle);
     }
 
-    setState(AudioGraphNodeState::FINISHED);
+    if (nodeState.state == AudioGraphNodeState::FINISHED) {
+      setState(StreamState(AudioGraphNodeState::FINISHED));
+    } else if (nodeState.state == AudioGraphNodeState::ERROR) {
+      setState({AudioGraphNodeState::ERROR, nodeState.message});
+    } else if (nodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
+      setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+    }
   }
 }
 
@@ -426,12 +485,14 @@ void AlsaAudioEmitter::setupAudioFormat(
   int pbits = snd_pcm_format_physical_width(format);
   int pbytes = pbits / 8;
 
-  framesToBytes = [pbytes, &streamAudioFormat](size_t frames) -> size_t {
-    return frames * pbytes * streamAudioFormat.channels;
+  framesToBytes =
+      [pbytes, channels = streamAudioFormat.channels](size_t frames) -> size_t {
+    return frames * pbytes * channels;
   };
 
-  bytesToFrames = [pbytes, &streamAudioFormat](size_t bytes) -> size_t {
-    return bytes / (pbytes * streamAudioFormat.channels);
+  bytesToFrames =
+      [pbytes, channels = streamAudioFormat.channels](size_t bytes) -> size_t {
+    return bytes / (pbytes * channels);
   };
 
   buffer.resize(streamAudioFormat.channels * periodSize * pbytes);

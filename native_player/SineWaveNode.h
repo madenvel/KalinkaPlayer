@@ -8,14 +8,18 @@
 class SineWaveNode : public AudioGraphOutputNode {
   size_t position = 0;
   size_t totalDataSize = 0;
-  int durationMs;
   int frequency;
 
 public:
-  SineWaveNode(int frequency, int durationMs)
-      : durationMs(durationMs), frequency(frequency) {
+  SineWaveNode(int frequency, int durationMs) : frequency(frequency) {
     totalDataSize = 96000 * 2 * durationMs / 1000;
-    setState(AudioGraphNodeState::STREAMING);
+    setState({AudioGraphNodeState::STREAMING, 0,
+              StreamInfo{.format = {.sampleRate = 48000,
+                                    .channels = 2,
+                                    .bitsPerSample = 16},
+                         .totalSamples = static_cast<unsigned int>(durationMs) *
+                                         48000 / 1000,
+                         .durationMs = static_cast<unsigned int>(durationMs)}});
   }
   virtual size_t read(void *data, size_t size) override {
 
@@ -31,25 +35,17 @@ public:
     position += size;
 
     if (position == totalDataSize) {
-      setState(AudioGraphNodeState::FINISHED);
+      setState(StreamState(AudioGraphNodeState::FINISHED));
     }
 
     return size;
   }
 
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),
-                             size_t size = 1) {
+                             size_t size = 1) override {
     return std::min(size, totalDataSize - position);
   }
 
-  virtual StreamInfo getStreamInfo() override {
-    return StreamInfo{
-        .format = {.sampleRate = 48000, .channels = 2, .bitsPerSample = 16},
-        .totalSamples = static_cast<unsigned int>(durationMs) * 48000 / 1000,
-        .durationMs = static_cast<unsigned int>(
-            durationMs)}; // {sampleRate, channels, bitsPerSample,
-                          // totalSamples, durationMs
-  }
   virtual ~SineWaveNode() = default;
 };
 

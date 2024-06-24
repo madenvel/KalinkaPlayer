@@ -15,24 +15,14 @@ class FlacStreamDecoder : public AudioGraphOutputNode,
 public:
   FlacStreamDecoder(size_t bufferSize);
 
-  virtual void connectTo(AudioGraphOutputNode *inputNode) override;
-  virtual void disconnect(AudioGraphOutputNode *inputNode) override;
+  virtual void
+  connectTo(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
+  virtual void
+  disconnect(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
 
   virtual size_t read(void *data, size_t size) override;
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),
                              size_t size = 1) override;
-
-  virtual StreamInfo getStreamInfo() override {
-    if (!streamInfo.has_value()) {
-      return StreamInfo();
-    }
-    return {streamInfo.value().sample_rate, streamInfo.value().channels,
-            streamInfo.value().bits_per_sample,
-            streamInfo.value().total_samples,
-            static_cast<unsigned int>(streamInfo.value().total_samples * 1000 /
-                                      static_cast<unsigned long long>(
-                                          streamInfo.value().sample_rate))};
-  }
 
   virtual ~FlacStreamDecoder();
 
@@ -44,20 +34,22 @@ protected:
                                                         size_t *bytes) override;
 
   virtual void error_callback(::FLAC__StreamDecoderErrorStatus status) override;
+
   virtual void
   metadata_callback(const ::FLAC__StreamMetadata *metadata) override;
 
 private:
   std::jthread decodingThread;
-  std::optional<FLAC__StreamMetadata_StreamInfo> streamInfo;
+  std::optional<FLAC__StreamMetadata_StreamInfo> flacStreamInfo;
   std::vector<uint8_t> data;
   DequeBuffer<uint8_t> buffer;
 
-  AudioGraphOutputNode *inputNode;
+  std::shared_ptr<AudioGraphOutputNode> inputNode;
 
   void thread_run(std::stop_token token);
   void onEmptyBuffer(DequeBuffer<uint8_t> &buffer);
   void throwOnFlacError(bool retval);
+  void setStreamingState();
 };
 
 #endif

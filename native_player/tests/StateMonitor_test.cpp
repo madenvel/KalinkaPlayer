@@ -1,0 +1,41 @@
+#include "AlsaAudioEmitter.h"
+#include "AudioGraphNode.h"
+#include "FileInputNode.h"
+#include "FlacStreamDecoder.h"
+
+#include <gtest/gtest.h>
+#include <memory>
+
+class AudioGraphNodeTest : public ::testing::Test {
+protected:
+  const std::string filename = "files/tone440.flac";
+
+  std::shared_ptr<FlacStreamDecoder> flacStreamDecoder;
+  std::shared_ptr<AlsaAudioEmitter> alsaAudioEmitter;
+
+  AudioGraphNodeTest()
+      : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("hw:0,0")) {}
+};
+
+TEST_F(AudioGraphNodeTest, stateMonitor) {
+  auto monitor = std::make_shared<StateMonitor>(alsaAudioEmitter.get());
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  alsaAudioEmitter->connectTo(flacStreamDecoder);
+  alsaAudioEmitter->waitForStatus(std::stop_token(),
+                                  AudioGraphNodeState::FINISHED);
+  int i = 0;
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING, AudioGraphNodeState::FINISHED};
+
+  while (monitor->hasData()) {
+    auto state = monitor->waitState();
+    ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
+    EXPECT_EQ(state.state, states[i++]);
+  }
+
+  alsaAudioEmitter->disconnect(flacStreamDecoder);
+  flacStreamDecoder->disconnect(fileInputNode);
+}

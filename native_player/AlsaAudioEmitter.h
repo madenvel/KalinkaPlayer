@@ -14,17 +14,18 @@ public:
   AlsaAudioEmitter(const std::string &deviceName, size_t bufferSize = 16384,
                    size_t periodSize = 1024);
 
-  virtual void connectTo(AudioGraphOutputNode *outputNode) override;
-  virtual void disconnect(AudioGraphOutputNode *outputNode) override;
+  virtual void
+  connectTo(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
+  virtual void
+  disconnect(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
 
-  virtual long getPosition() override { return 0; }
-  virtual StreamInfo getStreamInfo() override;
+  virtual void pause(bool paused) override;
 
   virtual ~AlsaAudioEmitter();
 
 private:
   std::string deviceName;
-  AudioGraphOutputNode *inputNode = nullptr;
+  std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
 
   StreamAudioFormat currentStreamAudioFormat;
