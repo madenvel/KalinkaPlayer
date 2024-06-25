@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from native_player import AudioPlayer, State
+from native_player import AudioPlayer, AudioGraphNodeState
 
 import time
 from threading import Thread
@@ -24,8 +24,9 @@ monitor = player.monitor()
 state_update_thread = Thread(target=print_state, args=(monitor,))
 state_update_thread.start()
 
-while player.get_state().state != State.FINISHED:
+while player.get_state().state != AudioGraphNodeState.FINISHED:
     time.sleep(1)
+    print("Working!!!")
 
 stop = True
 monitor.stop()
