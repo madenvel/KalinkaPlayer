@@ -1,7 +1,6 @@
 #include "AudioGraphNode.h"
 #include "AudioInfo.h"
 #include "AudioPlayer.h"
-#include "StateMachine.h"
 
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
@@ -29,7 +28,13 @@ PYBIND11_MODULE(native_player, m) {
       .def(pybind11::self != pybind11::self);
 
   py::class_<StreamState>(m, "StreamState")
-      .def(py::init<>())
+      .def(py::init<AudioGraphNodeState, long, std::optional<StreamInfo>>(),
+           py::arg("state"), py::arg("position"), py::arg("stream_info"))
+      .def(py::init<AudioGraphNodeState, std::optional<std::string>>(),
+           py::arg("state"), py::arg("message"))
+      .def(py::init<AudioGraphNodeState>(), py::arg("state"))
+      .def(py::init<AudioGraphNodeState, long>(), py::arg("state"),
+           py::arg("position"))
       .def_readwrite("state", &StreamState::state)
       .def_readwrite("position", &StreamState::position)
       .def_readwrite("message", &StreamState::message)
@@ -52,17 +57,6 @@ PYBIND11_MODULE(native_player, m) {
       .def("pause", &AudioPlayer::pause, py::arg("paused"))
       .def("get_state", &AudioPlayer::getState)
       .def("monitor", &AudioPlayer::monitor);
-
-  py::enum_<State>(m, "State")
-      .value("IDLE", State::IDLE)
-      .value("READY", State::READY)
-      .value("BUFFERING", State::BUFFERING)
-      .value("PLAYING", State::PLAYING)
-      .value("PAUSED", State::PAUSED)
-      .value("FINISHED", State::FINISHED)
-      .value("STOPPED", State::STOPPED)
-      .value("ERROR", State::ERROR)
-      .export_values();
 
   py::enum_<AudioGraphNodeState>(m, "AudioGraphNodeState")
       .value("ERROR", AudioGraphNodeState::ERROR)
