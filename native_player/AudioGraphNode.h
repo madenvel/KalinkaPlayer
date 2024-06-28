@@ -5,15 +5,13 @@
 #include "Buffer.h"
 #include "StreamState.h"
 
-#include <condition_variable>
 #include <iostream>
 #include <list>
 #include <mutex>
 #include <optional>
 #include <queue>
 #include <thread>
-
-class StateMonitor;
+#include <unordered_map>
 
 class AudioGraphNode {
 public:
@@ -21,45 +19,23 @@ public:
 
   virtual StreamState getState();
 
-  virtual StreamState
-  waitForStatus(std::stop_token stopToken,
-                std::optional<AudioGraphNodeState> nextState = std::nullopt);
+  virtual int
+  onStateChange(std::function<bool(AudioGraphNode *, StreamState)> callback);
+  virtual void removeStateChangeCallback(int id);
 
+  virtual void acceptSourceChange() {};
   virtual ~AudioGraphNode();
 
 protected:
-  friend class StateMonitor;
   void setState(const StreamState &newState);
 
 private:
-  StreamState state;
   std::mutex mutex;
-  std::condition_variable_any cv;
-  bool done = false;
+  StreamState state;
 
-  std::list<StateMonitor *> monitors;
-};
-
-class StateMonitor {
-public:
-  friend class AudioGraphNode;
-
-  StateMonitor(AudioGraphNode *ptr);
-  StateMonitor(const StateMonitor &) = delete;
-  StateMonitor &operator=(const StateMonitor &) = delete;
-  ~StateMonitor();
-
-  StreamState waitState();
-
-  bool hasData();
-
-  void stop();
-
-protected:
-  std::queue<StreamState> queue_;
-  AudioGraphNode *ptr;
-
-  bool stopped = false;
+  std::unordered_map<int, std::function<bool(AudioGraphNode *, StreamState)>>
+      stateChangeCallbacks;
+  int callbackId = 0;
 };
 
 class AudioGraphOutputNode : public virtual AudioGraphNode {

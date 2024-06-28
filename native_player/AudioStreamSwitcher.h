@@ -13,6 +13,7 @@ public:
 
   virtual void
   connectTo(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
+
   virtual void
   disconnect(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
 
@@ -21,10 +22,7 @@ public:
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),
                              size_t size = 1) override;
 
-  virtual StreamState getState() override;
-  virtual StreamState waitForStatus(
-      std::stop_token stopToken,
-      std::optional<AudioGraphNodeState> nextStatus = std::nullopt) override;
+  virtual void acceptSourceChange() override;
 
 private:
   std::list<std::shared_ptr<AudioGraphOutputNode>> inputNodes;
@@ -32,6 +30,8 @@ private:
 
   std::mutex mutex;
   std::stop_source stopSource;
+
+  int stateCallbackId = -1;
 
   void switchToNextSource();
 };

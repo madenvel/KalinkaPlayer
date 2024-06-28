@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "TestHelpers.h"
+
 class FlacStreamDecoderTest : public ::testing::Test {
 protected:
   static constexpr size_t bufferSize = 16384;
@@ -37,8 +39,7 @@ TEST_F(FlacStreamDecoderTest, read) {
   auto inputNode = std::make_shared<FileInputNode>("files/tone440.flac");
   flacStreamDecoder->connectTo(inputNode);
   uint8_t data[bufferSize];
-  flacStreamDecoder->waitForStatus(std::stop_token(),
-                                   AudioGraphNodeState::STREAMING);
+  waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   EXPECT_EQ(flacStreamDecoder->read(data, 100), 100);
   flacStreamDecoder->disconnect(inputNode);
@@ -48,8 +49,8 @@ TEST_F(FlacStreamDecoderTest, getStreamInfo) {
   auto flacStreamDecoder = std::make_shared<FlacStreamDecoder>(bufferSize);
   auto inputNode = std::make_shared<FileInputNode>("files/tone440.flac");
   flacStreamDecoder->connectTo(inputNode);
-  auto state = flacStreamDecoder->waitForStatus(std::stop_token(),
-                                                AudioGraphNodeState::STREAMING);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
   ASSERT_TRUE(state.streamInfo.has_value());
   auto audioInfo = state.streamInfo.value();
   EXPECT_EQ(audioInfo.format.sampleRate, 44100);
@@ -66,8 +67,7 @@ TEST_F(FlacStreamDecoderTest, getState) {
   flacStreamDecoder->connectTo(inputNode);
   EXPECT_EQ(flacStreamDecoder->getState().state,
             AudioGraphNodeState::PREPARING);
-  flacStreamDecoder->waitForStatus(std::stop_token(),
-                                   AudioGraphNodeState::STREAMING);
+  waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
   EXPECT_EQ(flacStreamDecoder->getState().state,
             AudioGraphNodeState::STREAMING);
   uint8_t data[1000];

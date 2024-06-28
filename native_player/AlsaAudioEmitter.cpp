@@ -1,6 +1,7 @@
 #include "AlsaAudioEmitter.h"
 #include "StreamState.h"
 
+#include "StateMonitor.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -265,36 +266,61 @@ void AlsaAudioEmitter::stop() {
   }
 }
 
+StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
+  StreamState inputNodeState = inputNode->getState();
+  bool done = false;
+  while (!token.stop_requested()) {
+    switch (inputNodeState.state) {
+    case AudioGraphNodeState::PREPARING:
+      setState(StreamState(AudioGraphNodeState::PREPARING));
+      break;
+    case AudioGraphNodeState::STREAMING:
+      done = true;
+      break;
+    case AudioGraphNodeState::FINISHED:
+      setState(StreamState(AudioGraphNodeState::FINISHED));
+      break;
+    case AudioGraphNodeState::ERROR:
+      setState({AudioGraphNodeState::ERROR, inputNodeState.message});
+      break;
+    case AudioGraphNodeState::SOURCE_CHANGED:
+      setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+      inputNode->acceptSourceChange();
+      break;
+    default:
+      setState(StreamState(AudioGraphNodeState::STOPPED));
+      break;
+    }
+    if (done) {
+      break;
+    }
+    StateChangeWaitLock lock(token, *inputNode, inputNodeState.timestamp);
+    inputNodeState = lock.state();
+  };
+
+  return inputNodeState;
+}
+
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
   if (inputNode == nullptr) {
     return;
   }
 
   while (!token.stop_requested()) {
-    auto inputNodeState = inputNode->getState().state;
-    bool shouldNotChangeState =
-        inputNodeState == AudioGraphNodeState::FINISHED ||
-        inputNodeState == AudioGraphNodeState::ERROR;
+    auto inputNodeState = waitForInputToBeReady(token);
 
-    if (not shouldNotChangeState) {
-      setState(StreamState(AudioGraphNodeState::PREPARING));
-    }
-
-    if (inputNode->waitForStatus(token, AudioGraphNodeState::STREAMING).state !=
-        AudioGraphNodeState::STREAMING) {
-      setState(StreamState(AudioGraphNodeState::FINISHED));
+    if (token.stop_requested()) {
       break;
-    }
-
-    if (shouldNotChangeState) {
-      setState(StreamState(AudioGraphNodeState::PREPARING));
     }
 
     auto streamInfo = inputNode->getState().streamInfo;
     if (!streamInfo.has_value()) {
-      std::cerr << "No format information available" << std::endl;
       setState({AudioGraphNodeState::ERROR, "No format information available"});
-      return;
+      continue;
+    }
+    if (streamInfo.value().format != currentStreamAudioFormat &&
+        inputNodeState.state != AudioGraphNodeState::PREPARING) {
+      setState(StreamState(AudioGraphNodeState::PREPARING));
     }
 
     setupAudioFormat(streamInfo.value().format);
@@ -308,15 +334,15 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     streamInfo.value().format = currentStreamAudioFormat;
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
 
-    StreamState nodeState(AudioGraphNodeState::STOPPED);
     std::optional<std::chrono::steady_clock::time_point> setStreamingStateAfter;
 
     while (!token.stop_requested()) {
-
       // Update streaming state
       if (setStreamingStateAfter.has_value() &&
           std::chrono::steady_clock::now() >= setStreamingStateAfter.value()) {
         setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+
+        // TODO: use real audio format
         setState({AudioGraphNodeState::STREAMING,
                   std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now() -
@@ -362,14 +388,18 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
       size_t read = inputNode->read(buffer.data(), bytesToRead);
 
-      nodeState = inputNode->getState();
+      inputNodeState = inputNode->getState();
       bool newAudioFormat = false;
 
-      if (nodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
+      if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
         // Request new state to get new stream info
         // It should only be present if the state is STREAMING
-        auto newStreamInfo = inputNode->getState().streamInfo;
-        if (!newStreamInfo.has_value() ||
+        inputNode->acceptSourceChange();
+        inputNodeState = inputNode->getState();
+        auto newStreamInfo = inputNodeState.streamInfo;
+
+        if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
+            !newStreamInfo.has_value() ||
             newStreamInfo.value().format != currentStreamAudioFormat) {
           newAudioFormat = true;
         } else if (read < bytesToRead) {
@@ -383,7 +413,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       }
 
       if (read < bytesToRead) {
-        if (nodeState.state != AudioGraphNodeState::FINISHED &&
+        if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
             !newAudioFormat) {
           std::cerr << "XRUN - read " << read << " but expected " << bytesToRead
                     << std::endl;
@@ -403,8 +433,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         }
       }
 
-      if (newAudioFormat || nodeState.state == AudioGraphNodeState::FINISHED ||
-          nodeState.state == AudioGraphNodeState::ERROR) {
+      if (newAudioFormat ||
+          inputNodeState.state == AudioGraphNodeState::FINISHED ||
+          inputNodeState.state == AudioGraphNodeState::ERROR) {
         break;
       }
     }
@@ -413,14 +444,6 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       snd_pcm_drop((snd_pcm_t *)pcmHandle);
     } else {
       snd_pcm_drain((snd_pcm_t *)pcmHandle);
-    }
-
-    if (nodeState.state == AudioGraphNodeState::FINISHED) {
-      setState(StreamState(AudioGraphNodeState::FINISHED));
-    } else if (nodeState.state == AudioGraphNodeState::ERROR) {
-      setState({AudioGraphNodeState::ERROR, nodeState.message});
-    } else if (nodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
-      setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
     }
   }
 }

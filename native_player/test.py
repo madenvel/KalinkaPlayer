@@ -26,7 +26,7 @@ state_update_thread.start()
 
 while player.get_state().state != AudioGraphNodeState.FINISHED:
     time.sleep(1)
-    print("Working!!!")
+
 
 stop = True
 monitor.stop()

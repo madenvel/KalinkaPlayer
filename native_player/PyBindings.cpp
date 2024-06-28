@@ -1,6 +1,8 @@
 #include "AudioGraphNode.h"
 #include "AudioInfo.h"
 #include "AudioPlayer.h"
+#include "StateMonitor.h"
+#include "StreamState.h"
 
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
@@ -38,7 +40,7 @@ PYBIND11_MODULE(native_player, m) {
       .def_readwrite("state", &StreamState::state)
       .def_readwrite("position", &StreamState::position)
       .def_readwrite("message", &StreamState::message)
-      .def_readwrite("audio_info", &StreamState::streamInfo)
+      .def_readwrite("stream_info", &StreamState::streamInfo)
       .def_readwrite("timestamp", &StreamState::timestamp)
       .def("__repr__", [](const StreamState &s) { return s.toString(); })
       .def(pybind11::self == pybind11::self)

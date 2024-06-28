@@ -1,10 +1,10 @@
-#pragma once
+#ifndef STREAM_STATE_H
+#define STREAM_STATE_H
 
 #include <chrono>
 #include <optional>
 #include <string>
 
-#include "AudioGraphNode.h"
 #include "AudioInfo.h"
 
 // enum class State {
@@ -27,6 +27,9 @@ enum class AudioGraphNodeState {
   FINISHED,
   SOURCE_CHANGED
 };
+
+extern std::ostream &operator<<(std::ostream &os, AudioGraphNodeState state);
+extern std::string stateToString(AudioGraphNodeState state);
 
 inline long long getTimestampNs() {
   return std::chrono::steady_clock::now().time_since_epoch().count();
@@ -58,10 +61,17 @@ struct StreamState {
   bool operator!=(const StreamState &other) const = default;
 
   std::string toString() const {
-    return "<StreamState state=" + std::to_string(static_cast<int>(state)) +
+    return "<StreamState state=" + stateToString(state) +
            ", position=" + std::to_string(position) +
            ", message=" + message.value_or("null") + ", streamInfo=" +
            (streamInfo.has_value() ? streamInfo.value().toString() : "null") +
            ", timestamp=" + std::to_string(timestamp) + ">";
   }
+
+  friend std::ostream &operator<<(std::ostream &os, const StreamState &state) {
+    os << state.toString();
+    return os;
+  }
 };
+
+#endif

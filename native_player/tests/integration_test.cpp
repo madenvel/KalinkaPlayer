@@ -8,6 +8,8 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "TestHelpers.h"
+
 class IntegrationTest : public ::testing::Test {
 protected:
   const std::string filename = "files/tone440.flac";
@@ -42,12 +44,9 @@ TEST_F(IntegrationTest, httpInputIntegration) {
             AudioGraphNodeState::PREPARING);
   alsaAudioEmitter->connectTo(flacStreamDecoder);
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
-  alsaAudioEmitter->waitForStatus(std::stop_token(),
-                                  AudioGraphNodeState::FINISHED);
+  waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED);
 
   alsaAudioEmitter->disconnect(flacStreamDecoder);
   flacStreamDecoder->disconnect(audioGraphHttpStream);
@@ -59,20 +58,18 @@ TEST_F(IntegrationTest, streamSwitch) {
   auto sineWaveNode440 = std::make_shared<SineWaveNode>(440, duration1);
   auto sineWaveNode880 = std::make_shared<SineWaveNode>(880, duration2);
   auto streamSwitchNode = std::make_shared<AudioStreamSwitcher>();
+  EXPECT_EQ(streamSwitchNode->getState().state, AudioGraphNodeState::STOPPED);
+  alsaAudioEmitter->connectTo(streamSwitchNode);
+  EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STOPPED);
   streamSwitchNode->connectTo(sineWaveNode440);
   streamSwitchNode->connectTo(sineWaveNode880);
-  alsaAudioEmitter->connectTo(streamSwitchNode);
 
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
   auto start = std::chrono::high_resolution_clock::now();
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::FINISHED)
-          .state,
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
 
   auto end = std::chrono::high_resolution_clock::now();

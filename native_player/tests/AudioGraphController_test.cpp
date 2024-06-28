@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "TestHelpers.h"
+
 class WaitingNode : public AudioGraphOutputNode {
   bool done = false;
 
@@ -41,8 +43,6 @@ protected:
                            floor(i / 2) / 48000.0));
       auto found = static_cast<const int16_t *>(data)[i];
       if (found != value) {
-        std::cerr << "Mismatch at [" << i << "]=" << found
-                  << ", expected=" << value << std::endl;
         result = false;
       }
     }
@@ -61,6 +61,9 @@ TEST_F(AudioGraphControllerTest, connectTo) {
   audioGraphController->connectTo(sineWaveNode440);
   audioGraphController->connectTo(sineWaveNode880);
 
+  EXPECT_EQ(audioGraphController->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+  audioGraphController->acceptSourceChange();
   EXPECT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::STREAMING);
 }
@@ -90,8 +93,13 @@ TEST_F(AudioGraphControllerTest, readStreamData) {
   audioGraphController->connectTo(sineWaveNode440);
   audioGraphController->connectTo(sineWaveNode880);
 
-  auto state = audioGraphController->waitForStatus(
-      std::stop_token(), AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(audioGraphController->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+
+  audioGraphController->acceptSourceChange();
+
+  auto state =
+      waitForStatus(*audioGraphController, AudioGraphNodeState::STREAMING);
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
 
   StreamInfo sine440 = sineWaveNode440->getState().streamInfo.value();
@@ -105,15 +113,18 @@ TEST_F(AudioGraphControllerTest, readStreamData) {
   std::vector<uint8_t> stream440(stream440Size + 1);
   std::vector<uint8_t> stream880(stream880Size + 1);
 
-  EXPECT_EQ(audioGraphController->read(stream440.data(), stream440Size + 1),
+  EXPECT_EQ(audioGraphController->read(stream440.data(), stream440Size),
             stream440Size);
 
   EXPECT_TRUE(isSineWaveValid(440, 100, stream440.data()));
 
-  EXPECT_EQ(audioGraphController->getState().state,
+  ASSERT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::SOURCE_CHANGED);
 
-  EXPECT_EQ(audioGraphController->read(stream880.data(), stream880Size + 1),
+  std::cerr << "Calling acceptSourceChange" << std::endl;
+  audioGraphController->acceptSourceChange();
+
+  EXPECT_EQ(audioGraphController->read(stream880.data(), stream880Size),
             stream880Size);
 
   EXPECT_TRUE(isSineWaveValid(880, 50, stream880.data()));
@@ -128,11 +139,12 @@ TEST_F(AudioGraphControllerTest, waitForData) {
   audioGraphController->connectTo(sineWaveNode440);
   audioGraphController->connectTo(sineWaveNode880);
 
-  EXPECT_EQ(
-      audioGraphController
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
-      AudioGraphNodeState::STREAMING);
+  ASSERT_EQ(audioGraphController->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+  audioGraphController->acceptSourceChange();
+
+  EXPECT_EQ(audioGraphController->getState().state,
+            AudioGraphNodeState::STREAMING);
 
   StreamInfo sine440 = sineWaveNode440->getState().streamInfo.value();
   size_t stream440Size = sine440.totalSamples * sine440.format.channels *
@@ -150,11 +162,13 @@ TEST_F(AudioGraphControllerTest, waitForData) {
 
   EXPECT_EQ(audioGraphController->read(stream440.data(), stream440Size),
             stream440Size);
-  EXPECT_EQ(audioGraphController->getState().state,
+  ASSERT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::SOURCE_CHANGED);
+  audioGraphController->acceptSourceChange();
 
-  EXPECT_EQ(audioGraphController->waitForData(std::stop_token(), stream880Size),
-            stream880Size);
+  EXPECT_EQ(
+      audioGraphController->waitForData(std::stop_token(), stream880Size + 1),
+      stream880Size);
   EXPECT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::STREAMING);
 
@@ -169,6 +183,9 @@ TEST_F(AudioGraphControllerTest, manualSwitchStream) {
   std::shared_ptr<AudioStreamSwitcher> audioGraphController =
       std::make_shared<AudioStreamSwitcher>();
   audioGraphController->connectTo(sineWaveNode440);
+  ASSERT_EQ(audioGraphController->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+  audioGraphController->acceptSourceChange();
   EXPECT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::STREAMING);
   std::vector<uint8_t> buffer(100);
@@ -178,8 +195,9 @@ TEST_F(AudioGraphControllerTest, manualSwitchStream) {
   audioGraphController->connectTo(sineWaveNode880);
   audioGraphController->disconnect(sineWaveNode440);
 
-  EXPECT_EQ(audioGraphController->getState().state,
+  ASSERT_EQ(audioGraphController->getState().state,
             AudioGraphNodeState::SOURCE_CHANGED);
+  audioGraphController->acceptSourceChange();
 
   EXPECT_EQ(audioGraphController->read(buffer.data(), buffer.size()),
             buffer.size());

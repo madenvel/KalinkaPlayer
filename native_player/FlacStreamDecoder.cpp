@@ -145,10 +145,6 @@ void FlacStreamDecoder::setStreamingState() {
 }
 
 void FlacStreamDecoder::thread_run(std::stop_token token) {
-  if (waitForStatus(token, AudioGraphNodeState::PREPARING).state !=
-      AudioGraphNodeState::PREPARING) {
-    return;
-  }
   try {
     if (get_state() == FLAC__STREAM_DECODER_UNINITIALIZED) {
       throw std::runtime_error("Flac decoder not initialized");
@@ -159,7 +155,8 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
 
     bool retval = process_until_end_of_metadata();
     throwOnFlacError(retval);
-    setStreamingState();
+
+    bool streamingStateSet = false;
 
     while (!token.stop_requested()) {
       State state = get_state();
@@ -169,6 +166,10 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       }
       retval = process_single();
       throwOnFlacError(retval);
+      if (!streamingStateSet) {
+        setStreamingState();
+        streamingStateSet = true;
+      }
     }
   } catch (std::exception &ex) {
     std::string message =

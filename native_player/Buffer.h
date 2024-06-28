@@ -12,7 +12,7 @@
 
 template <class T> class DequeBuffer {
   std::deque<T> data;
-  std::mutex m;
+  mutable std::mutex m;
   std::condition_variable_any hasDataCon;
   std::condition_variable_any hasSpaceCon;
   std::atomic<bool> eof;

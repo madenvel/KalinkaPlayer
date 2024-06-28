@@ -9,79 +9,38 @@ StreamState AudioGraphNode::getState() {
   return state;
 }
 
-StreamState
-AudioGraphNode::waitForStatus(std::stop_token stopToken,
-                              std::optional<AudioGraphNodeState> nextState) {
-  std::unique_lock lock(mutex);
-  cv.wait(lock, stopToken, [&] {
-    if (done) {
-      return true;
-    }
-    if (nextState.has_value()) {
-      return state.state == nextState.value();
-    }
-    return true;
-  });
-  return state;
+int AudioGraphNode::onStateChange(
+    std::function<bool(AudioGraphNode *, StreamState)> callback) {
+  std::lock_guard lock(mutex);
+  stateChangeCallbacks.insert({++callbackId, callback});
+  callback(this, state);
+  return callbackId;
 }
 
-AudioGraphNode::~AudioGraphNode() {
-  done = true;
-  for (auto monitor : monitors) {
-    monitor->ptr = nullptr;
-    monitor->stopped = true;
+void AudioGraphNode::removeStateChangeCallback(int id) {
+  if (id < 0) {
+    return;
   }
-  cv.notify_all();
+
+  std::lock_guard lock(mutex);
+  stateChangeCallbacks.erase(id);
 }
+
+AudioGraphNode::~AudioGraphNode() {}
 
 void AudioGraphNode::setState(const StreamState &newState) {
-  {
-    std::lock_guard lock(mutex);
-    state = newState;
-    for (auto monitor : monitors) {
-      monitor->queue_.push(newState);
+  std::lock_guard lock(mutex);
+  if (state.state == newState.state) {
+    return;
+  }
+  state = newState;
+  for (auto it = stateChangeCallbacks.begin();
+       it != stateChangeCallbacks.end();) {
+    auto stateChangeCallback = it->second;
+    if (!stateChangeCallback(this, state)) {
+      it = stateChangeCallbacks.erase(it);
+    } else {
+      ++it;
     }
   }
-  cv.notify_all();
-}
-
-StateMonitor::StateMonitor(AudioGraphNode *ptr) : ptr(ptr) {
-  std::unique_lock lock(ptr->mutex);
-  ptr->monitors.emplace_back(this);
-  queue_.push(ptr->state);
-}
-
-StateMonitor::~StateMonitor() {
-  if (ptr) {
-    std::unique_lock lock(ptr->mutex);
-    ptr->monitors.remove(this);
-  }
-}
-
-StreamState StateMonitor::waitState() {
-#ifdef __PYTHON__
-  pybind11::gil_scoped_release release;
-#endif
-  if (stopped) {
-    return StreamState(AudioGraphNodeState::STOPPED);
-  }
-
-  std::unique_lock lock(ptr->mutex);
-  ptr->cv.wait(lock, [this] { return !queue_.empty() || stopped; });
-  if (stopped) {
-    return StreamState(AudioGraphNodeState::STOPPED);
-  }
-  auto message = queue_.front();
-  queue_.pop();
-  return message;
-}
-
-bool StateMonitor::hasData() {
-  std::unique_lock lock(ptr->mutex);
-  return !queue_.empty();
-}
-
-void StateMonitor::stop() {
-  stopped = true;
-  ptr->cv.notify_all();
 }

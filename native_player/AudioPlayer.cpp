@@ -3,6 +3,7 @@
 #include "AudioGraphHttpStream.h"
 #include "AudioStreamSwitcher.h"
 #include "FlacStreamDecoder.h"
+#include "StateMonitor.h"
 
 namespace {
 // These numbers can be reduced depending on audio bitness,
@@ -48,7 +49,7 @@ struct StreamNodes {
 AudioPlayer::AudioPlayer(const std::string &audioDevice)
     : audioEmitter(std::make_shared<AlsaAudioEmitter>(audioDevice)),
       streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
-  audioEmitter->connectTo(streamSwitcher);
+  // audioEmitter->connectTo(streamSwitcher);
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }
@@ -75,7 +76,6 @@ void AudioPlayer::play(const std::string &url) {
 
   StreamNodes newStream(url);
   streamSwitcher->connectTo(newStream.nodeChain.back());
-  disconnectAllStreams();
   streamNodesList.emplace_back(std::move(newStream));
   audioEmitter->connectTo(streamSwitcher);
   cleanUpFinishedStreams();

@@ -26,28 +26,29 @@ AudioStreamSwitcher::AudioStreamSwitcher() {}
 
 void AudioStreamSwitcher::connectTo(
     std::shared_ptr<AudioGraphOutputNode> inputNode) {
-  std::unique_lock lock(mutex);
   if (inputNode == nullptr) {
     throw std::runtime_error("Input node cannot be nullptr");
   }
 
+  std::lock_guard lock(mutex);
+  inputNodes.push_back(inputNode);
+
   if (currentInputNode == nullptr) {
-    currentInputNode = inputNode;
-    setState(StreamState(AudioGraphNodeState::STREAMING));
-  } else {
-    inputNodes.push_back(inputNode);
+    stopSource.request_stop();
+    stopSource = std::stop_source();
+    setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
   }
 }
 
 void AudioStreamSwitcher::disconnect(
     std::shared_ptr<AudioGraphOutputNode> inputNode) {
-  std::unique_lock lock(mutex);
 
   if (inputNode == nullptr) {
     throw std::runtime_error("Input node cannot be nullptr");
   }
-
+  std::unique_lock lock(mutex);
   if (inputNode == currentInputNode) {
+    currentInputNode->removeStateChangeCallback(stateCallbackId);
     currentInputNode = nullptr;
     stopSource.request_stop();
     stopSource = std::stop_source();
@@ -56,7 +57,6 @@ void AudioStreamSwitcher::disconnect(
                  : StreamState(AudioGraphNodeState::SOURCE_CHANGED));
   } else {
     inputNodes.remove(inputNode);
-
     if (currentInputNode == nullptr) {
       setState(StreamState(AudioGraphNodeState::FINISHED));
     }
@@ -64,107 +64,64 @@ void AudioStreamSwitcher::disconnect(
 }
 
 void AudioStreamSwitcher::switchToNextSource() {
-  if (inputNodes.empty()) {
-    setState(StreamState(AudioGraphNodeState::FINISHED));
+  std::unique_lock lock(mutex);
+  if (currentInputNode != nullptr ||
+      getState().state != AudioGraphNodeState::SOURCE_CHANGED) {
+    std::cerr << "Not in SOURCE_CHANGED state or currentInputNode is not null"
+              << std::endl;
     return;
   }
-
-  currentInputNode = inputNodes.front();
+  auto inputNode = inputNodes.front();
+  currentInputNode = inputNode;
   inputNodes.pop_front();
-  setState(StreamState(AudioGraphNodeState::STREAMING));
-}
-
-StreamState AudioStreamSwitcher::getState() {
-  std::unique_lock lock(mutex);
-  if (currentInputNode == nullptr) {
-    auto state = AudioGraphNode::getState();
-    switchToNextSource();
-    return state;
-  }
-
-  return currentInputNode->getState();
-}
-
-StreamState AudioStreamSwitcher::waitForStatus(
-    std::stop_token stopToken, std::optional<AudioGraphNodeState> nextStatus) {
-
-  std::unique_lock lock(mutex);
-  auto state = AudioGraphNode::getState();
-  if (state.state == AudioGraphNodeState::SOURCE_CHANGED) {
-    switchToNextSource();
-    return StreamState(AudioGraphNodeState::SOURCE_CHANGED);
-  }
-
-  auto combinedStopToken = combineStopTokens(stopToken, stopSource.get_token());
-  auto currentNode = currentInputNode;
-
   lock.unlock();
 
-  if (currentNode == nullptr) {
-    if (nextStatus.has_value() && state.state == nextStatus.value()) {
-      return state;
+  auto id = inputNode->onStateChange([this](AudioGraphNode *node,
+                                            StreamState state) -> bool {
+    std::lock_guard lock(mutex);
+    if (node != currentInputNode.get()) {
+      return false;
+    }
+    if (state.state == AudioGraphNodeState::FINISHED && !inputNodes.empty()) {
+      currentInputNode = nullptr;
+      setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+      return false;
     }
 
-    auto newState =
-        AudioGraphNode::waitForStatus(combinedStopToken.get_token(),
-                                      AudioGraphNodeState::STREAMING)
-            .state;
+    // Restamp the state to avoid time jumping backwards
+    state.timestamp = getTimestampNs();
+    setState(state);
 
-    if (combinedStopToken.get_token().stop_requested()) {
-      return StreamState(AudioGraphNodeState::STOPPED);
-    }
-
-    lock.lock();
-    currentNode = currentInputNode;
-    lock.unlock();
-
-    if (newState == AudioGraphNodeState::STREAMING && currentNode != nullptr) {
-      if (nextStatus.has_value()) {
-        return currentNode->waitForStatus(combinedStopToken.get_token(),
-                                          nextStatus);
-      }
-      return currentNode->getState();
-    }
+    return true;
+  });
+  lock.lock();
+  if (currentInputNode == inputNode) {
+    stateCallbackId = id;
   }
-
-  return currentNode->waitForStatus(combinedStopToken.get_token(), nextStatus);
 }
 
 size_t AudioStreamSwitcher::read(void *data, size_t size) {
   std::unique_lock lock(mutex);
-  if (currentInputNode == nullptr) {
-    switchToNextSource();
-  }
-
-  if (currentInputNode == nullptr) {
+  auto currentInput = currentInputNode;
+  lock.unlock();
+  if (currentInput == nullptr) {
     return 0;
   }
 
-  size_t bytesRead = currentInputNode->read(data, size);
-
-  if (currentInputNode->getState().state == AudioGraphNodeState::FINISHED &&
-      !inputNodes.empty()) {
-    setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
-    currentInputNode = nullptr;
-  }
-
-  return bytesRead;
+  return currentInput->read(data, size);
 }
 
 size_t AudioStreamSwitcher::waitForData(std::stop_token stopToken,
                                         size_t size) {
   std::unique_lock lock(mutex);
-  if (currentInputNode == nullptr) {
-    switchToNextSource();
-  }
-
-  if (currentInputNode == nullptr) {
+  auto currentNode = currentInputNode;
+  lock.unlock();
+  if (currentNode == nullptr) {
     return 0;
   }
 
-  auto combinedStopToken = combineStopTokens(stopToken, stopSource.get_token());
-  // Increase ref counter
-  auto currentNode = currentInputNode;
-  lock.unlock();
-  return currentNode->waitForData(combinedStopToken.get_token(), size);
+  auto combinedToken = combineStopTokens(stopToken, stopSource.get_token());
+  return currentNode->waitForData(combinedToken.get_token(), size);
 }
+
+void AudioStreamSwitcher::acceptSourceChange() { switchToNextSource(); }

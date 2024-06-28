@@ -41,6 +41,7 @@ private:
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
+  StreamState waitForInputToBeReady(std::stop_token token);
 
   void start();
   void stop();

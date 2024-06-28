@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "TestHelpers.h"
+
 class AudioGraphNodeTest : public ::testing::Test {
 protected:
   const std::string filename = "files/tone440.flac";
@@ -23,8 +25,7 @@ TEST_F(AudioGraphNodeTest, stateMonitor) {
   auto fileInputNode = std::make_shared<FileInputNode>(filename);
   flacStreamDecoder->connectTo(fileInputNode);
   alsaAudioEmitter->connectTo(flacStreamDecoder);
-  alsaAudioEmitter->waitForStatus(std::stop_token(),
-                                  AudioGraphNodeState::FINISHED);
+  waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED);
   int i = 0;
   AudioGraphNodeState states[] = {
       AudioGraphNodeState::STOPPED, AudioGraphNodeState::PREPARING,

@@ -1,7 +1,7 @@
 from setuptools import setup, Extension
 import pybind11
 
-compile_flags = ["-O2", "--std=c++23"]
+compile_flags = ["-O2", "--std=c++23", "-D__PYTHON__"]
 
 extensions = [
     Extension(
@@ -14,8 +14,9 @@ extensions = [
             "AudioPlayer.cpp",
             "AudioStreamSwitcher.cpp",
             "FlacStreamDecoder.cpp",
+            "StreamState.cpp",
+            "StateMonitor.cpp",
             "PyBindings.cpp",
-            "StateMachine.cpp",
         ],
         include_dirs=[pybind11.get_include()],
         libraries=["curlpp", "curl", "FLAC++", "FLAC", "asound", "pthread", "m"],

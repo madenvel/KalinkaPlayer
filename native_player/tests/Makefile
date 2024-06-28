@@ -10,7 +10,9 @@ SRCS += ../AudioGraphHttpStream.cpp \
 		../AudioGraphNode.cpp \
 		../AlsaAudioEmitter.cpp \
 		../AudioStreamSwitcher.cpp \
-		../AudioPlayer.cpp
+		../AudioPlayer.cpp \
+		../StreamState.cpp \
+		../StateMonitor.cpp
 
 # List of object files
 OBJS = $(SRCS:.cpp=.o)

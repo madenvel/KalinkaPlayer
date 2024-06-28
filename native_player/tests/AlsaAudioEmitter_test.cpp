@@ -6,6 +6,8 @@
 #include <cmath>
 #include <gtest/gtest.h>
 
+#include "TestHelpers.h"
+
 class AlsaAudioEmitterTest : public ::testing::Test {
 protected:
   const size_t bufferSize = 16384;
@@ -35,9 +37,7 @@ TEST_F(AlsaAudioEmitterTest, disconnect) {
   EXPECT_EQ(outputNode->getState().state, AudioGraphNodeState::STREAMING);
   alsaAudioEmitter->connectTo(outputNode);
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
   alsaAudioEmitter->disconnect(outputNode);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STOPPED);
@@ -48,9 +48,8 @@ TEST_F(AlsaAudioEmitterTest, getState) {
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STOPPED);
   alsaAudioEmitter->connectTo(outputNode);
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
+
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
   std::this_thread::sleep_for(std::chrono::milliseconds(1010));
   EXPECT_EQ(outputNode->getState().state, AudioGraphNodeState::FINISHED);
@@ -63,9 +62,7 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   auto outputNode = std::make_shared<SineWaveNode>(440, 1000);
   alsaAudioEmitter->connectTo(outputNode);
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::STREAMING)
-          .state,
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   alsaAudioEmitter->pause(true);
@@ -75,10 +72,7 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STREAMING);
   auto start = std::chrono::high_resolution_clock::now();
   EXPECT_EQ(
-      alsaAudioEmitter
-          ->waitForStatus(std::stop_token(), AudioGraphNodeState::FINISHED)
-          .state,
-
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
   auto end = std::chrono::high_resolution_clock::now();
   auto duration =
