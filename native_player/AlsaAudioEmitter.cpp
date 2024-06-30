@@ -325,10 +325,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
 
     setupAudioFormat(streamInfo.value().format);
-    const auto dataToRequest =
+    const size_t dataToRequest =
         snd_pcm_frames_to_bytes(pcmHandle, bufferSize / 2);
-    auto dataAvailable =
-        static_cast<size_t>(inputNode->waitForData(token, dataToRequest));
+    size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
     if (dataAvailable < dataToRequest) {
       std::cerr << "Not enough data available for playback - requested "
                 << dataToRequest << " received " << dataAvailable
