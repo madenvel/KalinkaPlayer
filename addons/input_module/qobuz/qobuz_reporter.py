@@ -47,7 +47,7 @@ class QobuzReporter:
                 }
             )
         elif state.state in ["STOPPED", "PAUSED"]:
-            if self.current_state and self.current_state.current_track:
+            if self.current_state and self.current_state.current_track and self.current_state.state == "PLAYING":
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingEnd",

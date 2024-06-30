@@ -129,6 +129,7 @@ class PlayQueue(AsyncExecutor):
             if self.prepared_tracks:
                 item = self.prepared_tracks.popitem(last=False)
                 self.current_track_id = item[0]
+                self._request_more_tracks()
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
             self._cancel_prefetch_timer()
@@ -183,6 +184,8 @@ class PlayQueue(AsyncExecutor):
 
         if index is not None and index not in range(0, len(self.track_list)):
             return
+        
+        logger.info(f"Playing next track index={index}")
 
         track_url = self._setup_track_to_play(index)
         self.prepared_tracks[index] = track_url
@@ -267,7 +270,6 @@ class PlayQueue(AsyncExecutor):
 
     def get_state(self) -> PlayerState:
         stream_state = self.track_player.get_state()
-        logger.info(f"State: {stream_state}")
         return PlayerState(
             state=to_state_name(stream_state.state),
             current_track=(
