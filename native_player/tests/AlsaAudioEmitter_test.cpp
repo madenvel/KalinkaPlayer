@@ -64,8 +64,11 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  auto sleepAmount = 500;
+  std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
   alsaAudioEmitter->pause(true);
+  auto state = alsaAudioEmitter->getState();
+  EXPECT_NEAR(state.position, sleepAmount + bufferSize / 48, 10);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::PAUSED);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   alsaAudioEmitter->pause(false);

@@ -57,7 +57,7 @@ void AudioStreamSwitcher::disconnect(
                  : StreamState(AudioGraphNodeState::SOURCE_CHANGED));
   } else {
     inputNodes.remove(inputNode);
-    if (currentInputNode == nullptr) {
+    if (currentInputNode == nullptr && inputNodes.empty()) {
       setState(StreamState(AudioGraphNodeState::FINISHED));
     }
   }

@@ -7,3 +7,4 @@ zeroconf
 setuptools
 pyyaml
 pybind11
+pytest

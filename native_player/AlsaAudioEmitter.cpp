@@ -240,7 +240,8 @@ void AlsaAudioEmitter::pause(bool paused) {
        state.state == AudioGraphNodeState::PAUSED) &&
       state.state != stateToSet) {
     StreamState newState(stateToSet, 0, state.streamInfo);
-    newState.position = (newState.timestamp - state.timestamp) / 1000;
+    newState.position =
+        framesPlayed * 1000 / currentStreamAudioFormat.sampleRate;
     setState(newState);
   }
 }
@@ -324,7 +325,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
 
     setupAudioFormat(streamInfo.value().format);
-    const auto dataToRequest = framesToBytes(bufferSize / 2);
+    const auto dataToRequest =
+        snd_pcm_frames_to_bytes(pcmHandle, bufferSize / 2);
     auto dataAvailable = inputNode->waitForData(token, dataToRequest);
     if (dataAvailable < dataToRequest) {
       std::cerr << "Not enough data available for playback - requested "
@@ -335,6 +337,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
 
     std::optional<std::chrono::steady_clock::time_point> setStreamingStateAfter;
+    bool newAudioFormat = false;
+    framesPlayed = 0;
 
     while (!token.stop_requested()) {
       // Update streaming state
@@ -342,13 +346,15 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
           std::chrono::steady_clock::now() >= setStreamingStateAfter.value()) {
         setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
 
-        // TODO: use real audio format
+        auto streamInfo = inputNode->getState().streamInfo;
+        streamInfo.value().format = currentStreamAudioFormat;
+
         setState({AudioGraphNodeState::STREAMING,
                   std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now() -
                       setStreamingStateAfter.value())
                       .count(),
-                  inputNode->getState().streamInfo});
+                  streamInfo});
         setStreamingStateAfter.reset();
       }
 
@@ -366,19 +372,18 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         continue;
       }
       size_t framesToRead =
-          std::min((long)bytesToFrames(buffer.size()), frames);
-      size_t bytesToRead = framesToBytes(framesToRead);
+          std::min(snd_pcm_bytes_to_frames(pcmHandle, buffer.size()), frames);
+      size_t bytesToRead = snd_pcm_frames_to_bytes(pcmHandle, framesToRead);
 
       if (getState().state == AudioGraphNodeState::PAUSED) {
         memset(buffer.data(), 0, bytesToRead);
-        err =
-            snd_pcm_writei((snd_pcm_t *)pcmHandle, buffer.data(), framesToRead);
+        err = snd_pcm_writei(pcmHandle, buffer.data(), framesToRead);
         if (err == -EAGAIN) {
           continue;
         }
         if (err < 0) {
           std::cout << "XRUN" << std::endl;
-          if (xrun_recovery((snd_pcm_t *)pcmHandle, err) < 0) {
+          if (xrun_recovery(pcmHandle, err) < 0) {
             printf("Write error: %s\n", snd_strerror(err));
             break;
           }
@@ -387,14 +392,16 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       }
 
       size_t read = inputNode->read(buffer.data(), bytesToRead);
+      framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, read);
 
       inputNodeState = inputNode->getState();
-      bool newAudioFormat = false;
+      newAudioFormat = false;
 
       if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
         // Request new state to get new stream info
         // It should only be present if the state is STREAMING
         inputNode->acceptSourceChange();
+        framesPlayed = 0;
         inputNodeState = inputNode->getState();
         auto newStreamInfo = inputNodeState.streamInfo;
 
@@ -408,15 +415,18 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
           setStreamingStateAfter =
               std::chrono::steady_clock::now() +
               std::chrono::milliseconds(timeToReportPosition);
-          read += inputNode->read(buffer.data() + read, bytesToRead - read);
+          auto moreBytes =
+              inputNode->read(buffer.data() + read, bytesToRead - read);
+          framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, moreBytes);
+          read += moreBytes;
         }
       }
 
       if (read < bytesToRead) {
         if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
             !newAudioFormat) {
-          std::cerr << "XRUN - read " << read << " but expected " << bytesToRead
-                    << std::endl;
+          std::cerr << "Possible XRUN - read " << read << " but expected "
+                    << bytesToRead << std::endl;
         }
         memset(buffer.data() + read, 0, bytesToRead - read);
       }
@@ -441,9 +451,12 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
 
     if (token.stop_requested()) {
-      snd_pcm_drop((snd_pcm_t *)pcmHandle);
+      snd_pcm_drop(pcmHandle);
     } else {
-      snd_pcm_drain((snd_pcm_t *)pcmHandle);
+      snd_pcm_drain(pcmHandle);
+      if (newAudioFormat) {
+        setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+      }
     }
   }
 }
@@ -464,8 +477,8 @@ void AlsaAudioEmitter::setupAudioFormat(
   snd_pcm_hw_params_t *hw_params;
   snd_pcm_hw_params_malloc(&hw_params);
   try {
-    init_hwparams(static_cast<snd_pcm_t *>(pcmHandle), hw_params, sampleRate,
-                  bufferSize, periodSize, format);
+    init_hwparams(pcmHandle, hw_params, sampleRate, bufferSize, periodSize,
+                  format);
   } catch (const std::exception &ex) {
     snd_pcm_hw_params_free(hw_params);
     throw ex;
@@ -481,8 +494,7 @@ void AlsaAudioEmitter::setupAudioFormat(
   snd_pcm_sw_params_t *sw_params;
   snd_pcm_sw_params_malloc(&sw_params);
   try {
-    set_swparams(static_cast<snd_pcm_t *>(pcmHandle), sw_params, bufferSize,
-                 periodSize);
+    set_swparams(pcmHandle, sw_params, bufferSize, periodSize);
   } catch (const std::exception &ex) {
     snd_pcm_sw_params_free(sw_params);
     throw ex;
@@ -498,27 +510,13 @@ void AlsaAudioEmitter::setupAudioFormat(
 
   ufds.resize(count);
 
-  if ((err = snd_pcm_poll_descriptors((snd_pcm_t *)pcmHandle, ufds.data(),
-                                      count)) < 0) {
+  if ((err = snd_pcm_poll_descriptors(pcmHandle, ufds.data(), count)) < 0) {
     throw std::runtime_error(
         "Unable to obtain poll descriptors for playback: " +
         std::string(snd_strerror(err)));
   }
 
-  int pbits = snd_pcm_format_physical_width(format);
-  int pbytes = pbits / 8;
-
-  framesToBytes =
-      [pbytes, channels = streamAudioFormat.channels](size_t frames) -> size_t {
-    return frames * pbytes * channels;
-  };
-
-  bytesToFrames =
-      [pbytes, channels = streamAudioFormat.channels](size_t bytes) -> size_t {
-    return bytes / (pbytes * channels);
-  };
-
-  buffer.resize(streamAudioFormat.channels * periodSize * pbytes);
+  buffer.resize(snd_pcm_frames_to_bytes(pcmHandle, periodSize));
 
   // Hack for Raspberry Pi HiFiBerry
   // Sleep to make sure RPi is ready to play

@@ -36,8 +36,7 @@ private:
   std::vector<pollfd> ufds;
   std::vector<uint8_t> buffer;
 
-  std::function<size_t(size_t)> framesToBytes;
-  std::function<size_t(size_t)> bytesToFrames;
+  std::atomic<unsigned long long> framesPlayed = 0;
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);

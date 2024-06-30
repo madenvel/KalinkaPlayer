@@ -7,3 +7,4 @@ build/
 .vscode/
 test
 bin/
+native_test

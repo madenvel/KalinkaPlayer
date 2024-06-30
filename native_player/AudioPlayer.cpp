@@ -55,30 +55,22 @@ AudioPlayer::AudioPlayer(const std::string &audioDevice)
 AudioPlayer::~AudioPlayer() { stop(); }
 
 void AudioPlayer::play(const std::string &url) {
-  bool alreadyStreaming = false;
-
-  for (auto it = streamNodesList.begin(); it != streamNodesList.end();) {
-    auto &streamNodes = *it;
-    if (streamNodes.url == url &&
-        streamNodes.nodeChain.back()->getState().state ==
-            AudioGraphNodeState::STREAMING) {
-      alreadyStreaming = true;
-      ++it;
-    } else {
-      streamSwitcher->disconnect(streamNodes.nodeChain.back());
-      it = streamNodesList.erase(it);
+  for (auto it = streamNodesList.begin(); it != streamNodesList.end(); ++it) {
+    if (it->url == url) {
+      std::list<StreamNodes> newStreamNodesList;
+      newStreamNodesList.emplace_back(std::move(*it));
+      streamNodesList.erase(it);
+      disconnectAllStreams();
+      streamNodesList.swap(newStreamNodesList);
+      return;
     }
-  }
-
-  if (alreadyStreaming) {
-    return;
   }
 
   StreamNodes newStream(url);
   streamSwitcher->connectTo(newStream.nodeChain.back());
-  streamNodesList.emplace_back(std::move(newStream));
   audioEmitter->connectTo(streamSwitcher);
-  cleanUpFinishedStreams();
+  disconnectAllStreams();
+  streamNodesList.emplace_back(std::move(newStream));
 }
 
 void AudioPlayer::playNext(const std::string &url) {
