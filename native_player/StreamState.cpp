@@ -1,5 +1,7 @@
 #include "StreamState.h"
 
+#include <sstream>
+
 std::ostream &operator<<(std::ostream &os, AudioGraphNodeState state) {
   switch (state) {
   case AudioGraphNodeState::ERROR:

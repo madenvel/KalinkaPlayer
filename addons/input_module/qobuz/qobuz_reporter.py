@@ -28,6 +28,7 @@ class QobuzReporter:
         if state.state == "PLAYING":
             if (
                 self.current_state
+                and self.current_state.current_track
                 and self.current_state.current_track.id != state.current_track.id
             ):
                 self.mqueue.put(
