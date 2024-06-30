@@ -119,7 +119,6 @@ class PlayQueue(AsyncExecutor):
 
     def _state_update_listener(self):
         while self.listen_state:
-            logger.info("Waiting for state update")
             new_state = self.state_monitor.wait_state()
             logger.info(f"New state: {new_state}")
             self._process_state_update(new_state)
@@ -139,9 +138,10 @@ class PlayQueue(AsyncExecutor):
         elif new_state.state != AudioGraphNodeState.STREAMING:
             self._cancel_prefetch_timer()
 
+        state_update_ts = time.monotonic_ns()
         position_diff = 0
         if new_state.state == AudioGraphNodeState.STREAMING:
-            position_diff = int((time.monotonic_ns() - new_state.timestamp) / 1_000_000)
+            position_diff = int((state_update_ts - new_state.timestamp) / 1_000_000)
 
         self.event_emitter.dispatch(
             EventType.StateChanged,
@@ -152,6 +152,7 @@ class PlayQueue(AsyncExecutor):
                 position=new_state.position + position_diff,
                 message=new_state.message,
                 audio_info=to_audio_info(new_state.stream_info),
+                timestamp=state_update_ts,
             ).model_dump(exclude_none=True),
         )
 
@@ -377,5 +378,6 @@ class PlayQueue(AsyncExecutor):
                 index=self.current_track_id,
                 state=to_state_name(AudioGraphNodeState.STOPPED),
                 position=0,
+                timestamp=time.monotonic_ns(),
             ).model_dump(exclude_none=True),
         )

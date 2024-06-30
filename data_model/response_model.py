@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt
 
 from data_model.datamodel import Genre, Track
 
@@ -25,6 +25,7 @@ class PlayerState(BaseModel):
     position: Optional[int] = None
     message: Optional[str] = None
     audio_info: Optional[AudioInfo] = None
+    timestamp: PositiveInt = None
 
 
 class FavoriteAddedEvent(BaseModel):
