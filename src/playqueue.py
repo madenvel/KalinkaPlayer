@@ -48,6 +48,8 @@ logger = logging.getLogger(__name__)
 #   SOURCE_CHANGED
 # };
 
+PREFETCH_TIME_MS = 5000
+
 
 def to_audio_info(stream_info: StreamInfo):
     if stream_info is None:
@@ -184,7 +186,7 @@ class PlayQueue(AsyncExecutor):
 
         if index is not None and index not in range(0, len(self.track_list)):
             return
-        
+
         logger.info(f"Playing next track index={index}")
 
         track_url = self._setup_track_to_play(index)
@@ -354,7 +356,9 @@ class PlayQueue(AsyncExecutor):
         if not stream_info:
             return
 
-        time_to_prefetch_s = (stream_info.duration_ms - state.position - 3000) / 1000
+        time_to_prefetch_s = (
+            stream_info.duration_ms - state.position - PREFETCH_TIME_MS
+        ) / 1000
 
         if time_to_prefetch_s < 0:
             return
