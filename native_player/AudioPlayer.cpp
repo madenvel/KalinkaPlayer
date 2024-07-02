@@ -48,9 +48,7 @@ struct StreamNodes {
 
 AudioPlayer::AudioPlayer(const std::string &audioDevice)
     : audioEmitter(std::make_shared<AlsaAudioEmitter>(audioDevice)),
-      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
-  // audioEmitter->connectTo(streamSwitcher);
-}
+      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {}
 
 AudioPlayer::~AudioPlayer() { stop(); }
 
@@ -74,11 +72,11 @@ void AudioPlayer::play(const std::string &url) {
 }
 
 void AudioPlayer::playNext(const std::string &url) {
-  cleanUpFinishedStreams();
   StreamNodes newStream(url);
   streamSwitcher->connectTo(newStream.nodeChain.back());
-  streamNodesList.emplace_back(std::move(newStream));
   audioEmitter->connectTo(streamSwitcher);
+  cleanUpFinishedStreams();
+  streamNodesList.emplace_back(std::move(newStream));
 }
 
 void AudioPlayer::stop() {
