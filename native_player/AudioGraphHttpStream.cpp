@@ -64,6 +64,7 @@ void AudioGraphHttpStream::reader(std::stop_token token) {
         std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3);
 
     request.setOpt(new curlpp::options::WriteFunction(functor));
+    request.setOpt(new curlpp::options::Timeout(0));
     request.perform();
     buffer.setEof();
     long responseCode = 0;
