@@ -283,6 +283,7 @@ class PlayQueue(AsyncExecutor):
             position=self._estimated_progress(stream_state),
             message=stream_state.message,
             audio_info=to_audio_info(stream_state.stream_info),
+            timestamp=time.monotonic_ns(),
         )
 
     @enqueue
