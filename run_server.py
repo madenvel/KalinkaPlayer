@@ -11,7 +11,7 @@ uvicorn_log_config = {
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
-            "format": "%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+            "format": "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
             "datefmt": "%H:%M:%S",
         }
     },
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+        format="%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
     host = get_ip_address(config["server"]["interface"])
