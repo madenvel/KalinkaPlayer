@@ -269,15 +269,13 @@ void AlsaAudioEmitter::stop() {
 
 StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
   StreamState inputNodeState = inputNode->getState();
-  bool done = false;
   while (!token.stop_requested()) {
     switch (inputNodeState.state) {
     case AudioGraphNodeState::PREPARING:
       setState(StreamState(AudioGraphNodeState::PREPARING));
       break;
     case AudioGraphNodeState::STREAMING:
-      done = true;
-      break;
+      return inputNodeState;
     case AudioGraphNodeState::FINISHED:
       setState(StreamState(AudioGraphNodeState::FINISHED));
       break;
@@ -290,9 +288,6 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
       break;
     default:
       setState(StreamState(AudioGraphNodeState::STOPPED));
-      break;
-    }
-    if (done) {
       break;
     }
     StateChangeWaitLock lock(token, *inputNode, inputNodeState.timestamp);
