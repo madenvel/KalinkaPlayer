@@ -72,6 +72,7 @@ void AudioPlayer::play(const std::string &url) {
 }
 
 void AudioPlayer::playNext(const std::string &url) {
+  std::cerr << "Adding new track to play next" << std::endl;
   StreamNodes newStream(url);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);

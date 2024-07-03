@@ -52,12 +52,20 @@ void AudioStreamSwitcher::disconnect(
     currentInputNode = nullptr;
     stopSource.request_stop();
     stopSource = std::stop_source();
+    if (inputNodes.empty()) {
+      std::cerr << "Removed current node, no more input nodes available, "
+                   "setting state to FINISHED"
+                << std::endl;
+    }
     setState(inputNodes.empty()
                  ? StreamState(AudioGraphNodeState::FINISHED)
                  : StreamState(AudioGraphNodeState::SOURCE_CHANGED));
   } else {
     inputNodes.remove(inputNode);
     if (currentInputNode == nullptr && inputNodes.empty()) {
+      std::cerr << "Removed other node, no more input nodes available, setting "
+                   "state to FINISHED"
+                << std::endl;
       setState(StreamState(AudioGraphNodeState::FINISHED));
     }
   }
@@ -90,6 +98,11 @@ void AudioStreamSwitcher::switchToNextSource() {
 
     // Restamp the state to avoid time jumping backwards
     state.timestamp = getTimestampNs();
+    if (state.state == AudioGraphNodeState::FINISHED) {
+      std::cerr << "Callback - Current stream finished, no more streams - "
+                   "setting state to FINISHED"
+                << std::endl;
+    }
     setState(state);
 
     return true;
