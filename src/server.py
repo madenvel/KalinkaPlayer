@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     playqueue.terminate()
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 app = FastAPI(lifespan=lifespan)
 
 

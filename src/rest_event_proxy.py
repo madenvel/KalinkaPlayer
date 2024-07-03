@@ -4,7 +4,7 @@ from src.rpiasync import EventListener
 from queue import Empty, Queue
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class EventStream:

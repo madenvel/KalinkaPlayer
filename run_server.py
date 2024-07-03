@@ -42,7 +42,7 @@ uvicorn_log_config = {
     },
 }
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 if __name__ == "__main__":
     logging.basicConfig(

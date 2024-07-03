@@ -6,7 +6,7 @@ import json
 
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class QobuzReporter:
@@ -47,7 +47,11 @@ class QobuzReporter:
                 }
             )
         elif state.state in ["STOPPED", "PAUSED"]:
-            if self.current_state and self.current_state.current_track and self.current_state.state == "PLAYING":
+            if (
+                self.current_state
+                and self.current_state.current_track
+                and self.current_state.state == "PLAYING"
+            ):
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingEnd",

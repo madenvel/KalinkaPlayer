@@ -6,6 +6,8 @@ from src.playqueue import PlayQueue
 from .qobuz import qobuz_link_retriever, metadata_from_track
 from src.inputmodule import InputModule, TrackInfo
 
+logger = logging.getLogger(__name__.split(".")[-1])
+
 
 class QobuzAutoplay:
     def __init__(
@@ -102,7 +104,7 @@ class QobuzAutoplay:
 
         track_ids = [track["id"] for track in req.json()["tracks"]["items"]]
 
-        logging.info(
+        logger.info(
             "Retrieved "
             + str(len(track_ids))
             + " new recommendation(s) using algorithm "

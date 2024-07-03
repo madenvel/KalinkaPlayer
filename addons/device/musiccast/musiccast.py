@@ -14,7 +14,7 @@ import socket
 import random
 import json
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 def is_port_available(port):

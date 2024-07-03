@@ -10,7 +10,7 @@ from functools import wraps
 import time
 from uuid import UUID, uuid4
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
 def timeit(func):

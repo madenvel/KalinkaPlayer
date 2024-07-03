@@ -25,7 +25,7 @@ from native_player.native_player import (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 # enum State {
 #   IDLE = 0,
