@@ -1,4 +1,5 @@
 #include "AudioStreamSwitcher.h"
+#include "Log.h"
 
 namespace {
 struct CombinedStopToken {
@@ -53,9 +54,8 @@ void AudioStreamSwitcher::disconnect(
     stopSource.request_stop();
     stopSource = std::stop_source();
     if (inputNodes.empty()) {
-      std::cerr << "Removed current node, no more input nodes available, "
-                   "setting state to FINISHED"
-                << std::endl;
+      spdlog::debug("Removed current node, no more input nodes available, "
+                    "setting state to FINISHED");
     }
     setState(inputNodes.empty()
                  ? StreamState(AudioGraphNodeState::FINISHED)
@@ -63,9 +63,8 @@ void AudioStreamSwitcher::disconnect(
   } else {
     inputNodes.remove(inputNode);
     if (currentInputNode == nullptr && inputNodes.empty()) {
-      std::cerr << "Removed other node, no more input nodes available, setting "
-                   "state to FINISHED"
-                << std::endl;
+      spdlog::debug("Removed other node, no more input nodes available, "
+                    "setting state to FINISHED");
       setState(StreamState(AudioGraphNodeState::FINISHED));
     }
   }
@@ -75,8 +74,7 @@ void AudioStreamSwitcher::switchToNextSource() {
   std::unique_lock lock(mutex);
   if (currentInputNode != nullptr ||
       getState().state != AudioGraphNodeState::SOURCE_CHANGED) {
-    std::cerr << "Not in SOURCE_CHANGED state or currentInputNode is not null"
-              << std::endl;
+    spdlog::warn("Not in SOURCE_CHANGED state or currentInputNode is not null");
     return;
   }
   auto inputNode = inputNodes.front();
@@ -98,11 +96,6 @@ void AudioStreamSwitcher::switchToNextSource() {
 
     // Restamp the state to avoid time jumping backwards
     state.timestamp = getTimestampNs();
-    if (state.state == AudioGraphNodeState::FINISHED) {
-      std::cerr << "Callback - Current stream finished, no more streams - "
-                   "setting state to FINISHED"
-                << std::endl;
-    }
     setState(state);
 
     return true;

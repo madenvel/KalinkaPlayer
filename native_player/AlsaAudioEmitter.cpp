@@ -1,7 +1,8 @@
 #include "AlsaAudioEmitter.h"
+#include "Log.h"
+#include "StateMonitor.h"
 #include "StreamState.h"
 
-#include "StateMonitor.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -189,21 +190,7 @@ int wait_for_poll(snd_pcm_t *handle, struct pollfd *ufds, unsigned int count) {
 
 AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
                                    size_t bufferSize, size_t periodSize)
-    : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize) {
-
-  /* Open the device */
-  int err = snd_pcm_open((snd_pcm_t **)&pcmHandle, deviceName.c_str(),
-                         SND_PCM_STREAM_PLAYBACK, 0);
-
-  /* Error check */
-  if (err < 0) {
-    std::stringstream stream;
-    stream << "Cannot open audio device " << deviceName << " ("
-           << snd_strerror(err) << ")";
-    pcmHandle = nullptr;
-    throw std::runtime_error(stream.str());
-  }
-}
+    : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize) {}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() {
   stop();
@@ -297,8 +284,38 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
   return inputNodeState;
 }
 
+bool AlsaAudioEmitter::openDevice() {
+  /* Open the device */
+  int err = snd_pcm_open((snd_pcm_t **)&pcmHandle, deviceName.c_str(),
+                         SND_PCM_STREAM_PLAYBACK, 0);
+
+  /* Error check */
+  if (err < 0) {
+    std::stringstream stream;
+    stream << "Cannot open audio device " << deviceName << " ("
+           << snd_strerror(err) << ")";
+    pcmHandle = nullptr;
+    spdlog::error(stream.str());
+    setState({AudioGraphNodeState::ERROR, stream.str()});
+
+    return false;
+  }
+
+  return true;
+}
+
+void AlsaAudioEmitter::closeDevice() {
+  if (pcmHandle != nullptr) {
+    snd_pcm_close((snd_pcm_t *)pcmHandle);
+  }
+}
+
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
   if (inputNode == nullptr) {
+    return;
+  }
+
+  if (!openDevice()) {
     return;
   }
 
@@ -324,9 +341,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         pcmHandle, (bufferSize / periodSize) * periodSize);
     size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
     if (dataAvailable < dataToRequest) {
-      std::cerr << "Not enough data available for playback - requested "
-                << dataToRequest << " received " << dataAvailable
-                << " - expect XRUN" << std::endl;
+      spdlog::warn("Not enough data available for playback - requested {} "
+                   "received {} - expect XRUN",
+                   dataToRequest, dataAvailable);
     }
     streamInfo.value().format = currentStreamAudioFormat;
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
@@ -407,8 +424,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         } else {
           int timeToReportPosition = 1000 * (bufferSize - framesToRead) /
                                      currentStreamAudioFormat.sampleRate;
-          std::cerr << "Report track change in " << timeToReportPosition << "ms"
-                    << std::endl;
+          spdlog::debug("Report track change in {}ms", timeToReportPosition);
           setStreamingStateAfter =
               std::chrono::steady_clock::now() +
               std::chrono::milliseconds(timeToReportPosition);
@@ -422,8 +438,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       if (read < bytesToRead) {
         if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
             !newAudioFormat) {
-          std::cerr << "Possible XRUN - read " << read << " but expected "
-                    << bytesToRead << std::endl;
+          spdlog::debug("Possible XRUN - read {} but expected {}", read,
+                        bytesToRead);
         }
         memset(buffer.data() + read, 0, bytesToRead - read);
       }
@@ -456,6 +472,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       }
     }
   }
+
+  closeDevice();
 }
 
 void AlsaAudioEmitter::setupAudioFormat(

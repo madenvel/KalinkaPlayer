@@ -5,6 +5,8 @@
 #include <curlpp/Types.hpp>
 #include <curlpp/cURLpp.hpp>
 
+#include "Log.h"
+
 AudioGraphHttpStream::AudioGraphHttpStream(const std::string &url,
                                            size_t bufferSize)
     : url(url),
@@ -41,8 +43,7 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
                        std::min(totalSize - sizeWritten, spaceAvailable));
     }
   } else {
-    std::cerr << "HTTP request failed with code " + std::to_string(responseCode)
-              << std::endl;
+    spdlog::error("HTTP request failed with code {}", responseCode);
   }
 
   return sizeWritten;
@@ -72,13 +73,13 @@ void AudioGraphHttpStream::reader(std::stop_token token) {
     if (responseCode != 200) {
       std::string message =
           "HTTP request failed with code " + std::to_string(responseCode);
-      std::cerr << message << std::endl;
+      spdlog::error(message);
       setState({AudioGraphNodeState::ERROR, message});
     }
   } catch (curlpp::LibcurlRuntimeError &ex) {
     if (!token.stop_requested()) {
       std::string message = std::string("Libcurl exception: ") + ex.what();
-      std::cerr << message << std::endl;
+      spdlog::error(message);
       setState({AudioGraphNodeState::ERROR, message});
     }
   }

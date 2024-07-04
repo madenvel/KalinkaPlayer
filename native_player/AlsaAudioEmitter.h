@@ -42,6 +42,9 @@ private:
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
   StreamState waitForInputToBeReady(std::stop_token token);
 
+  bool openDevice();
+  void closeDevice();
+
   void start();
   void stop();
 };

@@ -1,5 +1,6 @@
 #include "FlacStreamDecoder.h"
 #include "AudioFormat.h"
+#include "Log.h"
 
 #include <functional>
 #include <iostream>
@@ -152,7 +153,6 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
     if (token.stop_requested()) {
       return;
     }
-
     bool retval = process_until_end_of_metadata();
     throwOnFlacError(retval);
 
@@ -174,7 +174,7 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
   } catch (std::exception &ex) {
     std::string message =
         std::string("Flac decoder thread exception: ") + ex.what();
-    std::cerr << message << std::endl;
+    spdlog::warn(message);
     if (getState().state != AudioGraphNodeState::ERROR) {
       setState({AudioGraphNodeState::ERROR, message});
     }
@@ -188,6 +188,7 @@ void FlacStreamDecoder::onEmptyBuffer(DequeBuffer<uint8_t> &buffer) {
     if (!get_decode_position(&decodePosition)) {
       decodePosition = 0;
     }
+
     setState(
         {AudioGraphNodeState::FINISHED, static_cast<long>(decodePosition)});
   }

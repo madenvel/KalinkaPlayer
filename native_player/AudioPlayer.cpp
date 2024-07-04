@@ -3,6 +3,7 @@
 #include "AudioGraphHttpStream.h"
 #include "AudioStreamSwitcher.h"
 #include "FlacStreamDecoder.h"
+#include "Log.h"
 #include "StateMonitor.h"
 
 namespace {
@@ -48,7 +49,9 @@ struct StreamNodes {
 
 AudioPlayer::AudioPlayer(const std::string &audioDevice)
     : audioEmitter(std::make_shared<AlsaAudioEmitter>(audioDevice)),
-      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {}
+      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
+  initLogger();
+}
 
 AudioPlayer::~AudioPlayer() { stop(); }
 
@@ -72,7 +75,7 @@ void AudioPlayer::play(const std::string &url) {
 }
 
 void AudioPlayer::playNext(const std::string &url) {
-  std::cerr << "Adding new track to play next" << std::endl;
+  spdlog::debug("Adding new track to play next");
   StreamNodes newStream(url);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
