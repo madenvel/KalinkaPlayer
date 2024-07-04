@@ -320,8 +320,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
 
     setupAudioFormat(streamInfo.value().format);
-    const size_t dataToRequest =
-        snd_pcm_frames_to_bytes(pcmHandle, bufferSize / 2);
+    const size_t dataToRequest = snd_pcm_frames_to_bytes(
+        pcmHandle, (bufferSize / periodSize) * periodSize);
     size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
     if (dataAvailable < dataToRequest) {
       std::cerr << "Not enough data available for playback - requested "
@@ -404,9 +404,11 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
             !newStreamInfo.has_value() ||
             newStreamInfo.value().format != currentStreamAudioFormat) {
           newAudioFormat = true;
-        } else if (read < bytesToRead) {
-          int timeToReportPosition =
-              1000 * framesToRead / currentStreamAudioFormat.sampleRate;
+        } else {
+          int timeToReportPosition = 1000 * (bufferSize - framesToRead) /
+                                     currentStreamAudioFormat.sampleRate;
+          std::cerr << "Report track change in " << timeToReportPosition << "ms"
+                    << std::endl;
           setStreamingStateAfter =
               std::chrono::steady_clock::now() +
               std::chrono::milliseconds(timeToReportPosition);
