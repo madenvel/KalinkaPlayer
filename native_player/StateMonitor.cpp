@@ -43,6 +43,9 @@ bool StateMonitor::hasData() {
 }
 
 void StateMonitor::stop() {
+  if (stopped) {
+    return;
+  }
   ptr->removeStateChangeCallback(subscriptionId);
   stopped = true;
   cv.notify_all();
