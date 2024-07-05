@@ -192,12 +192,7 @@ AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
                                    size_t bufferSize, size_t periodSize)
     : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize) {}
 
-AlsaAudioEmitter::~AlsaAudioEmitter() {
-  stop();
-  if (pcmHandle != nullptr) {
-    snd_pcm_close((snd_pcm_t *)pcmHandle);
-  }
-}
+AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
 void AlsaAudioEmitter::connectTo(
     std::shared_ptr<AudioGraphOutputNode> outputNode) {
@@ -286,8 +281,12 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
 
 bool AlsaAudioEmitter::openDevice() {
   /* Open the device */
-  int err = snd_pcm_open((snd_pcm_t **)&pcmHandle, deviceName.c_str(),
-                         SND_PCM_STREAM_PLAYBACK, 0);
+  if (pcmHandle != nullptr) {
+    throw std::runtime_error(
+        "Error while opening PCM device - the device might already be open");
+  }
+  int err =
+      snd_pcm_open(&pcmHandle, deviceName.c_str(), SND_PCM_STREAM_PLAYBACK, 0);
 
   /* Error check */
   if (err < 0) {
@@ -307,170 +306,181 @@ bool AlsaAudioEmitter::openDevice() {
 void AlsaAudioEmitter::closeDevice() {
   if (pcmHandle != nullptr) {
     snd_pcm_close((snd_pcm_t *)pcmHandle);
+    pcmHandle = nullptr;
+    currentStreamAudioFormat = StreamAudioFormat();
   }
 }
 
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
-  if (inputNode == nullptr) {
-    return;
-  }
-
-  if (!openDevice()) {
-    return;
-  }
-
-  while (!token.stop_requested()) {
-    auto inputNodeState = waitForInputToBeReady(token);
-
-    if (token.stop_requested()) {
-      break;
+  try {
+    if (inputNode == nullptr) {
+      return;
     }
 
-    auto streamInfo = inputNode->getState().streamInfo;
-    if (!streamInfo.has_value()) {
-      setState({AudioGraphNodeState::ERROR, "No format information available"});
-      continue;
+    if (!openDevice()) {
+      return;
     }
-    if (streamInfo.value().format != currentStreamAudioFormat &&
-        inputNodeState.state != AudioGraphNodeState::PREPARING) {
-      setState(StreamState(AudioGraphNodeState::PREPARING));
-    }
-
-    setupAudioFormat(streamInfo.value().format);
-    const size_t dataToRequest = snd_pcm_frames_to_bytes(
-        pcmHandle, (bufferSize / periodSize) * periodSize);
-    size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
-    if (dataAvailable < dataToRequest) {
-      spdlog::warn("Not enough data available for playback - requested {} "
-                   "received {} - expect XRUN",
-                   dataToRequest, dataAvailable);
-    }
-    streamInfo.value().format = currentStreamAudioFormat;
-    setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
-
-    std::optional<std::chrono::steady_clock::time_point> setStreamingStateAfter;
-    bool newAudioFormat = false;
-    framesPlayed = 0;
 
     while (!token.stop_requested()) {
-      // Update streaming state
-      if (setStreamingStateAfter.has_value() &&
-          std::chrono::steady_clock::now() >= setStreamingStateAfter.value()) {
-        setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+      auto inputNodeState = waitForInputToBeReady(token);
 
-        auto streamInfo = inputNode->getState().streamInfo;
-        streamInfo.value().format = currentStreamAudioFormat;
-
-        setState({AudioGraphNodeState::STREAMING,
-                  std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now() -
-                      setStreamingStateAfter.value())
-                      .count(),
-                  streamInfo});
-        setStreamingStateAfter.reset();
+      if (token.stop_requested()) {
+        break;
       }
 
-      int err = wait_for_poll((snd_pcm_t *)pcmHandle, ufds.data(), ufds.size());
-      if (err < 0) {
-        throw std::runtime_error("Poll failed for playback");
-      }
-      snd_pcm_sframes_t frames = snd_pcm_avail_update((snd_pcm_t *)pcmHandle);
-      if (frames < 0) {
-        throw std::runtime_error("Can't get avail update for playback: " +
-                                 std::string(snd_strerror(frames)));
-      }
-
-      if (static_cast<unsigned long>(frames) < periodSize) {
+      auto streamInfo = inputNodeState.streamInfo;
+      if (!streamInfo.has_value()) {
+        setState(
+            {AudioGraphNodeState::ERROR, "No format information available"});
         continue;
       }
-      size_t framesToRead =
-          std::min(snd_pcm_bytes_to_frames(pcmHandle, buffer.size()), frames);
-      size_t bytesToRead = snd_pcm_frames_to_bytes(pcmHandle, framesToRead);
+      if (streamInfo.value().format != currentStreamAudioFormat &&
+          inputNodeState.state != AudioGraphNodeState::PREPARING) {
+        setState(StreamState(AudioGraphNodeState::PREPARING));
+      }
 
-      if (getState().state == AudioGraphNodeState::PAUSED) {
-        memset(buffer.data(), 0, bytesToRead);
-        err = snd_pcm_writei(pcmHandle, buffer.data(), framesToRead);
+      setupAudioFormat(streamInfo.value().format);
+      const size_t dataToRequest = snd_pcm_frames_to_bytes(
+          pcmHandle, (bufferSize / periodSize) * periodSize);
+      size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
+      if (dataAvailable < dataToRequest) {
+        spdlog::warn("Not enough data available for playback - requested {} "
+                     "received {} - expect XRUN",
+                     dataToRequest, dataAvailable);
+      }
+      streamInfo.value().format = currentStreamAudioFormat;
+      setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
+
+      std::optional<std::chrono::steady_clock::time_point>
+          setStreamingStateAfter;
+      bool newAudioFormat = false;
+      framesPlayed = 0;
+
+      while (!token.stop_requested()) {
+        // Update streaming state
+        if (setStreamingStateAfter.has_value() &&
+            std::chrono::steady_clock::now() >=
+                setStreamingStateAfter.value()) {
+          setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+
+          auto streamInfo = inputNode->getState().streamInfo;
+          streamInfo.value().format = currentStreamAudioFormat;
+
+          setState({AudioGraphNodeState::STREAMING,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() -
+                        setStreamingStateAfter.value())
+                        .count(),
+                    streamInfo});
+          setStreamingStateAfter.reset();
+        }
+
+        int err = wait_for_poll(pcmHandle, ufds.data(), ufds.size());
+        if (err < 0) {
+          throw std::runtime_error("Poll failed for playback");
+        }
+        snd_pcm_sframes_t frames = snd_pcm_avail_update(pcmHandle);
+        if (frames < 0) {
+          throw std::runtime_error("Can't get avail update for playback: " +
+                                   std::string(snd_strerror(frames)));
+        }
+
+        if (static_cast<unsigned long>(frames) < periodSize) {
+          continue;
+        }
+        size_t framesToRead =
+            std::min(snd_pcm_bytes_to_frames(pcmHandle, buffer.size()), frames);
+        size_t bytesToRead = snd_pcm_frames_to_bytes(pcmHandle, framesToRead);
+
+        if (getState().state == AudioGraphNodeState::PAUSED) {
+          memset(buffer.data(), 0, bytesToRead);
+          err = snd_pcm_writei(pcmHandle, buffer.data(), framesToRead);
+          if (err == -EAGAIN) {
+            continue;
+          }
+          if (err < 0) {
+            std::cout << "XRUN" << std::endl;
+            if (xrun_recovery(pcmHandle, err) < 0) {
+              printf("Write error: %s\n", snd_strerror(err));
+              break;
+            }
+          }
+          continue;
+        }
+
+        size_t read = inputNode->read(buffer.data(), bytesToRead);
+        framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, read);
+
+        inputNodeState = inputNode->getState();
+        newAudioFormat = false;
+
+        if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
+          // Request new state to get new stream info
+          // It should only be present if the state is STREAMING
+          inputNode->acceptSourceChange();
+          framesPlayed = 0;
+          inputNodeState = inputNode->getState();
+          auto newStreamInfo = inputNodeState.streamInfo;
+
+          if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
+              !newStreamInfo.has_value() ||
+              newStreamInfo.value().format != currentStreamAudioFormat) {
+            newAudioFormat = true;
+          } else {
+            int timeToReportPosition = 1000 * (bufferSize - framesToRead) /
+                                       currentStreamAudioFormat.sampleRate;
+            spdlog::debug("Report track change in {}ms", timeToReportPosition);
+            setStreamingStateAfter =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(timeToReportPosition);
+            auto moreBytes =
+                inputNode->read(buffer.data() + read, bytesToRead - read);
+            framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, moreBytes);
+            read += moreBytes;
+          }
+        }
+
+        if (read < bytesToRead) {
+          if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
+              !newAudioFormat) {
+            spdlog::debug("Possible XRUN - read {} but expected {}", read,
+                          bytesToRead);
+          }
+          memset(buffer.data() + read, 0, bytesToRead - read);
+        }
+
+        err =
+            snd_pcm_writei((snd_pcm_t *)pcmHandle, buffer.data(), framesToRead);
         if (err == -EAGAIN) {
           continue;
         }
         if (err < 0) {
           std::cout << "XRUN" << std::endl;
-          if (xrun_recovery(pcmHandle, err) < 0) {
+          if (xrun_recovery((snd_pcm_t *)pcmHandle, err) < 0) {
             printf("Write error: %s\n", snd_strerror(err));
             break;
           }
         }
-        continue;
-      }
 
-      size_t read = inputNode->read(buffer.data(), bytesToRead);
-      framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, read);
-
-      inputNodeState = inputNode->getState();
-      newAudioFormat = false;
-
-      if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
-        // Request new state to get new stream info
-        // It should only be present if the state is STREAMING
-        inputNode->acceptSourceChange();
-        framesPlayed = 0;
-        inputNodeState = inputNode->getState();
-        auto newStreamInfo = inputNodeState.streamInfo;
-
-        if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
-            !newStreamInfo.has_value() ||
-            newStreamInfo.value().format != currentStreamAudioFormat) {
-          newAudioFormat = true;
-        } else {
-          int timeToReportPosition = 1000 * (bufferSize - framesToRead) /
-                                     currentStreamAudioFormat.sampleRate;
-          spdlog::debug("Report track change in {}ms", timeToReportPosition);
-          setStreamingStateAfter =
-              std::chrono::steady_clock::now() +
-              std::chrono::milliseconds(timeToReportPosition);
-          auto moreBytes =
-              inputNode->read(buffer.data() + read, bytesToRead - read);
-          framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, moreBytes);
-          read += moreBytes;
-        }
-      }
-
-      if (read < bytesToRead) {
-        if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
-            !newAudioFormat) {
-          spdlog::debug("Possible XRUN - read {} but expected {}", read,
-                        bytesToRead);
-        }
-        memset(buffer.data() + read, 0, bytesToRead - read);
-      }
-
-      err = snd_pcm_writei((snd_pcm_t *)pcmHandle, buffer.data(), framesToRead);
-      if (err == -EAGAIN) {
-        continue;
-      }
-      if (err < 0) {
-        std::cout << "XRUN" << std::endl;
-        if (xrun_recovery((snd_pcm_t *)pcmHandle, err) < 0) {
-          printf("Write error: %s\n", snd_strerror(err));
+        if (newAudioFormat ||
+            inputNodeState.state == AudioGraphNodeState::FINISHED ||
+            inputNodeState.state == AudioGraphNodeState::ERROR) {
           break;
         }
       }
 
-      if (newAudioFormat ||
-          inputNodeState.state == AudioGraphNodeState::FINISHED ||
-          inputNodeState.state == AudioGraphNodeState::ERROR) {
-        break;
+      if (token.stop_requested()) {
+        snd_pcm_drop(pcmHandle);
+      } else {
+        snd_pcm_drain(pcmHandle);
+        if (newAudioFormat) {
+          setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+        }
       }
     }
-
-    if (token.stop_requested()) {
-      snd_pcm_drop(pcmHandle);
-    } else {
-      snd_pcm_drain(pcmHandle);
-      if (newAudioFormat) {
-        setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
-      }
-    }
+  } catch (const std::exception &ex) {
+    spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
+    setState({AudioGraphNodeState::ERROR, "Internal error"});
   }
 
   closeDevice();
@@ -479,7 +489,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 void AlsaAudioEmitter::setupAudioFormat(
     const StreamAudioFormat &streamAudioFormat) {
 
+  spdlog::debug("Setting up audio format: {}", streamAudioFormat.toString());
   if (streamAudioFormat == currentStreamAudioFormat) {
+    spdlog::debug("Audio format is already set up - ignoring");
     snd_pcm_prepare(pcmHandle);
     return;
   }
@@ -503,6 +515,7 @@ void AlsaAudioEmitter::setupAudioFormat(
   if (err < 0) {
     std::stringstream error;
     error << "Unable to set hw params for playback: " << snd_strerror(err);
+    spdlog::error(error.str());
     throw std::runtime_error(error.str());
   }
 
