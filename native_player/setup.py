@@ -28,6 +28,7 @@ extensions = [
             "asound",
             "pthread",
             "spdlog",
+            "fmt",
         ],
         language="c++",
         extra_compile_args=compile_flags,
