@@ -53,6 +53,7 @@ TEST_F(AlsaAudioEmitterTest, getState) {
       AudioGraphNodeState::STREAMING);
   std::this_thread::sleep_for(std::chrono::milliseconds(1010));
   EXPECT_EQ(outputNode->getState().state, AudioGraphNodeState::FINISHED);
+  std::this_thread::sleep_for(std::chrono::milliseconds(341));
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::FINISHED);
   alsaAudioEmitter->disconnect(outputNode);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STOPPED);
