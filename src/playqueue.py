@@ -77,23 +77,6 @@ def to_state_name(state: AudioGraphNodeState) -> str:
         return "FINISHED"
 
 
-class PlayQueueState(BaseModel):
-    state_info: StreamState
-    current_track: Optional[Track] = None
-    index: Optional[int] = None
-
-    @staticmethod
-    def empty():
-        return PlayQueueState(state_info=StreamState(AudioGraphNodeState.STOPPED))
-
-    class Config:
-        arbitrary_types_allowed = True
-
-
-def stream_state_to_event(state: StreamState):
-    PlayQueueState(state_info=state)
-
-
 class PlayQueue(AsyncExecutor):
     def __init__(self, event_emitter: EventEmitter):
         super().__init__()
@@ -115,6 +98,7 @@ class PlayQueue(AsyncExecutor):
 
     def terminate(self):
         self.listen_state = False
+        self.track_player.stop()
         self.state_monitor.stop()
         self.state_update_thread.join()
         super().terminate()
@@ -177,7 +161,6 @@ class PlayQueue(AsyncExecutor):
         self.prepared_tracks.clear()
         self.prepared_tracks[index] = track_url
         self.track_player.play(track_url)
-        self._request_more_tracks()
 
     @enqueue
     def play_next(self, index):
@@ -192,7 +175,6 @@ class PlayQueue(AsyncExecutor):
         track_url = self._setup_track_to_play(index)
         self.prepared_tracks[index] = track_url
         self.track_player.play_next(track_url)
-        self._request_more_tracks()
 
     @enqueue
     def pause(self, paused: bool):
