@@ -427,8 +427,11 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
               newStreamInfo.value().format != currentStreamAudioFormat) {
             newAudioFormat = true;
           } else {
-            int timeToReportPosition = 1000 * (bufferSize - framesToRead) /
-                                       currentStreamAudioFormat.sampleRate;
+            int timeToReportPosition =
+                1000 *
+                (bufferSize - framesToRead +
+                 snd_pcm_bytes_to_frames(pcmHandle, read)) /
+                currentStreamAudioFormat.sampleRate;
             spdlog::debug("Report track change in {}ms", timeToReportPosition);
             setStreamingStateAfter =
                 std::chrono::steady_clock::now() +
