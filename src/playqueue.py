@@ -3,7 +3,6 @@ import time
 
 from functools import partial
 from typing import Optional
-from pydantic import BaseModel
 from threading import Timer, Thread
 
 from collections import OrderedDict
