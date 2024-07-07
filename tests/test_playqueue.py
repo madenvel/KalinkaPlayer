@@ -300,6 +300,7 @@ def test_play_next(event_emitter, playqueue):
                 ),
             ),
         ),
+        call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
             EventType.StateChanged,
             PlayerState(
