@@ -6,6 +6,7 @@
 #include <cmath>
 #include <gtest/gtest.h>
 
+#include "ErrorFakeNode.h"
 #include "TestHelpers.h"
 
 class AlsaAudioEmitterTest : public ::testing::Test {
@@ -82,5 +83,15 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
   EXPECT_NEAR(duration.count(), 500, 10);
+  alsaAudioEmitter->disconnect(outputNode);
+}
+
+TEST_F(AlsaAudioEmitterTest, stream_error) {
+  auto outputNode = std::make_shared<ErrorFakeNode>();
+  alsaAudioEmitter->connectTo(outputNode);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  auto streamState = alsaAudioEmitter->getState();
+  EXPECT_EQ(streamState.state, AudioGraphNodeState::ERROR);
+  EXPECT_EQ(streamState.message, "Fake error message");
   alsaAudioEmitter->disconnect(outputNode);
 }

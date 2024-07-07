@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "ErrorFakeNode.h"
 #include "TestHelpers.h"
 
 class FlacStreamDecoderTest : public ::testing::Test {
@@ -83,4 +84,14 @@ TEST_F(FlacStreamDecoderTest, getState) {
   EXPECT_EQ(totalSize, 44100 * 4);
   flacStreamDecoder->disconnect(inputNode);
   EXPECT_EQ(flacStreamDecoder->getState().state, AudioGraphNodeState::STOPPED);
+}
+
+TEST_F(FlacStreamDecoderTest, stream_error) {
+  auto flacStreamDecoder = std::make_shared<FlacStreamDecoder>(bufferSize);
+  auto inputNode = std::make_shared<ErrorFakeNode>();
+  flacStreamDecoder->connectTo(inputNode);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  auto streamState = flacStreamDecoder->getState();
+  EXPECT_EQ(streamState.state, AudioGraphNodeState::ERROR);
+  EXPECT_EQ(streamState.message, "Fake error message");
 }

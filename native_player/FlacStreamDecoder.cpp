@@ -80,8 +80,13 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
 FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
   std::stop_token token = decodingThread.get_stop_token();
   *bytes = inputNode->read(buffer, *bytes);
-  auto inputNodeStatus = inputNode->getState().state;
+  auto inputNodeState = inputNode->getState();
+  auto inputNodeStatus = inputNodeState.state;
   if (token.stop_requested()) {
+    return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
+  }
+  if (inputNodeStatus == AudioGraphNodeState::ERROR) {
+    setState({AudioGraphNodeState::ERROR, inputNodeState.message});
     return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
   }
   if (inputNodeStatus == AudioGraphNodeState::FINISHED && *bytes == 0) {
