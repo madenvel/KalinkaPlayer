@@ -25,7 +25,7 @@ There's currently no package provided for easy installation, hence the service h
 1. Clone the repository, `git clone https://github.com/madenvel/RpiPlayer.git`
 2. Install pre-requisites [WIP]
 ```
-sudo apt install python3 g++ libasound-dev libflac-dev libflac++-dev libcurlpp-dev llibspdlog-dev libfmt-dev
+sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev
 ```
 3. Create python virtual environment:
 ```
