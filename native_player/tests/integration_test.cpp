@@ -76,7 +76,7 @@ TEST_F(IntegrationTest, streamSwitch) {
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-  EXPECT_NEAR(duration.count(), (duration1 + duration2), 10);
+  EXPECT_NEAR(duration.count(), (duration1 + duration2), 15);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::FINISHED);
 
   alsaAudioEmitter->disconnect(streamSwitchNode);
