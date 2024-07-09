@@ -55,21 +55,18 @@ StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
                                          AudioGraphNode &node,
                                          AudioGraphNodeState nextState)
     : lastState(AudioGraphNodeState::STOPPED) {
-  mutex.lock();
+  std::unique_lock lock(mutex);
   int subscriptionId = node.onStateChange(
       [this, nextState](AudioGraphNode *node, StreamState state) -> bool {
         lastState = state;
         if (state.state == nextState) {
-          mutex.unlock();
+          cv.notify_all();
           return false;
         }
         return true;
       });
-  mutex.lock();
-  mutex.unlock();
-  //   std::unique_lock lock(mutex);
-  //   cv.wait(lock, token,
-  //           [this, nextState] { return lastState.state == nextState; });
+  cv.wait(lock, token,
+          [this, nextState] { return lastState.state == nextState; });
   node.removeStateChangeCallback(subscriptionId);
 }
 
