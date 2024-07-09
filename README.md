@@ -16,7 +16,7 @@ The target audience for this are DIY HiFi enthusiast familiar with linux and com
 - Gapless playback for the songs of the same audio format
 - Supports MusicCast device volume control and automatic turn on / off
 - Works on Raspberry Pi (used on RPi 4 with Raspberry OS bullseye), low CPU & memory usage. The main part is written in C++.
-- Control App (see RpiMusic project) that runs on multiple platforms*.
+- Control App (see RpiMusic project) that runs on multiple platforms.
 
 # Installation
 There's currently no package provided for easy installation, hence the service has to be built and run manually. This is planned to be addressed in the future.
@@ -81,8 +81,6 @@ If you were running the server on Raspberry Pi, you can logout now.
 9. Enjoy!
 
 # Notes
-* The app has been tested on Windows and on Android mostly. Zeroconf client doesn't work properly on Windows (i.g. ip address of the service is not returned correctly).
-* Playback notification is only implemented for Android in native code (Java) hence not available for other platforms (as I don't have a device at the moment). 
 * Audio engine uses ALSA directly and relies on its configuration. If automatic resampling is set up, it will likely affect the app but it should still work.
 * I run this on Raspberry Pi 4 with HiFiBerry Digi2 card configured as recommended in their manual. This software would likely work with any card that supports ALSA
-* but there might be issues which may need to be fixed.
+* but there might be issues.
