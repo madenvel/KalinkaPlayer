@@ -76,8 +76,9 @@ nohup ./run_server.py &
 ```
 The log will be saved to `nohup.out`.
 If you were running the server on Raspberry Pi, you can logout now.
+
 7. Download and install the app (see RpiMusic project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
-8. Enjoy!
+9. Enjoy!
 
 # Notes
 * The app has been tested on Windows and on Android mostly. Zeroconf client doesn't work properly on Windows (i.g. ip address of the service is not returned correctly).
