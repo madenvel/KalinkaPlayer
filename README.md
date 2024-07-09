@@ -1,5 +1,5 @@
 # What is it?
-This project provides a backend to stream music on systems running Linux (including Raspberry Pi 4+). It provides an REST API to control the playqueue and playback,
+This project provides a backend to stream music on systems running Linux (including Raspberry Pi 4+). It provides a REST API to control the playqueue and playback,
 as well as an ability to discover new content.
 
 At this point, it only supports [Qobuz](https://www.qobuz.com) as a streaming platform, so you need to have a valid subscription.
