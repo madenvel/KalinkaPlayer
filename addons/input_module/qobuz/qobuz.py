@@ -81,7 +81,7 @@ class QobuzClient:
         self.session = requests.Session()
         self.session.headers.update(
             {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0",
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
                 "X-App-Id": self.id,
             }
         )
@@ -211,18 +211,13 @@ def get_client() -> QobuzClient:
 
 def extract_track_format(track):
     mime_type = track["mime_type"].split("/")[1]
-    sampling_rate = int(track["sampling_rate"] * 1000)
-    bit_depth = track["bit_depth"]
-
-    return (mime_type, sampling_rate, bit_depth)
+    return mime_type
 
 
 def qobuz_link_retriever(qobuz_client, id) -> str:
     track = qobuz_client.get_track_url(id, fmt_id=27)
-    (format, sample_rate, bit_depth) = extract_track_format(track)
-    track_url = TrackUrl(
-        url=track["url"], format=format, sample_rate=sample_rate, bit_depth=bit_depth
-    )
+    format = extract_track_format(track)
+    track_url = TrackUrl(url=track["url"], format=format)
     return track_url
 
 

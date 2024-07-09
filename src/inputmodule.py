@@ -16,8 +16,6 @@ class TrackInfo(BaseModel):
 class TrackUrl(BaseModel):
     url: str
     format: str
-    sample_rate: PositiveInt
-    bit_depth: PositiveInt
 
 
 class SearchType(str, Enum):
