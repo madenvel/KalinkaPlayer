@@ -157,6 +157,9 @@ class PlayQueue(AsyncExecutor):
             index = self.current_track_id
 
         track_url = self._setup_track_to_play(index)
+        if track_url is None:
+            return
+
         self.prepared_tracks.clear()
         self.prepared_tracks[index] = track_url
         self.track_player.play(track_url)
@@ -172,6 +175,9 @@ class PlayQueue(AsyncExecutor):
         logger.info(f"Playing next track index={index}")
 
         track_url = self._setup_track_to_play(index)
+        if track_url is None:
+            return
+        
         self.prepared_tracks[index] = track_url
         self.track_player.play_next(track_url)
 
@@ -320,8 +326,7 @@ class PlayQueue(AsyncExecutor):
             except Exception as e:
                 logger.warn("Failed to retrieve track link:", e)
                 self.event_emitter.dispatch(EventType.NetworkError, str(e))
-                self.stop()
-                return
+                return None
 
             return track_info.url
 
