@@ -28,6 +28,8 @@ public:
                                 std::chrono::milliseconds timeout,
                                 size_t size) override;
 
+  virtual size_t seekTo(size_t absolutePosition) override;
+
   virtual ~FlacStreamDecoder();
 
 protected:

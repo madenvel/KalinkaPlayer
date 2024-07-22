@@ -145,3 +145,5 @@ size_t AudioStreamSwitcher::waitForDataFor(std::stop_token stopToken,
 }
 
 void AudioStreamSwitcher::acceptSourceChange() { switchToNextSource(); }
+
+size_t AudioStreamSwitcher::seekTo(size_t absolutePosition) { return size_t(); }

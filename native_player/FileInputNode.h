@@ -46,6 +46,11 @@ public:
     return waitForData(stopToken, size);
   }
 
+  virtual size_t seekTo(size_t absolutePosition) override {
+    in.seekg(absolutePosition, std::ios::beg);
+    return in.tellg();
+  }
+
   virtual ~FileInputNode() = default;
 };
 

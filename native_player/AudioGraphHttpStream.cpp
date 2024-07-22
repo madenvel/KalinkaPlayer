@@ -237,3 +237,6 @@ size_t AudioGraphHttpStream::waitForDataFor(std::stop_token stopToken,
                                             size_t size) {
   return buffer.waitForDataFor(stopToken, timeout, size);
 }
+size_t AudioGraphHttpStream::seekTo(size_t absolutePosition) {
+  return size_t();
+}

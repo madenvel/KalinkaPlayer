@@ -219,3 +219,5 @@ size_t FlacStreamDecoder::waitForDataFor(std::stop_token stopToken,
                                          size_t size) {
   return buffer.waitForDataFor(stopToken, timeout, size);
 }
+
+size_t FlacStreamDecoder::seekTo(size_t absolutePosition) { return size_t(); }
