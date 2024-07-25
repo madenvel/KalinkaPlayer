@@ -32,3 +32,18 @@ TEST_F(AudioGraphHttpStreamTest, read) {
             AudioGraphNodeState::FINISHED);
   EXPECT_EQ(totalBytesRead, 11314580);
 }
+
+TEST_F(AudioGraphHttpStreamTest, test_broken_url_set_error_status) {
+  auto audioGraphHttpStream = std::make_shared<AudioGraphHttpStream>(
+      "http://httpstat.us/404", bufferSize);
+  std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  size_t bytesToRead = 0;
+  size_t totalBytesRead = 0;
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    audioGraphHttpStream->read(data.get(), bytesToRead);
+    totalBytesRead += bytesToRead;
+  }
+  EXPECT_EQ(audioGraphHttpStream->getState().state, AudioGraphNodeState::ERROR);
+  EXPECT_EQ(totalBytesRead, 0);
+}

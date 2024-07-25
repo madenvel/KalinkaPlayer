@@ -228,6 +228,15 @@ def test_switch_track(event_emitter, playqueue):
         call.dispatch(
             EventType.StateChanged,
             PlayerState(
+                state="BUFFERING",
+                index=1,
+                position=0,
+                current_track=track2.metadata.model_dump(exclude_unset=True),
+            ),
+        ),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
                 state="PLAYING",
                 index=1,
                 position=0,
@@ -301,6 +310,15 @@ def test_play_next(event_emitter, playqueue):
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="BUFFERING",
+                index=2,
+                position=0,
+                current_track=track3.metadata.model_dump(exclude_unset=True),
+            ),
+        ),
         call.dispatch(
             EventType.StateChanged,
             PlayerState(

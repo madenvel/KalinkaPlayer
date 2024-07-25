@@ -52,21 +52,18 @@ TEST_F(AudioPlayerTest, play_one_after_another) {
   }
 
   AudioGraphNodeState states[] = {
-      AudioGraphNodeState::STOPPED,
-      AudioGraphNodeState::SOURCE_CHANGED,
-      AudioGraphNodeState::PREPARING,
-      AudioGraphNodeState::STREAMING,
-      AudioGraphNodeState::SOURCE_CHANGED, /*AudioGraphNodeState::PREPARING,*/
-      AudioGraphNodeState::STREAMING,
-      AudioGraphNodeState::SOURCE_CHANGED,
-      /*AudioGraphNodeState::PREPARING, */ AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING,      AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
       AudioGraphNodeState::FINISHED};
 
   int i = 0;
   while (monitor->hasData()) {
     auto state = monitor->waitState();
     ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
-    EXPECT_EQ(state.state, states[i++]);
+    EXPECT_EQ(state.state, states[i++]) << "i=" << (i - 1);
   }
   EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
 }
@@ -86,14 +83,14 @@ TEST_F(AudioPlayerTest, test_play_next_then_play) {
   AudioGraphNodeState states[] = {
       AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
       AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
-      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::STREAMING,
-      AudioGraphNodeState::FINISHED};
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING,      AudioGraphNodeState::FINISHED};
 
   int i = 0;
   while (monitor->hasData()) {
     auto state = monitor->waitState();
     ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
-    EXPECT_EQ(state.state, states[i++]);
+    EXPECT_EQ(state.state, states[i++]) << "i=" << (i - 1);
   }
   EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
 }
