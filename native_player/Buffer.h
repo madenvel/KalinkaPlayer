@@ -92,6 +92,19 @@ public:
     return data.size();
   }
 
+  size_t waitForDataFor(std::stop_token stopToken = std::stop_token(),
+                        std::chrono::milliseconds timeout = {},
+                        size_t size = 1) {
+    if (size > 0) {
+      std::unique_lock<std::mutex> lock(m);
+      hasDataCon.wait_for(lock, stopToken, timeout, [this, &size] {
+        return done || data.size() >= std::min(size, maxSize) || eof.load();
+      });
+    }
+
+    return data.size();
+  }
+
   size_t waitForSpace(std::stop_token stopToken = std::stop_token(),
                       size_t size = 1) {
     if (maxSize != 0) {
@@ -108,7 +121,10 @@ public:
     return std::numeric_limits<size_t>::max();
   }
 
-  size_t size() const { return data.size(); }
+  size_t size() const {
+    std::lock_guard lock(m);
+    return data.size();
+  }
 
   size_t availableSpace() const {
     std::lock_guard lock(m);
