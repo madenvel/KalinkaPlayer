@@ -11,6 +11,9 @@ public:
   AudioGraphHttpStream(const std::string &url, size_t bufferSize);
   virtual size_t read(void *data, size_t size) override;
   virtual size_t waitForData(std::stop_token stopToken, size_t size) override;
+  virtual size_t waitForDataFor(std::stop_token stopToken,
+                                std::chrono::milliseconds timeout,
+                                size_t size) override;
 
   virtual ~AudioGraphHttpStream();
 

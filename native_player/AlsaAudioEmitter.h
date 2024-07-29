@@ -9,6 +9,27 @@
 #include <thread>
 #include <vector>
 
+class PlayedFramesCounter {
+public:
+  PlayedFramesCounter() = default;
+  void update(snd_pcm_sframes_t frames);
+
+  snd_pcm_sframes_t getPlayedFrames() const { return lastPlayedFrames; }
+
+  std::vector<snd_pcm_sframes_t> drainSequence();
+
+  void
+  callOnOrAfterFrame(snd_pcm_sframes_t frame,
+                     std::function<void(snd_pcm_sframes_t)> onFramesPlayed);
+
+private:
+  snd_pcm_sframes_t lastPlayedFrames = 0;
+
+  std::list<
+      std::pair<snd_pcm_sframes_t, std::function<void(snd_pcm_sframes_t)>>>
+      onFramesPlayedCallbacks;
+};
+
 class AlsaAudioEmitter : public AudioGraphEmitterNode {
 public:
   AlsaAudioEmitter(const std::string &deviceName, size_t bufferSize = 16384,
@@ -29,14 +50,15 @@ private:
   std::jthread playbackThread;
 
   StreamAudioFormat currentStreamAudioFormat;
+  PlayedFramesCounter playedFramesCounter;
   snd_pcm_t *pcmHandle = nullptr;
 
   snd_pcm_uframes_t bufferSize;
   snd_pcm_uframes_t periodSize;
   std::vector<pollfd> ufds;
-  std::vector<uint8_t> buffer;
 
-  std::atomic<unsigned long long> framesPlayed = 0;
+  std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;
+  std::atomic<bool> paused = false;
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
@@ -44,6 +66,21 @@ private:
 
   bool openDevice();
   void closeDevice();
+
+  snd_pcm_sframes_t waitForAlsaBufferSpace(std::stop_token stopToken);
+  bool hasInputSourceStateChanged();
+  snd_pcm_sframes_t writeToAlsa(
+      snd_pcm_uframes_t framesToWrite,
+      std::function<snd_pcm_sframes_t(void *ptr, snd_pcm_uframes_t frames,
+                                      size_t bytes)>
+          func);
+  snd_pcm_sframes_t readIntoAlsaFromStream(std::stop_token stopToken,
+                                           snd_pcm_sframes_t framesToRead);
+  size_t waitForInputData(std::stop_token stopToken, snd_pcm_uframes_t frames);
+  inline std::chrono::milliseconds framesToTimeMs(snd_pcm_sframes_t frames);
+
+  void startPcmStream(const StreamInfo &streamInfo);
+  void drainPcm();
 
   void start();
   void stop();

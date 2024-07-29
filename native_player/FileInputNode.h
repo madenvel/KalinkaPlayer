@@ -39,6 +39,13 @@ public:
     return std::min(fileSize - in.tellg(), size);
   }
 
+  virtual size_t waitForDataFor(std::stop_token stopToken,
+                                std::chrono::milliseconds timeout,
+                                size_t size) override {
+    (void)timeout;
+    return waitForData(stopToken, size);
+  }
+
   virtual ~FileInputNode() = default;
 };
 

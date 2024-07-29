@@ -4,6 +4,8 @@
 #include <pybind11/pybind11.h>
 #endif
 
+#include "Log.h"
+
 StreamState AudioGraphNode::getState() {
   std::lock_guard lock(mutex);
   return state;

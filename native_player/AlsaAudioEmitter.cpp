@@ -29,7 +29,7 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   }
   /* set the interleaved read/write format */
   err = snd_pcm_hw_params_set_access(pcm_handle, params,
-                                     SND_PCM_ACCESS_RW_INTERLEAVED);
+                                     SND_PCM_ACCESS_MMAP_INTERLEAVED);
   if (err < 0) {
     error << "Access type not available for playback: " << snd_strerror(err);
     throw std::runtime_error(error.str());
@@ -157,17 +157,18 @@ int xrun_recovery(snd_pcm_t *handle, int err) {
   if (err == -EPIPE) { /* under-run */
     err = snd_pcm_prepare(handle);
     if (err < 0)
-      printf("Can't recovery from underrun, prepare failed: %s\n",
-             snd_strerror(err));
+      spdlog::error("Can't recovery from underrun, prepare failed: %s\n",
+                    snd_strerror(err));
     return 0;
   } else if (err == -ESTRPIPE) {
     while ((err = snd_pcm_resume(handle)) == -EAGAIN)
       sleep(1); /* wait until the suspend flag is released */
     if (err < 0) {
       err = snd_pcm_prepare(handle);
-      if (err < 0)
-        printf("Can't recovery from suspend, prepare failed: %s\n",
-               snd_strerror(err));
+      if (err < 0) {
+        spdlog::error("Can't recovery from suspend, prepare failed: %s\n",
+                      snd_strerror(err));
+      }
     }
     return 0;
   }
@@ -221,10 +222,20 @@ void AlsaAudioEmitter::pause(bool paused) {
   if ((state.state == AudioGraphNodeState::STREAMING ||
        state.state == AudioGraphNodeState::PAUSED) &&
       state.state != stateToSet) {
+    this->paused = paused;
     StreamState newState(stateToSet, 0, state.streamInfo);
-    newState.position =
-        framesPlayed * 1000 / currentStreamAudioFormat.sampleRate;
-    setState(newState);
+    newState.position = framesToTimeMs(currentSourceTotalFramesWritten).count();
+    snd_pcm_sframes_t delay = 0;
+    int err = snd_pcm_delay(pcmHandle, &delay);
+    if (err < 0) {
+      spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
+    }
+    playedFramesCounter.callOnOrAfterFrame(
+        delay, [this, newState, paused](snd_pcm_sframes_t frames) {
+          spdlog::debug("Reporting {}, frames={}",
+                        (paused ? "paused" : "resumed"), frames);
+          setState(newState);
+        });
   }
 }
 
@@ -311,6 +322,190 @@ void AlsaAudioEmitter::closeDevice() {
   }
 }
 
+snd_pcm_sframes_t
+AlsaAudioEmitter::waitForAlsaBufferSpace(std::stop_token stopToken) {
+  snd_pcm_sframes_t frames = 0;
+  int err = wait_for_poll(pcmHandle, ufds.data(), ufds.size());
+  if (err < 0) {
+    spdlog::error("Poll failed for playback: {}", snd_strerror(err));
+    throw std::runtime_error("Poll failed for playback");
+  }
+  frames = snd_pcm_avail_update(pcmHandle);
+
+  if (frames < 0) {
+    throw std::runtime_error("Can't get avail update for playback: " +
+                             std::string(snd_strerror(frames)));
+  }
+
+  return frames;
+}
+
+bool AlsaAudioEmitter::hasInputSourceStateChanged() {
+  auto inputNodeState = inputNode->getState();
+  if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
+    inputNode->acceptSourceChange();
+    inputNodeState = inputNode->getState();
+    currentSourceTotalFramesWritten = 0;
+
+    auto newStreamInfo = inputNodeState.streamInfo;
+    if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
+        !newStreamInfo.has_value() ||
+        newStreamInfo.value().format != currentStreamAudioFormat) {
+      spdlog::info("Source changed - different format, draining");
+      drainPcm();
+      setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+      return true;
+    } else {
+      snd_pcm_sframes_t framesDelay = 0;
+      int err = snd_pcm_delay(pcmHandle, &framesDelay);
+      if (err < 0) {
+        spdlog::error("Error when calling snd_pcm_delay: {}",
+                      snd_strerror(err));
+      }
+
+      spdlog::debug("Reporting source change in {}ms, frames={}",
+                    framesToTimeMs(framesDelay).count(), framesDelay);
+
+      playedFramesCounter.callOnOrAfterFrame(
+          framesDelay, [this, streamInfo = newStreamInfo,
+                        framesDelay](snd_pcm_sframes_t frames) {
+            setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
+            setState(StreamState{AudioGraphNodeState::STREAMING,
+                                 framesToTimeMs(frames - framesDelay).count(),
+                                 streamInfo});
+          });
+    }
+  } else if (inputNodeState.state == AudioGraphNodeState::FINISHED ||
+             inputNodeState.state == AudioGraphNodeState::ERROR) {
+    spdlog::info("Source finished, state={}",
+                 stateToString(inputNodeState.state));
+    drainPcm();
+    return true;
+  }
+
+  return false;
+}
+
+snd_pcm_sframes_t AlsaAudioEmitter::writeToAlsa(
+    snd_pcm_uframes_t framesToWrite,
+    std::function<snd_pcm_sframes_t(void *ptr, snd_pcm_uframes_t frames,
+                                    size_t bytes)>
+        func) {
+  const snd_pcm_channel_area_t *my_areas = nullptr;
+  snd_pcm_uframes_t offset = 0, frames = framesToWrite;
+  int err = snd_pcm_mmap_begin(pcmHandle, &my_areas, &offset, &frames);
+  if (err < 0) {
+    if (xrun_recovery(pcmHandle, err) < 0) {
+      throw std::runtime_error("Error in mmap begin: " +
+                               std::string(snd_strerror(err)));
+    }
+  }
+
+  void *ptr = static_cast<uint8_t *>(my_areas[0].addr) +
+              (my_areas[0].first / 8) +
+              snd_pcm_frames_to_bytes(pcmHandle, offset);
+
+  frames = func(ptr, frames, snd_pcm_frames_to_bytes(pcmHandle, frames));
+
+  err = snd_pcm_mmap_commit(pcmHandle, offset, frames);
+  if (static_cast<snd_pcm_uframes_t>(err) != frames || err < 0) {
+    if (xrun_recovery(pcmHandle, err) < 0) {
+      throw std::runtime_error("Error in mmap commit: " +
+                               std::string(snd_strerror(err)));
+    }
+  }
+
+  return frames;
+}
+
+snd_pcm_sframes_t
+AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
+                                         snd_pcm_sframes_t framesToRead) {
+  snd_pcm_sframes_t framesRead = 0;
+
+  if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
+    playedFramesCounter.update(framesToRead);
+  }
+
+  while (framesRead < framesToRead) {
+    snd_pcm_uframes_t frames = framesToRead - framesRead;
+    if (paused) {
+
+      framesRead += writeToAlsa(
+          frames, [](void *ptr, snd_pcm_uframes_t frames, size_t bytes) {
+            memset(ptr, 0, bytes);
+            return frames;
+          });
+
+    } else {
+      auto actualFrames = writeToAlsa(
+          frames, [this](void *ptr, snd_pcm_uframes_t frames, size_t bytes) {
+            return snd_pcm_bytes_to_frames(pcmHandle,
+                                           inputNode->read(ptr, bytes));
+          });
+
+      framesRead += actualFrames;
+      currentSourceTotalFramesWritten += actualFrames;
+
+      if (hasInputSourceStateChanged()) {
+        return -1;
+      }
+
+      if (static_cast<snd_pcm_uframes_t>(actualFrames) < frames) {
+        auto bytesAvailable =
+            waitForInputData(stopToken, frames - actualFrames);
+        if (bytesAvailable == 0) {
+          drainPcm();
+          return -1;
+        }
+      }
+    }
+  }
+  return framesRead;
+}
+
+size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
+                                          snd_pcm_uframes_t frames) {
+  if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
+    auto maxTimeout = bufferSize - snd_pcm_avail_update(pcmHandle) - periodSize;
+    auto timeout = std::min(framesToTimeMs(frames), framesToTimeMs(maxTimeout));
+    return inputNode->waitForDataFor(
+        stopToken, timeout, snd_pcm_frames_to_bytes(pcmHandle, frames));
+  }
+
+  return inputNode->waitForData(stopToken,
+                                snd_pcm_frames_to_bytes(pcmHandle, frames));
+}
+
+std::chrono::milliseconds
+AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
+  return std::chrono::milliseconds(1000 * frames /
+                                   currentStreamAudioFormat.sampleRate);
+}
+
+void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo) {
+  int err = snd_pcm_start(pcmHandle);
+  if (err < 0) {
+    throw std::runtime_error(std::string("Can't start PCM: ") +
+                             snd_strerror(err));
+  }
+  spdlog::info("Starting playback");
+  setState({AudioGraphNodeState::STREAMING, 0, streamInfo});
+}
+
+void AlsaAudioEmitter::drainPcm() {
+  auto drainSequence = playedFramesCounter.drainSequence();
+  if (!drainSequence.empty()) {
+    snd_pcm_sframes_t prevFrames = 0;
+    for (auto frames : drainSequence) {
+      std::this_thread::sleep_for(framesToTimeMs(frames - prevFrames));
+      playedFramesCounter.update(frames - prevFrames);
+      prevFrames = frames;
+    }
+  }
+  snd_pcm_drain(pcmHandle);
+}
+
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
   try {
     if (inputNode == nullptr) {
@@ -330,155 +525,36 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
       auto streamInfo = inputNodeState.streamInfo;
       if (!streamInfo.has_value()) {
-        setState(
-            {AudioGraphNodeState::ERROR, "No format information available"});
-        continue;
-      }
-      if (streamInfo.value().format != currentStreamAudioFormat &&
-          inputNodeState.state != AudioGraphNodeState::PREPARING) {
-        setState(StreamState(AudioGraphNodeState::PREPARING));
+        throw std::runtime_error("No stream information available");
       }
 
+      setState(StreamState(AudioGraphNodeState::PREPARING));
       setupAudioFormat(streamInfo.value().format);
-      const size_t dataToRequest = snd_pcm_frames_to_bytes(
-          pcmHandle, (bufferSize / periodSize) * periodSize);
-      size_t dataAvailable = inputNode->waitForData(token, dataToRequest);
-      if (dataAvailable < dataToRequest) {
-        spdlog::warn("Not enough data available for playback - requested {} "
-                     "received {} - expect XRUN",
-                     dataToRequest, dataAvailable);
-      }
       streamInfo.value().format = currentStreamAudioFormat;
-      setState({AudioGraphNodeState::STREAMING, 0, streamInfo.value()});
 
-      std::optional<std::chrono::steady_clock::time_point>
-          setStreamingStateAfter;
-      bool newAudioFormat = false;
-      framesPlayed = 0;
+      currentSourceTotalFramesWritten = 0;
+      bool started = false;
+      paused = false;
 
       while (!token.stop_requested()) {
-        // Update streaming state
-        if (setStreamingStateAfter.has_value() &&
-            std::chrono::steady_clock::now() >=
-                setStreamingStateAfter.value()) {
-          setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
-
-          auto streamInfo = inputNode->getState().streamInfo;
-          streamInfo.value().format = currentStreamAudioFormat;
-
-          setState({AudioGraphNodeState::STREAMING,
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        std::chrono::steady_clock::now() -
-                        setStreamingStateAfter.value())
-                        .count(),
-                    streamInfo});
-          setStreamingStateAfter.reset();
-        }
-
-        int err = wait_for_poll(pcmHandle, ufds.data(), ufds.size());
-        if (err < 0) {
-          throw std::runtime_error("Poll failed for playback");
-        }
-        snd_pcm_sframes_t frames = snd_pcm_avail_update(pcmHandle);
-        if (frames < 0) {
-          throw std::runtime_error("Can't get avail update for playback: " +
-                                   std::string(snd_strerror(frames)));
-        }
-
-        if (static_cast<unsigned long>(frames) < periodSize) {
-          continue;
-        }
-        size_t framesToRead =
-            std::min(snd_pcm_bytes_to_frames(pcmHandle, buffer.size()), frames);
-        size_t bytesToRead = snd_pcm_frames_to_bytes(pcmHandle, framesToRead);
-
-        if (getState().state == AudioGraphNodeState::PAUSED) {
-          memset(buffer.data(), 0, bytesToRead);
-          err = snd_pcm_writei(pcmHandle, buffer.data(), framesToRead);
-          if (err == -EAGAIN) {
-            continue;
-          }
-          if (err < 0) {
-            std::cout << "XRUN" << std::endl;
-            if (xrun_recovery(pcmHandle, err) < 0) {
-              printf("Write error: %s\n", snd_strerror(err));
-              break;
-            }
-          }
-          continue;
-        }
-
-        size_t read = inputNode->read(buffer.data(), bytesToRead);
-        framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, read);
-
-        inputNodeState = inputNode->getState();
-        newAudioFormat = false;
-
-        if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
-          // Request new state to get new stream info
-          // It should only be present if the state is STREAMING
-          inputNode->acceptSourceChange();
-          framesPlayed = 0;
-          inputNodeState = inputNode->getState();
-          auto newStreamInfo = inputNodeState.streamInfo;
-
-          if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
-              !newStreamInfo.has_value() ||
-              newStreamInfo.value().format != currentStreamAudioFormat) {
-            newAudioFormat = true;
-          } else {
-            int timeToReportPosition =
-                1000 *
-                (bufferSize - framesToRead +
-                 snd_pcm_bytes_to_frames(pcmHandle, read)) /
-                currentStreamAudioFormat.sampleRate;
-            spdlog::debug("Report track change in {}ms", timeToReportPosition);
-            setStreamingStateAfter =
-                std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(timeToReportPosition);
-            auto moreBytes =
-                inputNode->read(buffer.data() + read, bytesToRead - read);
-            framesPlayed += snd_pcm_bytes_to_frames(pcmHandle, moreBytes);
-            read += moreBytes;
-          }
-        }
-
-        if (read < bytesToRead) {
-          if (inputNodeState.state != AudioGraphNodeState::FINISHED &&
-              !newAudioFormat) {
-            spdlog::debug("Possible XRUN - read {} but expected {}", read,
-                          bytesToRead);
-          }
-          memset(buffer.data() + read, 0, bytesToRead - read);
-        }
-
-        err =
-            snd_pcm_writei((snd_pcm_t *)pcmHandle, buffer.data(), framesToRead);
-        if (err == -EAGAIN) {
-          continue;
-        }
-        if (err < 0) {
-          std::cout << "XRUN" << std::endl;
-          if (xrun_recovery((snd_pcm_t *)pcmHandle, err) < 0) {
-            printf("Write error: %s\n", snd_strerror(err));
-            break;
-          }
-        }
-
-        if (newAudioFormat ||
-            inputNodeState.state == AudioGraphNodeState::FINISHED ||
-            inputNodeState.state == AudioGraphNodeState::ERROR) {
+        auto framesToRead = waitForAlsaBufferSpace(token);
+        if (!framesToRead) {
           break;
+        }
+
+        auto framesRead = readIntoAlsaFromStream(token, framesToRead);
+        if (framesRead < 0) {
+          break;
+        }
+
+        if (!started) {
+          startPcmStream(streamInfo.value());
+          started = true;
         }
       }
 
       if (token.stop_requested()) {
         snd_pcm_drop(pcmHandle);
-      } else {
-        snd_pcm_drain(pcmHandle);
-        if (newAudioFormat) {
-          setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
-        }
       }
     }
   } catch (const std::exception &ex) {
@@ -547,9 +623,36 @@ void AlsaAudioEmitter::setupAudioFormat(
         std::string(snd_strerror(err)));
   }
 
-  buffer.resize(snd_pcm_frames_to_bytes(pcmHandle, periodSize));
-
   // Hack for Raspberry Pi HiFiBerry
   // Sleep to make sure RPi is ready to play
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
+}
+
+void PlayedFramesCounter::update(snd_pcm_sframes_t frames) {
+  lastPlayedFrames += frames;
+  for (auto it = onFramesPlayedCallbacks.begin();
+       it != onFramesPlayedCallbacks.end();) {
+    if (lastPlayedFrames >= it->first) {
+      it->second(lastPlayedFrames);
+      it = onFramesPlayedCallbacks.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+std::vector<snd_pcm_sframes_t> PlayedFramesCounter::drainSequence() {
+  std::vector<snd_pcm_sframes_t> sequence;
+  for (auto &callback : onFramesPlayedCallbacks) {
+    sequence.push_back(callback.first - lastPlayedFrames);
+  }
+
+  std::sort(sequence.begin(), sequence.end());
+  return sequence;
+}
+
+void PlayedFramesCounter::callOnOrAfterFrame(
+    snd_pcm_sframes_t frame,
+    std::function<void(snd_pcm_sframes_t)> onFramesPlayed) {
+  onFramesPlayedCallbacks.push_back({frame + lastPlayedFrames, onFramesPlayed});
 }

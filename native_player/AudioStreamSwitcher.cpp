@@ -130,4 +130,18 @@ size_t AudioStreamSwitcher::waitForData(std::stop_token stopToken,
   return currentNode->waitForData(combinedToken.get_token(), size);
 }
 
+size_t AudioStreamSwitcher::waitForDataFor(std::stop_token stopToken,
+                                           std::chrono::milliseconds timeout,
+                                           size_t size) {
+  std::unique_lock lock(mutex);
+  auto currentNode = currentInputNode;
+  lock.unlock();
+  if (currentNode == nullptr) {
+    return 0;
+  }
+
+  auto combinedToken = combineStopTokens(stopToken, stopSource.get_token());
+  return currentNode->waitForDataFor(combinedToken.get_token(), timeout, size);
+}
+
 void AudioStreamSwitcher::acceptSourceChange() { switchToNextSource(); }

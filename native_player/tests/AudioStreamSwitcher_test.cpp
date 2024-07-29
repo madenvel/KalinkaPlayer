@@ -26,6 +26,15 @@ public:
     }
     return 0;
   }
+  virtual size_t waitForDataFor(std::stop_token stopToken,
+                                std::chrono::milliseconds timeout,
+                                size_t size) override {
+    while (!done && !stopToken.stop_requested() && timeout.count() > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      timeout -= std::chrono::milliseconds(100);
+    }
+    return 0;
+  }
 };
 
 class AudioStreamSwitcherTest : public ::testing::Test {

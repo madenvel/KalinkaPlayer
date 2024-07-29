@@ -213,3 +213,9 @@ size_t FlacStreamDecoder::read(void *data, size_t size) {
 size_t FlacStreamDecoder::waitForData(std::stop_token stopToken, size_t size) {
   return buffer.waitForData(stopToken, size);
 }
+
+size_t FlacStreamDecoder::waitForDataFor(std::stop_token stopToken,
+                                         std::chrono::milliseconds timeout,
+                                         size_t size) {
+  return buffer.waitForDataFor(stopToken, timeout, size);
+}

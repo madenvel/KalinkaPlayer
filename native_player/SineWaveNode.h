@@ -46,6 +46,13 @@ public:
     return std::min(size, totalDataSize - position);
   }
 
+  virtual size_t waitForDataFor(std::stop_token stopToken,
+                                std::chrono::milliseconds timeout,
+                                size_t size) override {
+    (void)timeout;
+    return waitForData(stopToken, size);
+  }
+
   virtual ~SineWaveNode() = default;
 };
 

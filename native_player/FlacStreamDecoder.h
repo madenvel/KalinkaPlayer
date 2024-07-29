@@ -24,6 +24,10 @@ public:
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),
                              size_t size = 1) override;
 
+  virtual size_t waitForDataFor(std::stop_token stopToken,
+                                std::chrono::milliseconds timeout,
+                                size_t size) override;
+
   virtual ~FlacStreamDecoder();
 
 protected:
