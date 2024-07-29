@@ -231,11 +231,8 @@ void AlsaAudioEmitter::pause(bool paused) {
       spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
     }
     playedFramesCounter.callOnOrAfterFrame(
-        delay, [this, newState, paused](snd_pcm_sframes_t frames) {
-          spdlog::debug("Reporting {}, frames={}",
-                        (paused ? "paused" : "resumed"), frames);
-          setState(newState);
-        });
+        delay,
+        [this, newState](snd_pcm_sframes_t frames) { setState(newState); });
   }
 }
 
@@ -367,12 +364,11 @@ bool AlsaAudioEmitter::hasInputSourceStateChanged() {
                     framesToTimeMs(framesDelay).count(), framesDelay);
 
       playedFramesCounter.callOnOrAfterFrame(
-          framesDelay, [this, streamInfo = newStreamInfo,
-                        framesDelay](snd_pcm_sframes_t frames) {
+          framesDelay,
+          [this, streamInfo = newStreamInfo](snd_pcm_sframes_t frames) {
             setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
             setState(StreamState{AudioGraphNodeState::STREAMING,
-                                 framesToTimeMs(frames - framesDelay).count(),
-                                 streamInfo});
+                                 framesToTimeMs(frames).count(), streamInfo});
           });
     }
   } else if (inputNodeState.state == AudioGraphNodeState::FINISHED ||
@@ -633,7 +629,7 @@ void PlayedFramesCounter::update(snd_pcm_sframes_t frames) {
   for (auto it = onFramesPlayedCallbacks.begin();
        it != onFramesPlayedCallbacks.end();) {
     if (lastPlayedFrames >= it->first) {
-      it->second(lastPlayedFrames);
+      it->second(lastPlayedFrames - it->first);
       it = onFramesPlayedCallbacks.erase(it);
     } else {
       ++it;

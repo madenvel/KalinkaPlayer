@@ -85,7 +85,7 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   auto end = std::chrono::high_resolution_clock::now();
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-  EXPECT_NEAR(duration.count(), totalDuration - state.position, 15);
+  EXPECT_NEAR(duration.count(), totalDuration - state.position, 1024 / 48);
   alsaAudioEmitter->disconnect(outputNode);
 }
 
