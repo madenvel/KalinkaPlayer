@@ -8,7 +8,8 @@
 
 class AudioGraphHttpStream : public AudioGraphOutputNode {
 public:
-  AudioGraphHttpStream(const std::string &url, size_t bufferSize);
+  AudioGraphHttpStream(const std::string &url, size_t bufferSize,
+                       size_t chunkSize = 0);
   virtual size_t read(void *data, size_t size) override;
   virtual size_t waitForData(std::stop_token stopToken, size_t size) override;
   virtual size_t waitForDataFor(std::stop_token stopToken,
@@ -24,11 +25,12 @@ private:
   std::stop_source stopSource;
   size_t contentLength = 1;
   size_t offset = 0;
+  size_t chunkSize = 0;
   bool acceptRange = false;
 
   void reader(std::stop_token token);
   void readContentChunks(std::stop_token token);
-  int readSingleChunk(size_t offset, size_t size, std::stop_token stopToken);
+  int readSingleChunk(std::stop_token stopToken);
   size_t WriteCallback(void *contents, size_t size, size_t nmemb);
   void emptyBufferCallback(DequeBuffer<uint8_t> &buffer);
   size_t headerCallback(char *buffer, size_t size, size_t nitems);

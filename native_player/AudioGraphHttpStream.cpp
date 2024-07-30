@@ -11,11 +11,12 @@
 #include "Log.h"
 
 AudioGraphHttpStream::AudioGraphHttpStream(const std::string &url,
-                                           size_t bufferSize)
+                                           size_t bufferSize, size_t chunkSize)
     : url(url),
       buffer(std::max(bufferSize, static_cast<size_t>(CURL_MAX_WRITE_SIZE)),
              std::bind(&AudioGraphHttpStream::emptyBufferCallback, this,
-                       std::placeholders::_1)) {
+                       std::placeholders::_1)),
+      chunkSize(chunkSize) {
   readerThread =
       std::jthread(std::bind_front(&AudioGraphHttpStream::reader, this));
 }
@@ -78,6 +79,9 @@ size_t AudioGraphHttpStream::headerCallback(char *buffer, size_t size,
         contentLength = std::stoul(value);
       }
     }
+    if (key == "accept-ranges") {
+      acceptRange = (value == "bytes");
+    }
   }
   return totalSize;
 }
@@ -129,49 +133,87 @@ void AudioGraphHttpStream::reader(std::stop_token stopToken) {
 
 void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
   using namespace std::placeholders;
-  const size_t chunkSize = buffer.max_size() / 2;
   int numRetries = 3;
   for (; offset < contentLength;) {
-    size_t size = std::min(chunkSize, contentLength - offset);
-    buffer.waitForSpace(stopToken, size);
+    buffer.waitForSpace(stopToken, buffer.max_size() / 2);
     long responseCode = 0;
     if (stopToken.stop_requested()) {
       break;
     }
-    responseCode = readSingleChunk(offset, size, stopToken);
 
-    if (responseCode != 200) {
-      if (numRetries == 0) {
-        std::string message =
-            "HTTP GET request failed with code " + std::to_string(responseCode);
-        throw std::runtime_error(message);
-      } else {
-        --numRetries;
-        spdlog::warn(
-            "HTTP GET request failed with code {}, retrying {} more times",
-            responseCode, numRetries);
+    try {
+      responseCode = readSingleChunk(stopToken);
+    } catch (const curlpp::LibcurlRuntimeError &ex) {
+      if (stopToken.stop_requested()) {
+        break;
       }
-    } else {
-      numRetries = 3;
+      responseCode = -1;
+      spdlog::warn("Libcurl exception: {}", ex.what());
+      if (numRetries == 0 || !acceptRange) {
+        spdlog::error("Request failed at offset {}/{} - aborting", offset,
+                      contentLength);
+        throw;
+      } else {
+        spdlog::warn("Request failed at offset {}/{} - retrying {} more times",
+                     offset, contentLength, numRetries);
+        --numRetries;
+        continue;
+      }
+    }
+
+    switch (responseCode) {
+    case 200:
+      break;
+    case 206:
+      continue;
+    case 416:
+      throw std::runtime_error("Request range not satisfiable, " +
+                               std::to_string(offset) + "/" +
+                               std::to_string(contentLength) +
+                               ", chunk=" + std::to_string(chunkSize));
+    default:
+      if (responseCode != 200) {
+        if (numRetries == 0 || !acceptRange) {
+          std::string message = "HTTP GET request failed with code " +
+                                std::to_string(responseCode);
+          throw std::runtime_error(message);
+        } else {
+          --numRetries;
+          spdlog::warn(
+              "HTTP GET request failed with code {}, retrying {} more times",
+              responseCode, numRetries);
+        }
+      } else {
+        numRetries = 3;
+      }
+    }
+
+    if (responseCode == 206) {
+      continue;
     }
   }
 }
 
-int AudioGraphHttpStream::readSingleChunk(size_t offset, size_t size,
-                                          std::stop_token stopToken) {
+int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
   using namespace std::placeholders;
-
-  std::ostringstream range;
-  range << offset << "-" << size + offset - 1;
 
   curlpp::Easy request;
   curlpp::options::Url myUrl(url);
   request.setOpt(myUrl);
+
   if (acceptRange) {
+    std::ostringstream range;
+    range << offset << "-";
+    if (chunkSize) {
+      range << chunkSize + offset - 1;
+    }
+    spdlog::info("Request range {}-{}/{}", offset,
+                 (chunkSize ? std::to_string(chunkSize + offset - 1) : ""),
+                 contentLength);
     request.setOpt(new curlpp::options::Range(range.str()));
   }
+
   request.setOpt(new curlpp::options::ConnectTimeout(10));
-  request.setOpt(new curlpp::options::Timeout(acceptRange ? 10 : 0));
   request.setOpt(new curlpp::options::WriteFunction(
       std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3)));
   request.perform();
