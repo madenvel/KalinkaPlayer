@@ -6,6 +6,7 @@
 #include <alsa/asoundlib.h>
 
 #include <functional>
+#include <list>
 #include <thread>
 #include <vector>
 
@@ -21,6 +22,8 @@ public:
   void
   callOnOrAfterFrame(snd_pcm_sframes_t frame,
                      std::function<void(snd_pcm_sframes_t)> onFramesPlayed);
+
+  void reset();
 
 private:
   snd_pcm_sframes_t lastPlayedFrames = 0;
@@ -79,7 +82,7 @@ private:
   size_t waitForInputData(std::stop_token stopToken, snd_pcm_uframes_t frames);
   inline std::chrono::milliseconds framesToTimeMs(snd_pcm_sframes_t frames);
 
-  void startPcmStream(const StreamInfo &streamInfo);
+  void startPcmStream(const StreamInfo &streamInfo, snd_pcm_uframes_t position);
   void drainPcm();
 
   void start();

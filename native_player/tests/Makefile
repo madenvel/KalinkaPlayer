@@ -1,10 +1,11 @@
 CC = clang++
 CFLAGS = -Wall -g -std=c++23 -fsanitize=address -I../
-LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lgtest_main -lgtest -fsanitize=address
+LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgtest -fsanitize=address
 
 # List of source files
 SRCS = $(wildcard *.cpp)
 SRCS += ../AudioGraphHttpStream.cpp \
+		../Buffer.cpp \
 		../FlacStreamDecoder.cpp \
 		../AudioFormat.cpp \
 		../AudioGraphNode.cpp \

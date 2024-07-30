@@ -7,6 +7,7 @@ extensions = [
     Extension(
         "native_player",
         sources=[
+            "Buffer.cpp",
             "AlsaAudioEmitter.cpp",
             "AudioFormat.cpp",
             "AudioGraphHttpStream.cpp",

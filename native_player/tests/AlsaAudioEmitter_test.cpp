@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "ErrorFakeNode.h"
+#include "SlowOutputNode.h"
 #include "TestHelpers.h"
 
 class AlsaAudioEmitterTest : public ::testing::Test {
@@ -96,5 +97,29 @@ TEST_F(AlsaAudioEmitterTest, stream_error) {
   auto streamState = alsaAudioEmitter->getState();
   EXPECT_EQ(streamState.state, AudioGraphNodeState::ERROR);
   EXPECT_EQ(streamState.message, "Fake error message");
+  alsaAudioEmitter->disconnect(outputNode);
+}
+
+TEST_F(AlsaAudioEmitterTest, slow_output_node_goes_into_preparing) {
+  const size_t duration = 2000;
+  auto outputNode = std::make_shared<SlowOutputNode>(duration, 1000);
+  alsaAudioEmitter->connectTo(outputNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PREPARING).state,
+      AudioGraphNodeState::PREPARING);
+
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, duration / 2);
+
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+
   alsaAudioEmitter->disconnect(outputNode);
 }

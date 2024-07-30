@@ -3,6 +3,7 @@
 
 #include <condition_variable>
 #include <mutex>
+#include <queue>
 
 #include "AudioGraphNode.h"
 #include "StreamState.h"

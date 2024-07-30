@@ -308,6 +308,8 @@ bool AlsaAudioEmitter::openDevice() {
     return false;
   }
 
+  currentSourceTotalFramesWritten = 0;
+  playedFramesCounter.reset();
   return true;
 }
 
@@ -479,14 +481,16 @@ AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
                                    currentStreamAudioFormat.sampleRate);
 }
 
-void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo) {
+void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
+                                      snd_pcm_uframes_t position) {
   int err = snd_pcm_start(pcmHandle);
   if (err < 0) {
     throw std::runtime_error(std::string("Can't start PCM: ") +
                              snd_strerror(err));
   }
   spdlog::info("Starting playback");
-  setState({AudioGraphNodeState::STREAMING, 0, streamInfo});
+  setState({AudioGraphNodeState::STREAMING, framesToTimeMs(position).count(),
+            streamInfo});
 }
 
 void AlsaAudioEmitter::drainPcm() {
@@ -528,8 +532,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       setupAudioFormat(streamInfo.value().format);
       streamInfo.value().format = currentStreamAudioFormat;
 
-      currentSourceTotalFramesWritten = 0;
       bool started = false;
+      snd_pcm_uframes_t streamStartPosition = currentSourceTotalFramesWritten;
       paused = false;
 
       while (!token.stop_requested()) {
@@ -544,7 +548,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
         }
 
         if (!started) {
-          startPcmStream(streamInfo.value());
+          startPcmStream(streamInfo.value(), streamStartPosition);
           started = true;
         }
       }
@@ -651,4 +655,9 @@ void PlayedFramesCounter::callOnOrAfterFrame(
     snd_pcm_sframes_t frame,
     std::function<void(snd_pcm_sframes_t)> onFramesPlayed) {
   onFramesPlayedCallbacks.push_back({frame + lastPlayedFrames, onFramesPlayed});
+}
+
+void PlayedFramesCounter::reset() {
+  onFramesPlayedCallbacks.clear();
+  lastPlayedFrames = 0;
 }
