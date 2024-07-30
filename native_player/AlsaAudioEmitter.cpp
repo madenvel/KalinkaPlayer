@@ -257,6 +257,14 @@ void AlsaAudioEmitter::stop() {
   }
 }
 
+#if 0
+void AlsaAudioEmitter::setState(const StreamState &newState) {
+  spdlog::info("Setting state to {}", stateToString(newState.state));
+
+  AudioGraphNode::setState(newState);
+}
+#endif
+
 StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
   StreamState inputNodeState = inputNode->getState();
   while (!token.stop_requested()) {
@@ -465,8 +473,10 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
 size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
                                           snd_pcm_uframes_t frames) {
   if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
-    auto maxTimeout = bufferSize - snd_pcm_avail_update(pcmHandle) - periodSize;
-    auto timeout = std::min(framesToTimeMs(frames), framesToTimeMs(maxTimeout));
+    snd_pcm_sframes_t delayFrames = 0;
+    snd_pcm_delay(pcmHandle, &delayFrames);
+    auto timeout = framesToTimeMs(std::max(
+        0l, delayFrames - static_cast<snd_pcm_sframes_t>(2 * periodSize)));
     return inputNode->waitForDataFor(
         stopToken, timeout, snd_pcm_frames_to_bytes(pcmHandle, frames));
   }

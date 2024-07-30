@@ -87,6 +87,10 @@ private:
 
   void start();
   void stop();
+
+#if 0
+  void setState(const StreamState &newState);
+#endif
 };
 
 #endif
