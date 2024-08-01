@@ -4,6 +4,7 @@
 #include "AudioGraphNode.h"
 #include "Buffer.h"
 
+#include "Utils.h"
 #include <curlpp/Easy.hpp>
 
 class AudioGraphHttpStream : public AudioGraphOutputNode {
@@ -26,8 +27,12 @@ private:
   std::stop_source stopSource;
   size_t contentLength = 1;
   size_t offset = 0;
+  std::atomic<size_t> seekRequest = -1;
   size_t chunkSize = 0;
   bool acceptRange = false;
+
+  std::unique_ptr<CombinedStopToken> combinedStopToken;
+  std::stop_source seekStopTokenSource;
 
   void reader(std::stop_token token);
   void readContentChunks(std::stop_token token);
@@ -35,7 +40,13 @@ private:
   size_t WriteCallback(void *contents, size_t size, size_t nmemb);
   void emptyBufferCallback(DequeBuffer<uint8_t> &buffer);
   size_t headerCallback(char *buffer, size_t size, size_t nitems);
+  int progressCallback(double dltotal, double dlnow, double ultotal,
+                       double ulnow);
+
   void readHeader();
+
+  std::mutex mutex;
+  std::condition_variable_any cv;
 };
 
 #endif

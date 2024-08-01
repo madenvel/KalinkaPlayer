@@ -59,7 +59,7 @@ public:
   virtual size_t waitForDataFor(std::stop_token stopToken,
                                 std::chrono::milliseconds timeout,
                                 size_t size) = 0;
-  virtual size_t seekTo(size_t absolutePosition) = 0;
+  virtual size_t seekTo(size_t absolutePosition) { return -1; }
 
   virtual ~AudioGraphOutputNode() = default;
 };

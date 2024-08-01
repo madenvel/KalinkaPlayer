@@ -148,6 +148,17 @@ public:
   }
 
   bool isEof() { return eof.load(); }
+
+  void clear() {
+    {
+      std::lock_guard<std::mutex> lock(m);
+      data.clear();
+      if (data.empty()) {
+        onEmptyCallback(*this);
+      }
+    }
+    hasSpaceCon.notify_all();
+  }
 };
 
 #endif
