@@ -8,18 +8,17 @@
 class SineWaveNode : public AudioGraphOutputNode {
   size_t position = 0;
   size_t totalDataSize = 0;
+  StreamInfo streamInfo;
   int frequency;
 
 public:
   SineWaveNode(int frequency, int durationMs) : frequency(frequency) {
     totalDataSize = 96000 * 2 * durationMs / 1000;
-    setState({AudioGraphNodeState::STREAMING, 0,
-              StreamInfo{.format = {.sampleRate = 48000,
-                                    .channels = 2,
-                                    .bitsPerSample = 16},
-                         .totalSamples = static_cast<unsigned int>(durationMs) *
-                                         48000 / 1000,
-                         .durationMs = static_cast<unsigned int>(durationMs)}});
+    streamInfo = StreamInfo{
+        .format = {.sampleRate = 48000, .channels = 2, .bitsPerSample = 16},
+        .totalSamples = static_cast<unsigned int>(durationMs) * 48000 / 1000,
+        .durationMs = static_cast<unsigned int>(durationMs)};
+    setState({AudioGraphNodeState::STREAMING, 0, streamInfo});
   }
   virtual size_t read(void *data, size_t size) override {
 
@@ -51,6 +50,14 @@ public:
                                 size_t size) override {
     (void)timeout;
     return waitForData(stopToken, size);
+  }
+
+  virtual size_t seekTo(size_t position) override {
+    setState(StreamState{AudioGraphNodeState::PREPARING});
+    this->position = position;
+    setState(StreamState{AudioGraphNodeState::STREAMING,
+                         static_cast<long>(position), streamInfo});
+    return position;
   }
 
   virtual ~SineWaveNode() = default;

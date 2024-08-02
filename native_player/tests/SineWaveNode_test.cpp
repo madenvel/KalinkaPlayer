@@ -56,3 +56,16 @@ TEST_F(SineWaveNodeTest, read_all) {
     EXPECT_EQ(data[i], value);
   }
 }
+
+TEST_F(SineWaveNodeTest, seekTo) {
+  SineWaveNode sineWaveNode(frequency, duration);
+  sineWaveNode.seekTo(48000);
+  std::vector<int16_t> data(20);
+  EXPECT_EQ(sineWaveNode.read(data.data(), 40), 40);
+  for (int i = 0; i < 20; i++) {
+    const auto value =
+        floor(8192 * sin(2 * M_PI * static_cast<double>(frequency) *
+                         floor((i + 48000) / 2) / 48000.0));
+    EXPECT_EQ(data[i], value);
+  }
+}
