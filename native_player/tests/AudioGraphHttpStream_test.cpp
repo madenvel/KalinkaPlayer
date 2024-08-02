@@ -74,7 +74,8 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_forward) {
       break;
     };
   }
-
+  // Wait for the buffers to be full
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   audioGraphHttpStream->seekTo(halfContent + halfContent / 2);
 
   while ((bytesToRead =
@@ -110,6 +111,8 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_backward) {
     };
   }
 
+  // Wait for the buffers to be full
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
   audioGraphHttpStream->seekTo(halfContent / 2);
 
   while ((bytesToRead =

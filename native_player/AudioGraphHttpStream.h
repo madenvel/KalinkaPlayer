@@ -24,15 +24,12 @@ private:
   std::jthread readerThread;
   std::string url;
   DequeBuffer<uint8_t> buffer;
-  std::stop_source stopSource;
   size_t contentLength = 1;
   size_t offset = 0;
-  std::atomic<size_t> seekRequest = -1;
+  Signal<size_t> seekRequestSignal;
   size_t chunkSize = 0;
   bool acceptRange = false;
-
-  std::unique_ptr<CombinedStopToken> combinedStopToken;
-  std::stop_source seekStopTokenSource;
+  bool setStreamingState = true;
 
   void reader(std::stop_token token);
   void readContentChunks(std::stop_token token);
