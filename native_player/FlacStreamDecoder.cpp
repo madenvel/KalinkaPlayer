@@ -2,6 +2,7 @@
 #include "AudioFormat.h"
 #include "Log.h"
 
+#include "StateMonitor.h"
 #include <functional>
 #include <iostream>
 #include <vector>
@@ -61,9 +62,16 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
 
   auto const sizeInBytes = data.size();
   size_t bytesWritten = 0;
+  auto combinedStopToken = combineStopTokens(decodingThread.get_stop_token(),
+                                             seekSignal.getStopToken());
+
   while (bytesWritten < sizeInBytes) {
     auto spaceAvailable =
-        this->buffer.waitForSpace(decodingThread.get_stop_token());
+        this->buffer.waitForSpace(combinedStopToken.get_token());
+
+    if (seekSignal.getStopToken().stop_requested()) {
+      break;
+    }
 
     if (decodingThread.get_stop_token().stop_requested()) {
       return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
@@ -78,13 +86,16 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
 }
 ::FLAC__StreamDecoderReadStatus
 FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
-  std::stop_token token = decodingThread.get_stop_token();
+  auto combinedStopToken = combineStopTokens(seekSignal.getStopToken(),
+                                             decodingThread.get_stop_token());
+  inputNode->waitForData(combinedStopToken.get_token(), *bytes);
   *bytes = inputNode->read(buffer, *bytes);
-  auto inputNodeState = inputNode->getState();
-  auto inputNodeStatus = inputNodeState.state;
-  if (token.stop_requested()) {
+  sourceStreamPosition += *bytes;
+  if (decodingThread.get_stop_token().stop_requested()) {
     return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
   }
+  auto inputNodeState = inputNode->getState();
+  auto inputNodeStatus = inputNodeState.state;
   if (inputNodeStatus == AudioGraphNodeState::ERROR) {
     setState({AudioGraphNodeState::ERROR, inputNodeState.message});
     return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
@@ -107,7 +118,50 @@ void FlacStreamDecoder::metadata_callback(
     const ::FLAC__StreamMetadata *metadata) {
   if (metadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
     flacStreamInfo = metadata->data.stream_info;
+
+    if (inputNode->getState().streamInfo.has_value()) {
+      sourceStreamLength =
+          inputNode->getState().streamInfo.value().totalSamples;
+    }
   }
+}
+
+::FLAC__StreamDecoderSeekStatus
+FlacStreamDecoder::seek_callback(FLAC__uint64 absolute_byte_offset) {
+  if (!seekSignal.getValue()) {
+    return FLAC__STREAM_DECODER_SEEK_STATUS_ERROR;
+  }
+
+  buffer.clear();
+  setState(StreamState{AudioGraphNodeState::PREPARING});
+  streamReadPosition = *seekSignal.getValue();
+  seekSignal.respond(streamReadPosition);
+  auto ret = inputNode->seekTo(absolute_byte_offset);
+  if (ret == -1) {
+    return FLAC__STREAM_DECODER_SEEK_STATUS_UNSUPPORTED;
+  }
+  sourceStreamPosition = ret;
+  return FLAC__STREAM_DECODER_SEEK_STATUS_OK;
+}
+
+::FLAC__StreamDecoderTellStatus
+FlacStreamDecoder::tell_callback(FLAC__uint64 *absolute_byte_offset) {
+  *absolute_byte_offset = sourceStreamPosition;
+  return FLAC__STREAM_DECODER_TELL_STATUS_OK;
+}
+
+::FLAC__StreamDecoderLengthStatus
+FlacStreamDecoder::length_callback(FLAC__uint64 *stream_length) {
+  if (sourceStreamLength) {
+    *stream_length = *sourceStreamLength;
+    return FLAC__STREAM_DECODER_LENGTH_STATUS_OK;
+  }
+  spdlog::warn("Source stream length is not available");
+  return FLAC__STREAM_DECODER_LENGTH_STATUS_ERROR;
+}
+
+bool FlacStreamDecoder::eof_callback() {
+  return inputNode->getState().state == AudioGraphNodeState::FINISHED;
 }
 
 void FlacStreamDecoder::throwOnFlacError(bool retval) {
@@ -141,13 +195,7 @@ void FlacStreamDecoder::setStreamingState() {
           flacStreamInfo.value().total_samples * 1000 /
           static_cast<unsigned long long>(flacStreamInfo.value().sample_rate))};
 
-  uint64_t decodePosition = 0;
-  if (!get_decode_position(&decodePosition)) {
-    decodePosition = 0;
-  }
-
-  setState({AudioGraphNodeState::STREAMING, static_cast<long>(decodePosition),
-            streamInfo});
+  setState({AudioGraphNodeState::STREAMING, streamReadPosition, streamInfo});
 }
 
 void FlacStreamDecoder::thread_run(std::stop_token token) {
@@ -174,6 +222,15 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       if (!streamingStateSet) {
         setStreamingState();
         streamingStateSet = true;
+      }
+
+      if (seekSignal.getValue().has_value()) {
+        auto seekOffset = seekSignal.getValue().value();
+        state = get_state();
+        if (!seek_absolute(seekOffset)) {
+          spdlog::warn("Seek failed, offset={}", seekOffset);
+        }
+        setStreamingState();
       }
     }
   } catch (std::exception &ex) {
@@ -208,18 +265,24 @@ FlacStreamDecoder::~FlacStreamDecoder() {
 }
 
 size_t FlacStreamDecoder::read(void *data, size_t size) {
-  return buffer.read(static_cast<uint8_t *>(data), size);
+  auto readBytes = buffer.read(static_cast<uint8_t *>(data), size);
+  streamReadPosition += readBytes;
+  return readBytes;
 }
 size_t FlacStreamDecoder::waitForData(std::stop_token stopToken, size_t size) {
-  return buffer.waitForData(stopToken, size);
+  auto combinedToken = combineStopTokens(stopToken, seekSignal.getStopToken());
+  return buffer.waitForData(combinedToken.get_token(), size);
 }
 
 size_t FlacStreamDecoder::waitForDataFor(std::stop_token stopToken,
                                          std::chrono::milliseconds timeout,
                                          size_t size) {
-  return buffer.waitForDataFor(stopToken, timeout, size);
+  auto combinedToken = combineStopTokens(stopToken, seekSignal.getStopToken());
+  return buffer.waitForDataFor(combinedToken.get_token(), timeout, size);
 }
 
 size_t FlacStreamDecoder::seekTo(size_t absolutePosition) {
-  return seek_absolute(absolutePosition);
+  seekSignal.sendValue(absolutePosition);
+  // TODO: Pass a calling thread stop token
+  return seekSignal.getResponse(std::stop_token());
 }
