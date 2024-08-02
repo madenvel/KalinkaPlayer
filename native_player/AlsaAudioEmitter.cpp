@@ -2,6 +2,7 @@
 #include "Log.h"
 #include "StateMonitor.h"
 #include "StreamState.h"
+#include "Utils.h"
 
 #include <iostream>
 #include <sstream>
@@ -234,6 +235,11 @@ void AlsaAudioEmitter::pause(bool paused) {
         delay,
         [this, newState](snd_pcm_sframes_t frames) { setState(newState); });
   }
+}
+
+size_t AlsaAudioEmitter::seek(size_t positionMs) {
+  seekRequestSignal.sendValue(positionMs);
+  return seekRequestSignal.getResponse(std::stop_token());
 }
 
 void AlsaAudioEmitter::start() {
@@ -526,6 +532,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       return;
     }
 
+    bool seekHappened = false;
+
     while (!token.stop_requested()) {
       auto inputNodeState = waitForInputToBeReady(token);
 
@@ -543,6 +551,11 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       streamInfo.value().format = currentStreamAudioFormat;
 
       bool started = false;
+      if (seekHappened) {
+        currentSourceTotalFramesWritten = inputNodeState.position;
+        seekHappened = false;
+      }
+
       snd_pcm_uframes_t streamStartPosition = currentSourceTotalFramesWritten;
       paused = false;
 
@@ -552,8 +565,31 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
           break;
         }
 
-        auto framesRead = readIntoAlsaFromStream(token, framesToRead);
+        auto combinedToken =
+            combineStopTokens(token, seekRequestSignal.getStopToken());
+
+        auto framesRead =
+            readIntoAlsaFromStream(combinedToken.get_token(), framesToRead);
         if (framesRead < 0) {
+          break;
+        }
+
+        if (seekRequestSignal.getStopToken().stop_requested()) {
+          setState(StreamState{AudioGraphNodeState::PREPARING});
+          auto seekValue = *seekRequestSignal.getValue() *
+                           currentStreamAudioFormat.sampleRate / 1000;
+          spdlog::info("Request seek to {}ms ({} frames)",
+                       *seekRequestSignal.getValue(), seekValue);
+          auto retVal = inputNode->seekTo(seekValue);
+          seekRequestSignal.respond(framesToTimeMs(seekValue).count());
+          if (retVal != seekValue) {
+            spdlog::warn("Seek request failed, requested={}, actual={}",
+                         seekValue, retVal);
+            continue;
+          }
+
+          drainPcm();
+          seekHappened = true;
           break;
         }
 

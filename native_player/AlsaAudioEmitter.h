@@ -2,6 +2,7 @@
 #define ALSA_AUDIO_EMITTER_H
 
 #include "AudioGraphNode.h"
+#include "Utils.h"
 
 #include <alsa/asoundlib.h>
 
@@ -44,6 +45,7 @@ public:
   disconnect(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
 
   virtual void pause(bool paused) override;
+  virtual size_t seek(size_t positionMs) override;
 
   virtual ~AlsaAudioEmitter();
 
@@ -62,6 +64,7 @@ private:
 
   std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;
   std::atomic<bool> paused = false;
+  Signal<size_t> seekRequestSignal;
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
