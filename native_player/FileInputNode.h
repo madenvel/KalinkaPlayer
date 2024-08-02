@@ -20,7 +20,8 @@ public:
     in.seekg(0, std::ios::end);
     fileSize = in.tellg();
     in.seekg(0, std::ios::beg);
-    setState(StreamState(AudioGraphNodeState::STREAMING));
+    setState(StreamState(AudioGraphNodeState::STREAMING, 0,
+                         StreamInfo{.totalSamples = fileSize}));
   }
 
   virtual size_t read(void *data, size_t size) override {
