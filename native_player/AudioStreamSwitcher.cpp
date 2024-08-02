@@ -131,8 +131,7 @@ size_t AudioStreamSwitcher::seekTo(size_t absolutePosition) {
   lock.unlock();
 
   if (currentNode == nullptr) {
-    return 0;
+    return -1;
   }
-
   return currentNode->seekTo(absolutePosition);
 }
