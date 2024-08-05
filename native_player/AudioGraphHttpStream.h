@@ -42,6 +42,8 @@ private:
 
   void readHeader();
 
+  void handleSeekSignal(size_t position);
+
   std::mutex mutex;
   std::condition_variable_any cv;
 };

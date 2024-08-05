@@ -40,9 +40,13 @@ public:
   ~Signal() { cv.notify_all(); }
 
   void sendValue(const SignalType &value) {
-    std::unique_lock lock(mutex);
-    this->value = value;
-    signalStopSource.request_stop();
+    {
+      std::unique_lock lock(mutex);
+      this->value = value;
+      ackValue = SignalType();
+      signalStopSource.request_stop();
+    }
+    cv.notify_all();
   }
 
   std::optional<SignalType> getValue() const { return value; }
@@ -65,6 +69,12 @@ public:
   std::stop_token getStopToken() const {
     std::lock_guard lock(mutex);
     return signalStopSource.get_token();
+  }
+
+  std::optional<SignalType> waitValue(std::stop_token stopToken) {
+    std::unique_lock lock(mutex);
+    cv.wait(lock, stopToken, [this] { return value.has_value(); });
+    return value;
   }
 };
 
