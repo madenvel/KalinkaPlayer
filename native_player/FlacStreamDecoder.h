@@ -76,6 +76,7 @@ private:
   void onEmptyBuffer(DequeBuffer<uint8_t> &buffer);
   void throwOnFlacError(bool retval);
   void setStreamingState();
+  void handleSeekSignal(size_t position);
 };
 
 #endif

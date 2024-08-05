@@ -139,3 +139,33 @@ TEST_F(IntegrationTest, httpInputSearchForward) {
   flacStreamDecoder->read(buffer.data(), 4096);
   flacStreamDecoder->disconnect(audioGraphHttpStream);
 }
+
+TEST_F(IntegrationTest, fileInputReadAllAndSearchToBeg) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+  std::vector<uint8_t> buffer(4096);
+  size_t contentRead = 0;
+  while (flacStreamDecoder->waitForData(std::stop_token(), 4096)) {
+    contentRead += flacStreamDecoder->read(buffer.data(), 4096);
+  }
+  EXPECT_EQ(contentRead, contentLength * 4);
+
+  EXPECT_EQ(flacStreamDecoder->getState().state, AudioGraphNodeState::FINISHED);
+
+  flacStreamDecoder->seekTo(0);
+
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_TRUE(state.streamInfo.has_value());
+  EXPECT_EQ(state.position, 0);
+  contentRead = 0;
+  while (flacStreamDecoder->waitForData(std::stop_token(), 4096)) {
+    contentRead += flacStreamDecoder->read(buffer.data(), 4096);
+  }
+  EXPECT_EQ(contentRead, contentLength * 4);
+  flacStreamDecoder->disconnect(fileInputNode);
+}
