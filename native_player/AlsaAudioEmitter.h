@@ -53,6 +53,7 @@ private:
   std::string deviceName;
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
+  mutable std::mutex mut;
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
@@ -65,6 +66,7 @@ private:
   std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;
   std::atomic<bool> paused = false;
   Signal<size_t> seekRequestSignal;
+  bool seekHappened = false;
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);

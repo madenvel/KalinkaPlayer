@@ -238,11 +238,17 @@ void AlsaAudioEmitter::pause(bool paused) {
 }
 
 size_t AlsaAudioEmitter::seek(size_t positionMs) {
-  seekRequestSignal.sendValue(positionMs);
-  return seekRequestSignal.getResponse(std::stop_token());
+  std::lock_guard<std::mutex> lock(mut);
+  if (playbackThread.joinable()) {
+    seekRequestSignal.sendValue(positionMs);
+    return seekRequestSignal.getResponse(std::stop_token());
+  }
+
+  return -1;
 }
 
 void AlsaAudioEmitter::start() {
+  std::lock_guard<std::mutex> lock(mut);
   if (inputNode == nullptr) {
     throw std::runtime_error("AlsaAudioEmitter must be connected to an "
                              "AudioGraphOutputNode node");
@@ -254,6 +260,7 @@ void AlsaAudioEmitter::start() {
 }
 
 void AlsaAudioEmitter::stop() {
+  std::lock_guard<std::mutex> lock(mut);
   if (playbackThread.joinable() &&
       !playbackThread.get_stop_source().stop_requested()) {
     playbackThread.request_stop();
@@ -272,6 +279,8 @@ void AlsaAudioEmitter::setState(const StreamState &newState) {
 #endif
 
 StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
+  auto combinedToken =
+      combineStopTokens(token, seekRequestSignal.getStopToken());
   StreamState inputNodeState = inputNode->getState();
   while (!token.stop_requested()) {
     switch (inputNodeState.state) {
@@ -294,7 +303,19 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
       setState(StreamState(AudioGraphNodeState::STOPPED));
       break;
     }
-    StateChangeWaitLock lock(token, *inputNode, inputNodeState.timestamp);
+    if (seekRequestSignal.getValue()) {
+      auto positionMs = *seekRequestSignal.getValue();
+      auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
+      spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
+      auto retVal = inputNode->seekTo(seekValue);
+      if (retVal != seekValue) {
+        spdlog::warn("Seek request failed, requested={}, actual={}", seekValue,
+                     retVal);
+      }
+      seekHappened = true;
+    }
+    StateChangeWaitLock lock(combinedToken.get_token(), *inputNode,
+                             inputNodeState.timestamp);
     inputNodeState = lock.state();
   };
 
@@ -531,8 +552,6 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     if (!openDevice()) {
       return;
     }
-
-    bool seekHappened = false;
 
     while (!token.stop_requested()) {
       auto inputNodeState = waitForInputToBeReady(token);

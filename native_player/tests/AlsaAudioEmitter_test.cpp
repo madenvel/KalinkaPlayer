@@ -159,3 +159,7 @@ TEST_F(AlsaAudioEmitterTest, test_seekBackwards) {
       AudioGraphNodeState::FINISHED);
   alsaAudioEmitter->disconnect(outputNode);
 }
+
+TEST_F(AlsaAudioEmitterTest, test_seekWhenStopped) {
+  EXPECT_EQ(alsaAudioEmitter->seek(0), -1);
+}
