@@ -48,7 +48,11 @@ public:
   }
 
   virtual size_t seekTo(size_t absolutePosition) override {
+    setState(StreamState(AudioGraphNodeState::PREPARING));
+    in.clear();
     in.seekg(absolutePosition, std::ios::beg);
+    setState(StreamState(AudioGraphNodeState::STREAMING, absolutePosition,
+                         StreamInfo{.totalSamples = fileSize}));
     return in.tellg();
   }
 

@@ -31,3 +31,25 @@ TEST_F(FileInputNodeTest, read) {
   EXPECT_EQ(fileInputNode.getState().state, AudioGraphNodeState::FINISHED);
   EXPECT_EQ(bytesRead, fileSize);
 }
+
+TEST_F(FileInputNodeTest, seek) {
+  FileInputNode fileInputNode(filename);
+  uint8_t data[100];
+  int bytesRead = 0;
+  int num = 0;
+  do {
+    num = fileInputNode.read(data, 100);
+    bytesRead += num;
+  } while (num != 0);
+  EXPECT_EQ(fileInputNode.getState().state, AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(bytesRead, fileSize);
+
+  EXPECT_EQ(fileInputNode.seekTo(0), 0);
+  bytesRead = 0;
+  do {
+    num = fileInputNode.read(data, 100);
+    bytesRead += num;
+  } while (num != 0);
+  EXPECT_EQ(fileInputNode.getState().state, AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(bytesRead, fileSize);
+}
