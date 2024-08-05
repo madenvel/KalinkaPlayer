@@ -57,6 +57,7 @@ PYBIND11_MODULE(native_player, m) {
       .def("play_next", &AudioPlayer::playNext, py::arg("url"))
       .def("stop", &AudioPlayer::stop)
       .def("pause", &AudioPlayer::pause, py::arg("paused"))
+      .def("seek", &AudioPlayer::seek, py::arg("position_ms"))
       .def("get_state", &AudioPlayer::getState)
       .def("monitor", &AudioPlayer::monitor);
 

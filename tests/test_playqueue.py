@@ -84,6 +84,7 @@ def assert_call_args(actual_args, expected_args, position):
 
 def assert_has_calls(event_emitter, expected_calls):
     i = 0
+    assert len(event_emitter.mock_calls) == len(expected_calls)
     for actual_call, expected_call in zip(event_emitter.mock_calls, expected_calls):
         assert actual_call[0] == expected_call[0]
         assert_call_args(actual_call[1], expected_call[1], i)
@@ -412,6 +413,82 @@ def test_play_pause_stop_play(event_emitter, playqueue):
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="BUFFERING",
+                index=0,
+                position=0,
+                current_track=track.metadata.model_dump(exclude_unset=True),
+            ),
+        ),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="PLAYING",
+                index=0,
+                position=0,
+                current_track=track.metadata.model_dump(exclude_unset=True),
+                audio_info=AudioInfo(
+                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
+                ),
+            ),
+        ),
+    ]
+    assert_has_calls(event_emitter, expected_calls)
+
+
+def test_seek(event_emitter, playqueue):
+    track = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
+    time.sleep(1)
+    playqueue.add([track])
+    playqueue.play()
+    time.sleep(4)
+    playqueue.seek(3000)
+    time.sleep(4)
+    expected_calls = [
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="STOPPED",
+                index=0,
+                position=0,
+            ),
+        ),
+        call.dispatch(
+            EventType.TracksAdded, [track.metadata.model_dump(exclude_unset=True)]
+        ),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="STOPPED",
+                index=0,
+                position=0,
+                current_track=track.metadata.model_dump(exclude_unset=True),
+            ),
+        ),
+        call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="BUFFERING",
+                index=0,
+                position=0,
+                current_track=track.metadata.model_dump(exclude_unset=True),
+            ),
+        ),
+        call.dispatch(
+            EventType.StateChanged,
+            PlayerState(
+                state="PLAYING",
+                index=0,
+                position=3000,
+                current_track=track.metadata.model_dump(exclude_unset=True),
+                audio_info=AudioInfo(
+                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
+                ),
+            ),
+        ),
         call.dispatch(
             EventType.StateChanged,
             PlayerState(
