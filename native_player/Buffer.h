@@ -149,6 +149,8 @@ public:
 
   bool isEof() { return eof.load(); }
 
+  void resetEof() { eof.store(false); }
+
   void clear() {
     {
       std::lock_guard<std::mutex> lock(m);
