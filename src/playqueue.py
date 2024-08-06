@@ -195,7 +195,7 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def seek(self, positionMs: int):
-        self.track_player.seek(positionMs)
+        return self.track_player.seek(positionMs)
 
     @enqueue
     def stop(self):

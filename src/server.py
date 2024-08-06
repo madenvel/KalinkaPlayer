@@ -110,7 +110,7 @@ async def read_queue_stop():
 
 @app.put("/queue/current_track/seek")
 async def read_queue_seek(position_ms: int):
-    value = playqueue.seek(position_ms)
+    value = playqueue.seek(position_ms).get()
     return {"message": "Ok", "position_ms": value}
 
 
