@@ -297,7 +297,7 @@ size_t FlacStreamDecoder::waitForDataFor(std::stop_token stopToken,
 }
 
 size_t FlacStreamDecoder::seekTo(size_t absolutePosition) {
-  if (getState().state == AudioGraphNodeState::ERROR) {
+  if (getState().state == AudioGraphNodeState::ERROR || seekSignal.getValue()) {
     return -1;
   }
 

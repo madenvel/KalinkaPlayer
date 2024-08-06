@@ -239,7 +239,7 @@ void AlsaAudioEmitter::pause(bool paused) {
 
 size_t AlsaAudioEmitter::seek(size_t positionMs) {
   std::lock_guard<std::mutex> lock(mut);
-  if (playbackThread.joinable()) {
+  if (playbackThread.joinable() && !seekRequestSignal.getValue()) {
     seekRequestSignal.sendValue(positionMs);
     return seekRequestSignal.getResponse(std::stop_token());
   }

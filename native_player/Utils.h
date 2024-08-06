@@ -49,7 +49,10 @@ public:
     cv.notify_all();
   }
 
-  std::optional<SignalType> getValue() const { return value; }
+  std::optional<SignalType> getValue() const {
+    std::unique_lock lock(mutex);
+    return value;
+  }
 
   SignalType getResponse(std::stop_token stopToken) {
     std::unique_lock lock(mutex);

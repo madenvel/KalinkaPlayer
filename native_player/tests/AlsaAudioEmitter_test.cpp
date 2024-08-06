@@ -133,7 +133,7 @@ TEST_F(AlsaAudioEmitterTest, test_seekToForward) {
       AudioGraphNodeState::STREAMING);
   auto sleepAmount = totalDuration / 4;
   std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
-  alsaAudioEmitter->seek(totalDuration / 2);
+  EXPECT_EQ(alsaAudioEmitter->seek(totalDuration / 2), totalDuration / 2);
   auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
   EXPECT_NEAR(state.position, 1000, 10);
   EXPECT_EQ(

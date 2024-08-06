@@ -296,7 +296,8 @@ size_t AudioGraphHttpStream::waitForDataFor(std::stop_token stopToken,
 
 size_t AudioGraphHttpStream::seekTo(size_t absolutePosition) {
   if (!acceptRange || absolutePosition >= contentLength ||
-      getState().state == AudioGraphNodeState::ERROR) {
+      getState().state == AudioGraphNodeState::ERROR ||
+      seekRequestSignal.getValue()) {
     return -1;
   }
 
