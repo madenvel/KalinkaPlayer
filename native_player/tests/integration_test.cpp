@@ -81,3 +81,91 @@ TEST_F(IntegrationTest, streamSwitch) {
 
   alsaAudioEmitter->disconnect(streamSwitchNode);
 }
+
+TEST_F(IntegrationTest, fileInputSearchForward) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  std::vector<uint8_t> buffer(4096);
+  flacStreamDecoder->waitForData(std::stop_token(), 4096);
+  flacStreamDecoder->read(buffer.data(), 4096);
+  EXPECT_EQ(flacStreamDecoder->seekTo(16384), 16384);
+  EXPECT_EQ(flacStreamDecoder->getState().state,
+            AudioGraphNodeState::PREPARING);
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_TRUE(state.streamInfo.has_value());
+  EXPECT_EQ(state.position, 16384);
+  flacStreamDecoder->waitForData(std::stop_token(), 4096);
+  flacStreamDecoder->read(buffer.data(), 4096);
+  flacStreamDecoder->disconnect(fileInputNode);
+}
+
+TEST_F(IntegrationTest, fileInputSearchBackward) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  std::vector<uint8_t> buffer(4096);
+  flacStreamDecoder->waitForData(std::stop_token(), 4096);
+  flacStreamDecoder->read(buffer.data(), 4096);
+  EXPECT_EQ(flacStreamDecoder->seekTo(100), 100);
+  EXPECT_GE(flacStreamDecoder->waitForData(std::stop_token(), 4096), 4096);
+  EXPECT_EQ(flacStreamDecoder->read(buffer.data(), 4096), 4096);
+  flacStreamDecoder->disconnect(fileInputNode);
+}
+
+TEST_F(IntegrationTest, httpInputSearchForward) {
+  auto audioGraphHttpStream = std::make_shared<AudioGraphHttpStream>(
+      "https://getsamplefiles.com/download/flac/sample-3.flac", 16384);
+  flacStreamDecoder->connectTo(audioGraphHttpStream);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  std::vector<uint8_t> buffer(4096);
+  flacStreamDecoder->waitForData(std::stop_token(), 4096);
+  flacStreamDecoder->read(buffer.data(), 4096);
+  EXPECT_EQ(flacStreamDecoder->seekTo(16384), 16384);
+  EXPECT_EQ(flacStreamDecoder->getState().state,
+            AudioGraphNodeState::PREPARING);
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_TRUE(state.streamInfo.has_value());
+  EXPECT_EQ(state.position, 16384);
+  flacStreamDecoder->waitForData(std::stop_token(), 4096);
+  flacStreamDecoder->read(buffer.data(), 4096);
+  flacStreamDecoder->disconnect(audioGraphHttpStream);
+}
+
+TEST_F(IntegrationTest, fileInputReadAllAndSearchToBeg) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+  std::vector<uint8_t> buffer(4096);
+  size_t contentRead = 0;
+  while (flacStreamDecoder->waitForData(std::stop_token(), 4096)) {
+    contentRead += flacStreamDecoder->read(buffer.data(), 4096);
+  }
+  EXPECT_EQ(contentRead, contentLength * 4);
+
+  EXPECT_EQ(flacStreamDecoder->getState().state, AudioGraphNodeState::FINISHED);
+
+  flacStreamDecoder->seekTo(0);
+
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_TRUE(state.streamInfo.has_value());
+  EXPECT_EQ(state.position, 0);
+  contentRead = 0;
+  while (flacStreamDecoder->waitForData(std::stop_token(), 4096)) {
+    contentRead += flacStreamDecoder->read(buffer.data(), 4096);
+  }
+  EXPECT_EQ(contentRead, contentLength * 4);
+  flacStreamDecoder->disconnect(fileInputNode);
+}

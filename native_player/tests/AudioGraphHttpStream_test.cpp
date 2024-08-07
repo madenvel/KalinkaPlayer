@@ -3,6 +3,10 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "TestHelpers.h"
+
+#include "Log.h"
+
 class AudioGraphHttpStreamTest : public ::testing::Test {
 protected:
   const std::string url =
@@ -46,4 +50,115 @@ TEST_F(AudioGraphHttpStreamTest, test_broken_url_set_error_status) {
   }
   EXPECT_EQ(audioGraphHttpStream->getState().state, AudioGraphNodeState::ERROR);
   EXPECT_EQ(totalBytesRead, 0);
+}
+
+TEST_F(AudioGraphHttpStreamTest, seekTo_forward) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(url, bufferSize);
+  std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+  spdlog::info("Content length: {}", contentLength);
+  size_t bytesToRead = 0;
+  size_t totalBytesRead = 0;
+  size_t halfContent = contentLength / 2;
+  EXPECT_GT(contentLength, 0);
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    size_t sizeToRead = std::min(halfContent - totalBytesRead, bytesToRead);
+    audioGraphHttpStream->read(data.get(), sizeToRead);
+    totalBytesRead += sizeToRead;
+
+    if (totalBytesRead == halfContent) {
+      break;
+    };
+  }
+  // Wait for the buffers to be full
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+  audioGraphHttpStream->seekTo(halfContent + halfContent / 2);
+
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    audioGraphHttpStream->read(data.get(), bytesToRead);
+    totalBytesRead += bytesToRead;
+  }
+
+  EXPECT_EQ(audioGraphHttpStream->getState().state,
+            AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(totalBytesRead, contentLength - halfContent / 2);
+}
+
+TEST_F(AudioGraphHttpStreamTest, seekTo_backward) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(url, bufferSize);
+  std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+  size_t bytesToRead = 0;
+  size_t totalBytesRead = 0;
+  size_t halfContent = contentLength / 2;
+  EXPECT_GT(contentLength, 0);
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    size_t sizeToRead = std::min(halfContent - totalBytesRead, bytesToRead);
+    audioGraphHttpStream->read(data.get(), sizeToRead);
+    totalBytesRead += sizeToRead;
+
+    if (totalBytesRead == halfContent) {
+      break;
+    };
+  }
+
+  // Wait for the buffers to be full
+  std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+  audioGraphHttpStream->seekTo(halfContent / 2);
+
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    audioGraphHttpStream->read(data.get(), bytesToRead);
+    totalBytesRead += bytesToRead;
+  }
+
+  EXPECT_EQ(audioGraphHttpStream->getState().state,
+            AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(totalBytesRead, contentLength + halfContent / 2);
+}
+
+TEST_F(AudioGraphHttpStreamTest, seekTo_backward_after_finished) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(url, bufferSize);
+  std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+  size_t bytesToRead = 0;
+  size_t totalBytesRead = 0;
+  size_t halfContent = contentLength - bufferSize / 2;
+  EXPECT_GT(contentLength, 0);
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    size_t sizeToRead = std::min(halfContent - totalBytesRead, bytesToRead);
+    audioGraphHttpStream->read(data.get(), sizeToRead);
+    totalBytesRead += sizeToRead;
+
+    if (totalBytesRead == halfContent) {
+      break;
+    };
+  }
+
+  audioGraphHttpStream->seekTo(0);
+
+  totalBytesRead = 0;
+
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    audioGraphHttpStream->read(data.get(), bytesToRead);
+    totalBytesRead += bytesToRead;
+  }
+
+  EXPECT_EQ(audioGraphHttpStream->getState().state,
+            AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(totalBytesRead, contentLength);
 }

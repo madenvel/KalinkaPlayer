@@ -90,6 +90,10 @@ void AudioPlayer::stop() {
 
 void AudioPlayer::pause(bool paused) { audioEmitter->pause(paused); }
 
+size_t AudioPlayer::seek(size_t positionMs) {
+  return audioEmitter->seek(positionMs);
+}
+
 StreamState AudioPlayer::getState() { return audioEmitter->getState(); }
 
 std::unique_ptr<StateMonitor> AudioPlayer::monitor() {

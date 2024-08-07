@@ -20,7 +20,8 @@ public:
     in.seekg(0, std::ios::end);
     fileSize = in.tellg();
     in.seekg(0, std::ios::beg);
-    setState(StreamState(AudioGraphNodeState::STREAMING));
+    setState(StreamState(AudioGraphNodeState::STREAMING, 0,
+                         StreamInfo{.totalSamples = fileSize}));
   }
 
   virtual size_t read(void *data, size_t size) override {
@@ -44,6 +45,15 @@ public:
                                 size_t size) override {
     (void)timeout;
     return waitForData(stopToken, size);
+  }
+
+  virtual size_t seekTo(size_t absolutePosition) override {
+    setState(StreamState(AudioGraphNodeState::PREPARING));
+    in.clear();
+    in.seekg(absolutePosition, std::ios::beg);
+    setState(StreamState(AudioGraphNodeState::STREAMING, absolutePosition,
+                         StreamInfo{.totalSamples = fileSize}));
+    return in.tellg();
   }
 
   virtual ~FileInputNode() = default;

@@ -26,6 +26,7 @@ public:
 
   // Accept the source change. This is called when the source has changed and
   // the reader should accept the new source.
+  // The data transfer stops until the source is accepted.
   // It has no effect if the node is not in SOURCE_CHANGED state.
   virtual void acceptSourceChange() {};
   virtual ~AudioGraphNode();
@@ -59,6 +60,7 @@ public:
   virtual size_t waitForDataFor(std::stop_token stopToken,
                                 std::chrono::milliseconds timeout,
                                 size_t size) = 0;
+  virtual size_t seekTo(size_t absolutePosition) { return -1; }
 
   virtual ~AudioGraphOutputNode() = default;
 };
@@ -76,6 +78,7 @@ public:
 class AudioGraphEmitterNode : public AudioGraphInputNode {
 public:
   virtual void pause(bool paused) = 0;
+  virtual size_t seek(size_t positionMs) = 0;
 };
 
 #endif

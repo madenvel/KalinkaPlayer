@@ -108,6 +108,12 @@ async def read_queue_stop():
     return {"message": "Ok"}
 
 
+@app.put("/queue/current_track/seek")
+async def read_queue_seek(position_ms: int):
+    value = playqueue.seek(position_ms).get()
+    return {"message": "Ok", "position_ms": value}
+
+
 @app.get("/browse/album/{entity_id}")
 def browse_album(entity_id: str, offset: int = 0, limit: int = 10):
     return inputmodule.browse_album(entity_id, offset, limit).model_dump(

@@ -33,6 +33,8 @@ public:
   // might expired.
   void pause(bool paused);
 
+  size_t seek(size_t positionMs);
+
   // Retrieves the current state of the node (non-blocking)
   StreamState getState();
 

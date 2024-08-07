@@ -33,9 +33,16 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
                                            size_t nmemb) {
   size_t sizeWritten = 0;
   size_t totalSize = size * nmemb;
+  if (setStreamingState) {
+    setState(StreamState(AudioGraphNodeState::STREAMING, offset,
+                         StreamInfo{.totalSamples = contentLength}));
+    setStreamingState = false;
+  }
+  auto combinedStopToken = combineStopTokens(seekRequestSignal.getStopToken(),
+                                             readerThread.get_stop_token());
   while (sizeWritten < totalSize) {
-    auto spaceAvailable = buffer.waitForSpace(readerThread.get_stop_token());
-    if (readerThread.get_stop_token().stop_requested()) {
+    auto spaceAvailable = buffer.waitForSpace(combinedStopToken.get_token());
+    if (combinedStopToken.get_token().stop_requested()) {
       break;
     }
     auto writtenChunkSize =
@@ -86,6 +93,15 @@ size_t AudioGraphHttpStream::headerCallback(char *buffer, size_t size,
   return totalSize;
 }
 
+int AudioGraphHttpStream::progressCallback(double dltotal, double dlnow,
+                                           double ultotal, double ulnow) {
+  if (seekRequestSignal.getStopToken().stop_requested() ||
+      readerThread.get_stop_token().stop_requested()) {
+    return 1;
+  }
+  return 0;
+}
+
 void AudioGraphHttpStream::readHeader() {
   curlpp::Easy request;
   curlpp::options::Url myUrl(url);
@@ -112,12 +128,29 @@ void AudioGraphHttpStream::readHeader() {
   spdlog::debug("Http Stream: content-length={}", contentLength);
 }
 
+void AudioGraphHttpStream::handleSeekSignal(size_t position) {
+  buffer.clear();
+  buffer.resetEof();
+  offset = position;
+  setStreamingState = true;
+  setState(StreamState(AudioGraphNodeState::PREPARING));
+  seekRequestSignal.respond(offset);
+}
+
 void AudioGraphHttpStream::reader(std::stop_token stopToken) {
   try {
     setState(StreamState(AudioGraphNodeState::PREPARING));
     readHeader();
-    setState(StreamState(AudioGraphNodeState::STREAMING));
-    readContentChunks(stopToken);
+    while (!stopToken.stop_requested()) {
+      readContentChunks(stopToken);
+      buffer.setEof();
+      spdlog::debug("Finished reading content");
+      auto seekValue = seekRequestSignal.waitValue(stopToken);
+      if (!seekValue) {
+        break;
+      }
+      handleSeekSignal(*seekValue);
+    }
   } catch (curlpp::LibcurlRuntimeError &ex) {
     if (!stopToken.stop_requested()) {
       std::string message = std::string("Libcurl exception: ") + ex.what();
@@ -129,16 +162,29 @@ void AudioGraphHttpStream::reader(std::stop_token stopToken) {
     setState({AudioGraphNodeState::ERROR, ex.what()});
   }
   buffer.setEof();
+  spdlog::debug("Reader thread is finished");
 }
 
 void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
   using namespace std::placeholders;
   int numRetries = 3;
   for (; offset < contentLength;) {
-    buffer.waitForSpace(stopToken, buffer.max_size() / 2);
+    auto seekToPos = seekRequestSignal.getValue();
+    if (seekToPos) {
+      handleSeekSignal(seekToPos.value());
+    }
+
+    auto combinedStopToken =
+        combineStopTokens(stopToken, seekRequestSignal.getStopToken());
+
+    buffer.waitForSpace(combinedStopToken.get_token(), buffer.max_size() / 2);
     long responseCode = 0;
     if (stopToken.stop_requested()) {
       break;
+    }
+
+    if (seekRequestSignal.getStopToken().stop_requested()) {
+      continue;
     }
 
     try {
@@ -146,6 +192,9 @@ void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
     } catch (const curlpp::LibcurlRuntimeError &ex) {
       if (stopToken.stop_requested()) {
         break;
+      }
+      if (seekRequestSignal.getStopToken().stop_requested()) {
+        continue;
       }
       responseCode = -1;
       spdlog::warn("Libcurl exception: {}", ex.what());
@@ -216,6 +265,9 @@ int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
   request.setOpt(new curlpp::options::ConnectTimeout(10));
   request.setOpt(new curlpp::options::WriteFunction(
       std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3)));
+  request.setOpt(new curlpp::options::NoProgress(false));
+  request.setOpt(new curlpp::options::ProgressFunction(std::bind(
+      &AudioGraphHttpStream::progressCallback, this, _1, _2, _3, _4)));
   request.perform();
 
   long responseCode = 0;
@@ -229,11 +281,30 @@ size_t AudioGraphHttpStream::read(void *data, size_t size) {
 
 size_t AudioGraphHttpStream::waitForData(std::stop_token stopToken,
                                          size_t size) {
-  return buffer.waitForData(stopToken, size);
+  auto combinedToken =
+      combineStopTokens(stopToken, readerThread.get_stop_token());
+  return buffer.waitForData(combinedToken.get_token(), size);
 }
 
 size_t AudioGraphHttpStream::waitForDataFor(std::stop_token stopToken,
                                             std::chrono::milliseconds timeout,
                                             size_t size) {
-  return buffer.waitForDataFor(stopToken, timeout, size);
+  auto combinedToken =
+      combineStopTokens(stopToken, readerThread.get_stop_token());
+  return buffer.waitForDataFor(combinedToken.get_token(), timeout, size);
+}
+
+size_t AudioGraphHttpStream::seekTo(size_t absolutePosition) {
+  if (!acceptRange || absolutePosition >= contentLength ||
+      getState().state == AudioGraphNodeState::ERROR ||
+      seekRequestSignal.getValue()) {
+    return -1;
+  }
+
+  spdlog::debug("AudioGraphHttpStream::seekTo({})", absolutePosition);
+  seekRequestSignal.sendValue(absolutePosition);
+  auto retVal = seekRequestSignal.getResponse(std::stop_token());
+  spdlog::debug("AudioGraphHttpStream::seekTo({}) -> {}", absolutePosition,
+                retVal);
+  return retVal;
 }

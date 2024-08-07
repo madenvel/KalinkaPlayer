@@ -123,3 +123,61 @@ TEST_F(AlsaAudioEmitterTest, slow_output_node_goes_into_preparing) {
 
   alsaAudioEmitter->disconnect(outputNode);
 }
+
+TEST_F(AlsaAudioEmitterTest, test_seekToForward) {
+  const auto totalDuration = 2000;
+  auto outputNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(outputNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  auto sleepAmount = totalDuration / 4;
+  std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
+  EXPECT_EQ(alsaAudioEmitter->seek(totalDuration / 2), totalDuration / 2);
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+  EXPECT_NEAR(state.position, 1000, 10);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+  alsaAudioEmitter->disconnect(outputNode);
+}
+
+TEST_F(AlsaAudioEmitterTest, test_seekBackwards) {
+  const auto totalDuration = 2000;
+  auto outputNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(outputNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  auto sleepAmount = totalDuration / 4;
+  std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
+  alsaAudioEmitter->seek(0);
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+  EXPECT_NEAR(state.position, 0, 10);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+  alsaAudioEmitter->disconnect(outputNode);
+}
+
+TEST_F(AlsaAudioEmitterTest, test_seekWhenStopped) {
+  EXPECT_EQ(alsaAudioEmitter->seek(0), -1);
+}
+
+TEST_F(AlsaAudioEmitterTest, test_seekAfterFinished) {
+  const auto totalDuration = 2000;
+  auto outputNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(outputNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+  alsaAudioEmitter->seek(10);
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, 10);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+}

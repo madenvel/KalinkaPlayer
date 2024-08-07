@@ -3,11 +3,13 @@
 
 #include "AudioGraphNode.h"
 
-#include "Buffer.h"
 #include <FLAC++/decoder.h>
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include "Buffer.h"
+#include "Utils.h"
 
 class FlacStreamDecoder : public AudioGraphOutputNode,
                           public AudioGraphInputNode,
@@ -28,6 +30,8 @@ public:
                                 std::chrono::milliseconds timeout,
                                 size_t size) override;
 
+  virtual size_t seekTo(size_t absolutePosition) override;
+
   virtual ~FlacStreamDecoder();
 
 protected:
@@ -42,11 +46,29 @@ protected:
   virtual void
   metadata_callback(const ::FLAC__StreamMetadata *metadata) override;
 
+  virtual ::FLAC__StreamDecoderSeekStatus
+  seek_callback(FLAC__uint64 absolute_byte_offset) override;
+
+  virtual ::FLAC__StreamDecoderTellStatus
+  tell_callback(FLAC__uint64 *absolute_byte_offset) override;
+
+  virtual ::FLAC__StreamDecoderLengthStatus
+  length_callback(FLAC__uint64 *stream_length) override;
+
+  virtual bool eof_callback() override;
+
 private:
   std::jthread decodingThread;
+
   std::optional<FLAC__StreamMetadata_StreamInfo> flacStreamInfo;
+  std::optional<size_t> sourceStreamLength;
+  size_t sourceStreamPosition = 0;
+
   std::vector<uint8_t> data;
   DequeBuffer<uint8_t> buffer;
+  std::atomic<long> streamReadPosition = 0;
+
+  Signal<size_t> seekSignal;
 
   std::shared_ptr<AudioGraphOutputNode> inputNode;
 
@@ -54,6 +76,7 @@ private:
   void onEmptyBuffer(DequeBuffer<uint8_t> &buffer);
   void throwOnFlacError(bool retval);
   void setStreamingState();
+  void handleSeekSignal(size_t position);
 };
 
 #endif

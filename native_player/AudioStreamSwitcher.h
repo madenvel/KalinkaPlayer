@@ -25,6 +25,7 @@ public:
   virtual size_t waitForDataFor(std::stop_token stopToken,
                                 std::chrono::milliseconds timeout,
                                 size_t size) override;
+  virtual size_t seekTo(size_t absolutePosition) override;
 
   virtual void acceptSourceChange() override;
 

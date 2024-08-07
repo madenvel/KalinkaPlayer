@@ -177,7 +177,7 @@ class PlayQueue(AsyncExecutor):
         track_url = self._setup_track_to_play(index)
         if track_url is None:
             return
-        
+
         self.prepared_tracks[index] = track_url
         self.track_player.play_next(track_url)
 
@@ -192,6 +192,10 @@ class PlayQueue(AsyncExecutor):
     @enqueue
     def prev(self):
         self._play_sync(self.current_track_id - 1)
+
+    @enqueue
+    def seek(self, positionMs: int):
+        return self.track_player.seek(positionMs)
 
     @enqueue
     def stop(self):

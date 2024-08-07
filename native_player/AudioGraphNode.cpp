@@ -1,9 +1,4 @@
 #include "AudioGraphNode.h"
-
-#ifdef __PYTHON__
-#include <pybind11/pybind11.h>
-#endif
-
 #include "Log.h"
 
 StreamState AudioGraphNode::getState() {
