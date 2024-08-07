@@ -163,3 +163,21 @@ TEST_F(AlsaAudioEmitterTest, test_seekBackwards) {
 TEST_F(AlsaAudioEmitterTest, test_seekWhenStopped) {
   EXPECT_EQ(alsaAudioEmitter->seek(0), -1);
 }
+
+TEST_F(AlsaAudioEmitterTest, test_seekAfterFinished) {
+  const auto totalDuration = 2000;
+  auto outputNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(outputNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+  alsaAudioEmitter->seek(10);
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, 10);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+}

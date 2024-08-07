@@ -307,6 +307,7 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
       auto positionMs = *seekRequestSignal.getValue();
       auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
       spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
+      seekRequestSignal.respond(framesToTimeMs(seekValue).count());
       auto retVal = inputNode->seekTo(seekValue);
       if (retVal != seekValue) {
         spdlog::warn("Seek request failed, requested={}, actual={}", seekValue,
@@ -385,7 +386,8 @@ bool AlsaAudioEmitter::hasInputSourceStateChanged() {
     if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
         !newStreamInfo.has_value() ||
         newStreamInfo.value().format != currentStreamAudioFormat) {
-      spdlog::info("Source changed - different format, draining");
+      spdlog::info(
+          "Source changed - not streaming or different format, draining");
       drainPcm();
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
       return true;

@@ -178,3 +178,33 @@ TEST_F(AudioPlayerTest, seek_backward) {
 
   EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
 }
+
+TEST_F(AudioPlayerTest, seek_one_after_another) {
+  auto monitor = audioPlayer.monitor();
+  audioPlayer.play(url3);
+
+  std::this_thread::sleep_for(std::chrono::seconds(4));
+  EXPECT_EQ(audioPlayer.seek(5000), 5000);
+  EXPECT_EQ(audioPlayer.seek(500), 500);
+
+  std::this_thread::sleep_for(std::chrono::seconds(4));
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,   AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING};
+
+  int i = 0;
+  while (monitor->hasData()) {
+    auto state = monitor->waitState();
+    ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
+    EXPECT_EQ(state.state, states[i++]);
+
+    if (i == 6) {
+      EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+      EXPECT_NEAR(state.position, 0, 500);
+    }
+  }
+
+  EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
+}
