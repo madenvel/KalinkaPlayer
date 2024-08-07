@@ -59,7 +59,7 @@ public:
     }
 
     for (size_t i = 0; i < size / 2; i += 2) {
-      int16_t amplitude = -5000 + 10000 * (((position / 2 + i) / 100) % 2);
+      int16_t amplitude = -3000 + 6000 * (((position / 2 + i) / 100) % 2);
       static_cast<uint16_t *>(data)[i] = amplitude;
       static_cast<uint16_t *>(data)[i + 1] = amplitude;
     }
