@@ -2,7 +2,7 @@ import logging
 from queue import Queue
 import threading
 
-from src.rpiasync import AsyncLoop
+from src.async_common import AsyncLoop
 
 
 class Future:

@@ -1,5 +1,5 @@
 __pycache__
-rpi_conf.yaml
+kalinka_conf.yaml
 *.so
 *.o
 build/

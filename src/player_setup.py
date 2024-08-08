@@ -1,5 +1,5 @@
 from addons.input_module.qobuz.qobuz_reporter import QobuzReporter
-from src.rpiasync import EventEmitter, EventListener
+from src.async_common import EventEmitter, EventListener
 from queue import Queue
 from addons.input_module.qobuz.qobuz_autoplay import QobuzAutoplay
 from addons.input_module.qobuz import (

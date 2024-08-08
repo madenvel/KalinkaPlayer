@@ -1,6 +1,6 @@
 from functools import partial
 from src.events import EventType
-from src.rpiasync import EventListener
+from src.async_common import EventListener
 from queue import Empty, Queue
 import logging
 

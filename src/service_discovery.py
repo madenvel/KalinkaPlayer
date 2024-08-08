@@ -9,7 +9,7 @@ from zeroconf.asyncio import AsyncZeroconf
 logger = logging.getLogger(__name__.split(".")[-1])
 
 desc = {
-    "rpiplayer_api_version": "0.1",
+    "kalinka_api_version": "0.1",
 }
 
 
@@ -17,8 +17,8 @@ def get_service_info():
     server_cfg = config["server"]
 
     return ServiceInfo(
-        type_="_rpiplayer._tcp.local.",
-        name=f"{server_cfg['service_name']}._rpiplayer._tcp.local.",
+        type_="_kalinkaplayer._tcp.local.",
+        name=f"{server_cfg['service_name']}._kalinkaplayer._tcp.local.",
         addresses=[get_ip_address(server_cfg["interface"])],
         port=server_cfg["port"],
         properties=desc,

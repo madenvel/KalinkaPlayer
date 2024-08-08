@@ -7,7 +7,7 @@ from src.events import EventType
 from src.inputmodule import TrackInfo, Track, TrackUrl
 from data_model.datamodel import Album
 from src.playqueue import PlayQueue
-from src.rpiasync import EventEmitter
+from src.async_common import EventEmitter
 
 
 def create_track(id: str):

@@ -11,7 +11,7 @@ from data_model.response_model import AudioInfo, PlayerState
 from data_model.datamodel import Track
 
 from src.event_loop import AsyncExecutor, enqueue
-from src.rpiasync import EventEmitter
+from src.async_common import EventEmitter
 from src.inputmodule import TrackInfo
 from src.events import EventType
 from src.config import config

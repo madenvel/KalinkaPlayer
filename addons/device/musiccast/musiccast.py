@@ -5,7 +5,7 @@ from src.events import EventType
 
 from src.ext_device import SupportedFunction, Volume
 from src.playqueue import PlayQueue
-from src.rpiasync import EventEmitter
+from src.async_common import EventEmitter
 from src.config import config
 
 import threading

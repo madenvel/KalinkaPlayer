@@ -11,7 +11,7 @@ from data_model.response_model import (
     GenreList,
 )
 from src.events import EventType
-from src.rpiasync import EventEmitter
+from src.async_common import EventEmitter
 
 from src.inputmodule import (
     SearchType,

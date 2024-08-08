@@ -690,8 +690,10 @@ void AlsaAudioEmitter::setupAudioFormat(
         std::string(snd_strerror(err)));
   }
 
-  // Hack for Raspberry Pi HiFiBerry
-  // Sleep to make sure RPi is ready to play
+  // Hack for HiFiBerry boards on Raspberry Pi
+  // Sleep to make sure RPi is ready to play.
+  // I2S sync mechanism doesn't work properly
+  // wich results in the first ~500 ms of the track being cut off.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 

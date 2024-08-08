@@ -1,10 +1,9 @@
 # What is it?
-This project provides a backend to stream music on systems running Linux (including Raspberry Pi 4+). It provides a REST API to control the playqueue and playback,
-as well as an ability to discover new content.
+This project provides a backend to stream music on systems running Linux (including Raspberry Pi 4+) and  REST API to control the playqueue and playback, as well as an ability to discover new content.
 
-At this point, it only supports [Qobuz](https://www.qobuz.com) as a streaming platform, so you need to have a valid subscription.
+At this point, it only supports [Qobuz](https://www.qobuz.com) as a streaming platform, and you must have a valid subscription.
 
-The target audience for this are DIY HiFi enthusiast familiar with linux and command line.
+The target audience for this are DIY HiFi enthusiasts familiar with linux and command line.
 
 # Features
 - Supports Qobuz as a streaming platform, including:
@@ -16,20 +15,20 @@ The target audience for this are DIY HiFi enthusiast familiar with linux and com
 - Gapless playback for the songs of the same audio format
 - Supports MusicCast device volume control and automatic turn on / off
 - Works on Raspberry Pi (used on RPi 4 with Raspberry OS bullseye), low CPU & memory usage. The main part is written in C++.
-- Control App (see RpiMusic project) that runs on multiple platforms.
+- Kalinka Music App is a player control application that runs on multiple platforms.
 
 # Installation
 There's currently no package provided for easy installation, hence the service has to be built and run manually. This is planned to be addressed in the future.
 
 ## Prepare environment
-1. Clone the repository, `git clone https://github.com/madenvel/RpiPlayer.git`
+1. Clone the repository, `git clone https://github.com/madenvel/KalinkaPlayer.git`
 2. Install pre-requisites [WIP]
 ```
 sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
 ```
 3. Create python virtual environment:
 ```
-cd RpiPlayer
+cd KalinkaPlayer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -77,10 +76,9 @@ nohup ./run_server.py &
 The log will be saved to `nohup.out`.
 If you were running the server on Raspberry Pi, you can logout now.
 
-7. Download and install the app (see RpiMusic project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
+7. Download and install the app (see KalinkaApp project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
 9. Enjoy!
 
 # Notes
 * Audio engine uses ALSA directly and relies on its configuration. If automatic resampling is set up, it will likely affect the app but it should still work.
-* I run this on Raspberry Pi 4 with HiFiBerry Digi2 card configured as recommended in their manual. This software would likely work with any card that supports ALSA
-* but there might be issues.
+* I run this on Raspberry Pi 4 with HiFiBerry Digi2 card configured as recommended in their manual. This software would likely work with any card that works with ALSA but there might be issues.
