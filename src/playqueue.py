@@ -169,7 +169,11 @@ class PlayQueue(AsyncExecutor):
         if len(self.track_list) == 0:
             return
 
-        if index is not None and index not in range(0, len(self.track_list)):
+        if (
+            index is not None
+            and index not in range(0, len(self.track_list))
+            or index in self.prepared_tracks
+        ):
             return
 
         logger.info(f"Playing next track index={index}")
@@ -352,6 +356,7 @@ class PlayQueue(AsyncExecutor):
         ) / 1000
 
         if time_to_prefetch_s < 0:
+            self.play_next(next_track_id)
             return
 
         logger.info(f"Prefetching next track in {time_to_prefetch_s} seconds")
