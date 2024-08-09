@@ -169,3 +169,25 @@ TEST_F(IntegrationTest, fileInputReadAllAndSearchToBeg) {
   EXPECT_EQ(contentRead, contentLength * 4);
   flacStreamDecoder->disconnect(fileInputNode);
 }
+
+TEST_F(IntegrationTest, test_play_after_finished) {
+  const auto totalDuration = 1000;
+  auto outputNode1 = std::make_shared<SineWaveNode>(440, totalDuration);
+  auto outputNode2 = std::make_shared<SineWaveNode>(880, totalDuration);
+  auto switcher = std::make_shared<AudioStreamSwitcher>();
+  switcher->connectTo(outputNode1);
+  alsaAudioEmitter->connectTo(switcher);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+  switcher->connectTo(outputNode2);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+}

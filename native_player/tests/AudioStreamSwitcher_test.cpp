@@ -210,3 +210,33 @@ TEST_F(AudioStreamSwitcherTest, disconnectDuringWait) {
   EXPECT_EQ(audioStreamSwitcher->waitForData(std::stop_token(), 1), 0);
   disconnectThread.join();
 }
+
+TEST_F(AudioStreamSwitcherTest, connect_after_finished) {
+  audioStreamSwitcher->connectTo(sineWaveNode440);
+  ASSERT_EQ(audioStreamSwitcher->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+  audioStreamSwitcher->acceptSourceChange();
+  EXPECT_EQ(audioStreamSwitcher->getState().state,
+            AudioGraphNodeState::STREAMING);
+  std::vector<uint8_t> buffer(100);
+
+  while (audioStreamSwitcher->getState().state ==
+         AudioGraphNodeState::STREAMING) {
+    audioStreamSwitcher->read(buffer.data(), buffer.size());
+  }
+  EXPECT_EQ(audioStreamSwitcher->getState().state,
+            AudioGraphNodeState::FINISHED);
+
+  audioStreamSwitcher->connectTo(sineWaveNode880);
+
+  ASSERT_EQ(audioStreamSwitcher->getState().state,
+            AudioGraphNodeState::SOURCE_CHANGED);
+  audioStreamSwitcher->acceptSourceChange();
+
+  while (audioStreamSwitcher->getState().state ==
+         AudioGraphNodeState::STREAMING) {
+    audioStreamSwitcher->read(buffer.data(), buffer.size());
+  }
+  EXPECT_EQ(audioStreamSwitcher->getState().state,
+            AudioGraphNodeState::FINISHED);
+}

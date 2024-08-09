@@ -13,7 +13,11 @@ void AudioStreamSwitcher::connectTo(
   std::lock_guard lock(mutex);
   inputNodes.push_back(inputNode);
 
-  if (currentInputNode == nullptr) {
+  if (currentInputNode == nullptr ||
+      getState().state == AudioGraphNodeState::FINISHED) {
+    if (currentInputNode != nullptr) {
+      currentInputNode = nullptr;
+    }
     stopSource.request_stop();
     stopSource = std::stop_source();
     setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
