@@ -37,8 +37,6 @@ private:
   size_t WriteCallback(void *contents, size_t size, size_t nmemb);
   void emptyBufferCallback(DequeBuffer<uint8_t> &buffer);
   size_t headerCallback(char *buffer, size_t size, size_t nitems);
-  int progressCallback(double dltotal, double dlnow, double ultotal,
-                       double ulnow);
 
   void readHeader();
 
@@ -46,6 +44,7 @@ private:
 
   std::mutex mutex;
   std::condition_variable_any cv;
+  curlpp::Easy request;
 };
 
 #endif

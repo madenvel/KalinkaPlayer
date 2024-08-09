@@ -15,6 +15,8 @@ const size_t FLAC_BUFFER_SIZE = 1536000;
 // 750KB, 50% of flac buffer size
 // approx. flac compression ratio is 50%
 const size_t HTTP_BUFFER_SIZE = 768000;
+
+const size_t CHUNK_SIZE = HTTP_BUFFER_SIZE / 2;
 } // namespace
 
 struct StreamNodes {
@@ -23,8 +25,8 @@ struct StreamNodes {
   const std::string url;
 
   StreamNodes(const std::string &url) : url(url) {
-    nodeChain.emplace_back(
-        std::make_shared<AudioGraphHttpStream>(url, HTTP_BUFFER_SIZE));
+    nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
+        url, HTTP_BUFFER_SIZE, CHUNK_SIZE));
 
     auto decoder = std::make_shared<FlacStreamDecoder>(FLAC_BUFFER_SIZE);
     decoder->connectTo(nodeChain.back());

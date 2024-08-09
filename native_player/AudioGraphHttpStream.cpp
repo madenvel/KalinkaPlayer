@@ -43,7 +43,10 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
   while (sizeWritten < totalSize) {
     auto spaceAvailable = buffer.waitForSpace(combinedStopToken.get_token());
     if (combinedStopToken.get_token().stop_requested()) {
-      break;
+      if (seekRequestSignal.getStopToken().stop_requested()) {
+        return chunkSize ? totalSize : 0;
+      }
+      return 0;
     }
     auto writtenChunkSize =
         buffer.write(static_cast<uint8_t *>(contents) + sizeWritten,
@@ -93,17 +96,7 @@ size_t AudioGraphHttpStream::headerCallback(char *buffer, size_t size,
   return totalSize;
 }
 
-int AudioGraphHttpStream::progressCallback(double dltotal, double dlnow,
-                                           double ultotal, double ulnow) {
-  if (seekRequestSignal.getStopToken().stop_requested() ||
-      readerThread.get_stop_token().stop_requested()) {
-    return 1;
-  }
-  return 0;
-}
-
 void AudioGraphHttpStream::readHeader() {
-  curlpp::Easy request;
   curlpp::options::Url myUrl(url);
   request.setOpt(myUrl);
   request.setOpt(new curlpp::options::NoBody(true));
@@ -246,7 +239,7 @@ void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
 int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
   using namespace std::placeholders;
 
-  curlpp::Easy request;
+  request.reset();
   curlpp::options::Url myUrl(url);
   request.setOpt(myUrl);
 
@@ -256,18 +249,12 @@ int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
     if (chunkSize) {
       range << chunkSize + offset - 1;
     }
-    spdlog::info("Request range {}-{}/{}", offset,
-                 (chunkSize ? std::to_string(chunkSize + offset - 1) : ""),
-                 contentLength);
     request.setOpt(new curlpp::options::Range(range.str()));
   }
 
   request.setOpt(new curlpp::options::ConnectTimeout(10));
   request.setOpt(new curlpp::options::WriteFunction(
       std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3)));
-  request.setOpt(new curlpp::options::NoProgress(false));
-  request.setOpt(new curlpp::options::ProgressFunction(std::bind(
-      &AudioGraphHttpStream::progressCallback, this, _1, _2, _3, _4)));
   request.perform();
 
   long responseCode = 0;
