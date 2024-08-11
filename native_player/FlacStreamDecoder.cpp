@@ -301,11 +301,11 @@ size_t FlacStreamDecoder::seekTo(size_t absolutePosition) {
     return -1;
   }
 
-  spdlog::debug("FlacStreamDecoder::seekTo({})", absolutePosition);
+  spdlog::trace("FlacStreamDecoder::seekTo({})", absolutePosition);
   seekSignal.sendValue(absolutePosition);
   // TODO: Pass a calling thread stop token
   auto retVal = seekSignal.getResponse(std::stop_token());
-  spdlog::debug("FlacStreamDecoder::seekTo({}) -> {}", absolutePosition,
+  spdlog::trace("FlacStreamDecoder::seekTo({}) -> {}", absolutePosition,
                 retVal);
   return retVal;
 }
