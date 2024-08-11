@@ -46,7 +46,7 @@ server:
   interface: <NETWORK INTERFACE> # i.g. wlan0
   port: <PORT>
   service_name: <SERVICE NAME> # i.g. MyPlayer
-output_device:
+output:
   alsa:
     device: <ALSA OUTPUT DEVICE> # typically hw:0,0
 addons:
