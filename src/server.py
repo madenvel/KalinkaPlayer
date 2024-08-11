@@ -16,6 +16,9 @@ from src.service_discovery import ServiceDiscovery
 
 playqueue, event_listener, inputmodule, device = setup()
 
+if not inputmodule:
+    raise Exception("No input module configured")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -192,16 +195,19 @@ async def remove(index: int):
 
 @app.get("/device/list")
 async def set_device_params():
-    return device.supported_functions()
+    return device.supported_functions() if device else []
 
 
 @app.get("/device/get_volume")
 async def get_volume(device_id: str) -> Volume:
-    return device.get_volume()
+    return device.get_volume() if device else Volume(current_volume=0, max_volume=0)
 
 
 @app.put("/device/set_volume")
 async def set_volume(device_id: str, volume: int):
+    if device is None:
+        return {"message": "No device configured"}
+
     device.set_volume(volume)
     return {"message": "Ok"}
 

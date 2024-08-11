@@ -186,7 +186,9 @@ class Device:
         self._request_musiccast(f"/main/setInput?input={self.connected_input}")
 
     def _request_musiccast(self, endpoint, headers=None):
-        response = self.session.get(self.base_url + endpoint, headers=headers)
+        response = self.session.get(
+            self.base_url + endpoint, headers=headers, timeout=5
+        )
         if response.status_code != 200:
             raise Exception(f"MusicCast returned {response.status_code}")
 

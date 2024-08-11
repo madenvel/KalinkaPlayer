@@ -1,55 +1,54 @@
-from addons.input_module.qobuz.qobuz_reporter import QobuzReporter
+import logging
+
 from src.async_common import EventEmitter, EventListener
 from queue import Queue
-from addons.input_module.qobuz.qobuz_autoplay import QobuzAutoplay
-from addons.input_module.qobuz import (
-    QobuzInputModule,
-    get_client,
-)
 
+from src.ext_device import ExternalOutputDevice
+from src.module_import import import_module_by_path
 from src.playqueue import EventType, PlayQueue
 from src.inputmodule import InputModule
 from addons.device.musiccast.musiccast import Device
 
+from src.config import config
 
-def setup_autoplay(
-    client,
-    playqueue: PlayQueue,
-    track_browser: InputModule,
-    event_listener: EventListener,
-):
-    autoplay = QobuzAutoplay(client, playqueue, track_browser)
-    event_listener.subscribe(EventType.RequestMoreTracks, autoplay.add_recommendation)
-    event_listener.subscribe(EventType.TracksAdded, autoplay.add_tracks)
-    event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
+logger = logging.getLogger(__name__.split(".")[-1])
 
 
-def setup_reporter(
-    client,
-    event_listener: EventListener,
-):
-    reporter = QobuzReporter(client)
-    event_listener.subscribe(EventType.StateChanged, reporter.on_state_changed)
+def setup_input_module(playqueue, event_emitter, event_listener) -> InputModule:
+    input_modules = config["addons"]["input_module"]
+
+    if not input_modules:
+        return None
+
+    current_module = list(input_modules.items())[0]
+    logger.info(f"Setting up input module: {current_module[0]}")
+    input = import_module_by_path(
+        "addons.input_module." + current_module[0].lower() + ".module_setup"
+    )
+    return input.setup(playqueue, event_emitter, event_listener)
 
 
-def setup_device(
-    playqueue: PlayQueue, event_listener: EventListener, event_emitter: EventEmitter
-):
-    device = Device(playqueue, event_emitter)
-    event_listener.subscribe(EventType.StateChanged, device._on_state_changed)
+def setup_device(playqueue, event_emitter, event_listener) -> ExternalOutputDevice:
+    devices = config["addons"]["device"]
 
-    return device
+    if not devices:
+        return None
+
+    current_device = list(devices.items())[0]
+    logger.info(f"Enabling device control: {current_device[0]}")
+    input = import_module_by_path(
+        "addons.device." + current_device[0].lower() + ".module_setup"
+    )
+
+    return input.setup(playqueue, event_emitter, event_listener)
 
 
 def setup():
-    client = get_client()
     queue = Queue()
     event_emitter = EventEmitter(queue)
     event_listener = EventListener(queue)
-    inputmodule = QobuzInputModule(client, event_emitter)
     playqueue = PlayQueue(event_emitter)
-    setup_reporter(client, event_listener)
-    setup_autoplay(client, playqueue, inputmodule, event_listener)
-    device = setup_device(playqueue, event_listener, event_emitter)
+    inputmodule = setup_input_module(playqueue, event_emitter, event_listener)
+    device = setup_device(playqueue, event_emitter, event_listener)
 
     return playqueue, event_listener, inputmodule, device
