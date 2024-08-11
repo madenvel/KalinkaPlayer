@@ -67,18 +67,21 @@ private:
   std::vector<pollfd> ufds;
 
   std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;
-  std::atomic<bool> paused = false;
   Signal<size_t> seekRequestSignal;
+  Signal<bool> pauseRequestSignal;
+  bool paused = false;
   bool seekHappened = false;
 
   void workerThread(std::stop_token token);
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
   StreamState waitForInputToBeReady(std::stop_token token);
+  bool handleSeekSignal();
+  bool handlePauseSignal(bool paused);
 
   bool openDevice();
   void closeDevice();
 
-  snd_pcm_sframes_t waitForAlsaBufferSpace(std::stop_token stopToken);
+  snd_pcm_sframes_t waitForAlsaBufferSpace();
   bool hasInputSourceStateChanged();
   snd_pcm_sframes_t writeToAlsa(
       snd_pcm_uframes_t framesToWrite,

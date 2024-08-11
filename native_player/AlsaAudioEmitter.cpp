@@ -217,26 +217,8 @@ void AlsaAudioEmitter::disconnect(
 }
 
 void AlsaAudioEmitter::pause(bool paused) {
-  auto state = getState();
-  auto stateToSet = state.state == AudioGraphNodeState::STREAMING
-                        ? AudioGraphNodeState::PAUSED
-                        : AudioGraphNodeState::STREAMING;
-
-  if ((state.state == AudioGraphNodeState::STREAMING ||
-       state.state == AudioGraphNodeState::PAUSED) &&
-      state.state != stateToSet) {
-    this->paused = paused;
-    StreamState newState(stateToSet, 0, state.streamInfo);
-    newState.position = framesToTimeMs(currentSourceTotalFramesWritten).count();
-    snd_pcm_sframes_t delay = 0;
-    int err = snd_pcm_delay(pcmHandle, &delay);
-    if (err < 0) {
-      spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
-    }
-    playedFramesCounter.callOnOrAfterFrame(
-        delay,
-        [this, newState](snd_pcm_sframes_t frames) { setState(newState); });
-  }
+  pauseRequestSignal.sendValue(paused);
+  pauseRequestSignal.getResponse(std::stop_token());
 }
 
 size_t AlsaAudioEmitter::seek(size_t positionMs) {
@@ -281,8 +263,6 @@ void AlsaAudioEmitter::setState(const StreamState &newState) {
 #endif
 
 StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
-  auto combinedToken =
-      combineStopTokens(token, seekRequestSignal.getStopToken());
   StreamState inputNodeState = inputNode->getState();
   while (!token.stop_requested()) {
     switch (inputNodeState.state) {
@@ -306,23 +286,58 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
       break;
     }
     if (seekRequestSignal.getValue()) {
-      auto positionMs = *seekRequestSignal.getValue();
-      auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
-      spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
-      seekRequestSignal.respond(framesToTimeMs(seekValue).count());
-      auto retVal = inputNode->seekTo(seekValue);
-      if (retVal != seekValue) {
-        spdlog::warn("Seek request failed, requested={}, actual={}", seekValue,
-                     retVal);
-      }
-      seekHappened = true;
+      handleSeekSignal();
     }
+
+    if (pauseRequestSignal.getValue()) {
+      pauseRequestSignal.respond(false);
+    }
+
+    auto combinedToken =
+        combineStopTokens(token, seekRequestSignal.getStopToken(),
+                          pauseRequestSignal.getStopToken());
     StateChangeWaitLock lock(combinedToken.get_token(), *inputNode,
                              inputNodeState.timestamp);
     inputNodeState = lock.state();
   };
 
   return inputNodeState;
+}
+
+bool AlsaAudioEmitter::handleSeekSignal() {
+  auto positionMs = *seekRequestSignal.getValue();
+  auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
+  spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
+  seekRequestSignal.respond(framesToTimeMs(seekValue).count());
+  auto retVal = inputNode->seekTo(seekValue);
+  if (retVal != seekValue) {
+    spdlog::warn("Seek request failed, requested={}, actual={}", seekValue,
+                 retVal);
+    return false;
+  }
+  seekHappened = true;
+  return true;
+}
+
+bool AlsaAudioEmitter::handlePauseSignal(bool paused) {
+  auto state = getState();
+  auto stateToSet =
+      paused ? AudioGraphNodeState::PAUSED : AudioGraphNodeState::STREAMING;
+
+  this->paused = paused;
+  StreamState newState(stateToSet, 0, state.streamInfo);
+  newState.position = framesToTimeMs(currentSourceTotalFramesWritten).count();
+  snd_pcm_sframes_t delay = 0;
+  int err = snd_pcm_delay(pcmHandle, &delay);
+  if (err < 0) {
+    spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
+    return false;
+  }
+  playedFramesCounter.callOnOrAfterFrame(
+      delay,
+      [this, newState](snd_pcm_sframes_t frames) { setState(newState); });
+
+  return true;
 }
 
 bool AlsaAudioEmitter::openDevice() {
@@ -359,8 +374,7 @@ void AlsaAudioEmitter::closeDevice() {
   }
 }
 
-snd_pcm_sframes_t
-AlsaAudioEmitter::waitForAlsaBufferSpace(std::stop_token stopToken) {
+snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
   snd_pcm_sframes_t frames = 0;
   int err = wait_for_poll(pcmHandle, ufds.data(), ufds.size());
   if (err < 0) {
@@ -583,13 +597,14 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       paused = false;
 
       while (!token.stop_requested()) {
-        auto framesToRead = waitForAlsaBufferSpace(token);
+        auto framesToRead = waitForAlsaBufferSpace();
         if (!framesToRead) {
           break;
         }
 
         auto combinedToken =
-            combineStopTokens(token, seekRequestSignal.getStopToken());
+            combineStopTokens(token, seekRequestSignal.getStopToken(),
+                              pauseRequestSignal.getStopToken());
 
         auto framesRead =
             readIntoAlsaFromStream(combinedToken.get_token(), framesToRead);
@@ -597,22 +612,24 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
           break;
         }
 
-        if (seekRequestSignal.getStopToken().stop_requested()) {
+        if (pauseRequestSignal.getValue()) {
+          if (paused != *pauseRequestSignal.getValue()) {
+            bool success = handlePauseSignal(*pauseRequestSignal.getValue());
+            pauseRequestSignal.respond(success ? *pauseRequestSignal.getValue()
+                                               : paused);
+          } else {
+            pauseRequestSignal.respond(paused);
+          }
+          continue;
+        }
+
+        if (seekRequestSignal.getValue()) {
           setState(StreamState{AudioGraphNodeState::PREPARING});
-          auto seekValue = *seekRequestSignal.getValue() *
-                           currentStreamAudioFormat.sampleRate / 1000;
-          spdlog::info("Request seek to {}ms ({} frames)",
-                       *seekRequestSignal.getValue(), seekValue);
-          auto retVal = inputNode->seekTo(seekValue);
-          seekRequestSignal.respond(framesToTimeMs(seekValue).count());
-          if (retVal != seekValue) {
-            spdlog::warn("Seek request failed, requested={}, actual={}",
-                         seekValue, retVal);
+          if (!handleSeekSignal()) {
             continue;
           }
 
           drainPcm();
-          seekHappened = true;
           break;
         }
 
