@@ -5,8 +5,6 @@
 
 #include "TestHelpers.h"
 
-#include "Log.h"
-
 class AudioGraphHttpStreamTest : public ::testing::Test {
 protected:
   const std::string url =
@@ -59,7 +57,6 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_forward) {
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
   auto contentLength = state.streamInfo.value().totalSamples;
-  spdlog::info("Content length: {}", contentLength);
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   size_t halfContent = contentLength / 2;
