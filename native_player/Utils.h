@@ -1,29 +1,49 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <array>
 #include <functional>
-#include <thread>
+#include <memory>
+#include <stop_token>
+#include <tuple>
+#include <type_traits>
 
-struct CombinedStopToken {
-  std::stop_source stopSource;
-  std::stop_callback<std::function<void()>> callback1;
-  std::stop_callback<std::function<void()>> callback2;
+template <std::size_t N> class CombinedStopToken {
+  static_assert(N > 0, "Number of tokens must be greater than 0");
 
-  CombinedStopToken(const std::stop_token &token1,
-                    const std::stop_token &token2)
-      : stopSource(),
-        callback1(token1, [this]() { stopSource.request_stop(); }),
-        callback2(token2, [this]() { stopSource.request_stop(); }) {}
+public:
+  template <typename... Tokens>
+  CombinedStopToken(Tokens... tokens) : stopTokens_{tokens...} {
+    static_assert(sizeof...(Tokens) == N,
+                  "Number of tokens must match template parameter N");
+    static_assert((std::is_same_v<Tokens, std::stop_token> && ...),
+                  "All Tokens must be std::stop_token");
+    registerCallbacks(std::index_sequence_for<Tokens...>{});
+  }
 
-  CombinedStopToken() = delete;
+  std::stop_token get_token() { return combinedSource_.get_token(); }
 
-  std::stop_token get_token() const { return stopSource.get_token(); }
+private:
+  using Callback = std::stop_callback<std::function<void()>>;
+  std::array<std::stop_token, N> stopTokens_;
+  std::stop_source combinedSource_;
+  std::array<std::unique_ptr<Callback>, N> callbacks_;
+
+  template <std::size_t... Is>
+  void registerCallbacks(std::index_sequence<Is...>) {
+    (registerCallback<Is>(), ...);
+  }
+
+  template <std::size_t I> void registerCallback() {
+    auto &token = stopTokens_[I];
+    callbacks_[I] = std::make_unique<Callback>(
+        token, [this]() { combinedSource_.request_stop(); });
+  }
 };
 
-inline CombinedStopToken combineStopTokens(const std::stop_token &token1,
-                                           const std::stop_token &token2) {
-
-  return CombinedStopToken(token1, token2);
+template <typename... Tokens>
+CombinedStopToken<sizeof...(Tokens)> combineStopTokens(Tokens... tokens) {
+  return CombinedStopToken<sizeof...(Tokens)>(tokens...);
 }
 
 template <typename SignalType> class Signal {
