@@ -191,8 +191,10 @@ int wait_for_poll(snd_pcm_t *handle, struct pollfd *ufds, unsigned int count) {
 } // namespace
 
 AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
-                                   size_t bufferSize, size_t periodSize)
-    : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize) {}
+                                   size_t bufferSize, size_t periodSize,
+                                   size_t sleepAfterFormatSetupMs)
+    : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize),
+      sleepAfterFormatSetupMs(sleepAfterFormatSetupMs) {}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
@@ -694,7 +696,10 @@ void AlsaAudioEmitter::setupAudioFormat(
   // Sleep to make sure RPi is ready to play.
   // I2S sync mechanism doesn't work properly
   // wich results in the first ~500 ms of the track being cut off.
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  if (sleepAfterFormatSetupMs) {
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(sleepAfterFormatSetupMs));
+  }
 }
 
 void PlayedFramesCounter::update(snd_pcm_sframes_t frames) {

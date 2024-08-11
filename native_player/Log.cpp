@@ -44,7 +44,7 @@ public:
 };
 
 // Function to initialize the logger with a custom format
-void initLogger() {
+void initLogger(const std::string &logLevel) {
   auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
   auto formatter = std::make_unique<spdlog::pattern_formatter>();
   formatter->add_flag<CustomLogLevelFormatter>('L').set_pattern(
@@ -54,5 +54,5 @@ void initLogger() {
 
   auto logger = std::make_shared<spdlog::logger>("native", console_sink);
   spdlog::set_default_logger(logger);
-  spdlog::set_level(spdlog::level::debug);
+  spdlog::set_level(spdlog::level::from_str(logLevel));
 }

@@ -37,7 +37,8 @@ private:
 class AlsaAudioEmitter : public AudioGraphEmitterNode {
 public:
   AlsaAudioEmitter(const std::string &deviceName, size_t bufferSize = 16384,
-                   size_t periodSize = 1024);
+                   size_t periodSize = 1024,
+                   size_t sleepAfterFormatSetupMs = 0);
 
   virtual void
   connectTo(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
@@ -51,6 +52,10 @@ public:
 
 private:
   std::string deviceName;
+  snd_pcm_uframes_t bufferSize;
+  snd_pcm_uframes_t periodSize;
+  size_t sleepAfterFormatSetupMs;
+
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
   mutable std::mutex mut;
@@ -59,8 +64,6 @@ private:
   PlayedFramesCounter playedFramesCounter;
   snd_pcm_t *pcmHandle = nullptr;
 
-  snd_pcm_uframes_t bufferSize;
-  snd_pcm_uframes_t periodSize;
   std::vector<pollfd> ufds;
 
   std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;

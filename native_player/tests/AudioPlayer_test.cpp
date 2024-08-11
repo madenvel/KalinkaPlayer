@@ -1,5 +1,6 @@
 #include "AudioGraphNode.h"
 #include "AudioPlayer.h"
+#include "Config.h"
 #include "StateMonitor.h"
 #include "StreamState.h"
 
@@ -14,9 +15,16 @@ protected:
   const std::string url3 =
       "https://getsamplefiles.com/download/flac/sample-2.flac";
 
+  Config config = {{"input.http.buffer_size", "768000"},
+                   {"input.http.chunk_size", "384000"},
+                   {"decoder.flac.buffer_size", "1536000"},
+                   {"output.alsa.device", "hw:0,0"},
+                   {"output.alsa.buffer_size", "16384"},
+                   {"output.alsa.period_size", "1024"}};
+
   AudioPlayer audioPlayer;
 
-  AudioPlayerTest() : audioPlayer("hw:0,0") {}
+  AudioPlayerTest() : audioPlayer(config) {}
 };
 
 TEST_F(AudioPlayerTest, constructor_destructor) {}

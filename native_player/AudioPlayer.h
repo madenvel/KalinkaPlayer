@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+#include "Config.h"
+
 struct StreamState;
 class AudioGraphEmitterNode;
 class AudioStreamSwitcher;
@@ -13,7 +15,7 @@ class StateMonitor;
 
 class AudioPlayer {
 public:
-  AudioPlayer(const std::string &audioDevice);
+  AudioPlayer(const Config &config);
   ~AudioPlayer();
 
   // Open a stream and start playing it immediately.
@@ -43,6 +45,7 @@ public:
   std::unique_ptr<StateMonitor> monitor();
 
 private:
+  Config config;
   std::shared_ptr<AudioGraphEmitterNode> audioEmitter;
   std::shared_ptr<AudioStreamSwitcher> streamSwitcher;
   std::list<StreamNodes> streamNodesList;

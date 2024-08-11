@@ -3,6 +3,6 @@
 
 #include <spdlog/spdlog.h>
 
-extern void initLogger();
+extern void initLogger(const std::string &logLevel);
 
 #endif // LOG_H

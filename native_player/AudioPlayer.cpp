@@ -2,6 +2,7 @@
 #include "AlsaAudioEmitter.h"
 #include "AudioGraphHttpStream.h"
 #include "AudioStreamSwitcher.h"
+#include "Config.h"
 #include "FlacStreamDecoder.h"
 #include "Log.h"
 #include "StateMonitor.h"
@@ -24,11 +25,13 @@ struct StreamNodes {
   NodeChain nodeChain;
   const std::string url;
 
-  StreamNodes(const std::string &url) : url(url) {
+  StreamNodes(const std::string &url, const Config &config) : url(url) {
     nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
-        url, HTTP_BUFFER_SIZE, CHUNK_SIZE));
+        url, value_or(config, "input.http.buffer_size", HTTP_BUFFER_SIZE),
+        value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
 
-    auto decoder = std::make_shared<FlacStreamDecoder>(FLAC_BUFFER_SIZE);
+    auto decoder = std::make_shared<FlacStreamDecoder>(
+        value_or(config, "decoder.flac.buffer_size", FLAC_BUFFER_SIZE));
     decoder->connectTo(nodeChain.back());
     nodeChain.emplace_back(std::move(decoder));
   }
@@ -49,10 +52,15 @@ struct StreamNodes {
   }
 };
 
-AudioPlayer::AudioPlayer(const std::string &audioDevice)
-    : audioEmitter(std::make_shared<AlsaAudioEmitter>(audioDevice)),
+AudioPlayer::AudioPlayer(const Config &config)
+    : config(config),
+      audioEmitter(std::make_shared<AlsaAudioEmitter>(
+          value_or(config, "output.alsa.device", std::string("hw:0,0")),
+          value_or(config, "output.alsa.buffer_size", 16384),
+          value_or(config, "output.alsa.period_size", 1024),
+          value_or(config, "fixups.alsa_sleep_after_format_setup_ms", 0))),
       streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
-  initLogger();
+  initLogger(value_or(config, "server.log_level", std::string("debug")));
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }
@@ -69,7 +77,7 @@ void AudioPlayer::play(const std::string &url) {
     }
   }
 
-  StreamNodes newStream(url);
+  StreamNodes newStream(url, config);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   disconnectAllStreams();
@@ -78,7 +86,7 @@ void AudioPlayer::play(const std::string &url) {
 
 void AudioPlayer::playNext(const std::string &url) {
   spdlog::debug("Adding new track to play next");
-  StreamNodes newStream(url);
+  StreamNodes newStream(url, config);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   cleanUpFinishedStreams();

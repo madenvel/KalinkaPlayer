@@ -21,6 +21,7 @@ from native_player.native_player import (
     StreamState,
     AudioGraphNodeState,
     StreamInfo,
+    py_dict_to_config,
 )
 
 
@@ -80,7 +81,8 @@ class PlayQueue(AsyncExecutor):
     def __init__(self, event_emitter: EventEmitter):
         super().__init__()
         self.event_emitter = event_emitter
-        self.track_player = AudioPlayer(config["output_device"]["alsa"]["device"])
+        self.config = py_dict_to_config(config)
+        self.track_player = AudioPlayer(self.config)
         self.current_track_id = 0
         self.track_list: list[TrackInfo] = []
 
