@@ -80,6 +80,7 @@ PYBIND11_MODULE(native_player, m) {
   py::class_<StateMonitor>(m, "StateMonitor")
       .def("wait_state", &StateMonitor::waitState)
       .def("has_data", &StateMonitor::hasData)
+      .def("is_running", &StateMonitor::isRunning)
       .def("stop", &StateMonitor::stop);
 
   py::class_<AudioPlayer>(m, "AudioPlayer")

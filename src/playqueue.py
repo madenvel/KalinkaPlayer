@@ -87,7 +87,6 @@ class PlayQueue(AsyncExecutor):
         self.track_list: list[TrackInfo] = []
 
         self.timer_thread = None
-        self.listen_state = True
         self.state_monitor = self.track_player.monitor()
         self.prepared_tracks = OrderedDict()
 
@@ -98,14 +97,13 @@ class PlayQueue(AsyncExecutor):
         self.terminate()
 
     def terminate(self):
-        self.listen_state = False
         self.track_player.stop()
         self.state_monitor.stop()
         self.state_update_thread.join()
         super().terminate()
 
     def _state_update_listener(self):
-        while self.listen_state:
+        while self.state_monitor.is_running():
             new_state = self.state_monitor.wait_state()
             logger.info(f"New state: {new_state}")
             self._process_state_update(new_state)

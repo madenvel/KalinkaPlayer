@@ -20,6 +20,7 @@ public:
   StreamState waitState();
 
   bool hasData();
+  bool isRunning() const;
   void stop();
 
 protected:

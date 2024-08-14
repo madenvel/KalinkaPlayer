@@ -22,6 +22,7 @@ protected:
 
 TEST_F(AudioGraphNodeTest, stateMonitor) {
   auto monitor = std::make_shared<StateMonitor>(alsaAudioEmitter.get());
+  EXPECT_TRUE(monitor->isRunning());
   auto fileInputNode = std::make_shared<FileInputNode>(filename);
   flacStreamDecoder->connectTo(fileInputNode);
   alsaAudioEmitter->connectTo(flacStreamDecoder);
@@ -36,6 +37,9 @@ TEST_F(AudioGraphNodeTest, stateMonitor) {
     ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
     EXPECT_EQ(state.state, states[i++]);
   }
+
+  monitor->stop();
+  EXPECT_FALSE(monitor->isRunning());
 
   alsaAudioEmitter->disconnect(flacStreamDecoder);
   flacStreamDecoder->disconnect(fileInputNode);
