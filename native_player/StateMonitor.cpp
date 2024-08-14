@@ -51,6 +51,8 @@ void StateMonitor::stop() {
   cv.notify_all();
 }
 
+bool StateMonitor::isRunning() const { return !stopped; }
+
 StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
                                          AudioGraphNode &node,
                                          AudioGraphNodeState nextState)
