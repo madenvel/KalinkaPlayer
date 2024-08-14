@@ -4,6 +4,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from data_model.response_model import FavoriteIds, GenreList, PlayerState
+from src import state_keeper
 from src.ext_device import Volume
 from src.player_setup import setup
 from src.rest_event_proxy import EventStream
@@ -22,13 +23,21 @@ if not inputmodule:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    sd = ServiceDiscovery()
-    await sd.register_service()
-    yield
-    logger.info("Shutting down...")
-    await sd.unregister_service()
-    event_listener.terminate()
-    playqueue.terminate()
+    try:
+        sd = ServiceDiscovery()
+        await sd.register_service()
+        state_keeper.restore_state(playqueue, inputmodule)
+        yield
+
+    except Exception as e:
+        logger.error(f"Error: {e}")
+
+    finally:
+        logger.info("Shutting down...")
+        await sd.unregister_service()
+        event_listener.terminate()
+        state_keeper.save_state(playqueue, inputmodule)
+        playqueue.terminate()
 
 
 logger = logging.getLogger(__name__.split(".")[-1])

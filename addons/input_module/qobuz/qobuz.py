@@ -262,6 +262,9 @@ class QobuzInputModule(InputModule):
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
 
+    def module_name(self) -> str:
+        return "Qobuz"
+
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> list[BrowseItem]:

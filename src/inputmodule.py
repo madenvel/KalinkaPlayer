@@ -27,6 +27,10 @@ class SearchType(str, Enum):
 
 class InputModule(ABC):
     @abstractmethod
+    def module_name(self) -> str:
+        pass
+
+    @abstractmethod
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:

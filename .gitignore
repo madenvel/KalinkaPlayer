@@ -1,5 +1,6 @@
 __pycache__
 kalinka_conf.yaml
+kalinka_state.json
 *.so
 *.o
 build/
