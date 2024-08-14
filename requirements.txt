@@ -1,4 +1,3 @@
-qobuz-dl
 requests
 pydantic
 fastapi
