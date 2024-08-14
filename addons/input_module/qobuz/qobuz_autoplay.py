@@ -1,9 +1,8 @@
 from functools import partial
 import logging
-from qobuz_dl.qopy import Client
 
 from src.playqueue import PlayQueue
-from .qobuz import qobuz_link_retriever, metadata_from_track
+from .qobuz import QobuzClient, qobuz_link_retriever, metadata_from_track
 from src.inputmodule import InputModule, TrackInfo
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -12,7 +11,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class QobuzAutoplay:
     def __init__(
         self,
-        qobuz_client: Client,
+        qobuz_client: QobuzClient,
         playqueue: PlayQueue,
         track_browser: InputModule,
         amount_to_request: int = 50,

@@ -1,7 +1,7 @@
 import hashlib
 import time
 from typing import List
-from qobuz_dl.bundle import Bundle
+from .bundle import Bundle
 
 from functools import partial
 from data_model.response_model import (
@@ -71,6 +71,10 @@ class InvalidQuality(Exception):
 
 class NonStreamable(Exception):
     pass
+
+
+# The code below is partially based on the code from
+# qobuz-dl by vitiko98, fc7
 
 
 class QobuzClient:
