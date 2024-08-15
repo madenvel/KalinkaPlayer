@@ -1,16 +1,6 @@
 #!/usr/bin/make -f
 
+ARCH := $(shell dpkg --print-architecture)
+
 %:
     dh $@
-
-override_dh_auto_install:
-	mkdir -p $(CURDIR)/usr/bin
-	mkdir -p $(CURDIR)/usr/share/kalinka
-	cp ../kalinka_server.sh $(CURDIR)/usr/bin/
-	cp -r ../addons $(CURDIR)/usr/share/kalinka/
-	cp -r ../data_model $(CURDIR)/usr/share/kalinka/
-	cp -r ../src $(CURDIR)/usr/share/kalinka/
-	cp -r ../run_server.py $(CURDIR)/usr/share/kalinka/
-
-	dh_auto_install
-	
