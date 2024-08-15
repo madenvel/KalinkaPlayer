@@ -1,2 +1,2 @@
 #!/bin/bash
-exec python3 /usr/share/kalinka/run_server.py
+exec python3 /opt/kalinka/run_server.py
