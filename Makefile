@@ -6,7 +6,7 @@ all: $(TARGET)
 
 $(TARGET_DIR):
 	mkdir -p $(TARGET_DIR)
-	cp -r debian $(TARGET_DIR)
+	cp -r DEBIAN $(TARGET_DIR)
 
 $(TARGET): $(TARGET_DIR)
 	cd native_player && make
