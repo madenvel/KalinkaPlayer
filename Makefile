@@ -11,3 +11,7 @@ $(TARGET_DIR):
 $(TARGET): $(TARGET_DIR)
 	cd native_player && make
 	cd $(TARGET_DIR) && dpkg-deb --build .
+
+clean:
+	rm -rf $(TARGET_DIR)
+	cd native_player && make clean
