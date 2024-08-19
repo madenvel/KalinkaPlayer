@@ -8,12 +8,7 @@ Package: kalinka-player
 Version: @VERSION@
 Architecture: @ARCH@
 Depends: python3 (>=3.9),
-    python3-requests,
-    python3-pydantic,
-    python3-fastapi,
-    python3-yaml,
-    python3-uvicorn,
-    python3-zeroconf,
+    python3-venv,
     libcurlpp0,
     libcurl4,
     libflac++10,

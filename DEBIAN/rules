@@ -4,3 +4,6 @@ ARCH := $(shell dpkg --print-architecture)
 
 %:
     dh $@
+
+override_dh_shlibdeps:
+	dh_shlibdeps
