@@ -9,6 +9,8 @@ class AudioGraphHttpStreamTest : public ::testing::Test {
 protected:
   const std::string url =
       "https://getsamplefiles.com/download/flac/sample-2.flac";
+  const std::string urlNoRanges =
+      "https://filesamples.com/samples/audio/flac/sample1.flac";
   const size_t bufferSize = 32768;
 
   void SetUp() override {}
@@ -23,6 +25,9 @@ TEST_F(AudioGraphHttpStreamTest, read) {
   auto audioGraphHttpStream =
       std::make_shared<AudioGraphHttpStream>(url, bufferSize);
   std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  size_t totalLength = state.streamInfo.value().totalSamples;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   while ((bytesToRead =
@@ -32,7 +37,28 @@ TEST_F(AudioGraphHttpStreamTest, read) {
   }
   EXPECT_EQ(audioGraphHttpStream->getState().state,
             AudioGraphNodeState::FINISHED);
-  EXPECT_EQ(totalBytesRead, 11314580);
+  EXPECT_EQ(totalBytesRead, totalLength);
+}
+
+TEST_F(AudioGraphHttpStreamTest, read_no_ranges) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(urlNoRanges, bufferSize);
+  std::shared_ptr<uint8_t[]> data = std::make_shared<uint8_t[]>(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  size_t totalLength = state.streamInfo.value().totalSamples;
+  // Streaming data, no length available
+  EXPECT_EQ(totalLength, 1);
+  size_t bytesToRead = 0;
+  size_t totalBytesRead = 0;
+  while ((bytesToRead =
+              audioGraphHttpStream->waitForData(std::stop_token(), 1)) != 0) {
+    audioGraphHttpStream->read(data.get(), bytesToRead);
+    totalBytesRead += bytesToRead;
+  }
+  EXPECT_EQ(audioGraphHttpStream->getState().state,
+            AudioGraphNodeState::FINISHED);
+  EXPECT_GT(totalBytesRead, 0);
 }
 
 TEST_F(AudioGraphHttpStreamTest, test_broken_url_set_error_status) {

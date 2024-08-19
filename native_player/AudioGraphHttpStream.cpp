@@ -33,6 +33,14 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
                                            size_t nmemb) {
   size_t sizeWritten = 0;
   size_t totalSize = size * nmemb;
+
+  long responseCode = 0;
+  curlpp::Info<CURLINFO_RESPONSE_CODE, long>::get(request, responseCode);
+  if (responseCode != 200 && responseCode != 206) {
+    spdlog::trace("Skipping data for response code {}", responseCode);
+    return totalSize;
+  }
+
   if (setStreamingState) {
     setState(StreamState(AudioGraphNodeState::STREAMING, offset,
                          StreamInfo{.totalSamples = contentLength}));
@@ -96,32 +104,12 @@ size_t AudioGraphHttpStream::headerCallback(char *buffer, size_t size,
   return totalSize;
 }
 
-void AudioGraphHttpStream::readHeader() {
-  curlpp::options::Url myUrl(url);
-  request.setOpt(myUrl);
-  request.setOpt(new curlpp::options::NoBody(true));
-  request.setOpt(new curlpp::options::ConnectTimeout(10));
-  request.setOpt(new curlpp::options::Timeout(10));
-  request.setOpt(new curlpp::options::HeaderFunction(std::bind(
-      &AudioGraphHttpStream::headerCallback, this, std::placeholders::_1,
-      std::placeholders::_2, std::placeholders::_3)));
-  request.setOpt(new curlpp::options::WriteFunction(
-      [](char *contents, size_t size, size_t nmemb) -> size_t {
-        return size * nmemb;
-      }));
-  request.perform();
-  long responseCode = 0;
-  curlpp::Info<CURLINFO_RESPONSE_CODE, long>::get(request, responseCode);
-  if (responseCode != 200) {
-    std::string message =
-        "HTTP HEADER request failed with code " + std::to_string(responseCode);
-    throw std::runtime_error(message);
+void AudioGraphHttpStream::handleSeekSignal(size_t position) {
+  if (!acceptRange && position != 0) {
+    seekRequestSignal.respond(offset);
+    return;
   }
 
-  spdlog::debug("Http Stream: content-length={}", contentLength);
-}
-
-void AudioGraphHttpStream::handleSeekSignal(size_t position) {
   buffer.clear();
   buffer.resetEof();
   offset = position;
@@ -133,7 +121,6 @@ void AudioGraphHttpStream::handleSeekSignal(size_t position) {
 void AudioGraphHttpStream::reader(std::stop_token stopToken) {
   try {
     setState(StreamState(AudioGraphNodeState::PREPARING));
-    readHeader();
     while (!stopToken.stop_requested()) {
       readContentChunks(stopToken);
       buffer.setEof();
@@ -208,6 +195,8 @@ void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
       break;
     case 206:
       continue;
+    case 404:
+      throw std::runtime_error("HTTP GET request failed with code 404");
     case 416:
       throw std::runtime_error("Request range not satisfiable, " +
                                std::to_string(offset) + "/" +
@@ -250,11 +239,17 @@ int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
       range << chunkSize + offset - 1;
     }
     request.setOpt(new curlpp::options::Range(range.str()));
+
+    spdlog::trace("Requesting range: {}, contentLength={}, offset={}",
+                  range.str(), contentLength, offset);
   }
 
   request.setOpt(new curlpp::options::ConnectTimeout(10));
   request.setOpt(new curlpp::options::WriteFunction(
       std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3)));
+  request.setOpt(new curlpp::options::HeaderFunction(std::bind(
+      &AudioGraphHttpStream::headerCallback, this, std::placeholders::_1,
+      std::placeholders::_2, std::placeholders::_3)));
   request.perform();
 
   long responseCode = 0;
