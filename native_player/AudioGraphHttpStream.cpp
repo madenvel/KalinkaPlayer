@@ -88,9 +88,7 @@ size_t AudioGraphHttpStream::headerCallback(char *buffer, size_t size,
     if (!value.empty() && value.back() == '\r') {
       value.pop_back();
     }
-    if (key == "content-length") {
-      contentLength = std::stoul(value);
-    } else if (key == "content-range") {
+    if (key == "content-range") {
       size_t separator = value.find('/');
       if (separator != std::string::npos) {
         value = value.substr(separator + 1);
@@ -247,9 +245,12 @@ int AudioGraphHttpStream::readSingleChunk(std::stop_token stopToken) {
   request.setOpt(new curlpp::options::ConnectTimeout(10));
   request.setOpt(new curlpp::options::WriteFunction(
       std::bind(&AudioGraphHttpStream::WriteCallback, this, _1, _2, _3)));
-  request.setOpt(new curlpp::options::HeaderFunction(std::bind(
-      &AudioGraphHttpStream::headerCallback, this, std::placeholders::_1,
-      std::placeholders::_2, std::placeholders::_3)));
+  if (!hasReadHeader) {
+    request.setOpt(new curlpp::options::HeaderFunction(std::bind(
+        &AudioGraphHttpStream::headerCallback, this, std::placeholders::_1,
+        std::placeholders::_2, std::placeholders::_3)));
+    hasReadHeader = true;
+  }
   request.perform();
 
   long responseCode = 0;

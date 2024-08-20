@@ -29,6 +29,7 @@ private:
   Signal<size_t> seekRequestSignal;
   size_t chunkSize = 0;
   bool acceptRange = true;
+  bool hasReadHeader = false;
   bool setStreamingState = true;
 
   void reader(std::stop_token token);
