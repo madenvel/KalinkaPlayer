@@ -9,6 +9,7 @@ USER=kalusr
 
 echo Create a system user
 adduser --system --no-create-home --group $USER
+usermod -aG audio $USER
 
 echo Creating and activating virtual environment
 python3 -m venv $VENV_DIR
