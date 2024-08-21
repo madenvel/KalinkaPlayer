@@ -2,7 +2,7 @@
 import logging
 import uvicorn
 
-from src.config import config
+from src import config
 from src.netutils import get_ip_address
 
 import argparse
@@ -75,8 +75,8 @@ if __name__ == "__main__":
     if args.config:
         config.set_config_path(args.config)
 
-    host = get_ip_address(config["server"]["interface"])
-    port = config["server"]["port"]
+    host = get_ip_address(config.config["server"]["interface"])
+    port = config.config["server"]["port"]
     logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(
         "src.server:app",

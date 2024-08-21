@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+
+find /opt/kalinka/ -type d -name "__pycache__" -exec rm -r {} +

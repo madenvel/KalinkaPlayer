@@ -1,0 +1,68 @@
+---
+server:
+  # Replace with the network interface the server will listen on.
+  # Run `ifconfig` to get the list of all available interfaces.
+  interface: wlan0
+
+  # Change if this port value is used by other services.
+  port: 8000
+
+  # This is the name of the service that will be broadcasted.
+  service_name: MyKalinkaServer
+
+  # Log level can be debug, info, warn, or error.
+  log_level: info
+
+output:
+  alsa:
+    # Replace with your ALSA device.
+    # Run `aplay -l` to list devices.
+    # Usually it is `hw:<card>,<device>`.
+    device: hw:0,0
+
+    # ALSA buffer size and period size in frames.
+    # The less period size, the higher CPU consumption is.
+    # Large buffer will result in slower response to pause.
+    # These are requested values, the actual values may differ.
+    buffer_size: 16384
+    period_size: 1024
+
+input:
+  http:
+    # Buffer for the incoming HTTP data in bytes.
+    # Increase the size if you have a slow network.
+    # Should not be less than curl block size (16Kb).
+    buffer_size: 768000
+
+    # Chunk should not be larger than the buffer size
+    # to avoid connection drop by the server.
+    # Small chunk size will result in more frequent network requests
+    # and additional delays.
+    # Recommended size is half of the buffer size.
+    chunk_size: 384000
+
+decoder:
+  flac:
+    # Buffer for the decoded audio data in bytes.
+    # Increase the size if you have a slow device.
+    # Recommended to be twice as large as HTTP buffer.
+    buffer_size: 1536000
+
+fixups:
+  # Needs to be set for Raspberry Pi / HiFiBerry boards.
+  alsa_sleep_after_format_setup_ms: 500
+
+addons:
+  device:
+    # Uncomment and set up if you have a MusicCast device.
+    # musiccast:
+    #   device_addr: 10.10.10.1
+    #   device_port: 80
+    #   connected_input: optical2
+
+  input_module:
+    qobuz:
+      # Replace with your Qobuz email and password hash.
+      # `echo -n "your_password" | md5sum`
+      email: my@email.com
+      password_hash: hash
