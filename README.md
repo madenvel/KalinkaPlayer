@@ -18,8 +18,18 @@ The target audience for this are DIY HiFi enthusiasts familiar with linux and co
 - Kalinka Music App is a player control application that runs on multiple platforms.
 
 # Installation
-There's currently no package provided for easy installation, hence the service has to be built and run manually. This is planned to be addressed in the future.
+## Debian-package
+Pre-built packages: TBD
 
+A debian package can be built by running `make` in the root directory. Note, that there's no cross-compilation,
+the package is built for the platform it is being built on.
+
+Make sure you update the config file `/opt/kalinka/kalinka_conf.yaml` after you install the package (see below).
+
+The service can be restarted with `sudo systemctl restart kalinka.service`, to check the status of the service
+and the last log lines use `systemctl status kalinka.service`.
+
+# Running from sources
 ## Prepare environment
 1. Clone the repository, `git clone https://github.com/madenvel/KalinkaPlayer.git`
 2. Install pre-requisites [WIP]
