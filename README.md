@@ -19,7 +19,7 @@ The target audience for this are DIY HiFi enthusiasts familiar with linux and co
 
 # Installation
 ## Debian-package
-Pre-built packages: TBD
+[Pre-built packages](https://github.com/madenvel/KalinkaPrebuilt/tree/main/Kalinka%20Player)
 
 A debian package can be built by running `make` in the root directory. Note, that there's no cross-compilation,
 the package is built for the platform it is being built on.
