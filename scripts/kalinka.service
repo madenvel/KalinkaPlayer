@@ -1,0 +1,12 @@
+[Unit]
+Description=Run kalinka backend
+
+[Service]
+Type=simple
+User=kalusr
+WorkingDirectory=/opt/kalinka
+ExecStart=/usr/bin/kalinka_server.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,37 @@
+Source: kalinka-player
+Priority: optional
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.6
+Homepage: https://github.com/madenvel/KalinkaPlayer
+Package: kalinka-player
+Version: @VERSION@
+Architecture: @ARCH@
+Depends: python3 (>= PYTHON_VERSION), python3 (<< PYTHON_VERSION.99),
+    python3-venv,
+    libcurlpp0,
+    libcurl4,
+    libflac++10,
+    libflac12,
+    libasound2,
+    libspdlog1.10,
+    libfmt9,
+    libstdc++6,
+    libc6,
+    libgcc-s1,
+    libnghttp2-14,
+    libidn2-0,
+    libssl3,
+    libgssapi-krb5-2,
+    zlib1g,
+    libogg0,
+    libunistring2,
+    libkrb5-3,
+    libk5crypto3,
+    libcom-err2,
+    libkrb5support0,
+    libkeyutils1,
+    libselinux1,
+    libpcre2-8-0
+Description: Kalinka Audio Player (backend)
+  Kalinka Audio Player backend service used in a pair with Kalinka App.
