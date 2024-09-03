@@ -29,10 +29,10 @@ public:
   // Stop playback and close the device
   void stop();
 
-  // Pause the streaming.
+  // Pause the playback.
   // Note that if paused for too long, the http stream may be closed by the
-  // server. The API doesn't support reconnection but even if it did, the link
-  // might expired.
+  // server. The API supports reconnection but depending on the URL, it might
+  // expire by the time the player tries to reconnect.
   void pause(bool paused);
 
   size_t seek(size_t positionMs);
