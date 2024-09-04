@@ -65,7 +65,7 @@ def to_audio_info(stream_info: StreamInfo):
 def to_state_name(state: AudioGraphNodeState) -> str:
     if state == AudioGraphNodeState.ERROR:
         return "ERROR"
-    elif state == AudioGraphNodeState.STOPPED:
+    elif state == AudioGraphNodeState.STOPPED or state == AudioGraphNodeState.FINISHED:
         return "STOPPED"
     elif state == AudioGraphNodeState.PREPARING:
         return "BUFFERING"
@@ -73,8 +73,6 @@ def to_state_name(state: AudioGraphNodeState) -> str:
         return "PLAYING"
     elif state == AudioGraphNodeState.PAUSED:
         return "PAUSED"
-    elif state == AudioGraphNodeState.FINISHED:
-        return "FINISHED"
 
 
 class PlayQueue(AsyncExecutor):
@@ -118,7 +116,8 @@ class PlayQueue(AsyncExecutor):
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
             self._cancel_prefetch_timer()
-            new_state.state = AudioGraphNodeState.STOPPED
+            if self.current_track_id < len(self.track_list):
+                self.play_next(self.current_track_id + 1)
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
         elif new_state.state != AudioGraphNodeState.STREAMING:
