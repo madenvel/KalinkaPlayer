@@ -280,6 +280,7 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
     case AudioGraphNodeState::SOURCE_CHANGED:
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
       inputNode->acceptSourceChange();
+      currentSourceTotalFramesWritten = 0;
       break;
     default:
       setState(StreamState(AudioGraphNodeState::STOPPED));
