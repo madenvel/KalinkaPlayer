@@ -35,11 +35,14 @@ protected:
 
 class StateChangeWaitLock {
 public:
-  StateChangeWaitLock(std::stop_token token, AudioGraphNode &node,
-                      AudioGraphNodeState nextState);
+  StateChangeWaitLock(
+      std::stop_token token, AudioGraphNode &node,
+      AudioGraphNodeState nextState,
+      std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
-  StateChangeWaitLock(std::stop_token token, AudioGraphNode &node,
-                      unsigned long long timestamp);
+  StateChangeWaitLock(
+      std::stop_token token, AudioGraphNode &node, unsigned long long timestamp,
+      std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
   const StreamState &state() { return lastState; }
 

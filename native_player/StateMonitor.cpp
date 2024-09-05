@@ -53,9 +53,9 @@ void StateMonitor::stop() {
 
 bool StateMonitor::isRunning() const { return !stopped; }
 
-StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
-                                         AudioGraphNode &node,
-                                         AudioGraphNodeState nextState)
+StateChangeWaitLock::StateChangeWaitLock(
+    std::stop_token token, AudioGraphNode &node, AudioGraphNodeState nextState,
+    std::optional<std::chrono::milliseconds> timeout)
     : lastState(AudioGraphNodeState::STOPPED) {
   std::unique_lock lock(mutex);
   int subscriptionId = node.onStateChange(
@@ -67,14 +67,19 @@ StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
         }
         return true;
       });
-  cv.wait(lock, token,
-          [this, nextState] { return lastState.state == nextState; });
+  if (timeout.has_value()) {
+    cv.wait_for(lock, token, timeout.value(),
+                [this, nextState] { return lastState.state == nextState; });
+  } else {
+    cv.wait(lock, token,
+            [this, nextState] { return lastState.state == nextState; });
+  }
   node.removeStateChangeCallback(subscriptionId);
 }
 
-StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
-                                         AudioGraphNode &node,
-                                         unsigned long long timestamp)
+StateChangeWaitLock::StateChangeWaitLock(
+    std::stop_token token, AudioGraphNode &node, unsigned long long timestamp,
+    std::optional<std::chrono::milliseconds> timeout)
     : lastState(AudioGraphNodeState::STOPPED) {
   int subscriptionId = node.onStateChange(
       [this, timestamp](AudioGraphNode *node, StreamState state) -> bool {
@@ -84,7 +89,12 @@ StateChangeWaitLock::StateChangeWaitLock(std::stop_token token,
         return state.timestamp > timestamp;
       });
   std::unique_lock lock(mutex);
-  cv.wait(lock, token,
-          [this, timestamp] { return lastState.timestamp > timestamp; });
+  if (timeout.has_value()) {
+    cv.wait_for(lock, token, timeout.value(),
+                [this, timestamp] { return lastState.timestamp > timestamp; });
+  } else {
+    cv.wait(lock, token,
+            [this, timestamp] { return lastState.timestamp > timestamp; });
+  }
   node.removeStateChangeCallback(subscriptionId);
 }
