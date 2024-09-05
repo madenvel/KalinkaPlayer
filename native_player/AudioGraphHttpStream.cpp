@@ -109,10 +109,14 @@ void AudioGraphHttpStream::handleSeekSignal(size_t position) {
   }
 
   buffer.clear();
-  buffer.resetEof();
-  offset = position;
-  setStreamingState = true;
-  setState(StreamState(AudioGraphNodeState::PREPARING));
+  if (position >= contentLength) {
+    offset = contentLength;
+  } else {
+    buffer.resetEof();
+    offset = position;
+    setStreamingState = true;
+    setState(StreamState(AudioGraphNodeState::PREPARING));
+  }
   seekRequestSignal.respond(offset);
 }
 
@@ -146,10 +150,11 @@ void AudioGraphHttpStream::reader(std::stop_token stopToken) {
 void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
   using namespace std::placeholders;
   int numRetries = 3;
-  for (; offset < contentLength;) {
+  while (offset < contentLength) {
     auto seekToPos = seekRequestSignal.getValue();
     if (seekToPos) {
       handleSeekSignal(seekToPos.value());
+      continue;
     }
 
     auto combinedStopToken =
@@ -278,8 +283,7 @@ size_t AudioGraphHttpStream::waitForDataFor(std::stop_token stopToken,
 }
 
 size_t AudioGraphHttpStream::seekTo(size_t absolutePosition) {
-  if (!acceptRange || absolutePosition >= contentLength ||
-      getState().state == AudioGraphNodeState::ERROR ||
+  if (getState().state == AudioGraphNodeState::ERROR ||
       seekRequestSignal.getValue()) {
     return -1;
   }

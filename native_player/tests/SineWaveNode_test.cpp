@@ -1,8 +1,9 @@
 #include "SineWaveNode.h"
 
 #include <gtest/gtest.h>
-
 #include <vector>
+
+#include "TestHelpers.h"
 
 class SineWaveNodeTest : public ::testing::Test {
 protected:
@@ -59,7 +60,11 @@ TEST_F(SineWaveNodeTest, read_all) {
 
 TEST_F(SineWaveNodeTest, seekTo) {
   SineWaveNode sineWaveNode(frequency, duration);
-  sineWaveNode.seekTo(48000);
+  auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples / 2),
+            state.streamInfo.value().totalSamples / 2);
+  state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, state.streamInfo.value().totalSamples / 2);
   std::vector<int16_t> data(20);
   EXPECT_EQ(sineWaveNode.read(data.data(), 40), 40);
   for (int i = 0; i < 20; i++) {
@@ -68,4 +73,23 @@ TEST_F(SineWaveNodeTest, seekTo) {
                          floor((i + 48000) / 2) / 48000.0));
     EXPECT_EQ(data[i], value);
   }
+}
+
+TEST_F(SineWaveNodeTest, seekToEnd) {
+  SineWaveNode sineWaveNode(frequency, duration);
+  auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples),
+            state.streamInfo.value().totalSamples);
+  EXPECT_EQ(sineWaveNode.getState().state, AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(SineWaveNodeTest, seekToEnd_and_back) {
+  SineWaveNode sineWaveNode(frequency, duration);
+  auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples),
+            state.streamInfo.value().totalSamples);
+  EXPECT_EQ(sineWaveNode.getState().state, AudioGraphNodeState::FINISHED);
+  EXPECT_EQ(sineWaveNode.seekTo(0), 0);
+  state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, 0);
 }

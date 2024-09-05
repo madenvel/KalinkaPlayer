@@ -309,13 +309,13 @@ bool AlsaAudioEmitter::handleSeekSignal() {
   auto positionMs = *seekRequestSignal.getValue();
   auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
   spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
-  seekRequestSignal.respond(framesToTimeMs(seekValue).count());
   auto retVal = inputNode->seekTo(seekValue);
-  if (retVal != seekValue) {
-    spdlog::warn("Seek request failed, requested={}, actual={}", seekValue,
-                 retVal);
+  if (retVal == -1U) {
+    spdlog::warn("Seek request failed: requested={}", seekValue);
+    seekRequestSignal.respond(-1);
     return false;
   }
+  seekRequestSignal.respond(framesToTimeMs(retVal).count());
   seekHappened = true;
   return true;
 }

@@ -197,6 +197,12 @@ void FlacStreamDecoder::handleSeekSignal(size_t position) {
     }
   }
   buffer.clear();
+  if (position >= flacStreamInfo.value().total_samples) {
+    streamReadPosition = flacStreamInfo.value().total_samples;
+    seekSignal.respond(position);
+    return;
+  }
+
   buffer.resetEof();
   setState(StreamState{AudioGraphNodeState::PREPARING});
   seekSignal.respond(position);
@@ -238,6 +244,10 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
 
         if (seekSignal.getValue().has_value()) {
           handleSeekSignal(*seekSignal.getValue());
+          if (static_cast<FLAC__uint64>(streamReadPosition) ==
+              flacStreamInfo.value().total_samples) {
+            break;
+          }
         }
       }
 
@@ -261,13 +271,7 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
 
 void FlacStreamDecoder::onEmptyBuffer(DequeBuffer<uint8_t> &buffer) {
   if (buffer.isEof() && getState().state != AudioGraphNodeState::ERROR) {
-    uint64_t decodePosition = 0;
-    if (!get_decode_position(&decodePosition)) {
-      decodePosition = 0;
-    }
-
-    setState(
-        {AudioGraphNodeState::FINISHED, static_cast<long>(decodePosition)});
+    setState(StreamState{AudioGraphNodeState::FINISHED});
   }
 }
 

@@ -198,6 +198,38 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_backward_after_finished) {
   EXPECT_EQ(totalBytesRead, contentLength);
 }
 
+TEST_F(AudioGraphHttpStreamTest, seekToEnd) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(url, bufferSize);
+  std::vector<uint8_t> data(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+
+  audioGraphHttpStream->seekTo(contentLength);
+  state = waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::FINISHED,
+                        std::chrono::milliseconds(1000));
+  EXPECT_EQ(state.state, AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(AudioGraphHttpStreamTest, seekToEndAndBack) {
+  auto audioGraphHttpStream =
+      std::make_shared<AudioGraphHttpStream>(url, bufferSize);
+  std::vector<uint8_t> data(bufferSize);
+  auto state =
+      waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+
+  audioGraphHttpStream->seekTo(contentLength);
+  state = waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::FINISHED,
+                        std::chrono::milliseconds(1000));
+  EXPECT_EQ(state.state, AudioGraphNodeState::FINISHED);
+
+  audioGraphHttpStream->seekTo(0);
+  state = waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+}
+
 TEST_F(AudioGraphHttpStreamTest, read_whole_dump) {
   auto audioGraphHttpStreamChunked =
       std::make_shared<AudioGraphHttpStream>(url, bufferSize, bufferSize / 2);

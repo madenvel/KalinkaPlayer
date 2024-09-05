@@ -25,10 +25,10 @@ protected:
 TEST_F(IntegrationTest, fileInputIntegration) {
   auto fileInputNode = std::make_shared<FileInputNode>(filename);
   flacStreamDecoder->connectTo(fileInputNode);
-  EXPECT_EQ(flacStreamDecoder->getState().state,
-            AudioGraphNodeState::PREPARING);
   flacStreamDecoder->waitForData(std::stop_token(), 8192);
-  EXPECT_EQ(flacStreamDecoder->getState().state,
+  EXPECT_EQ(waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING,
+                          std::chrono::milliseconds(1000))
+                .state,
             AudioGraphNodeState::STREAMING);
   alsaAudioEmitter->connectTo(flacStreamDecoder);
   std::this_thread::sleep_for(std::chrono::milliseconds(1200));
@@ -168,6 +168,40 @@ TEST_F(IntegrationTest, fileInputReadAllAndSearchToBeg) {
   }
   EXPECT_EQ(contentRead, contentLength * 4);
   flacStreamDecoder->disconnect(fileInputNode);
+}
+
+TEST_F(IntegrationTest, fileInputSeekToEnd) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+
+  flacStreamDecoder->seekTo(contentLength);
+
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::FINISHED,
+                        std::chrono::milliseconds(1000));
+
+  EXPECT_EQ(state.state, AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(IntegrationTest, fileInputSeekToEnd_and_back) {
+  auto fileInputNode = std::make_shared<FileInputNode>(filename);
+  flacStreamDecoder->connectTo(fileInputNode);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  auto contentLength = state.streamInfo.value().totalSamples;
+
+  flacStreamDecoder->seekTo(contentLength);
+
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::FINISHED,
+                        std::chrono::milliseconds(1000));
+
+  EXPECT_EQ(state.state, AudioGraphNodeState::FINISHED);
+
+  flacStreamDecoder->seekTo(0);
+  state = waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING,
+                        std::chrono::milliseconds(1000));
 }
 
 TEST_F(IntegrationTest, test_play_after_finished) {
