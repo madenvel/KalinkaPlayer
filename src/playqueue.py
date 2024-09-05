@@ -115,8 +115,7 @@ class PlayQueue(AsyncExecutor):
                 self._request_more_tracks()
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
-            self._cancel_prefetch_timer()
-            if self.current_track_id < len(self.track_list):
+            if self.timer_thread is None:
                 self.play_next(self.current_track_id + 1)
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
