@@ -208,12 +208,12 @@ async def set_device_params():
 
 
 @app.get("/device/get_volume")
-async def get_volume(device_id: str) -> Volume:
+def get_volume(device_id: str) -> Volume:
     return device.get_volume() if device else Volume(current_volume=0, max_volume=0)
 
 
 @app.put("/device/set_volume")
-async def set_volume(device_id: str, volume: int):
+def set_volume(device_id: str, volume: int):
     if device is None:
         return {"message": "No device configured"}
 
@@ -222,45 +222,45 @@ async def set_volume(device_id: str, volume: int):
 
 
 @app.get("/favorite/list/{type}")
-async def list_favorite(type: SearchType, offset: int = 0, limit: int = 10):
+def list_favorite(type: SearchType, offset: int = 0, limit: int = 10):
     return inputmodule.list_favorite(type, offset, limit).model_dump(exclude_unset=True)
 
 
 @app.put("/favorite/add/{type}/{id}")
-async def add_favorite(type: SearchType, id: str):
+def add_favorite(type: SearchType, id: str):
     return inputmodule.add_to_favorite(type, id)
 
 
 @app.delete("/favorite/remove/{type}/{id}")
-async def remove_favorite(type: SearchType, id: str):
+def remove_favorite(type: SearchType, id: str):
     return inputmodule.remove_from_favorite(type, id)
 
 
 @app.get("/favorite/ids")
-async def get_favorite_ids() -> FavoriteIds:
+def get_favorite_ids() -> FavoriteIds:
     return inputmodule.get_favorite_ids()
 
 
 @app.get("/genre/list")
-async def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
+def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
     return inputmodule.list_genre(offset=offset, limit=limit)
 
 
 @app.get("/get/album/{entity_id}")
-async def album_get(entity_id: str):
+def album_get(entity_id: str):
     return inputmodule.album_get(entity_id).model_dump(exclude_unset=True)
 
 
 @app.get("/get/artist/{entity_id}")
-async def artist_get(entity_id: str):
+def artist_get(entity_id: str):
     return inputmodule.artist_get(entity_id).model_dump(exclude_unset=True)
 
 
 @app.get("/get/track/{entity_id}")
-async def track_get(entity_id: str):
+def track_get(entity_id: str):
     return inputmodule.track_get(entity_id).model_dump(exclude_unset=True)
 
 
 @app.get("/get/playlist/{entity_id}")
-async def playlist_get(entity_id: str):
+def playlist_get(entity_id: str):
     return inputmodule.playlist_get(entity_id).model_dump(exclude_unset=True)
