@@ -559,7 +559,11 @@ void AlsaAudioEmitter::drainPcm() {
       prevFrames = frames;
     }
   }
-  snd_pcm_drain(pcmHandle);
+  if (paused) {
+    snd_pcm_drop(pcmHandle);
+  } else {
+    snd_pcm_drain(pcmHandle);
+  }
 }
 
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
