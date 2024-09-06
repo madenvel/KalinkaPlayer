@@ -42,6 +42,8 @@ import json
 import logging
 import requests
 
+from urllib3.util.retry import Retry
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
@@ -88,6 +90,12 @@ class QobuzClient:
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
                 "X-App-Id": self.id,
             }
+        )
+        self.session.mount(
+            "https://",
+            requests.adapters.HTTPAdapter(
+                max_retries=Retry(total=2, read=1, connect=1, redirect=True)
+            ),
         )
         self.base = "https://www.qobuz.com/api.json/0.2/"
         self.sec = None
