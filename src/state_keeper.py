@@ -9,6 +9,11 @@ logger = logging.getLogger(__name__.split(".")[-1])
 STATE_FILE = "kalinka_state.json"
 
 
+def set_state_file(file_path: str):
+    global STATE_FILE
+    STATE_FILE = file_path
+
+
 def save_state(playqueue: PlayQueue, inputmodule: InputModule):
     with open(STATE_FILE, "w") as f:
         json.dump(

@@ -10,6 +10,8 @@ USER=kalusr
 echo Create a system user
 adduser --system --no-create-home --group $USER
 usermod -aG audio $USER
+mkhomedir_helper $USER
+sudo -u $USER mkdir -p ~$USER/.local/share/kalinka
 
 echo Creating and activating virtual environment
 python3 -m venv $VENV_DIR
@@ -24,6 +26,6 @@ chown -R $USER:$USER /opt/kalinka/*
 # Reload systemd and enable the service
 systemctl daemon-reload
 systemctl enable kalinka.service
-systemctl start kalinka.service
+systemctl restart kalinka.service
 
 echo "Installation complete. The script will run at startup."

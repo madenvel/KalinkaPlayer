@@ -2,7 +2,7 @@
 import logging
 import uvicorn
 
-from src import config
+from src import config, state_keeper
 from src.netutils import get_ip_address
 
 import argparse
@@ -53,7 +53,11 @@ def parse_args():
         "--config",
         action="store",
         help="Config file location",
-        default="/opt/kalinka/kalinka_conf.yaml",
+    )
+    parser.add_argument(
+        "--state",
+        action="store",
+        help="State file location",
     )
     parser.add_argument(
         "--debug",
@@ -75,6 +79,9 @@ if __name__ == "__main__":
     if args.config:
         config.set_config_path(args.config)
 
+    if args.state:
+        state_keeper.set_state_file(args.state)
+
     host = get_ip_address(config.config["server"]["interface"])
     port = config.config["server"]["port"]
     logger.info(f"Starting server on {host}:{port}")
@@ -83,5 +90,6 @@ if __name__ == "__main__":
         host=host,
         port=port,
         reload=False,
+        timeout_graceful_shutdown=5,
         log_config=uvicorn_log_config,
     )
