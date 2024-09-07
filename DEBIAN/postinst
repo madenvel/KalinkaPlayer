@@ -11,7 +11,11 @@ echo Create a system user
 adduser --system --no-create-home --group $USER
 usermod -aG audio $USER
 mkhomedir_helper $USER
-sudo -u $USER mkdir -p ~$USER/.local/share/kalinka
+
+USER_HOME=$(sudo -u "$USER" sh -c 'echo $HOME')
+
+mkdir -p $USER_HOME/.local/share/kalinka
+chown $USER:$USER -R $USER_HOME/.local/share/kalinka
 
 echo Creating and activating virtual environment
 python3 -m venv $VENV_DIR
