@@ -7,7 +7,7 @@ Homepage: https://github.com/madenvel/KalinkaPlayer
 Package: kalinka-player
 Version: @VERSION@
 Architecture: @ARCH@
-Depends: python3 (>= PYTHON_VERSION), python3 (<< PYTHON_VERSION.99),
+Depends: python3 (>= PYTHON_VERSION),
     python3-venv,
     libcurlpp0,
     libcurl4,
