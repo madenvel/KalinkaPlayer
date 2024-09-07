@@ -1,5 +1,6 @@
-VERSION=1.0
-TARGET_DIR=kalinka-player-$(VERSION)
+VERSION := $(shell scripts/get_latest_version.sh)
+RELEASE_TAG := $(shell scripts/get_release_tag.sh)
+TARGET_DIR=kalinka-player-$(RELEASE_TAG)
 ARCH:=$(shell dpkg --print-architecture)
 TARGET=$(TARGET_DIR).$(ARCH).deb
 PYTHON_VERSION=$(shell python3 -c "import sys; print('{}.{}'.format(*sys.version_info[:2]))")
