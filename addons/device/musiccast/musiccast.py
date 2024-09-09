@@ -1,5 +1,5 @@
 import time
-import requests
+import httpx
 import logging
 from src.events import EventType
 
@@ -57,7 +57,7 @@ class Device:
         ]
         self.device_addr = config["addons"]["device"]["musiccast"]["device_addr"]
         self.device_port = config["addons"]["device"]["musiccast"]["device_port"]
-        self.session = requests.Session()
+        self.session = httpx.Client(timeout=5)
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
         )
