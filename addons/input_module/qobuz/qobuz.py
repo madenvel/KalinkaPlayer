@@ -40,9 +40,10 @@ from data_model.datamodel import (
 
 import json
 import logging
-import requests
 
-from urllib3.util.retry import Retry
+import httpx
+
+from httpx import HTTPTransport
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -75,6 +76,23 @@ class NonStreamable(Exception):
     pass
 
 
+class RetryTransport(httpx.HTTPTransport):
+    def __init__(self, read_retries=3, **kwargs):
+        super().__init__(**kwargs)
+        self.read_retries = read_retries
+
+    def handle_request(self, request):
+        read_retries = 0
+        while read_retries < self.read_retries:
+            try:
+                response = super().handle_request(request)
+                return response
+            except httpx.ProtocolError as exc:
+                retries += 1
+                time.sleep(self.backoff_factor * retries)
+                print(f"Retry {retries} due to {exc}")
+
+
 # The code below is partially based on the code from
 # qobuz-dl by vitiko98, fc7
 
@@ -84,19 +102,24 @@ class QobuzClient:
         logger.info(f"Logging...")
         self.secrets = secrets
         self.id = str(app_id)
-        self.session = requests.Session()
+        self.session = httpx.Client(
+            transport=RetryTransport(
+                read_retries=3, retries=3, http2=True, http1=False
+            ),
+            timeout=5,
+        )
         self.session.headers.update(
             {
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
                 "X-App-Id": self.id,
             }
         )
-        self.session.mount(
-            "https://",
-            requests.adapters.HTTPAdapter(
-                max_retries=Retry(total=2, read=1, connect=1, redirect=True)
-            ),
-        )
+        # self.session.mount(
+        #     "https://",
+        #     requests.adapters.HTTPAdapter(
+        #         max_retries=Retry(total=2, read=1, connect=1, redirect=True)
+        #     ),
+        # )
         self.base = "https://www.qobuz.com/api.json/0.2/"
         self.sec = None
         # a short living cache to be used for reporting purposes
@@ -166,7 +189,13 @@ class QobuzClient:
             "format_id": fmt_id,
             "intent": "stream",
         }
-        r = self.session.get(self.base + epoint, params=params)
+        for _ in range(3):
+            try:
+                r = self.session.get(self.base + epoint, params=params)
+                break
+            except ConnectionError as e:
+                logger.error(f"Connection error, retrying {_}: {e}")
+
         if r.status_code == 400:
             raise InvalidAppSecretError(f"Invalid app secret: {r.json()}.")
 
@@ -229,6 +258,7 @@ def extract_track_format(track):
 def qobuz_link_retriever(qobuz_client, id) -> str:
     track = qobuz_client.get_track_url(id, fmt_id=27)
     format = extract_track_format(track)
+    logger.info(f"Track link: {track['url']}")
     track_url = TrackUrl(url=track["url"], format=format)
     return track_url
 
@@ -288,7 +318,7 @@ class QobuzInputModule(InputModule):
             params={"album_id": id, "offset": offset, "limit": limit},
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -319,7 +349,7 @@ class QobuzInputModule(InputModule):
             },
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -346,7 +376,7 @@ class QobuzInputModule(InputModule):
             },
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -506,7 +536,7 @@ class QobuzInputModule(InputModule):
             },
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -532,7 +562,7 @@ class QobuzInputModule(InputModule):
             },
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -556,7 +586,7 @@ class QobuzInputModule(InputModule):
             },
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         tags = response.json()["tags"]
@@ -659,7 +689,7 @@ class QobuzInputModule(InputModule):
             params={"query": query, "limit": limit, "offset": offset},
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         return self._format_list_response(response.json(), offset, limit)
@@ -825,7 +855,7 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + epoint, params=params
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return EmptyList(offset, limit)
 
         rjson = response.json()
@@ -843,7 +873,7 @@ class QobuzInputModule(InputModule):
             params={"limit": 5000},
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return FavoriteIds()
 
         rjson = response.json()
@@ -872,7 +902,7 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + endpoint, params=params
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return {"message": response.text}
 
         rjson = response.json()
@@ -899,7 +929,7 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + endpoint, params=params
         )
 
-        if response.ok != True:
+        if response.is_success != True:
             return {"message": response.text}
 
         rjson = response.json()
@@ -918,7 +948,7 @@ class QobuzInputModule(InputModule):
         endpoint = "genre/list"
         response = self.qobuz_client.session.get(self.qobuz_client.base + endpoint)
 
-        if response.ok != True:
+        if response.is_success != True:
             return {"message": response.text}
 
         rjson = response.json()
@@ -941,7 +971,7 @@ class QobuzInputModule(InputModule):
 
         response.raise_for_status()
 
-        if response.ok != True:
+        if response.is_success != True:
             return None
 
         rjson = response.json()
@@ -960,7 +990,7 @@ class QobuzInputModule(InputModule):
 
         response.raise_for_status()
 
-        if response.ok != True:
+        if response.is_success != True:
             return None
 
         rjson = response.json()
@@ -977,7 +1007,7 @@ class QobuzInputModule(InputModule):
 
         response.raise_for_status()
 
-        if response.ok != True:
+        if response.is_success != True:
             return None
 
         rjson = response.json()

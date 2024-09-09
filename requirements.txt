@@ -1,4 +1,3 @@
-requests
 pydantic
 fastapi
 uvicorn
@@ -7,3 +6,4 @@ setuptools
 pyyaml
 pybind11
 pytest
+httpx[http2]

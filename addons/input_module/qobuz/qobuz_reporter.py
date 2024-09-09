@@ -126,7 +126,7 @@ class QobuzReporter:
                     params={"events": json.dumps(message["params"])},
                 )
 
-                if not response.ok:
+                if not response.is_success:
                     logger.warn('Failed to send event to Qobuz: "%s"', response.text)
                 else:
                     logger.info(
