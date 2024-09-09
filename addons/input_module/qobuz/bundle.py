@@ -1,4 +1,4 @@
-# The code below is from qobuz-dl package
+# The code below is based on qobuz-dl package
 # Authored by vitiko98, modified by qwerzl
 
 import base64
@@ -6,7 +6,7 @@ import logging
 import re
 from collections import OrderedDict
 
-from requests import Session
+import httpx
 
 # Modified code based on DashLt's spoofbuz
 
@@ -32,7 +32,7 @@ _BUNDLE_URL_REGEX = re.compile(
 
 class Bundle:
     def __init__(self):
-        self._session = Session()
+        self._session = httpx.Client(http2=True, timeout=5)
 
         logger.debug("Getting logging page")
         response = self._session.get(f"{_BASE_URL}/login")
@@ -49,6 +49,7 @@ class Bundle:
         response.raise_for_status()
 
         self._bundle = response.text
+        self._session.close()
 
     def get_app_id(self):
         match = _APP_ID_REGEX.search(self._bundle)
