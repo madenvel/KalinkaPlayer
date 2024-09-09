@@ -559,7 +559,7 @@ void AlsaAudioEmitter::drainPcm() {
       prevFrames = frames;
     }
   }
-  if (paused) {
+  if (paused || seekHappened) {
     snd_pcm_drop(pcmHandle);
   } else {
     snd_pcm_drain(pcmHandle);
