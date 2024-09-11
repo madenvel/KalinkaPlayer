@@ -222,7 +222,6 @@ void AlsaAudioEmitter::pause(bool paused) {
 }
 
 size_t AlsaAudioEmitter::seek(size_t positionMs) {
-  std::lock_guard<std::mutex> lock(mut);
   if (playbackThread.joinable() && !seekRequestSignal.getValue()) {
     seekRequestSignal.sendValue(positionMs);
     return seekRequestSignal.getResponse(std::stop_token());
@@ -232,7 +231,6 @@ size_t AlsaAudioEmitter::seek(size_t positionMs) {
 }
 
 void AlsaAudioEmitter::start() {
-  std::lock_guard<std::mutex> lock(mut);
   if (inputNode == nullptr) {
     throw std::runtime_error("AlsaAudioEmitter must be connected to an "
                              "AudioGraphOutputNode node");
@@ -244,7 +242,6 @@ void AlsaAudioEmitter::start() {
 }
 
 void AlsaAudioEmitter::stop() {
-  std::lock_guard<std::mutex> lock(mut);
   if (playbackThread.joinable() &&
       !playbackThread.get_stop_source().stop_requested()) {
     playbackThread.request_stop();

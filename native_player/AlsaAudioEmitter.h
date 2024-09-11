@@ -58,7 +58,6 @@ private:
 
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
-  mutable std::mutex mut;
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
@@ -66,7 +65,7 @@ private:
 
   std::vector<pollfd> ufds;
 
-  std::atomic<snd_pcm_sframes_t> currentSourceTotalFramesWritten = 0;
+  snd_pcm_sframes_t currentSourceTotalFramesWritten = 0;
   Signal<size_t> seekRequestSignal;
   Signal<bool> pauseRequestSignal;
   bool paused = false;
