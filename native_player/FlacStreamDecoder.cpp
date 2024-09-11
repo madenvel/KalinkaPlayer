@@ -269,7 +269,7 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
   setState(StreamState{AudioGraphNodeState::STOPPED});
 }
 
-void FlacStreamDecoder::onEmptyBuffer(DequeBuffer<uint8_t> &buffer) {
+void FlacStreamDecoder::onEmptyBuffer(Buffer<uint8_t> &buffer) {
   if (buffer.isEof() && getState().state != AudioGraphNodeState::ERROR) {
     setState(StreamState{AudioGraphNodeState::FINISHED});
   }

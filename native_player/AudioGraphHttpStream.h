@@ -23,7 +23,7 @@ public:
 private:
   std::jthread readerThread;
   std::string url;
-  DequeBuffer<uint8_t> buffer;
+  Buffer<uint8_t> buffer;
   size_t contentLength = 1;
   size_t offset = 0;
   Signal<size_t> seekRequestSignal;
@@ -36,7 +36,7 @@ private:
   void readContentChunks(std::stop_token token);
   int readSingleChunk(std::stop_token stopToken);
   size_t WriteCallback(void *contents, size_t size, size_t nmemb);
-  void emptyBufferCallback(DequeBuffer<uint8_t> &buffer);
+  void emptyBufferCallback(Buffer<uint8_t> &buffer);
   size_t headerCallback(char *buffer, size_t size, size_t nitems);
 
   void handleSeekSignal(size_t position);

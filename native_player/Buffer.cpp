@@ -1,3 +1,3 @@
 #include "Buffer.h"
 
-template class DequeBuffer<uint8_t>;
+template class Buffer<uint8_t>;

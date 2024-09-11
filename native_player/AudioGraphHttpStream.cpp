@@ -66,7 +66,7 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
   return sizeWritten;
 }
 
-void AudioGraphHttpStream::emptyBufferCallback(DequeBuffer<uint8_t> &buffer) {
+void AudioGraphHttpStream::emptyBufferCallback(Buffer<uint8_t> &buffer) {
   if (buffer.isEof() && getState().state != AudioGraphNodeState::ERROR) {
     setState(StreamState(AudioGraphNodeState::FINISHED));
   }

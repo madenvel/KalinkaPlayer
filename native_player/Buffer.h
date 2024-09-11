@@ -2,32 +2,30 @@
 #define BUFFER_H
 
 #include <atomic>
+#include <boost/circular_buffer.hpp>
 #include <cassert>
 #include <condition_variable>
-#include <deque>
 #include <functional>
 #include <iostream>
 #include <mutex>
 #include <stop_token>
 
-template <class T> class DequeBuffer {
-  std::deque<T> data;
+template <class T> class Buffer {
+  boost::circular_buffer<T> data;
   mutable std::mutex m;
   std::condition_variable_any hasDataCon;
   std::condition_variable_any hasSpaceCon;
   std::atomic<bool> eof;
-  size_t maxSize;
-  std::function<void(DequeBuffer<T> &)> onEmptyCallback;
+  std::function<void(Buffer<T> &)> onEmptyCallback;
   bool done = false;
 
 public:
-  DequeBuffer(
-      size_t maxSize = 0,
-      std::function<void(DequeBuffer<T> &)> onEmptyCallback =
-          [](DequeBuffer<T> &) {})
-      : eof(false), maxSize(maxSize), onEmptyCallback(onEmptyCallback) {}
+  Buffer(
+      size_t capacity,
+      std::function<void(Buffer<T> &)> onEmptyCallback = [](Buffer<T> &) {})
+      : data(capacity), eof(false), onEmptyCallback(onEmptyCallback) {}
 
-  ~DequeBuffer() {
+  ~Buffer() {
     {
       std::lock_guard<std::mutex> lock(m);
       done = true;
@@ -36,9 +34,9 @@ public:
     hasSpaceCon.notify_all();
   }
 
-  DequeBuffer(const DequeBuffer &) = delete;
+  Buffer(const Buffer &) = delete;
 
-  size_t max_size() const { return maxSize; }
+  size_t max_size() const { return data.capacity(); }
 
   size_t read(T *dest, size_t size) {
     size_t sizeToCopy = 0;
@@ -69,9 +67,11 @@ public:
     size_t sizeToCopy = 0;
     {
       std::lock_guard<std::mutex> lock(m);
-      sizeToCopy = maxSize == 0 ? size : std::min(size, maxSize - data.size());
+      sizeToCopy = data.capacity() == 0
+                       ? size
+                       : std::min(size, data.capacity() - data.size());
       data.insert(data.end(), source, source + sizeToCopy);
-      assert(data.size() <= maxSize);
+      assert(data.size() <= data.capacity());
     }
 
     if (sizeToCopy != 0) {
@@ -85,7 +85,8 @@ public:
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
       hasDataCon.wait(lock, stopToken, [this, &size] {
-        return done || data.size() >= std::min(size, maxSize) || eof.load();
+        return done || data.size() >= std::min(size, data.capacity()) ||
+               eof.load();
       });
     }
 
@@ -98,7 +99,8 @@ public:
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
       hasDataCon.wait_for(lock, stopToken, timeout, [this, &size] {
-        return done || data.size() >= std::min(size, maxSize) || eof.load();
+        return done || data.size() >= std::min(size, data.capacity()) ||
+               eof.load();
       });
     }
 
@@ -107,15 +109,15 @@ public:
 
   size_t waitForSpace(std::stop_token stopToken = std::stop_token(),
                       size_t size = 1) {
-    if (maxSize != 0) {
-      size = std::min(size, maxSize);
+    if (data.capacity() != 0) {
+      size = std::min(size, data.capacity());
       if (size > 0) {
         std::unique_lock<std::mutex> lock(m);
         hasSpaceCon.wait(lock, stopToken, [this, &size]() {
-          return done || (maxSize - data.size()) >= size;
+          return done || (data.capacity() - data.size()) >= size;
         });
       }
-      return maxSize - data.size();
+      return data.capacity() - data.size();
     }
 
     return std::numeric_limits<size_t>::max();
@@ -128,10 +130,10 @@ public:
 
   size_t availableSpace() const {
     std::lock_guard lock(m);
-    if (maxSize == 0) {
+    if (data.capacity() == 0) {
       return std::numeric_limits<size_t>::max();
     }
-    return maxSize - data.size();
+    return data.capacity() - data.size();
   }
 
   bool empty() const { return data.empty(); }

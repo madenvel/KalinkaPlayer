@@ -65,7 +65,7 @@ private:
   size_t sourceStreamPosition = 0;
 
   std::vector<uint8_t> data;
-  DequeBuffer<uint8_t> buffer;
+  Buffer<uint8_t> buffer;
   std::atomic<long> streamReadPosition = 0;
 
   Signal<size_t> seekSignal;
@@ -73,7 +73,7 @@ private:
   std::shared_ptr<AudioGraphOutputNode> inputNode;
 
   void thread_run(std::stop_token token);
-  void onEmptyBuffer(DequeBuffer<uint8_t> &buffer);
+  void onEmptyBuffer(Buffer<uint8_t> &buffer);
   void throwOnFlacError(bool retval);
   void setStreamingState();
   void handleSeekSignal(size_t position);
