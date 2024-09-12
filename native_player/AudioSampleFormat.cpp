@@ -1,4 +1,6 @@
-#include "AudioFormat.h"
+#include "AudioSampleFormat.h"
+
+#include <stdexcept>
 
 void convertToFormat(void *buffer, const int32_t *const samples[], size_t size,
                      AudioSampleFormat format) {
@@ -26,5 +28,8 @@ void convertToFormat(void *buffer, const int32_t *const samples[], size_t size,
     }
     break;
   }
+  case AudioSampleFormat::PCM24_3LE:
+  default:
+    throw std::runtime_error("Unsupported format");
   }
 }
