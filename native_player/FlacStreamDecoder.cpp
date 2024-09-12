@@ -55,7 +55,7 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
     return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
   }
 
-  AudioFormat format = bitsToFormat(frame->header.bits_per_sample);
+  AudioSampleFormat format = bitsToFormat(frame->header.bits_per_sample);
   data.resize(samplesToBytes(blockSize, format));
   convertToFormat(data.data(), buffer, blockSize, format);
 
@@ -181,10 +181,7 @@ void FlacStreamDecoder::setStreamingState() {
                             .channels = flacStreamInfo.value().channels,
                             .bitsPerSample =
                                 flacStreamInfo.value().bits_per_sample},
-      .totalSamples = flacStreamInfo.value().total_samples,
-      .durationMs = static_cast<unsigned int>(
-          flacStreamInfo.value().total_samples * 1000 /
-          static_cast<unsigned long long>(flacStreamInfo.value().sample_rate))};
+      .totalSamples = flacStreamInfo.value().total_samples};
 
   setState({AudioGraphNodeState::STREAMING, streamReadPosition, streamInfo});
 }

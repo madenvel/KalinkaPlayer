@@ -42,7 +42,6 @@ TEST_F(SineWaveNodeTest, getStreamInfo) {
   EXPECT_EQ(audioInfo.format.bitsPerSample, 16);
   EXPECT_EQ(audioInfo.totalSamples,
             static_cast<unsigned int>(duration) * 48000 / 1000);
-  EXPECT_EQ(audioInfo.durationMs, static_cast<unsigned int>(duration));
 }
 
 TEST_F(SineWaveNodeTest, read_all) {

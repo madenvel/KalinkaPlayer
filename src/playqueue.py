@@ -51,6 +51,10 @@ logger = logging.getLogger(__name__.split(".")[-1])
 PREFETCH_TIME_MS = 5000
 
 
+def get_duration_ms(stream_info: StreamInfo) -> int:
+    return int(stream_info.total_samples / stream_info.format.sample_rate * 1000)
+
+
 def to_audio_info(stream_info: StreamInfo):
     if stream_info is None:
         return None
@@ -58,7 +62,7 @@ def to_audio_info(stream_info: StreamInfo):
         sample_rate=stream_info.format.sample_rate,
         channels=stream_info.format.channels,
         bits_per_sample=stream_info.format.bits_per_sample,
-        duration_ms=stream_info.duration_ms,
+        duration_ms=get_duration_ms(stream_info),
     )
 
 
@@ -352,7 +356,7 @@ class PlayQueue(AsyncExecutor):
             return
 
         time_to_prefetch_s = (
-            stream_info.duration_ms - state.position - PREFETCH_TIME_MS
+            get_duration_ms(stream_info) - state.position - PREFETCH_TIME_MS
         ) / 1000
 
         if time_to_prefetch_s < 0:

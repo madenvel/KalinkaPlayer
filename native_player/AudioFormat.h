@@ -1,30 +1,30 @@
 #include <cstddef>
 #include <cstdint>
 
-enum AudioFormat { pcm_16le, pcm_24le, pcm_32le };
+enum AudioSampleFormat { PCM16_LE, PCM24_LE, PCM32_LE, PCM24_3LE };
 
 // Hard-coded channels = 2
 // We aim for hifi equipment and music
 const int CHANNELS = 2;
 
-constexpr AudioFormat bitsToFormat(int bits) {
+constexpr AudioSampleFormat bitsToFormat(int bits) {
   if (bits == 16) {
-    return AudioFormat::pcm_16le;
+    return AudioSampleFormat::PCM16_LE;
   } else if (bits == 24) {
-    return AudioFormat::pcm_24le;
+    return AudioSampleFormat::PCM24_LE;
   } else if (bits == 32) {
-    return AudioFormat::pcm_32le;
+    return AudioSampleFormat::PCM32_LE;
   }
 
-  return AudioFormat::pcm_24le;
+  return AudioSampleFormat::PCM24_LE;
 }
 
-inline size_t samplesToBytes(size_t i32samplesCount, AudioFormat format) {
+inline size_t samplesToBytes(size_t i32samplesCount, AudioSampleFormat format) {
   switch (format) {
-  case AudioFormat::pcm_16le:
+  case AudioSampleFormat::PCM16_LE:
     return i32samplesCount * 2 * CHANNELS;
-  case AudioFormat::pcm_24le:
-  case AudioFormat::pcm_32le:
+  case AudioSampleFormat::PCM24_LE:
+  case AudioSampleFormat::PCM32_LE:
     return i32samplesCount * 4 * CHANNELS;
   default:
     return 0;
@@ -37,4 +37,4 @@ inline int32_t packIntegers(int32_t a, int32_t b) {
 
 // Make sure buffer has enough space to allocate framesToBytes()
 void convertToFormat(void *buffer, const int32_t *const samples[], size_t size,
-                     AudioFormat format);
+                     AudioSampleFormat format);
