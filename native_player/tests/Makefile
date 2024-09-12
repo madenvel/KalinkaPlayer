@@ -7,7 +7,7 @@ SRCS = $(wildcard *.cpp)
 SRCS += ../AudioGraphHttpStream.cpp \
 		../Buffer.cpp \
 		../FlacStreamDecoder.cpp \
-		../AudioFormat.cpp \
+		../AudioSampleFormat.cpp \
 		../AudioGraphNode.cpp \
 		../AlsaAudioEmitter.cpp \
 		../AudioStreamSwitcher.cpp \
