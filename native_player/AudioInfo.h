@@ -21,15 +21,13 @@ struct StreamAudioFormat {
 struct StreamInfo {
   StreamAudioFormat format;
   unsigned long long totalSamples = 0;
-  unsigned int durationMs = 0;
 
   bool operator==(const StreamInfo &other) const = default;
   bool operator!=(const StreamInfo &other) const = default;
 
   std::string toString() const {
     return "<StreamInfo format=" + format.toString() +
-           ", totalSamples=" + std::to_string(totalSamples) +
-           ", durationMs=" + std::to_string(durationMs) + ">";
+           ", totalSamples=" + std::to_string(totalSamples) + ">";
   }
 };
 

@@ -13,7 +13,9 @@ class AudioGraphNode {
 public:
   AudioGraphNode() : state(AudioGraphNodeState::STOPPED) {}
 
-  // Get inner node state
+  // Get inner node state.
+  // This function is not generating a new state, instead
+  // it returns the last state set by the node.
   virtual StreamState getState();
 
   // Set the callback to be called when the state changes.

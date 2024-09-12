@@ -58,7 +58,6 @@ TEST_F(FlacStreamDecoderTest, getStreamInfo) {
   EXPECT_EQ(audioInfo.format.channels, 2);
   EXPECT_EQ(audioInfo.format.bitsPerSample, 16);
   EXPECT_EQ(audioInfo.totalSamples, 44100);
-  EXPECT_EQ(audioInfo.durationMs, 1000);
 }
 
 TEST_F(FlacStreamDecoderTest, getState) {

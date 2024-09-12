@@ -21,8 +21,7 @@ public:
                               .channels = 2,
                               .bitsPerSample = bitsPerSample},
                    .totalSamples = static_cast<unsigned int>(durationMs) *
-                                   sampleRate / 1000,
-                   .durationMs = static_cast<unsigned int>(durationMs)};
+                                   sampleRate / 1000};
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo});
   }
   virtual size_t read(void *data, size_t size) override {

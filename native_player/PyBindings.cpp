@@ -55,7 +55,6 @@ PYBIND11_MODULE(native_player, m) {
       .def(py::init<>())
       .def_readwrite("format", &StreamInfo::format)
       .def_readwrite("total_samples", &StreamInfo::totalSamples)
-      .def_readwrite("duration_ms", &StreamInfo::durationMs)
       .def("__repr__", [](const StreamInfo &a) { return a.toString(); })
       .def(pybind11::self == pybind11::self)
       .def(pybind11::self != pybind11::self);

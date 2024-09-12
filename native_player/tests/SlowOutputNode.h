@@ -23,8 +23,7 @@ public:
         AudioGraphNodeState::STREAMING, 0,
         StreamInfo{
             .format = {.sampleRate = 48000, .channels = 2, .bitsPerSample = 16},
-            .totalSamples = 48 * 2 * duration,
-            .durationMs = duration}});
+            .totalSamples = 48 * 2 * duration}});
   }
 
   virtual size_t read(void *data, size_t size) override {
