@@ -187,7 +187,7 @@ void AlsaAudioEmitter::disconnect(
 void AlsaAudioEmitter::pause(bool paused) {
   if (playbackThread.joinable() && isWorkerRunning) {
     pauseRequestSignal.sendValue(paused);
-    pauseRequestSignal.getResponse(std::stop_token());
+    pauseRequestSignal.getResponse(playbackThread.get_stop_token());
   }
 }
 
@@ -195,7 +195,7 @@ size_t AlsaAudioEmitter::seek(size_t positionMs) {
   if (playbackThread.joinable() && isWorkerRunning &&
       !seekRequestSignal.getValue()) {
     seekRequestSignal.sendValue(positionMs);
-    return seekRequestSignal.getResponse(std::stop_token());
+    return seekRequestSignal.getResponse(playbackThread.get_stop_token());
   }
 
   return -1;
@@ -338,6 +338,7 @@ void AlsaAudioEmitter::openDevice() {
 
 void AlsaAudioEmitter::closeDevice() {
   if (pcmHandle != nullptr) {
+    snd_pcm_drop(pcmHandle);
     snd_pcm_hw_free(pcmHandle);
     snd_pcm_close(pcmHandle);
     pcmHandle = nullptr;
@@ -361,7 +362,7 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
   unsigned short revents = 0;
 
   while (!playbackThread.get_stop_token().stop_requested() &&
-         frames < periodSize) {
+         static_cast<snd_pcm_uframes_t>(frames) < periodSize) {
     int ret = poll(ufds.data(), ufds.size(), pollTimeout.count());
     if (ret == 0) {
       continue;

@@ -290,7 +290,7 @@ size_t AudioGraphHttpStream::seekTo(size_t absolutePosition) {
 
   spdlog::trace("AudioGraphHttpStream::seekTo({})", absolutePosition);
   seekRequestSignal.sendValue(absolutePosition);
-  auto retVal = seekRequestSignal.getResponse(std::stop_token());
+  auto retVal = seekRequestSignal.getResponse(readerThread.get_stop_token());
   spdlog::trace("AudioGraphHttpStream::seekTo({}) -> {}", absolutePosition,
                 retVal);
   return retVal;
