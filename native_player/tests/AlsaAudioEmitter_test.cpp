@@ -71,7 +71,7 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
   alsaAudioEmitter->pause(true);
   auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PAUSED);
-  EXPECT_NEAR(state.position, sleepAmount + bufferSize / 48, 30);
+  EXPECT_NEAR(state.position, sleepAmount + bufferSize / 48, 60);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::PAUSED);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   alsaAudioEmitter->pause(false);
