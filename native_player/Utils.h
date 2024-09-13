@@ -77,6 +77,9 @@ public:
   SignalType getResponse(std::stop_token stopToken) {
     std::unique_lock lock(mutex);
     cv.wait(lock, stopToken, [this] { return !value.has_value(); });
+    if (stopToken.stop_requested()) {
+      return SignalType();
+    }
     return ackValue;
   }
 
