@@ -52,15 +52,19 @@ public:
 
 private:
   std::string deviceName;
+  snd_pcm_uframes_t requestedBufferSize;
+  snd_pcm_uframes_t requestedPeriodSize;
   snd_pcm_uframes_t bufferSize;
   snd_pcm_uframes_t periodSize;
   size_t sleepAfterFormatSetupMs;
 
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
+  std::atomic<bool> isWorkerRunning = false;
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
+  std::chrono::milliseconds pollTimeout = std::chrono::milliseconds(100);
   snd_pcm_t *pcmHandle = nullptr;
 
   std::vector<pollfd> ufds;
@@ -77,7 +81,7 @@ private:
   bool handleSeekSignal();
   bool handlePauseSignal(bool paused);
 
-  bool openDevice();
+  void openDevice();
   void closeDevice();
 
   snd_pcm_sframes_t waitForAlsaBufferSpace();

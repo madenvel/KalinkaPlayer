@@ -17,7 +17,7 @@ protected:
 
   AudioGraphNodeTest()
       : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
-        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("hw:0,0")) {}
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default")) {}
 };
 
 TEST_F(AudioGraphNodeTest, stateMonitor) {

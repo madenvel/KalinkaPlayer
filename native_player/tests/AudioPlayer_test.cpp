@@ -18,7 +18,7 @@ protected:
   Config config = {{"input.http.buffer_size", "768000"},
                    {"input.http.chunk_size", "384000"},
                    {"decoder.flac.buffer_size", "1536000"},
-                   {"output.alsa.device", "hw:0,0"},
+                   {"output.alsa.device", "default"},
                    {"output.alsa.buffer_size", "16384"},
                    {"output.alsa.period_size", "1024"}};
 
