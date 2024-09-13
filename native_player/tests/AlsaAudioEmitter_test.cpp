@@ -13,7 +13,7 @@
 class AlsaAudioEmitterTest : public ::testing::Test {
 protected:
   const size_t bufferSize = 16384;
-  const std::string device = "hw:0,0";
+  const std::string device = "default";
 
   std::shared_ptr<AlsaAudioEmitter> alsaAudioEmitter;
 

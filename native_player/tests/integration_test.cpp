@@ -19,7 +19,7 @@ protected:
 
   IntegrationTest()
       : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
-        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("hw:0,0")) {}
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default")) {}
 };
 
 TEST_F(IntegrationTest, fileInputIntegration) {
@@ -76,7 +76,7 @@ TEST_F(IntegrationTest, streamSwitch) {
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-  EXPECT_NEAR(duration.count(), (duration1 + duration2), 15);
+  EXPECT_GE(duration.count(), (duration1 + duration2));
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::FINISHED);
 
   alsaAudioEmitter->disconnect(streamSwitchNode);

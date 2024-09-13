@@ -21,6 +21,8 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   int err, dir = 0;
   std::stringstream error;
 
+  snd_pcm_hw_free(pcm_handle);
+
   /* choose all parameters */
   err = snd_pcm_hw_params_any(pcm_handle, params);
   if (err < 0) {
@@ -70,15 +72,6 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   }
 
   rate = rrate;
-  // /* set the buffer time */
-  // err = snd_pcm_hw_params_set_buffer_time_near(pcm_handle, params,
-  // &buffer_time,
-  //                                              &dir);
-  // if (err < 0) {
-  //   printf("Unable to set buffer time %u for playback: %s\n", buffer_time,
-  //          snd_strerror(err));
-  //   return err;
-  // }
   err =
       snd_pcm_hw_params_set_buffer_size_near(pcm_handle, params, &buffer_size);
   if (err < 0) {
@@ -93,11 +86,6 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
           << " for playback: " << snd_strerror(err);
     throw std::runtime_error(error.str());
   }
-  // err = snd_pcm_hw_params_get_period_size(params, &period_size, &dir);
-  // if (err < 0) {
-  //   printf("Unable to get period size for playback: %s\n",
-  //   snd_strerror(err)); return err;
-  // }
   /* write the parameters to device */
   err = snd_pcm_hw_params(pcm_handle, params);
   if (err < 0) {
@@ -119,33 +107,17 @@ void set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
           << snd_strerror(err);
     throw std::runtime_error(error.str());
   }
-  /* start the transfer when the buffer is almost full: */
-  /* (buffer_size / avail_min) * avail_min */
-  err = snd_pcm_sw_params_set_start_threshold(
-      handle, swparams, (buffer_size / period_size) * period_size);
+  /*
+   * Allow the transfer when at least period_size samples can be
+   * processed. This will make the main loop to wake up whenever
+   * there's enough space for at least a perio of samples.
+   */
+  err = snd_pcm_sw_params_set_avail_min(handle, swparams, period_size);
   if (err < 0) {
-    error << "Unable to set start threshold mode for playback: "
-          << snd_strerror(err);
+    error << "Unable to set avail min: " << snd_strerror(err);
     throw std::runtime_error(error.str());
   }
-  /* allow the transfer when at least period_size samples can be processed */
-  /* or disable this mechanism when period event is enabled (aka interrupt like
-   * style processing) */
-  bool period_event = false;
-  err = snd_pcm_sw_params_set_avail_min(
-      handle, swparams, period_event ? buffer_size : period_size);
-  if (err < 0) {
-    error << "Unable to set avail min for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
-  /* enable period events when requested */
-  if (period_event) {
-    err = snd_pcm_sw_params_set_period_event(handle, swparams, 1);
-    if (err < 0) {
-      error << "Unable to set period event: " << snd_strerror(err);
-      throw std::runtime_error(error.str());
-    }
-  }
+
   /* write the parameters to the playback device */
   err = snd_pcm_sw_params(handle, swparams);
   if (err < 0) {
@@ -175,35 +147,31 @@ int xrun_recovery(snd_pcm_t *handle, int err) {
   }
   return err;
 }
-
-int wait_for_poll(snd_pcm_t *handle, struct pollfd *ufds, unsigned int count) {
-  unsigned short revents = 0;
-
-  while (1) {
-    poll(ufds, count, -1);
-    snd_pcm_poll_descriptors_revents(handle, ufds, count, &revents);
-    if (revents & POLLERR)
-      return -EIO;
-    if (revents & POLLOUT)
-      return 0;
-  }
-}
 } // namespace
 
 AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
                                    size_t bufferSize, size_t periodSize,
                                    size_t sleepAfterFormatSetupMs)
-    : deviceName(deviceName), bufferSize(bufferSize), periodSize(periodSize),
+    : deviceName(deviceName), requestedBufferSize(bufferSize),
+      requestedPeriodSize(periodSize),
       sleepAfterFormatSetupMs(sleepAfterFormatSetupMs) {}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
 void AlsaAudioEmitter::connectTo(
     std::shared_ptr<AudioGraphOutputNode> outputNode) {
-  if (inputNode != nullptr && inputNode != outputNode) {
+  if (outputNode == nullptr) {
+    throw std::runtime_error("Input node cannot be nullptr");
+  }
+  if (inputNode == outputNode) {
+    return;
+  }
+
+  if (inputNode != nullptr) {
     throw std::runtime_error("AlsaAudioEmitter is already connected to an "
                              "AudioGraphOutputNode node");
   }
+
   inputNode = outputNode;
   start();
 }
@@ -217,12 +185,15 @@ void AlsaAudioEmitter::disconnect(
 }
 
 void AlsaAudioEmitter::pause(bool paused) {
-  pauseRequestSignal.sendValue(paused);
-  pauseRequestSignal.getResponse(std::stop_token());
+  if (playbackThread.joinable() && isWorkerRunning) {
+    pauseRequestSignal.sendValue(paused);
+    pauseRequestSignal.getResponse(std::stop_token());
+  }
 }
 
 size_t AlsaAudioEmitter::seek(size_t positionMs) {
-  if (playbackThread.joinable() && !seekRequestSignal.getValue()) {
+  if (playbackThread.joinable() && isWorkerRunning &&
+      !seekRequestSignal.getValue()) {
     seekRequestSignal.sendValue(positionMs);
     return seekRequestSignal.getResponse(std::stop_token());
   }
@@ -235,15 +206,17 @@ void AlsaAudioEmitter::start() {
     throw std::runtime_error("AlsaAudioEmitter must be connected to an "
                              "AudioGraphOutputNode node");
   }
-  if (!playbackThread.joinable()) {
-    playbackThread =
-        std::jthread(std::bind_front(&AlsaAudioEmitter::workerThread, this));
+
+  if (playbackThread.joinable()) {
+    playbackThread.request_stop();
+    playbackThread.join();
   }
+  playbackThread =
+      std::jthread(std::bind_front(&AlsaAudioEmitter::workerThread, this));
 }
 
 void AlsaAudioEmitter::stop() {
-  if (playbackThread.joinable() &&
-      !playbackThread.get_stop_source().stop_requested()) {
+  if (playbackThread.joinable()) {
     playbackThread.request_stop();
     playbackThread.join();
     playbackThread = std::jthread();
@@ -338,7 +311,7 @@ bool AlsaAudioEmitter::handlePauseSignal(bool paused) {
   return true;
 }
 
-bool AlsaAudioEmitter::openDevice() {
+void AlsaAudioEmitter::openDevice() {
   /* Open the device */
   if (pcmHandle != nullptr) {
     throw std::runtime_error(
@@ -356,36 +329,53 @@ bool AlsaAudioEmitter::openDevice() {
     spdlog::error(stream.str());
     setState({AudioGraphNodeState::ERROR, stream.str()});
 
-    return false;
+    throw std::runtime_error(stream.str());
   }
 
   currentSourceTotalFramesWritten = 0;
   playedFramesCounter.reset();
-  return true;
 }
 
 void AlsaAudioEmitter::closeDevice() {
   if (pcmHandle != nullptr) {
-    snd_pcm_close((snd_pcm_t *)pcmHandle);
+    snd_pcm_hw_free(pcmHandle);
+    snd_pcm_close(pcmHandle);
     pcmHandle = nullptr;
     currentStreamAudioFormat = StreamAudioFormat();
   }
 }
 
 snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
-  snd_pcm_sframes_t frames = 0;
-  int err = wait_for_poll(pcmHandle, ufds.data(), ufds.size());
-  if (err < 0) {
-    spdlog::error("Poll failed for playback: {}", snd_strerror(err));
-    throw std::runtime_error("Poll failed for playback");
-  }
-  frames = snd_pcm_avail_update(pcmHandle);
+  auto getAvailableFrames = [this]() -> snd_pcm_sframes_t {
+    snd_pcm_sframes_t frames = snd_pcm_avail_update(pcmHandle);
+    if (frames < 0) {
+      spdlog::error("Can't get avail update for playback: {}",
+                    snd_strerror(frames));
+      throw std::runtime_error("Can't get avail update for playback: " +
+                               std::string(snd_strerror(frames)));
+    }
+    return frames;
+  };
 
-  if (frames < 0) {
-    throw std::runtime_error("Can't get avail update for playback: " +
-                             std::string(snd_strerror(frames)));
-  }
+  snd_pcm_sframes_t frames = getAvailableFrames();
+  unsigned short revents = 0;
 
+  while (!playbackThread.get_stop_token().stop_requested() &&
+         frames < periodSize) {
+    int ret = poll(ufds.data(), ufds.size(), pollTimeout.count());
+    if (ret == 0) {
+      continue;
+    }
+    frames = getAvailableFrames();
+    snd_pcm_poll_descriptors_revents(pcmHandle, ufds.data(), ufds.size(),
+                                     &revents);
+    if (revents & POLLERR) {
+      throw std::runtime_error("Poll error");
+    }
+    if (revents & POLLOUT) {
+      break;
+    }
+  }
   return frames;
 }
 
@@ -536,12 +526,12 @@ AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
 
 void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
                                       snd_pcm_uframes_t position) {
+  spdlog::info("Starting playback");
   int err = snd_pcm_start(pcmHandle);
   if (err < 0) {
     throw std::runtime_error(std::string("Can't start PCM: ") +
                              snd_strerror(err));
   }
-  spdlog::info("Starting playback");
   setState({AudioGraphNodeState::STREAMING, framesToTimeMs(position).count(),
             streamInfo});
 }
@@ -564,14 +554,12 @@ void AlsaAudioEmitter::drainPcm() {
 }
 
 void AlsaAudioEmitter::workerThread(std::stop_token token) {
+  if (inputNode == nullptr) {
+    return;
+  }
+  isWorkerRunning = true;
   try {
-    if (inputNode == nullptr) {
-      return;
-    }
-
-    if (!openDevice()) {
-      return;
-    }
+    openDevice();
 
     while (!token.stop_requested()) {
       auto inputNodeState = waitForInputToBeReady(token);
@@ -647,10 +635,13 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
   } catch (const std::exception &ex) {
     spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
-    setState({AudioGraphNodeState::ERROR, "Internal error"});
+    setState({AudioGraphNodeState::ERROR,
+              "Internal error: " + std::string(ex.what())});
   }
 
   closeDevice();
+  inputNode = nullptr;
+  isWorkerRunning = false;
 }
 
 void AlsaAudioEmitter::setupAudioFormat(
@@ -667,6 +658,8 @@ void AlsaAudioEmitter::setupAudioFormat(
 
   snd_pcm_format_t format = getFormat(streamAudioFormat.bitsPerSample);
   unsigned sampleRate = streamAudioFormat.sampleRate;
+  bufferSize = requestedBufferSize;
+  periodSize = requestedPeriodSize;
 
   snd_pcm_hw_params_t *hw_params;
   snd_pcm_hw_params_malloc(&hw_params);
@@ -675,7 +668,7 @@ void AlsaAudioEmitter::setupAudioFormat(
                   format);
   } catch (const std::exception &ex) {
     snd_pcm_hw_params_free(hw_params);
-    throw ex;
+    throw;
   }
   snd_pcm_hw_params_free(hw_params);
 
@@ -692,7 +685,7 @@ void AlsaAudioEmitter::setupAudioFormat(
     set_swparams(pcmHandle, sw_params, bufferSize, periodSize);
   } catch (const std::exception &ex) {
     snd_pcm_sw_params_free(sw_params);
-    throw ex;
+    throw;
   }
   snd_pcm_sw_params_free(sw_params);
 
@@ -710,6 +703,8 @@ void AlsaAudioEmitter::setupAudioFormat(
         "Unable to obtain poll descriptors for playback: " +
         std::string(snd_strerror(err)));
   }
+
+  pollTimeout = std::chrono::milliseconds(bufferSize * 1000 / sampleRate);
 
   // Hack for HiFiBerry boards on Raspberry Pi
   // Sleep to make sure RPi is ready to play.

@@ -18,6 +18,12 @@ const size_t FLAC_BUFFER_SIZE = 1536000;
 const size_t HTTP_BUFFER_SIZE = 768000;
 
 const size_t CHUNK_SIZE = HTTP_BUFFER_SIZE / 2;
+
+bool isInvalidState(AudioGraphNodeState state) {
+  return state == AudioGraphNodeState::FINISHED ||
+         state == AudioGraphNodeState::STOPPED ||
+         state == AudioGraphNodeState::ERROR;
+}
 } // namespace
 
 struct StreamNodes {
@@ -55,7 +61,7 @@ struct StreamNodes {
 AudioPlayer::AudioPlayer(const Config &config)
     : config(config),
       audioEmitter(std::make_shared<AlsaAudioEmitter>(
-          value_or(config, "output.alsa.device", std::string("hw:0,0")),
+          value_or(config, "output.alsa.device", std::string("default")),
           value_or(config, "output.alsa.buffer_size", 16384),
           value_or(config, "output.alsa.period_size", 1024),
           value_or(config, "fixups.alsa_sleep_after_format_setup_ms", 0))),
@@ -67,10 +73,12 @@ AudioPlayer::~AudioPlayer() { stop(); }
 
 void AudioPlayer::play(const std::string &url) {
   for (auto it = streamNodesList.begin(); it != streamNodesList.end(); ++it) {
-    if (it->url == url) {
+    if (it->url == url &&
+        !isInvalidState(it->nodeChain.back()->getState().state)) {
       std::list<StreamNodes> newStreamNodesList;
       newStreamNodesList.emplace_back(std::move(*it));
       streamNodesList.erase(it);
+      audioEmitter->connectTo(streamSwitcher);
       disconnectAllStreams();
       streamNodesList.swap(newStreamNodesList);
       return;
@@ -119,8 +127,7 @@ void AudioPlayer::disconnectAllStreams() {
 
 void AudioPlayer::cleanUpFinishedStreams() {
   for (auto it = streamNodesList.begin(); it != streamNodesList.end();) {
-    if (it->nodeChain.back()->getState().state ==
-        AudioGraphNodeState::FINISHED) {
+    if (isInvalidState(it->nodeChain.back()->getState().state)) {
       it = streamNodesList.erase(it);
     } else {
       ++it;
