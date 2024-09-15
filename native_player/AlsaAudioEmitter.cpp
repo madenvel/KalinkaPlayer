@@ -5,6 +5,7 @@
 #include "Utils.h"
 
 #include <iostream>
+#include <pthread.h>
 #include <sstream>
 #include <stdexcept>
 
@@ -21,6 +22,7 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
   int err, dir = 0;
   std::stringstream error;
 
+  snd_pcm_drop(pcm_handle);
   snd_pcm_hw_free(pcm_handle);
 
   /* choose all parameters */
@@ -151,10 +153,12 @@ int xrun_recovery(snd_pcm_t *handle, int err) {
 
 AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
                                    size_t bufferSize, size_t periodSize,
-                                   size_t sleepAfterFormatSetupMs)
+                                   size_t sleepAfterFormatSetupMs,
+                                   bool reopenDeviceWithNewFormat)
     : deviceName(deviceName), requestedBufferSize(bufferSize),
       requestedPeriodSize(periodSize),
-      sleepAfterFormatSetupMs(sleepAfterFormatSetupMs) {}
+      sleepAfterFormatSetupMs(sleepAfterFormatSetupMs),
+      reopenDeviceWithNewFormat(reopenDeviceWithNewFormat) {}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
@@ -242,7 +246,9 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
     case AudioGraphNodeState::STREAMING:
       return inputNodeState;
     case AudioGraphNodeState::FINISHED:
-      setState(StreamState(AudioGraphNodeState::FINISHED));
+      setState(
+          StreamState(AudioGraphNodeState::FINISHED,
+                      framesToTimeMs(currentSourceTotalFramesWritten).count()));
       break;
     case AudioGraphNodeState::ERROR:
       setState({AudioGraphNodeState::ERROR, inputNodeState.message});
@@ -538,14 +544,17 @@ void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
 }
 
 void AlsaAudioEmitter::drainPcm() {
-  auto drainSequence = playedFramesCounter.drainSequence();
-  if (!drainSequence.empty()) {
-    snd_pcm_sframes_t prevFrames = 0;
-    for (auto frames : drainSequence) {
-      std::this_thread::sleep_for(framesToTimeMs(frames - prevFrames));
-      playedFramesCounter.update(frames - prevFrames);
-      prevFrames = frames;
+  if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
+    auto drainSequence = playedFramesCounter.drainSequence();
+    if (!drainSequence.empty()) {
+      snd_pcm_sframes_t prevFrames = 0;
+      for (auto frames : drainSequence) {
+        std::this_thread::sleep_for(framesToTimeMs(frames - prevFrames));
+        playedFramesCounter.update(frames - prevFrames);
+        prevFrames = frames;
+      }
     }
+    snd_pcm_drop(pcmHandle);
   }
   if (paused || seekHappened) {
     snd_pcm_drop(pcmHandle);
@@ -558,10 +567,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
   if (inputNode == nullptr) {
     return;
   }
+  pthread_setname_np(pthread_self(), "AlsaAudio");
   isWorkerRunning = true;
   try {
-    openDevice();
-
     while (!token.stop_requested()) {
       auto inputNodeState = waitForInputToBeReady(token);
 
@@ -649,10 +657,22 @@ void AlsaAudioEmitter::setupAudioFormat(
     const StreamAudioFormat &streamAudioFormat) {
 
   spdlog::debug("Setting up audio format: {}", streamAudioFormat.toString());
-  if (streamAudioFormat == currentStreamAudioFormat) {
+  if (pcmHandle != nullptr && streamAudioFormat == currentStreamAudioFormat) {
     spdlog::debug("Audio format is already set up - ignoring");
-    snd_pcm_prepare(pcmHandle);
+    int err = snd_pcm_prepare(pcmHandle);
+    if (err < 0) {
+      throw std::runtime_error("Can't prepare PCM: " +
+                               std::string(snd_strerror(err)));
+    }
     return;
+  }
+
+  if (reopenDeviceWithNewFormat && pcmHandle != nullptr) {
+    closeDevice();
+  }
+
+  if (pcmHandle == nullptr) {
+    openDevice();
   }
 
   int err = 0;

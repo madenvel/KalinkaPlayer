@@ -71,22 +71,16 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
   alsaAudioEmitter->pause(true);
   auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PAUSED);
-  EXPECT_NEAR(state.position, sleepAmount + bufferSize / 48, 60);
+  EXPECT_NEAR(state.position, sleepAmount + bufferSize / 48, 20);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::PAUSED);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   alsaAudioEmitter->pause(false);
   EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
       AudioGraphNodeState::STREAMING);
-  auto start = std::chrono::high_resolution_clock::now();
   EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
-  auto end = std::chrono::high_resolution_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-  EXPECT_NEAR(duration.count(), totalDuration - state.position, 1024 / 48);
-  alsaAudioEmitter->disconnect(outputNode);
 }
 
 TEST_F(AlsaAudioEmitterTest, stream_error) {

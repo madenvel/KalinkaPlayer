@@ -5,6 +5,7 @@
 #include "StateMonitor.h"
 #include <functional>
 #include <iostream>
+#include <pthread.h>
 #include <vector>
 
 FlacStreamDecoder::FlacStreamDecoder(size_t bufferSize)
@@ -213,6 +214,7 @@ void FlacStreamDecoder::handleSeekSignal(size_t position) {
 }
 
 void FlacStreamDecoder::thread_run(std::stop_token token) {
+  pthread_setname_np(pthread_self(), "FlacDecoder");
   try {
     if (get_state() == FLAC__STREAM_DECODER_UNINITIALIZED) {
       throw std::runtime_error("Flac decoder not initialized");

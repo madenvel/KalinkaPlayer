@@ -7,6 +7,7 @@
 
 #include <boost/algorithm/string.hpp>
 #include <functional>
+#include <pthread.h>
 
 #include "Log.h"
 
@@ -121,6 +122,7 @@ void AudioGraphHttpStream::handleSeekSignal(size_t position) {
 }
 
 void AudioGraphHttpStream::reader(std::stop_token stopToken) {
+  pthread_setname_np(pthread_self(), "HttpStream");
   try {
     setState(StreamState(AudioGraphNodeState::PREPARING));
     while (!stopToken.stop_requested()) {
