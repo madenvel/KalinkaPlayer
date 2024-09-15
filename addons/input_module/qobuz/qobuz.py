@@ -88,9 +88,9 @@ class RetryTransport(httpx.HTTPTransport):
                 response = super().handle_request(request)
                 return response
             except httpx.ProtocolError as exc:
-                retries += 1
-                time.sleep(self.backoff_factor * retries)
-                print(f"Retry {retries} due to {exc}")
+                read_retries += 1
+                time.sleep(self.backoff_factor * read_retries)
+                print(f"Retry {read_retries} due to {exc}")
 
 
 # The code below is partially based on the code from
