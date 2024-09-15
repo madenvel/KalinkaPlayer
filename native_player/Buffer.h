@@ -84,7 +84,7 @@ public:
                      size_t size = 1) {
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
-      hasDataCon.wait(lock, stopToken, [this, &size] {
+      hasDataCon.wait(lock, stopToken, [this, size] {
         return done || data.size() >= std::min(size, data.capacity()) ||
                eof.load();
       });
@@ -98,7 +98,7 @@ public:
                         size_t size = 1) {
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
-      hasDataCon.wait_for(lock, stopToken, timeout, [this, &size] {
+      hasDataCon.wait_for(lock, stopToken, timeout, [this, size] {
         return done || data.size() >= std::min(size, data.capacity()) ||
                eof.load();
       });
@@ -109,18 +109,14 @@ public:
 
   size_t waitForSpace(std::stop_token stopToken = std::stop_token(),
                       size_t size = 1) {
-    if (data.capacity() != 0) {
-      size = std::min(size, data.capacity());
-      if (size > 0) {
-        std::unique_lock<std::mutex> lock(m);
-        hasSpaceCon.wait(lock, stopToken, [this, &size]() {
-          return done || (data.capacity() - data.size()) >= size;
-        });
-      }
-      return data.capacity() - data.size();
+    size = std::min(size, data.capacity());
+    if (size > 0) {
+      std::unique_lock<std::mutex> lock(m);
+      hasSpaceCon.wait(lock, stopToken, [this, size]() {
+        return done || (data.capacity() - data.size()) >= size;
+      });
     }
-
-    return std::numeric_limits<size_t>::max();
+    return data.capacity() - data.size();
   }
 
   size_t size() const {
@@ -130,9 +126,6 @@ public:
 
   size_t availableSpace() const {
     std::lock_guard lock(m);
-    if (data.capacity() == 0) {
-      return std::numeric_limits<size_t>::max();
-    }
     return data.capacity() - data.size();
   }
 

@@ -37,8 +37,8 @@ private:
 class AlsaAudioEmitter : public AudioGraphEmitterNode {
 public:
   AlsaAudioEmitter(const std::string &deviceName, size_t bufferSize = 16384,
-                   size_t periodSize = 1024,
-                   size_t sleepAfterFormatSetupMs = 0);
+                   size_t periodSize = 1024, size_t sleepAfterFormatSetupMs = 0,
+                   bool reopenDeviceWithNewFormat = false);
 
   virtual void
   connectTo(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
@@ -56,7 +56,10 @@ private:
   snd_pcm_uframes_t requestedPeriodSize;
   snd_pcm_uframes_t bufferSize;
   snd_pcm_uframes_t periodSize;
+
+  // Fixups
   size_t sleepAfterFormatSetupMs;
+  bool reopenDeviceWithNewFormat;
 
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;

@@ -19,7 +19,8 @@ protected:
 
   IntegrationTest()
       : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
-        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default")) {}
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default", 16384,
+                                                            1024, 0, true)) {}
 };
 
 TEST_F(IntegrationTest, fileInputIntegration) {
@@ -61,25 +62,24 @@ TEST_F(IntegrationTest, streamSwitch) {
   EXPECT_EQ(streamSwitchNode->getState().state, AudioGraphNodeState::STOPPED);
   alsaAudioEmitter->connectTo(streamSwitchNode);
   EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::STOPPED);
+  StateMonitor monitor(alsaAudioEmitter.get());
   streamSwitchNode->connectTo(sineWaveNode440);
   streamSwitchNode->connectTo(sineWaveNode880);
 
   EXPECT_EQ(
-      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
-      AudioGraphNodeState::STREAMING);
-  auto start = std::chrono::high_resolution_clock::now();
-  EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
 
-  auto end = std::chrono::high_resolution_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::FINISHED};
 
-  EXPECT_GE(duration.count(), (duration1 + duration2));
-  EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::FINISHED);
-
-  alsaAudioEmitter->disconnect(streamSwitchNode);
+  for (int i = 0; monitor.hasData(); ++i) {
+    auto state = monitor.waitState();
+    EXPECT_EQ(state.state, states[i]) << "i=" << i;
+  }
 }
 
 TEST_F(IntegrationTest, fileInputSearchForward) {
@@ -224,4 +224,76 @@ TEST_F(IntegrationTest, test_play_after_finished) {
   EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(IntegrationTest, test_switch_different_formats_sine) {
+  const auto totalDuration = 2000;
+  const auto freq1 = 48000;
+  const auto freq2 = 96000;
+  auto outputNode1 = std::make_shared<SineWaveNode>(440, totalDuration, freq1);
+  auto outputNode2 = std::make_shared<SineWaveNode>(880, totalDuration, freq2);
+  auto switcher = std::make_shared<AudioStreamSwitcher>();
+  StateMonitor monitor(alsaAudioEmitter.get());
+  switcher->connectTo(outputNode1);
+  alsaAudioEmitter->connectTo(switcher);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  switcher->connectTo(outputNode2);
+  switcher->disconnect(outputNode1);
+
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING,      AudioGraphNodeState::FINISHED};
+
+  for (int i = 0; monitor.hasData(); ++i) {
+    auto state = monitor.waitState();
+    EXPECT_EQ(state.state, states[i]) << "i=" << i;
+    if (i == 3) {
+      EXPECT_EQ(state.streamInfo.value().format.sampleRate, freq1);
+    } else if (i == 6) {
+      EXPECT_EQ(state.streamInfo.value().format.sampleRate, freq2);
+    }
+  }
+}
+
+TEST_F(IntegrationTest, test_switch_different_formats_files) {
+  const auto freq1 = 44100;
+  const auto freq2 = 96000;
+  auto outputNode1 = std::make_shared<FileInputNode>("files/tone440.flac");
+  auto outputNode2 = std::make_shared<FileInputNode>("files/tone880.flac");
+  auto codec1 = std::make_shared<FlacStreamDecoder>(65536);
+  auto codec2 = std::make_shared<FlacStreamDecoder>(65536);
+  codec1->connectTo(outputNode1);
+  codec2->connectTo(outputNode2);
+  auto switcher = std::make_shared<AudioStreamSwitcher>();
+  StateMonitor monitor(alsaAudioEmitter.get());
+  switcher->connectTo(codec1);
+  switcher->connectTo(codec2);
+  alsaAudioEmitter->connectTo(switcher);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING,      AudioGraphNodeState::FINISHED};
+
+  for (int i = 0; monitor.hasData(); ++i) {
+    auto state = monitor.waitState();
+    EXPECT_EQ(state.state, states[i]) << "i=" << i;
+    if (i == 3) {
+      EXPECT_EQ(state.streamInfo.value().format.sampleRate, freq1);
+    } else if (i == 6) {
+      EXPECT_EQ(state.streamInfo.value().format.sampleRate, freq2);
+    }
+  }
 }

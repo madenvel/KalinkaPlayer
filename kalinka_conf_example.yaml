@@ -51,6 +51,10 @@ decoder:
 fixups:
   # Needs to be set for Raspberry Pi / HiFiBerry boards.
   alsa_sleep_after_format_setup_ms: 500
+  # A fixup if using pipewire-alsa / default device.
+  # Pipewire doesn't switch audio format without reopening the device.
+  # https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/4297
+  alsa_reopen_device_with_new_format: true
 
 addons:
   device:
