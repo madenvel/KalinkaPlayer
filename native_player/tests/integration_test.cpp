@@ -76,10 +76,15 @@ TEST_F(IntegrationTest, streamSwitch) {
       AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::STREAMING,
       AudioGraphNodeState::FINISHED};
 
-  for (int i = 0; monitor.hasData(); ++i) {
+  const auto statesCount = sizeof(states) / sizeof(AudioGraphNodeState);
+
+  int i = 0;
+  for (; i < statesCount && monitor.hasData(); ++i) {
     auto state = monitor.waitState();
     EXPECT_EQ(state.state, states[i]) << "i=" << i;
   }
+
+  EXPECT_EQ(i, statesCount);
 }
 
 TEST_F(IntegrationTest, fileInputSearchForward) {
