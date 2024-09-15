@@ -386,7 +386,7 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
   return frames;
 }
 
-bool AlsaAudioEmitter::hasInputSourceStateChanged() {
+bool AlsaAudioEmitter::handleInputNodeStateChange() {
   auto inputNodeState = inputNode->getState();
   if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
     inputNode->acceptSourceChange();
@@ -401,7 +401,7 @@ bool AlsaAudioEmitter::hasInputSourceStateChanged() {
           "Source changed - not streaming or different format, draining");
       drainPcm();
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
-      return true;
+      return false;
     } else {
       snd_pcm_sframes_t framesDelay = 0;
       int err = snd_pcm_delay(pcmHandle, &framesDelay);
@@ -426,10 +426,10 @@ bool AlsaAudioEmitter::hasInputSourceStateChanged() {
     spdlog::info("Source finished, state={}",
                  stateToString(inputNodeState.state));
     drainPcm();
-    return true;
+    return false;
   }
 
-  return false;
+  return true;
 }
 
 snd_pcm_sframes_t AlsaAudioEmitter::writeToAlsa(
@@ -483,6 +483,10 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
             return frames;
           });
 
+      if (!handleInputNodeStateChange()) {
+        return -1;
+      }
+
     } else {
       auto actualFrames = writeToAlsa(
           frames, [this](void *ptr, snd_pcm_uframes_t frames, size_t bytes) {
@@ -493,7 +497,7 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
       framesRead += actualFrames;
       currentSourceTotalFramesWritten += actualFrames;
 
-      if (hasInputSourceStateChanged()) {
+      if (!handleInputNodeStateChange()) {
         return -1;
       }
 

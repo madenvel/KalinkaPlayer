@@ -67,28 +67,27 @@ private:
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
+  snd_pcm_sframes_t currentSourceTotalFramesWritten = 0;
   std::chrono::milliseconds pollTimeout = std::chrono::milliseconds(100);
   snd_pcm_t *pcmHandle = nullptr;
-
   std::vector<pollfd> ufds;
 
-  snd_pcm_sframes_t currentSourceTotalFramesWritten = 0;
   Signal<size_t> seekRequestSignal;
   Signal<bool> pauseRequestSignal;
   bool paused = false;
   bool seekHappened = false;
 
   void workerThread(std::stop_token token);
-  void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
-  StreamState waitForInputToBeReady(std::stop_token token);
   bool handleSeekSignal();
   bool handlePauseSignal(bool paused);
 
   void openDevice();
   void closeDevice();
 
+  void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
+  StreamState waitForInputToBeReady(std::stop_token token);
   snd_pcm_sframes_t waitForAlsaBufferSpace();
-  bool hasInputSourceStateChanged();
+  bool handleInputNodeStateChange();
   snd_pcm_sframes_t writeToAlsa(
       snd_pcm_uframes_t framesToWrite,
       std::function<snd_pcm_sframes_t(void *ptr, snd_pcm_uframes_t frames,
@@ -97,10 +96,10 @@ private:
   snd_pcm_sframes_t readIntoAlsaFromStream(std::stop_token stopToken,
                                            snd_pcm_sframes_t framesToRead);
   size_t waitForInputData(std::stop_token stopToken, snd_pcm_uframes_t frames);
-  inline std::chrono::milliseconds framesToTimeMs(snd_pcm_sframes_t frames);
-
   void startPcmStream(const StreamInfo &streamInfo, snd_pcm_uframes_t position);
   void drainPcm();
+
+  inline std::chrono::milliseconds framesToTimeMs(snd_pcm_sframes_t frames);
 
   void start();
   void stop();
@@ -109,5 +108,6 @@ private:
   void setState(const StreamState &newState);
 #endif
 };
+;
 
 #endif
