@@ -2,6 +2,7 @@
 #define ALSA_AUDIO_EMITTER_H
 
 #include "AudioGraphNode.h"
+#include "Config.h"
 #include "Utils.h"
 
 #include <alsa/asoundlib.h>
@@ -36,9 +37,7 @@ private:
 
 class AlsaAudioEmitter : public AudioGraphEmitterNode {
 public:
-  AlsaAudioEmitter(const std::string &deviceName, size_t bufferSize = 16384,
-                   size_t periodSize = 1024, size_t sleepAfterFormatSetupMs = 0,
-                   bool reopenDeviceWithNewFormat = false);
+  AlsaAudioEmitter(const Config &config);
 
   virtual void
   connectTo(std::shared_ptr<AudioGraphOutputNode> outputNode) override;
@@ -52,8 +51,9 @@ public:
 
 private:
   std::string deviceName;
-  snd_pcm_uframes_t requestedBufferSize;
-  snd_pcm_uframes_t requestedPeriodSize;
+  snd_pcm_uframes_t requestedBufferSize = 0;
+  snd_pcm_uframes_t requestedPeriodSize = 0;
+
   snd_pcm_uframes_t bufferSize;
   snd_pcm_uframes_t periodSize;
 

@@ -10,6 +10,20 @@
 #include <stdexcept>
 
 namespace {
+inline int throw_on_error(int err, const std::string &message) {
+  if (err < 0) {
+    throw std::runtime_error(message + ": " + snd_strerror(err));
+  }
+  return err;
+}
+
+inline int log_on_error(int err, const std::string &message) {
+  if (err < 0) {
+    spdlog::warn("{}: {}", message, snd_strerror(err));
+  }
+  return err;
+}
+
 snd_pcm_format_t getFormat(int bitsPerSample) {
   return bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
 }
@@ -19,113 +33,76 @@ void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
                    snd_pcm_uframes_t &period_size, snd_pcm_format_t format) {
 
   unsigned int rrate;
-  int err, dir = 0;
+  int dir = 0;
   std::stringstream error;
 
   snd_pcm_drop(pcm_handle);
   snd_pcm_hw_free(pcm_handle);
 
   /* choose all parameters */
-  err = snd_pcm_hw_params_any(pcm_handle, params);
-  if (err < 0) {
-    error << "Broken configuration for playback: no configurations available: "
-          << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(
+      snd_pcm_hw_params_any(pcm_handle, params),
+      "Broken configuration for playback: no configurations available");
+
   /* set the interleaved read/write format */
-  err = snd_pcm_hw_params_set_access(pcm_handle, params,
-                                     SND_PCM_ACCESS_MMAP_INTERLEAVED);
-  if (err < 0) {
-    error << "Access type not available for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params_set_access(pcm_handle, params,
+                                              SND_PCM_ACCESS_MMAP_INTERLEAVED),
+                 "Access type not available for playback");
+
   /* set the sample format */
-  err = snd_pcm_hw_params_set_format(pcm_handle, params, format);
-  if (err < 0) {
-    error << "Sample format not available for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params_set_format(pcm_handle, params, format),
+                 "Sample format not available for playback");
+
   /* set the count of channels */
-  err = snd_pcm_hw_params_set_channels(pcm_handle, params, 2);
-  if (err < 0) {
-    error << "Channels count (" << 2
-          << ") not available for playbacks: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params_set_channels(pcm_handle, params, 2),
+                 "Channels count not available for playbacks");
+
   // Enabled resampling
-  err = snd_pcm_hw_params_set_rate_resample(pcm_handle, params, 1);
-  if (err < 0) {
-    error << "Resampling setup failed for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params_set_rate_resample(pcm_handle, params, 1),
+                 "Resampling setup failed for playback");
+
   /* set the stream rate */
   rrate = rate;
-  err = snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rrate, 0);
-  if (err < 0) {
-    error << "Rate " << rate
-          << "Hz not available for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rrate, 0),
+                 "Rate not available for playback");
+
   if (rrate != rate) {
-    error << "Rate doesn't match (requested " << rate << "Hz, get " << rrate
-          << "Hz)";
-    // Comment this out to be able to debug on a machine without resampling
-    // throw std::runtime_error(error.str());
+    throw std::runtime_error("Rate doesn't match");
   }
 
   rate = rrate;
-  err =
-      snd_pcm_hw_params_set_buffer_size_near(pcm_handle, params, &buffer_size);
-  if (err < 0) {
-    error << "Unable to get buffer size for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
-  // /* set the period size */
-  err = snd_pcm_hw_params_set_period_size_near(pcm_handle, params, &period_size,
-                                               &dir);
-  if (err < 0) {
-    error << "Unable to set period time " << period_size
-          << " for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(
+      snd_pcm_hw_params_set_buffer_size_near(pcm_handle, params, &buffer_size),
+      "Unable to get buffer size for playback");
+
+  throw_on_error(snd_pcm_hw_params_set_period_size_near(pcm_handle, params,
+                                                        &period_size, &dir),
+                 "Unable to set period time for playback");
+
   /* write the parameters to device */
-  err = snd_pcm_hw_params(pcm_handle, params);
-  if (err < 0) {
-    error << "Unable to set hw params for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_hw_params(pcm_handle, params),
+                 "Unable to set hw params for playback");
 }
 
 void set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
                   snd_pcm_uframes_t buffer_size,
                   snd_pcm_uframes_t period_size) {
-  int err;
-  std::stringstream error;
 
   /* get the current swparams */
-  err = snd_pcm_sw_params_current(handle, swparams);
-  if (err < 0) {
-    error << "Unable to determine current swparams for playback: "
-          << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_sw_params_current(handle, swparams),
+                 "Unable to determine current swparams for playback");
+
   /*
    * Allow the transfer when at least period_size samples can be
    * processed. This will make the main loop to wake up whenever
    * there's enough space for at least a perio of samples.
    */
-  err = snd_pcm_sw_params_set_avail_min(handle, swparams, period_size);
-  if (err < 0) {
-    error << "Unable to set avail min: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_sw_params_set_avail_min(handle, swparams, period_size),
+                 "Unable to set avail min");
 
   /* write the parameters to the playback device */
-  err = snd_pcm_sw_params(handle, swparams);
-  if (err < 0) {
-    error << "Unable to set sw params for playback: " << snd_strerror(err);
-    throw std::runtime_error(error.str());
-  }
+  throw_on_error(snd_pcm_sw_params(handle, swparams),
+                 "Unable to set sw params for playback");
 }
 
 int xrun_recovery(snd_pcm_t *handle, int err) {
@@ -151,14 +128,15 @@ int xrun_recovery(snd_pcm_t *handle, int err) {
 }
 } // namespace
 
-AlsaAudioEmitter::AlsaAudioEmitter(const std::string &deviceName,
-                                   size_t bufferSize, size_t periodSize,
-                                   size_t sleepAfterFormatSetupMs,
-                                   bool reopenDeviceWithNewFormat)
-    : deviceName(deviceName), requestedBufferSize(bufferSize),
-      requestedPeriodSize(periodSize),
-      sleepAfterFormatSetupMs(sleepAfterFormatSetupMs),
-      reopenDeviceWithNewFormat(reopenDeviceWithNewFormat) {}
+AlsaAudioEmitter::AlsaAudioEmitter(const Config &config)
+    : deviceName(
+          value_or(config, "output.alsa.device", std::string("default"))),
+      requestedBufferSize(value_or(config, "output.alsa.buffer_size", 16384)),
+      requestedPeriodSize(value_or(config, "output.alsa.period_size", 1024)),
+      sleepAfterFormatSetupMs(
+          value_or(config, "fixups.alsa_sleep_after_format_setup_ms", 0)),
+      reopenDeviceWithNewFormat(value_or(
+          config, "fixups.alsa_reopen_device_with_new_format", false)) {}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
@@ -318,11 +296,10 @@ bool AlsaAudioEmitter::handlePauseSignal(bool paused) {
 }
 
 void AlsaAudioEmitter::openDevice() {
-  /* Open the device */
   if (pcmHandle != nullptr) {
-    throw std::runtime_error(
-        "Error while opening PCM device - the device might already be open");
+    return;
   }
+
   int err =
       snd_pcm_open(&pcmHandle, deviceName.c_str(), SND_PCM_STREAM_PLAYBACK, 0);
 
@@ -344,9 +321,9 @@ void AlsaAudioEmitter::openDevice() {
 
 void AlsaAudioEmitter::closeDevice() {
   if (pcmHandle != nullptr) {
-    snd_pcm_drop(pcmHandle);
-    snd_pcm_hw_free(pcmHandle);
-    snd_pcm_close(pcmHandle);
+    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
+    log_on_error(snd_pcm_hw_free(pcmHandle), "snd_pcm_hw_free failed");
+    log_on_error(snd_pcm_close(pcmHandle), "snd_pcm_close failed");
     pcmHandle = nullptr;
     currentStreamAudioFormat = StreamAudioFormat();
   }
@@ -354,14 +331,8 @@ void AlsaAudioEmitter::closeDevice() {
 
 snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
   auto getAvailableFrames = [this]() -> snd_pcm_sframes_t {
-    snd_pcm_sframes_t frames = snd_pcm_avail_update(pcmHandle);
-    if (frames < 0) {
-      spdlog::error("Can't get avail update for playback: {}",
-                    snd_strerror(frames));
-      throw std::runtime_error("Can't get avail update for playback: " +
-                               std::string(snd_strerror(frames)));
-    }
-    return frames;
+    return throw_on_error(snd_pcm_avail_update(pcmHandle),
+                          "Can't get avail update for playback");
   };
 
   snd_pcm_sframes_t frames = getAvailableFrames();
@@ -374,8 +345,9 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
       continue;
     }
     frames = getAvailableFrames();
-    snd_pcm_poll_descriptors_revents(pcmHandle, ufds.data(), ufds.size(),
-                                     &revents);
+    throw_on_error(snd_pcm_poll_descriptors_revents(pcmHandle, ufds.data(),
+                                                    ufds.size(), &revents),
+                   "Can't get poll revents for playback");
     if (revents & POLLERR) {
       throw std::runtime_error("Poll error");
     }
@@ -404,12 +376,8 @@ bool AlsaAudioEmitter::handleInputNodeStateChange() {
       return false;
     } else {
       snd_pcm_sframes_t framesDelay = 0;
-      int err = snd_pcm_delay(pcmHandle, &framesDelay);
-      if (err < 0) {
-        spdlog::error("Error when calling snd_pcm_delay: {}",
-                      snd_strerror(err));
-      }
-
+      log_on_error(snd_pcm_delay(pcmHandle, &framesDelay),
+                   "snd_pcm_delay failed");
       spdlog::debug("Reporting source change in {}ms, frames={}",
                     framesToTimeMs(framesDelay).count(), framesDelay);
 
@@ -518,7 +486,8 @@ size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
                                           snd_pcm_uframes_t frames) {
   if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
     snd_pcm_sframes_t delayFrames = 0;
-    snd_pcm_delay(pcmHandle, &delayFrames);
+    log_on_error(snd_pcm_delay(pcmHandle, &delayFrames),
+                 "snd_pcm_delay failed");
     auto timeout = framesToTimeMs(std::max(
         0l, delayFrames - static_cast<snd_pcm_sframes_t>(2 * periodSize)));
     return inputNode->waitForDataFor(
@@ -538,11 +507,7 @@ AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
 void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
                                       snd_pcm_uframes_t position) {
   spdlog::info("Starting playback");
-  int err = snd_pcm_start(pcmHandle);
-  if (err < 0) {
-    throw std::runtime_error(std::string("Can't start PCM: ") +
-                             snd_strerror(err));
-  }
+  throw_on_error(snd_pcm_start(pcmHandle), "Can't start PCM");
   setState({AudioGraphNodeState::STREAMING, framesToTimeMs(position).count(),
             streamInfo});
 }
@@ -558,12 +523,12 @@ void AlsaAudioEmitter::drainPcm() {
         prevFrames = frames;
       }
     }
-    snd_pcm_drop(pcmHandle);
+    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
   }
   if (paused || seekHappened) {
-    snd_pcm_drop(pcmHandle);
+    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
   } else {
-    snd_pcm_drain(pcmHandle);
+    log_on_error(snd_pcm_drain(pcmHandle), "snd_pcm_drain failed");
   }
 }
 
@@ -643,7 +608,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       }
 
       if (token.stop_requested()) {
-        snd_pcm_drop(pcmHandle);
+        log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed on stop");
       }
     }
   } catch (const std::exception &ex) {
@@ -659,15 +624,10 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
 void AlsaAudioEmitter::setupAudioFormat(
     const StreamAudioFormat &streamAudioFormat) {
-
   spdlog::debug("Setting up audio format: {}", streamAudioFormat.toString());
   if (pcmHandle != nullptr && streamAudioFormat == currentStreamAudioFormat) {
     spdlog::debug("Audio format is already set up - ignoring");
-    int err = snd_pcm_prepare(pcmHandle);
-    if (err < 0) {
-      throw std::runtime_error("Can't prepare PCM: " +
-                               std::string(snd_strerror(err)));
-    }
+    throw_on_error(snd_pcm_prepare(pcmHandle), "Can't prepare PCM");
     return;
   }
 
@@ -678,8 +638,6 @@ void AlsaAudioEmitter::setupAudioFormat(
   if (pcmHandle == nullptr) {
     openDevice();
   }
-
-  int err = 0;
 
   snd_pcm_format_t format = getFormat(streamAudioFormat.bitsPerSample);
   unsigned sampleRate = streamAudioFormat.sampleRate;
@@ -697,15 +655,9 @@ void AlsaAudioEmitter::setupAudioFormat(
   }
   snd_pcm_hw_params_free(hw_params);
 
-  if (err < 0) {
-    std::stringstream error;
-    error << "Unable to set hw params for playback: " << snd_strerror(err);
-    spdlog::error(error.str());
-    throw std::runtime_error(error.str());
-  }
-
   snd_pcm_sw_params_t *sw_params;
-  snd_pcm_sw_params_malloc(&sw_params);
+  throw_on_error(snd_pcm_sw_params_malloc(&sw_params),
+                 "snd_pcm_sw_params_malloc failed");
   try {
     set_swparams(pcmHandle, sw_params, bufferSize, periodSize);
   } catch (const std::exception &ex) {
@@ -716,18 +668,12 @@ void AlsaAudioEmitter::setupAudioFormat(
 
   currentStreamAudioFormat = streamAudioFormat;
 
-  int count = snd_pcm_poll_descriptors_count((snd_pcm_t *)pcmHandle);
-  if (count <= 0) {
-    throw std::runtime_error("Invalid poll descriptors count");
-  }
-
+  int count = throw_on_error(snd_pcm_poll_descriptors_count(pcmHandle),
+                             "snd_pcm_poll_descriptors_count failed");
   ufds.resize(count);
 
-  if ((err = snd_pcm_poll_descriptors(pcmHandle, ufds.data(), count)) < 0) {
-    throw std::runtime_error(
-        "Unable to obtain poll descriptors for playback: " +
-        std::string(snd_strerror(err)));
-  }
+  throw_on_error(snd_pcm_poll_descriptors(pcmHandle, ufds.data(), count),
+                 "Unable to obtain poll descriptors for playback");
 
   pollTimeout = std::chrono::milliseconds(bufferSize * 1000 / sampleRate);
 
