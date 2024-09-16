@@ -10,6 +10,11 @@
 
 class AudioGraphNodeTest : public ::testing::Test {
 protected:
+  Config config = {{"output.alsa.device", "default"},
+                   {"output.alsa.buffer_size", "16384"},
+                   {"output.alsa.period_size", "1024"},
+                   {"fixups.alsa_reopen_device_with_new_format", "true"}};
+
   const std::string filename = "files/tone440.flac";
 
   std::shared_ptr<FlacStreamDecoder> flacStreamDecoder;
@@ -17,7 +22,7 @@ protected:
 
   AudioGraphNodeTest()
       : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
-        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default")) {}
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>(config)) {}
 };
 
 TEST_F(AudioGraphNodeTest, stateMonitor) {

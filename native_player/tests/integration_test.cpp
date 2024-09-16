@@ -8,10 +8,16 @@
 #include <gtest/gtest.h>
 #include <memory>
 
+#include "Config.h"
 #include "TestHelpers.h"
 
 class IntegrationTest : public ::testing::Test {
 protected:
+  Config config = {{"output.alsa.device", "default"},
+                   {"output.alsa.buffer_size", "16384"},
+                   {"output.alsa.period_size", "1024"},
+                   {"fixups.alsa_reopen_device_with_new_format", "true"}};
+
   const std::string filename = "files/tone440.flac";
 
   std::shared_ptr<FlacStreamDecoder> flacStreamDecoder;
@@ -19,8 +25,7 @@ protected:
 
   IntegrationTest()
       : flacStreamDecoder(std::make_shared<FlacStreamDecoder>(65536)),
-        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>("default", 16384,
-                                                            1024, 0, true)) {}
+        alsaAudioEmitter(std::make_shared<AlsaAudioEmitter>(config)) {}
 };
 
 TEST_F(IntegrationTest, fileInputIntegration) {

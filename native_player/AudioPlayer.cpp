@@ -59,14 +59,7 @@ struct StreamNodes {
 };
 
 AudioPlayer::AudioPlayer(const Config &config)
-    : config(config),
-      audioEmitter(std::make_shared<AlsaAudioEmitter>(
-          value_or(config, "output.alsa.device", std::string("default")),
-          value_or(config, "output.alsa.buffer_size", 16384),
-          value_or(config, "output.alsa.period_size", 1024),
-          value_or(config, "fixups.alsa_sleep_after_format_setup_ms", 0),
-          value_or(config, "fixups.alsa_reopen_device_with_new_format",
-                   false))),
+    : config(config), audioEmitter(std::make_shared<AlsaAudioEmitter>(config)),
       streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
   initLogger(value_or(config, "server.log_level", std::string("debug")));
 }
