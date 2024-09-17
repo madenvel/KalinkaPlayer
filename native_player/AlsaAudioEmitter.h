@@ -54,6 +54,9 @@ private:
   snd_pcm_uframes_t requestedBufferSize = 0;
   snd_pcm_uframes_t requestedPeriodSize = 0;
 
+  uint32_t requestedLatencyMs;
+  uint32_t requestedPeriodMs;
+
   snd_pcm_uframes_t bufferSize;
   snd_pcm_uframes_t periodSize;
 
@@ -83,6 +86,10 @@ private:
 
   void openDevice();
   void closeDevice();
+
+  void initHwParams(unsigned int &rate, snd_pcm_format_t format);
+  void setSwParams();
+  void setLatencyBasedBufferSize(snd_pcm_hw_params_t *params);
 
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
   StreamState waitForInputToBeReady(std::stop_token token);

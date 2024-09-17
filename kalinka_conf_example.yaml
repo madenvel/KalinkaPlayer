@@ -21,11 +21,20 @@ output:
     device: hw:0,0
 
     # ALSA buffer size and period size in frames.
-    # The less period size, the higher CPU consumption is.
+    # The smaller the period size, the higher CPU consumption is.
     # Large buffer will result in slower response to pause.
     # These are requested values, the actual values may differ.
-    buffer_size: 16384
-    period_size: 1024
+    # buffer_size: 16384
+    # period_size: 1024
+
+    # Set the latency in milliseconds.
+    # This value defines buffer size and is format agnostic.
+    # The lower the latency, the higher CPU consumption is.
+    latency_ms: 80
+
+    # Set the period in milliseconds. This defines how often the
+    # audio data is sent to the device.
+    period_ms: 20
 
 input:
   http:
