@@ -47,7 +47,7 @@ public:
       if (availableData > 0) {
         sizeToCopy = std::min(availableData, size);
         std::copy_n(data.begin(), sizeToCopy, dest);
-        data.erase(data.begin(), data.begin() + sizeToCopy);
+        data.erase_begin(sizeToCopy);
       }
       remainingSize = data.size();
     }
