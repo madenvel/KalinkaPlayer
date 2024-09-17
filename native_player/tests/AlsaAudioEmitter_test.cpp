@@ -12,8 +12,8 @@
 class AlsaAudioEmitterTest : public ::testing::Test {
 protected:
   Config config = {{"output.alsa.device", "default"},
-                   {"output.alsa.buffer_size", "16384"},
-                   {"output.alsa.period_size", "1024"},
+                   {"output.alsa.latency_ms", "80"},
+                   {"output.alsa.period_ms", "20"},
                    {"fixups.alsa_reopen_device_with_new_format", "true"}};
 
   std::shared_ptr<AlsaAudioEmitter> alsaAudioEmitter;
@@ -71,12 +71,14 @@ TEST_F(AlsaAudioEmitterTest, pause) {
   auto sleepAmount = totalDuration / 2;
   std::this_thread::sleep_for(std::chrono::milliseconds(sleepAmount));
   alsaAudioEmitter->pause(true);
-  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PAUSED);
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PAUSED,
+                             std::chrono::milliseconds(1000));
+  EXPECT_EQ(state.state, AudioGraphNodeState::PAUSED);
   EXPECT_NEAR(state.position,
               sleepAmount +
-                  value<size_t>(config, "output.alsa.buffer_size").value() / 48,
-              20);
-  EXPECT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::PAUSED);
+                  value<size_t>(config, "output.alsa.latency_ms").value(),
+              30);
+  ASSERT_EQ(alsaAudioEmitter->getState().state, AudioGraphNodeState::PAUSED);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   alsaAudioEmitter->pause(false);
   EXPECT_EQ(

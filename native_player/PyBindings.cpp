@@ -24,12 +24,12 @@ void flatten_dict(const py::dict &py_dict,
       flatten_dict(value.cast<py::dict>(), result, new_prefix);
     } else if (py::isinstance<py::str>(value)) {
       result[new_prefix] = value.cast<std::string>();
+    } else if (py::isinstance<py::bool_>(value)) {
+      result[new_prefix] = value.cast<bool>() ? "true" : "false";
     } else if (py::isinstance<py::int_>(value)) {
       result[new_prefix] = std::to_string(value.cast<int>());
     } else if (py::isinstance<py::float_>(value)) {
       result[new_prefix] = std::to_string(value.cast<float>());
-    } else if (py::isinstance<py::bool_>(value)) {
-      result[new_prefix] = value.cast<bool>() ? "true" : "false";
     }
   }
 }

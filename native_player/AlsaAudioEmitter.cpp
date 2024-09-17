@@ -9,15 +9,18 @@
 #include <sstream>
 #include <stdexcept>
 
+#define throw_on_error(func) throw_on_error_impl(func, #func " failed")
+#define log_on_error(func) log_on_error_impl(func, #func " failed")
+
 namespace {
-inline int throw_on_error(int err, const std::string &message) {
+inline int throw_on_error_impl(int err, const std::string &message) {
   if (err < 0) {
     throw std::runtime_error(message + ": " + snd_strerror(err));
   }
   return err;
 }
 
-inline int log_on_error(int err, const std::string &message) {
+inline int log_on_error_impl(int err, const std::string &message) {
   if (err < 0) {
     spdlog::warn("{}: {}", message, snd_strerror(err));
   }
@@ -26,83 +29,6 @@ inline int log_on_error(int err, const std::string &message) {
 
 snd_pcm_format_t getFormat(int bitsPerSample) {
   return bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
-}
-
-void init_hwparams(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *params,
-                   unsigned int &rate, snd_pcm_uframes_t &buffer_size,
-                   snd_pcm_uframes_t &period_size, snd_pcm_format_t format) {
-
-  unsigned int rrate;
-  int dir = 0;
-  std::stringstream error;
-
-  snd_pcm_drop(pcm_handle);
-  snd_pcm_hw_free(pcm_handle);
-
-  /* choose all parameters */
-  throw_on_error(
-      snd_pcm_hw_params_any(pcm_handle, params),
-      "Broken configuration for playback: no configurations available");
-
-  /* set the interleaved read/write format */
-  throw_on_error(snd_pcm_hw_params_set_access(pcm_handle, params,
-                                              SND_PCM_ACCESS_MMAP_INTERLEAVED),
-                 "Access type not available for playback");
-
-  /* set the sample format */
-  throw_on_error(snd_pcm_hw_params_set_format(pcm_handle, params, format),
-                 "Sample format not available for playback");
-
-  /* set the count of channels */
-  throw_on_error(snd_pcm_hw_params_set_channels(pcm_handle, params, 2),
-                 "Channels count not available for playbacks");
-
-  // Enabled resampling
-  throw_on_error(snd_pcm_hw_params_set_rate_resample(pcm_handle, params, 1),
-                 "Resampling setup failed for playback");
-
-  /* set the stream rate */
-  rrate = rate;
-  throw_on_error(snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rrate, 0),
-                 "Rate not available for playback");
-
-  if (rrate != rate) {
-    throw std::runtime_error("Rate doesn't match");
-  }
-
-  rate = rrate;
-  throw_on_error(
-      snd_pcm_hw_params_set_buffer_size_near(pcm_handle, params, &buffer_size),
-      "Unable to get buffer size for playback");
-
-  throw_on_error(snd_pcm_hw_params_set_period_size_near(pcm_handle, params,
-                                                        &period_size, &dir),
-                 "Unable to set period time for playback");
-
-  /* write the parameters to device */
-  throw_on_error(snd_pcm_hw_params(pcm_handle, params),
-                 "Unable to set hw params for playback");
-}
-
-void set_swparams(snd_pcm_t *handle, snd_pcm_sw_params_t *swparams,
-                  snd_pcm_uframes_t buffer_size,
-                  snd_pcm_uframes_t period_size) {
-
-  /* get the current swparams */
-  throw_on_error(snd_pcm_sw_params_current(handle, swparams),
-                 "Unable to determine current swparams for playback");
-
-  /*
-   * Allow the transfer when at least period_size samples can be
-   * processed. This will make the main loop to wake up whenever
-   * there's enough space for at least a perio of samples.
-   */
-  throw_on_error(snd_pcm_sw_params_set_avail_min(handle, swparams, period_size),
-                 "Unable to set avail min");
-
-  /* write the parameters to the playback device */
-  throw_on_error(snd_pcm_sw_params(handle, swparams),
-                 "Unable to set sw params for playback");
 }
 
 int xrun_recovery(snd_pcm_t *handle, int err) {
@@ -131,12 +57,29 @@ int xrun_recovery(snd_pcm_t *handle, int err) {
 AlsaAudioEmitter::AlsaAudioEmitter(const Config &config)
     : deviceName(
           value_or(config, "output.alsa.device", std::string("default"))),
-      requestedBufferSize(value_or(config, "output.alsa.buffer_size", 16384)),
-      requestedPeriodSize(value_or(config, "output.alsa.period_size", 1024)),
+      requestedLatencyMs(value_or(config, "output.alsa.latency_ms", 100)),
+      requestedPeriodMs(value_or(config, "output.alsa.period_ms", 25)),
       sleepAfterFormatSetupMs(
           value_or(config, "fixups.alsa_sleep_after_format_setup_ms", 0)),
       reopenDeviceWithNewFormat(value_or(
-          config, "fixups.alsa_reopen_device_with_new_format", false)) {}
+          config, "fixups.alsa_reopen_device_with_new_format", false)) {
+  auto configBufferSize =
+      value<snd_pcm_uframes_t>(config, "output.alsa.buffer_size");
+  auto configPeriodSize =
+      value<snd_pcm_uframes_t>(config, "output.alsa.period_size");
+
+  if (configBufferSize.has_value() && configPeriodSize.has_value()) {
+    requestedBufferSize = configBufferSize.value();
+    requestedPeriodSize = configPeriodSize.value();
+  }
+
+  for (auto &param : config) {
+    spdlog::info("AlsaAudioEmitter: {}={}", param.first, param.second);
+  }
+
+  spdlog::info("Reopen device with new format: {}",
+               reopenDeviceWithNewFormat ? "true" : "false");
+}
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }
 
@@ -321,9 +264,9 @@ void AlsaAudioEmitter::openDevice() {
 
 void AlsaAudioEmitter::closeDevice() {
   if (pcmHandle != nullptr) {
-    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
-    log_on_error(snd_pcm_hw_free(pcmHandle), "snd_pcm_hw_free failed");
-    log_on_error(snd_pcm_close(pcmHandle), "snd_pcm_close failed");
+    log_on_error(snd_pcm_drop(pcmHandle));
+    log_on_error(snd_pcm_hw_free(pcmHandle));
+    log_on_error(snd_pcm_close(pcmHandle));
     pcmHandle = nullptr;
     currentStreamAudioFormat = StreamAudioFormat();
   }
@@ -331,8 +274,7 @@ void AlsaAudioEmitter::closeDevice() {
 
 snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
   auto getAvailableFrames = [this]() -> snd_pcm_sframes_t {
-    return throw_on_error(snd_pcm_avail_update(pcmHandle),
-                          "Can't get avail update for playback");
+    return throw_on_error(snd_pcm_avail_update(pcmHandle));
   };
 
   snd_pcm_sframes_t frames = getAvailableFrames();
@@ -346,8 +288,7 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
     }
     frames = getAvailableFrames();
     throw_on_error(snd_pcm_poll_descriptors_revents(pcmHandle, ufds.data(),
-                                                    ufds.size(), &revents),
-                   "Can't get poll revents for playback");
+                                                    ufds.size(), &revents));
     if (revents & POLLERR) {
       throw std::runtime_error("Poll error");
     }
@@ -376,8 +317,7 @@ bool AlsaAudioEmitter::handleInputNodeStateChange() {
       return false;
     } else {
       snd_pcm_sframes_t framesDelay = 0;
-      log_on_error(snd_pcm_delay(pcmHandle, &framesDelay),
-                   "snd_pcm_delay failed");
+      log_on_error(snd_pcm_delay(pcmHandle, &framesDelay));
       spdlog::debug("Reporting source change in {}ms, frames={}",
                     framesToTimeMs(framesDelay).count(), framesDelay);
 
@@ -486,8 +426,7 @@ size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
                                           snd_pcm_uframes_t frames) {
   if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
     snd_pcm_sframes_t delayFrames = 0;
-    log_on_error(snd_pcm_delay(pcmHandle, &delayFrames),
-                 "snd_pcm_delay failed");
+    log_on_error(snd_pcm_delay(pcmHandle, &delayFrames));
     auto timeout = framesToTimeMs(std::max(
         0l, delayFrames - static_cast<snd_pcm_sframes_t>(2 * periodSize)));
     return inputNode->waitForDataFor(
@@ -507,7 +446,7 @@ AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
 void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
                                       snd_pcm_uframes_t position) {
   spdlog::info("Starting playback");
-  throw_on_error(snd_pcm_start(pcmHandle), "Can't start PCM");
+  throw_on_error(snd_pcm_start(pcmHandle));
   setState({AudioGraphNodeState::STREAMING, framesToTimeMs(position).count(),
             streamInfo});
 }
@@ -523,12 +462,12 @@ void AlsaAudioEmitter::drainPcm() {
         prevFrames = frames;
       }
     }
-    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
+    log_on_error(snd_pcm_drop(pcmHandle));
   }
   if (paused || seekHappened) {
-    log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed");
+    log_on_error(snd_pcm_drop(pcmHandle));
   } else {
-    log_on_error(snd_pcm_drain(pcmHandle), "snd_pcm_drain failed");
+    log_on_error(snd_pcm_drain(pcmHandle));
   }
 }
 
@@ -608,7 +547,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       }
 
       if (token.stop_requested()) {
-        log_on_error(snd_pcm_drop(pcmHandle), "snd_pcm_drop failed on stop");
+        log_on_error(snd_pcm_drop(pcmHandle));
       }
     }
   } catch (const std::exception &ex) {
@@ -624,10 +563,12 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
 void AlsaAudioEmitter::setupAudioFormat(
     const StreamAudioFormat &streamAudioFormat) {
+
   spdlog::debug("Setting up audio format: {}", streamAudioFormat.toString());
+
   if (pcmHandle != nullptr && streamAudioFormat == currentStreamAudioFormat) {
     spdlog::debug("Audio format is already set up - ignoring");
-    throw_on_error(snd_pcm_prepare(pcmHandle), "Can't prepare PCM");
+    throw_on_error(snd_pcm_prepare(pcmHandle));
     return;
   }
 
@@ -644,38 +585,21 @@ void AlsaAudioEmitter::setupAudioFormat(
   bufferSize = requestedBufferSize;
   periodSize = requestedPeriodSize;
 
-  snd_pcm_hw_params_t *hw_params;
-  snd_pcm_hw_params_malloc(&hw_params);
-  try {
-    init_hwparams(pcmHandle, hw_params, sampleRate, bufferSize, periodSize,
-                  format);
-  } catch (const std::exception &ex) {
-    snd_pcm_hw_params_free(hw_params);
-    throw;
-  }
-  snd_pcm_hw_params_free(hw_params);
-
-  snd_pcm_sw_params_t *sw_params;
-  throw_on_error(snd_pcm_sw_params_malloc(&sw_params),
-                 "snd_pcm_sw_params_malloc failed");
-  try {
-    set_swparams(pcmHandle, sw_params, bufferSize, periodSize);
-  } catch (const std::exception &ex) {
-    snd_pcm_sw_params_free(sw_params);
-    throw;
-  }
-  snd_pcm_sw_params_free(sw_params);
+  initHwParams(sampleRate, format);
+  setSwParams();
 
   currentStreamAudioFormat = streamAudioFormat;
 
-  int count = throw_on_error(snd_pcm_poll_descriptors_count(pcmHandle),
-                             "snd_pcm_poll_descriptors_count failed");
+  int count = throw_on_error(snd_pcm_poll_descriptors_count(pcmHandle));
   ufds.resize(count);
-
-  throw_on_error(snd_pcm_poll_descriptors(pcmHandle, ufds.data(), count),
-                 "Unable to obtain poll descriptors for playback");
+  throw_on_error(snd_pcm_poll_descriptors(pcmHandle, ufds.data(), count));
 
   pollTimeout = std::chrono::milliseconds(bufferSize * 1000 / sampleRate);
+
+  spdlog::info(
+      "Audio format set up: {}, bufferSize={}, periodSize={}, latency={}ms",
+      streamAudioFormat.toString(), bufferSize, periodSize,
+      pollTimeout.count());
 
   // Hack for HiFiBerry boards on Raspberry Pi
   // Sleep to make sure RPi is ready to play.
@@ -719,4 +643,133 @@ void PlayedFramesCounter::callOnOrAfterFrame(
 void PlayedFramesCounter::reset() {
   onFramesPlayedCallbacks.clear();
   lastPlayedFrames = 0;
+}
+
+void AlsaAudioEmitter::initHwParams(unsigned int &rate,
+                                    snd_pcm_format_t format) {
+
+  unsigned int rrate;
+  int dir = 0;
+  std::stringstream error;
+
+  snd_pcm_drop(pcmHandle);
+  snd_pcm_hw_free(pcmHandle);
+
+  snd_pcm_hw_params_t *params;
+  throw_on_error(snd_pcm_hw_params_malloc(&params));
+
+  try {
+
+    /* choose all parameters */
+    throw_on_error(snd_pcm_hw_params_any(pcmHandle, params));
+
+    /* set the interleaved read/write format */
+    throw_on_error(snd_pcm_hw_params_set_access(
+        pcmHandle, params, SND_PCM_ACCESS_MMAP_INTERLEAVED));
+
+    /* set the sample format */
+    throw_on_error(snd_pcm_hw_params_set_format(pcmHandle, params, format));
+
+    /* set the count of channels */
+    throw_on_error(snd_pcm_hw_params_set_channels(pcmHandle, params, 2));
+
+    // Enabled resampling
+    throw_on_error(snd_pcm_hw_params_set_rate_resample(pcmHandle, params, 1));
+
+    /* set the stream rate */
+    rrate = rate;
+    throw_on_error(
+        snd_pcm_hw_params_set_rate_near(pcmHandle, params, &rrate, 0));
+
+    if (rrate != rate) {
+      throw std::runtime_error("Rate doesn't match");
+    }
+
+    rate = rrate;
+    if (requestedPeriodSize == 0 || requestedBufferSize == 0) {
+      setLatencyBasedBufferSize(params);
+    } else {
+      throw_on_error(snd_pcm_hw_params_set_buffer_size_near(pcmHandle, params,
+                                                            &bufferSize));
+      throw_on_error(snd_pcm_hw_params_set_period_size_near(pcmHandle, params,
+                                                            &periodSize, &dir));
+    }
+
+    /* write the parameters to device */
+    throw_on_error(snd_pcm_hw_params(pcmHandle, params));
+
+  } catch (const std::exception &ex) {
+    snd_pcm_hw_params_free(params);
+    throw;
+  }
+
+  snd_pcm_hw_params_free(params);
+}
+
+void AlsaAudioEmitter::setSwParams() {
+
+  snd_pcm_sw_params_t *sw_params;
+  throw_on_error(snd_pcm_sw_params_malloc(&sw_params));
+  try {
+    /* get the current swparams */
+    throw_on_error(snd_pcm_sw_params_current(pcmHandle, sw_params));
+
+    // Wake up when the buffer has this amount of space available
+    throw_on_error(
+        snd_pcm_sw_params_set_avail_min(pcmHandle, sw_params, periodSize));
+
+    /* write the parameters to the playback device */
+    throw_on_error(snd_pcm_sw_params(pcmHandle, sw_params));
+  } catch (const std::exception &ex) {
+    snd_pcm_sw_params_free(sw_params);
+    throw;
+  }
+
+  snd_pcm_sw_params_free(sw_params);
+}
+
+void AlsaAudioEmitter::setLatencyBasedBufferSize(snd_pcm_hw_params_t *params) {
+  snd_pcm_hw_params_t *paramsSaved;
+  throw_on_error(snd_pcm_hw_params_malloc(&paramsSaved));
+  snd_pcm_hw_params_copy(paramsSaved, params);
+
+  int dir = 0;
+  auto latencyMcs = requestedLatencyMs * 1000;
+  auto periodMcs = requestedPeriodMs * 1000;
+  int err = snd_pcm_hw_params_set_buffer_time_near(pcmHandle, params,
+                                                   &latencyMcs, &dir);
+  try {
+    if (err < 0) {
+      /* error path -> set period size as first */
+      snd_pcm_hw_params_copy(params, paramsSaved);
+      /* set the period time */
+      throw_on_error(snd_pcm_hw_params_set_period_time_near(pcmHandle, params,
+                                                            &periodMcs, 0));
+
+      throw_on_error(snd_pcm_hw_params_get_period_size(params, &periodSize, 0));
+
+      bufferSize = periodSize * (requestedLatencyMs / requestedPeriodMs);
+      throw_on_error(snd_pcm_hw_params_set_buffer_size_near(pcmHandle, params,
+                                                            &bufferSize));
+
+      throw_on_error(snd_pcm_hw_params_get_buffer_size(params, &bufferSize));
+    } else {
+      /* standard configuration buffer_time -> periods */
+      throw_on_error(snd_pcm_hw_params_get_buffer_size(params, &bufferSize));
+
+      throw_on_error(snd_pcm_hw_params_get_buffer_time(params, &latencyMcs, 0));
+
+      /* set the period time */
+      periodMcs = latencyMcs / (requestedLatencyMs / requestedPeriodMs);
+      throw_on_error(snd_pcm_hw_params_set_period_time_near(pcmHandle, params,
+                                                            &periodMcs, 0));
+
+      throw_on_error(snd_pcm_hw_params_get_period_size(params, &periodSize, 0));
+    }
+  } catch (const std::exception &ex) {
+    snd_pcm_hw_params_free(paramsSaved);
+    throw;
+  }
+
+  snd_pcm_hw_params_free(paramsSaved);
 }
