@@ -74,10 +74,6 @@ AlsaAudioEmitter::AlsaAudioEmitter(const Config &config)
     requestedPeriodSize = configPeriodSize.value();
   }
 
-  for (auto &param : config) {
-    spdlog::info("AlsaAudioEmitter: {}={}", param.first, param.second);
-  }
-
   spdlog::info("Reopen device with new format: {}",
                reopenDeviceWithNewFormat ? "true" : "false");
 }

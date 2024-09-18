@@ -1,3 +1,4 @@
+#ifndef RELEASE
 #include "PerfMon.h"
 
 #include <iostream>
@@ -70,3 +71,5 @@ PerfMon::~PerfMon() {
 
   printStats();
 }
+
+#endif // RELEASE
