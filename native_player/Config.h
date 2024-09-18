@@ -2,6 +2,7 @@
 #define CONFIG_H
 
 #include <boost/lexical_cast.hpp>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
