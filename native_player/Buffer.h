@@ -2,19 +2,21 @@
 #define BUFFER_H
 
 #include <atomic>
-#include <boost/circular_buffer.hpp>
 #include <cassert>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <iostream>
 #include <mutex>
 #include <stop_token>
 
 template <class T> class Buffer {
-  boost::circular_buffer<T> data;
+  std::deque<T> data;
   mutable std::mutex m;
   std::condition_variable_any hasDataCon;
   std::condition_variable_any hasSpaceCon;
+
+  size_t capacity;
   std::atomic<bool> eof;
   std::function<void(Buffer<T> &)> onEmptyCallback;
   bool done = false;
@@ -23,7 +25,7 @@ public:
   Buffer(
       size_t capacity,
       std::function<void(Buffer<T> &)> onEmptyCallback = [](Buffer<T> &) {})
-      : data(capacity), eof(false), onEmptyCallback(onEmptyCallback) {}
+      : capacity(capacity), eof(false), onEmptyCallback(onEmptyCallback) {}
 
   ~Buffer() {
     {
@@ -36,7 +38,7 @@ public:
 
   Buffer(const Buffer &) = delete;
 
-  size_t max_size() const { return data.capacity(); }
+  size_t max_size() const { return capacity; }
 
   size_t read(T *dest, size_t size) {
     size_t sizeToCopy = 0;
@@ -47,7 +49,7 @@ public:
       if (availableData > 0) {
         sizeToCopy = std::min(availableData, size);
         std::copy_n(data.begin(), sizeToCopy, dest);
-        data.erase_begin(sizeToCopy);
+        data.erase(data.begin(), data.begin() + sizeToCopy);
       }
       remainingSize = data.size();
     }
@@ -67,11 +69,9 @@ public:
     size_t sizeToCopy = 0;
     {
       std::lock_guard<std::mutex> lock(m);
-      sizeToCopy = data.capacity() == 0
-                       ? size
-                       : std::min(size, data.capacity() - data.size());
+      sizeToCopy = std::min(size, capacity - data.size());
       data.insert(data.end(), source, source + sizeToCopy);
-      assert(data.size() <= data.capacity());
+      assert(data.size() <= capacity);
     }
 
     if (sizeToCopy != 0) {
@@ -85,8 +85,7 @@ public:
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
       hasDataCon.wait(lock, stopToken, [this, size] {
-        return done || data.size() >= std::min(size, data.capacity()) ||
-               eof.load();
+        return done || data.size() >= std::min(size, capacity) || eof.load();
       });
     }
 
@@ -99,8 +98,7 @@ public:
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
       hasDataCon.wait_for(lock, stopToken, timeout, [this, size] {
-        return done || data.size() >= std::min(size, data.capacity()) ||
-               eof.load();
+        return done || data.size() >= std::min(size, capacity) || eof.load();
       });
     }
 
@@ -109,14 +107,14 @@ public:
 
   size_t waitForSpace(std::stop_token stopToken = std::stop_token(),
                       size_t size = 1) {
-    size = std::min(size, data.capacity());
+    size = std::min(size, capacity);
     if (size > 0) {
       std::unique_lock<std::mutex> lock(m);
       hasSpaceCon.wait(lock, stopToken, [this, size]() {
-        return done || (data.capacity() - data.size()) >= size;
+        return done || (capacity - data.size()) >= size;
       });
     }
-    return data.capacity() - data.size();
+    return capacity - data.size();
   }
 
   size_t size() const {
@@ -126,7 +124,7 @@ public:
 
   size_t availableSpace() const {
     std::lock_guard lock(m);
-    return data.capacity() - data.size();
+    return capacity - data.size();
   }
 
   bool empty() const { return data.empty(); }
