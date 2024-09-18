@@ -73,9 +73,6 @@ AlsaAudioEmitter::AlsaAudioEmitter(const Config &config)
     requestedBufferSize = configBufferSize.value();
     requestedPeriodSize = configPeriodSize.value();
   }
-
-  spdlog::info("Reopen device with new format: {}",
-               reopenDeviceWithNewFormat ? "true" : "false");
 }
 
 AlsaAudioEmitter::~AlsaAudioEmitter() { stop(); }

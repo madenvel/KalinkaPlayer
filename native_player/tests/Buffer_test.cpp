@@ -67,6 +67,8 @@ TEST_F(BufferTest, waitForSpace) {
   EXPECT_EQ(expectedData, actualData);
 }
 
+#ifdef PROFILE
+
 TEST_F(BufferTest, read_write_performance_test) {
   Buffer<uint8_t> buffer(14000);
   const std::vector<uint8_t> data(8192, 111);
@@ -100,3 +102,5 @@ TEST_F(BufferTest, read_write_performance_test) {
   }
   EXPECT_LE(perfMon.getAverageNs(keyRead), 5 * perfMon.getAverageNs(keyMemcpy));
 }
+
+#endif // PROFILE
