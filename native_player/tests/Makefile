@@ -1,6 +1,6 @@
 CC = clang++
-CFLAGS = -Wall -g -std=c++23 -fsanitize=address -I../
-LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgtest -fsanitize=address
+CFLAGS = -Wall -g -O2 -std=c++23 -I../
+LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgtest
 
 # List of source files
 SRCS = $(wildcard *.cpp)
@@ -12,6 +12,7 @@ SRCS += ../AudioGraphHttpStream.cpp \
 		../AlsaAudioEmitter.cpp \
 		../AudioStreamSwitcher.cpp \
 		../AudioPlayer.cpp \
+		../PerfMon.cpp \
 		../StreamState.cpp \
 		../StateMonitor.cpp \
 		../Log.cpp
