@@ -1,7 +1,7 @@
 from setuptools import setup, Extension
 import pybind11
 
-compile_flags = ["-O2", "--std=c++23", "-D__PYTHON__", "-DRELEASE"]
+compile_flags = ["-O2", "--std=c++23", "-D__PYTHON__"]
 
 extensions = [
     Extension(

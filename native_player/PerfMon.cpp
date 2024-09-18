@@ -1,4 +1,4 @@
-#ifndef RELEASE
+#ifdef PROFILE
 #include "PerfMon.h"
 
 #include <iostream>
@@ -72,4 +72,4 @@ PerfMon::~PerfMon() {
   printStats();
 }
 
-#endif // RELEASE
+#endif // PROFILE

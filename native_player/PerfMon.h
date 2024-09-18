@@ -1,13 +1,7 @@
 #ifndef PERF_MON_H
 #define PERF_MON_H
 
-#include <boost/circular_buffer.hpp>
-#include <chrono>
-#include <iostream>
-#include <thread>
-#include <unordered_map>
-
-#ifndef RELEASE
+#ifdef PROFILE
 #define perfmon_begin(mark) PerfMon::getInstance().begin(mark)
 #define perfmon_end(mark) PerfMon::getInstance().end(mark)
 #define perfmon_print_stats() PerfMon::getInstance().printStats()
@@ -20,7 +14,14 @@
 #define perfmon_print_periodically(seconds)
 #endif
 
-#ifndef RELEASE
+#ifdef PROFILE
+
+#include <boost/circular_buffer.hpp>
+#include <chrono>
+#include <iostream>
+#include <thread>
+#include <unordered_map>
+
 class PerfMon {
 public:
   static PerfMon &getInstance() {
@@ -55,5 +56,5 @@ private:
   PerfMon &operator=(const PerfMon &) = delete;
 };
 
-#endif // RELEASE
+#endif // PROFILE
 #endif // PERF_MON_H
