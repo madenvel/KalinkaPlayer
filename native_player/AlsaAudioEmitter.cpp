@@ -1,5 +1,6 @@
 #include "AlsaAudioEmitter.h"
 #include "Log.h"
+#include "PerfMon.h"
 #include "StateMonitor.h"
 #include "StreamState.h"
 #include "Utils.h"
@@ -277,6 +278,9 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
     return throw_on_error(snd_pcm_avail_update(pcmHandle));
   };
 
+  perfmon_end("fullPeriodProcessingTime");
+  perfmon_begin("waitForAlsaBufferSpace");
+
   snd_pcm_sframes_t frames = getAvailableFrames();
   unsigned short revents = 0;
 
@@ -296,6 +300,9 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
       break;
     }
   }
+
+  perfmon_end("waitForAlsaBufferSpace");
+  perfmon_begin("fullPeriodProcessingTime");
   return frames;
 }
 
@@ -345,6 +352,7 @@ snd_pcm_sframes_t AlsaAudioEmitter::writeToAlsa(
     std::function<snd_pcm_sframes_t(void *ptr, snd_pcm_uframes_t frames,
                                     size_t bytes)>
         func) {
+  perfmon_begin("writeToAlsa");
   const snd_pcm_channel_area_t *my_areas = nullptr;
   snd_pcm_uframes_t offset = 0, frames = framesToWrite;
   int err = snd_pcm_mmap_begin(pcmHandle, &my_areas, &offset, &frames);
@@ -369,6 +377,8 @@ snd_pcm_sframes_t AlsaAudioEmitter::writeToAlsa(
     }
   }
 
+  perfmon_end("writeToAlsa");
+
   return frames;
 }
 
@@ -376,6 +386,8 @@ snd_pcm_sframes_t
 AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
                                          snd_pcm_sframes_t framesToRead) {
   snd_pcm_sframes_t framesRead = 0;
+
+  perfmon_begin("readIntoAlsaFromStream");
 
   if (snd_pcm_state(pcmHandle) == SND_PCM_STATE_RUNNING) {
     playedFramesCounter.update(framesToRead);
@@ -410,8 +422,10 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
       }
 
       if (static_cast<snd_pcm_uframes_t>(actualFrames) < frames) {
+        perfmon_begin("waitForMoreInputData");
         auto bytesAvailable =
             waitForInputData(stopToken, frames - actualFrames);
+        perfmon_end("waitForMoreInputData");
         if (bytesAvailable == 0) {
           drainPcm();
           return -1;
@@ -419,6 +433,7 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
       }
     }
   }
+  perfmon_end("readIntoAlsaFromStream");
   return framesRead;
 }
 

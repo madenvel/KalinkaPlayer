@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "FlacStreamDecoder.h"
 #include "Log.h"
+#include "PerfMon.h"
 #include "StateMonitor.h"
 
 namespace {
@@ -62,6 +63,7 @@ AudioPlayer::AudioPlayer(const Config &config)
     : config(config), audioEmitter(std::make_shared<AlsaAudioEmitter>(config)),
       streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
   initLogger(value_or(config, "server.log_level", std::string("debug")));
+  perfmon_print_periodically(5);
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }

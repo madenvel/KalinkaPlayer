@@ -77,9 +77,11 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
       return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
     }
 
+    perfmon_begin("FlacStreamDecoder::write_callback-write");
     bytesWritten += this->buffer.write(
         reinterpret_cast<uint8_t *>(data.data()) + bytesWritten,
         std::min(spaceAvailable, sizeInBytes - bytesWritten));
+    perfmon_end("FlacStreamDecoder::write_callback-write");
   }
 
   return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
@@ -283,8 +285,10 @@ FlacStreamDecoder::~FlacStreamDecoder() {
 }
 
 size_t FlacStreamDecoder::read(void *data, size_t size) {
+  perfmon_begin("FlacStreamDecoder::read");
   auto readBytes = buffer.read(static_cast<uint8_t *>(data), size);
   streamReadPosition += readBytes;
+  perfmon_end("FlacStreamDecoder::read");
   return readBytes;
 }
 size_t FlacStreamDecoder::waitForData(std::stop_token stopToken, size_t size) {
