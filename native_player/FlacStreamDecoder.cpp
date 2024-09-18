@@ -1,6 +1,7 @@
 #include "FlacStreamDecoder.h"
 #include "AudioSampleFormat.h"
 #include "Log.h"
+#include "PerfMon.h"
 
 #include "StateMonitor.h"
 #include <functional>
