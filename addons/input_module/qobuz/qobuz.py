@@ -80,6 +80,7 @@ class RetryTransport(httpx.HTTPTransport):
     def __init__(self, read_retries=3, **kwargs):
         super().__init__(**kwargs)
         self.read_retries = read_retries
+        self.backoff_factor = 0.5
 
     def handle_request(self, request):
         read_retries = 0
