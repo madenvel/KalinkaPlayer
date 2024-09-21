@@ -58,15 +58,18 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
   }
 
   AudioSampleFormat format = bitsToFormat(frame->header.bits_per_sample);
-  data.resize(samplesToBytes(blockSize, format));
+  auto const blockSizeInBytes = samplesToBytes(blockSize, format);
+
+  if (blockSizeInBytes > data.size()) {
+    data.resize(blockSizeInBytes);
+  }
   convertToFormat(data.data(), buffer, blockSize, format);
 
-  auto const sizeInBytes = data.size();
   size_t bytesWritten = 0;
   auto combinedStopToken = combineStopTokens(decodingThread.get_stop_token(),
                                              seekSignal.getStopToken());
 
-  while (bytesWritten < sizeInBytes) {
+  while (bytesWritten < blockSizeInBytes) {
     auto spaceAvailable =
         this->buffer.waitForSpace(combinedStopToken.get_token());
 
@@ -81,7 +84,7 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
     perfmon_begin("FlacStreamDecoder::write_callback-write");
     bytesWritten += this->buffer.write(
         reinterpret_cast<uint8_t *>(data.data()) + bytesWritten,
-        std::min(spaceAvailable, sizeInBytes - bytesWritten));
+        std::min(spaceAvailable, blockSizeInBytes - bytesWritten));
     perfmon_end("FlacStreamDecoder::write_callback-write");
   }
 
@@ -123,8 +126,7 @@ void FlacStreamDecoder::metadata_callback(
     flacStreamInfo = metadata->data.stream_info;
 
     if (inputNode->getState().streamInfo.has_value()) {
-      sourceStreamLength =
-          inputNode->getState().streamInfo.value().totalSamples;
+      sourceStreamLength = inputNode->getState().streamInfo.value().streamSize;
     }
   }
 }
@@ -181,11 +183,14 @@ void FlacStreamDecoder::setStreamingState() {
 
   StreamInfo streamInfo = {
       .format =
-          StreamAudioFormat{.sampleRate = flacStreamInfo.value().sample_rate,
-                            .channels = flacStreamInfo.value().channels,
-                            .bitsPerSample =
-                                flacStreamInfo.value().bits_per_sample},
-      .totalSamples = flacStreamInfo.value().total_samples};
+          StreamAudioFormat{
+              .sampleRate = flacStreamInfo.value().sample_rate,
+              .channels = flacStreamInfo.value().channels,
+              .bitsPerSample = flacStreamInfo.value().bits_per_sample,
+              .sampleFormat =
+                  bitsToFormat(flacStreamInfo.value().bits_per_sample)},
+      .streamType = StreamType::Frames,
+      .streamSize = flacStreamInfo.value().total_samples};
 
   setState({AudioGraphNodeState::STREAMING, streamReadPosition, streamInfo});
 }

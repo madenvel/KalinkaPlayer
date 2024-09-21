@@ -44,7 +44,8 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
 
   if (setStreamingState) {
     setState(StreamState(AudioGraphNodeState::STREAMING, offset,
-                         StreamInfo{.totalSamples = contentLength}));
+                         StreamInfo{.streamType = StreamType::Bytes,
+                                    .streamSize = contentLength}));
     setStreamingState = false;
   }
   auto combinedStopToken = combineStopTokens(seekRequestSignal.getStopToken(),

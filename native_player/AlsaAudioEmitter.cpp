@@ -28,8 +28,20 @@ inline int log_on_error_impl(int err, const std::string &message) {
   return err;
 }
 
-snd_pcm_format_t getFormat(int bitsPerSample) {
-  return bitsPerSample == 16 ? SND_PCM_FORMAT_S16_LE : SND_PCM_FORMAT_S24_LE;
+snd_pcm_format_t getFormat(AudioSampleFormat sampleFormat) {
+  switch (sampleFormat) {
+  case AudioSampleFormat::PCM16_LE:
+    return SND_PCM_FORMAT_S16_LE;
+  case AudioSampleFormat::PCM24_LE:
+    return SND_PCM_FORMAT_S24_LE;
+  case AudioSampleFormat::PCM32_LE:
+    return SND_PCM_FORMAT_S32_LE;
+  case AudioSampleFormat::PCM24_3LE:
+    return SND_PCM_FORMAT_S24_3LE;
+  default:
+    break;
+  }
+  throw std::runtime_error("Unsupported sample format");
 }
 
 int xrun_recovery(snd_pcm_t *handle, int err) {
@@ -497,6 +509,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       if (!streamInfo.has_value()) {
         throw std::runtime_error("No stream information available");
       }
+      if (streamInfo.value().streamType != StreamType::Frames) {
+        throw std::runtime_error("Unsupported stream type");
+      }
 
       setState(StreamState(AudioGraphNodeState::PREPARING));
       setupAudioFormat(streamInfo.value().format);
@@ -588,7 +603,7 @@ void AlsaAudioEmitter::setupAudioFormat(
     openDevice();
   }
 
-  snd_pcm_format_t format = getFormat(streamAudioFormat.bitsPerSample);
+  snd_pcm_format_t format = getFormat(streamAudioFormat.sampleFormat);
   unsigned sampleRate = streamAudioFormat.sampleRate;
   bufferSize = requestedBufferSize;
   periodSize = requestedPeriodSize;
@@ -675,7 +690,12 @@ void AlsaAudioEmitter::initHwParams(unsigned int &rate,
     throw_on_error(snd_pcm_hw_params_set_access(
         pcmHandle, params, SND_PCM_ACCESS_MMAP_INTERLEAVED));
 
-    /* set the sample format */
+    /* set the sample format mask*/
+    snd_pcm_format_mask_t *mask;
+    throw_on_error(snd_pcm_format_mask_malloc(&mask));
+    snd_pcm_format_mask_none(mask);
+    snd_pcm_format_mask_set(mask, format);
+
     throw_on_error(snd_pcm_hw_params_set_format(pcmHandle, params, format));
 
     /* set the count of channels */

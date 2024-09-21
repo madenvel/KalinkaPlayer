@@ -20,8 +20,9 @@ public:
         StreamInfo{.format = {.sampleRate = sampleRate,
                               .channels = 2,
                               .bitsPerSample = bitsPerSample},
-                   .totalSamples = static_cast<unsigned int>(durationMs) *
-                                   sampleRate / 1000};
+                   .streamType = StreamType::Frames,
+                   .streamSize = static_cast<unsigned int>(durationMs) *
+                                 sampleRate / 1000};
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo});
   }
   virtual size_t read(void *data, size_t size) override {
@@ -59,7 +60,7 @@ public:
   virtual size_t seekTo(size_t positionSamples) override {
     setState(StreamState{AudioGraphNodeState::PREPARING});
     positionSamples =
-        std::min(positionSamples, static_cast<size_t>(streamInfo.totalSamples));
+        std::min(positionSamples, static_cast<size_t>(streamInfo.streamSize));
     auto positionBytes = positionSamples * streamInfo.format.channels *
                          (streamInfo.format.bitsPerSample >> 3);
     this->position = positionBytes;

@@ -40,7 +40,11 @@ TEST_F(FlacStreamDecoderTest, read) {
   auto inputNode = std::make_shared<FileInputNode>("files/tone440.flac");
   flacStreamDecoder->connectTo(inputNode);
   uint8_t data[bufferSize];
-  waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  auto state =
+      waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  ASSERT_TRUE(state.streamInfo.has_value());
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Frames);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   EXPECT_EQ(flacStreamDecoder->read(data, 100), 100);
   flacStreamDecoder->disconnect(inputNode);
@@ -57,7 +61,7 @@ TEST_F(FlacStreamDecoderTest, getStreamInfo) {
   EXPECT_EQ(audioInfo.format.sampleRate, 44100);
   EXPECT_EQ(audioInfo.format.channels, 2);
   EXPECT_EQ(audioInfo.format.bitsPerSample, 16);
-  EXPECT_EQ(audioInfo.totalSamples, 44100);
+  EXPECT_EQ(audioInfo.streamSize, 44100);
 }
 
 TEST_F(FlacStreamDecoderTest, getState) {

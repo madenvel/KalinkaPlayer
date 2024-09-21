@@ -103,11 +103,11 @@ TEST_F(AudioStreamSwitcherTest, readStreamData) {
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
 
   StreamInfo sine440 = sineWaveNode440->getState().streamInfo.value();
-  size_t stream440Size = sine440.totalSamples * sine440.format.channels *
+  size_t stream440Size = sine440.streamSize * sine440.format.channels *
                          sine440.format.bitsPerSample / 8;
 
   StreamInfo sine880 = sineWaveNode880->getState().streamInfo.value();
-  size_t stream880Size = sine880.totalSamples * sine880.format.channels *
+  size_t stream880Size = sine880.streamSize * sine880.format.channels *
                          sine880.format.bitsPerSample / 8;
 
   std::vector<uint8_t> stream440(stream440Size + 1);
@@ -144,11 +144,11 @@ TEST_F(AudioStreamSwitcherTest, waitForData) {
             AudioGraphNodeState::STREAMING);
 
   StreamInfo sine440 = sineWaveNode440->getState().streamInfo.value();
-  size_t stream440Size = sine440.totalSamples * sine440.format.channels *
+  size_t stream440Size = sine440.streamSize * sine440.format.channels *
                          sine440.format.bitsPerSample / 8;
 
   StreamInfo sine880 = sineWaveNode880->getState().streamInfo.value();
-  size_t stream880Size = sine880.totalSamples * sine880.format.channels *
+  size_t stream880Size = sine880.streamSize * sine880.format.channels *
                          sine880.format.bitsPerSample / 8;
 
   std::vector<uint8_t> stream440(stream440Size + 1);
