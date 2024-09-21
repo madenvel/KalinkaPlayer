@@ -40,7 +40,7 @@ TEST_F(SineWaveNodeTest, getStreamInfo) {
   EXPECT_EQ(audioInfo.format.sampleRate, 48000);
   EXPECT_EQ(audioInfo.format.channels, 2);
   EXPECT_EQ(audioInfo.format.bitsPerSample, 16);
-  EXPECT_EQ(audioInfo.totalSamples,
+  EXPECT_EQ(audioInfo.streamSize,
             static_cast<unsigned int>(duration) * 48000 / 1000);
 }
 
@@ -60,10 +60,10 @@ TEST_F(SineWaveNodeTest, read_all) {
 TEST_F(SineWaveNodeTest, seekTo) {
   SineWaveNode sineWaveNode(frequency, duration);
   auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples / 2),
-            state.streamInfo.value().totalSamples / 2);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().streamSize / 2),
+            state.streamInfo.value().streamSize / 2);
   state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(state.position, state.streamInfo.value().totalSamples / 2);
+  EXPECT_EQ(state.position, state.streamInfo.value().streamSize / 2);
   std::vector<int16_t> data(20);
   EXPECT_EQ(sineWaveNode.read(data.data(), 40), 40);
   for (int i = 0; i < 20; i++) {
@@ -77,16 +77,16 @@ TEST_F(SineWaveNodeTest, seekTo) {
 TEST_F(SineWaveNodeTest, seekToEnd) {
   SineWaveNode sineWaveNode(frequency, duration);
   auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples),
-            state.streamInfo.value().totalSamples);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().streamSize),
+            state.streamInfo.value().streamSize);
   EXPECT_EQ(sineWaveNode.getState().state, AudioGraphNodeState::FINISHED);
 }
 
 TEST_F(SineWaveNodeTest, seekToEnd_and_back) {
   SineWaveNode sineWaveNode(frequency, duration);
   auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().totalSamples),
-            state.streamInfo.value().totalSamples);
+  EXPECT_EQ(sineWaveNode.seekTo(state.streamInfo.value().streamSize),
+            state.streamInfo.value().streamSize);
   EXPECT_EQ(sineWaveNode.getState().state, AudioGraphNodeState::FINISHED);
   EXPECT_EQ(sineWaveNode.seekTo(0), 0);
   state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);

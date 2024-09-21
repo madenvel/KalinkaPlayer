@@ -28,7 +28,8 @@ TEST_F(AudioGraphHttpStreamTest, read) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  size_t totalLength = state.streamInfo.value().totalSamples;
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Bytes);
+  size_t totalLength = state.streamInfo.value().streamSize;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   while ((bytesToRead =
@@ -49,7 +50,7 @@ TEST_F(AudioGraphHttpStreamTest, read_no_ranges) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  size_t totalLength = state.streamInfo.value().totalSamples;
+  size_t totalLength = state.streamInfo.value().streamSize;
   // Streaming data, no length available
   EXPECT_EQ(totalLength, 1);
   size_t bytesToRead = 0;
@@ -94,7 +95,7 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_forward) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   size_t halfContent = contentLength / 2;
@@ -130,7 +131,7 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_backward) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   size_t halfContent = contentLength / 2;
@@ -167,7 +168,7 @@ TEST_F(AudioGraphHttpStreamTest, seekTo_backward_after_finished) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;
   size_t halfContent = contentLength - bufferSize / 2;
@@ -204,7 +205,7 @@ TEST_F(AudioGraphHttpStreamTest, seekToEnd) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
 
   audioGraphHttpStream->seekTo(contentLength);
   state = waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::FINISHED,
@@ -218,7 +219,7 @@ TEST_F(AudioGraphHttpStreamTest, seekToEndAndBack) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
 
   audioGraphHttpStream->seekTo(contentLength);
   state = waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::FINISHED,

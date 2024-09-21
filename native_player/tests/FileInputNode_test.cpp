@@ -16,7 +16,8 @@ TEST_F(FileInputNodeTest, constructor_destructor) {
 TEST_F(FileInputNodeTest, read) {
   FileInputNode fileInputNode(filename);
   auto state = waitForStatus(fileInputNode, AudioGraphNodeState::STREAMING);
-  size_t fileSize = state.streamInfo.value().totalSamples;
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Bytes);
+  size_t fileSize = state.streamInfo.value().streamSize;
   uint8_t data[100];
   int bytesRead = 0;
   int num = 0;
@@ -31,7 +32,7 @@ TEST_F(FileInputNodeTest, read) {
 TEST_F(FileInputNodeTest, seek) {
   FileInputNode fileInputNode(filename);
   auto state = waitForStatus(fileInputNode, AudioGraphNodeState::STREAMING);
-  size_t fileSize = state.streamInfo.value().totalSamples;
+  size_t fileSize = state.streamInfo.value().streamSize;
   uint8_t data[100];
   int bytesRead = 0;
   int num = 0;
@@ -55,7 +56,7 @@ TEST_F(FileInputNodeTest, seek) {
 TEST_F(FileInputNodeTest, seekToEnd) {
   FileInputNode fileInputNode(filename);
   auto state = waitForStatus(fileInputNode, AudioGraphNodeState::STREAMING);
-  size_t fileSize = state.streamInfo.value().totalSamples;
+  size_t fileSize = state.streamInfo.value().streamSize;
   EXPECT_EQ(fileInputNode.seekTo(fileSize), fileSize);
   EXPECT_EQ(fileInputNode.getState().state, AudioGraphNodeState::FINISHED);
 }
@@ -63,7 +64,7 @@ TEST_F(FileInputNodeTest, seekToEnd) {
 TEST_F(FileInputNodeTest, seekPastEnd) {
   FileInputNode fileInputNode(filename);
   auto state = waitForStatus(fileInputNode, AudioGraphNodeState::STREAMING);
-  size_t fileSize = state.streamInfo.value().totalSamples;
+  size_t fileSize = state.streamInfo.value().streamSize;
   EXPECT_EQ(fileInputNode.seekTo(fileSize + 1), fileSize);
   EXPECT_EQ(fileInputNode.getState().state, AudioGraphNodeState::FINISHED);
 }

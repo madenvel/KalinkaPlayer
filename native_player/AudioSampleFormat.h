@@ -1,3 +1,6 @@
+#ifndef AUDIO_SAMPLE_FORMAT_H
+#define AUDIO_SAMPLE_FORMAT_H
+
 #include <cstddef>
 #include <cstdint>
 
@@ -38,3 +41,5 @@ inline int32_t packIntegers(int32_t a, int32_t b) {
 // Make sure buffer has enough space to allocate framesToBytes()
 void convertToFormat(void *buffer, const int32_t *const samples[], size_t size,
                      AudioSampleFormat format);
+
+#endif // AUDIO_SAMPLE_FORMAT_H

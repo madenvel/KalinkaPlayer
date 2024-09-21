@@ -156,7 +156,7 @@ TEST_F(IntegrationTest, fileInputReadAllAndSearchToBeg) {
   auto state =
       waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
   std::vector<uint8_t> buffer(4096);
   size_t contentRead = 0;
   while (flacStreamDecoder->waitForData(std::stop_token(), 4096)) {
@@ -185,7 +185,7 @@ TEST_F(IntegrationTest, fileInputSeekToEnd) {
   flacStreamDecoder->connectTo(fileInputNode);
   auto state =
       waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
 
   flacStreamDecoder->seekTo(contentLength);
 
@@ -200,7 +200,7 @@ TEST_F(IntegrationTest, fileInputSeekToEnd_and_back) {
   flacStreamDecoder->connectTo(fileInputNode);
   auto state =
       waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
-  auto contentLength = state.streamInfo.value().totalSamples;
+  auto contentLength = state.streamInfo.value().streamSize;
 
   flacStreamDecoder->seekTo(contentLength);
 
