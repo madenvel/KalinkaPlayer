@@ -20,7 +20,7 @@ public:
         StreamInfo{.format = {.sampleRate = sampleRate,
                               .channels = 2,
                               .bitsPerSample = bitsPerSample},
-                   .streamType = StreamType::Frames,
+                   .streamType = StreamType::FRAMES,
                    .streamSize = static_cast<unsigned int>(durationMs) *
                                  sampleRate / 1000};
     setState({AudioGraphNodeState::STREAMING, 0, streamInfo});

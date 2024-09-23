@@ -22,7 +22,7 @@ public:
     in.seekg(0, std::ios::beg);
     setState(StreamState(
         AudioGraphNodeState::STREAMING, 0,
-        StreamInfo{.streamType = StreamType::Bytes, .streamSize = fileSize}));
+        StreamInfo{.streamType = StreamType::BYTES, .streamSize = fileSize}));
   }
 
   virtual size_t read(void *data, size_t size) override {
@@ -56,11 +56,11 @@ public:
     if (absolutePosition < fileSize) {
       setState(StreamState(
           AudioGraphNodeState::STREAMING, absolutePosition,
-          StreamInfo{.streamType = StreamType::Bytes, .streamSize = fileSize}));
+          StreamInfo{.streamType = StreamType::BYTES, .streamSize = fileSize}));
     } else {
       setState(StreamState(
           AudioGraphNodeState::FINISHED, absolutePosition,
-          StreamInfo{.streamType = StreamType::Bytes, .streamSize = fileSize}));
+          StreamInfo{.streamType = StreamType::BYTES, .streamSize = fileSize}));
     }
     return in.tellg();
   }

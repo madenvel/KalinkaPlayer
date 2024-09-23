@@ -52,7 +52,7 @@ PREFETCH_TIME_MS = 5000
 
 
 def get_duration_ms(stream_info: StreamInfo) -> int:
-    return int(stream_info.total_samples / stream_info.format.sample_rate * 1000)
+    return int(stream_info.stream_size / stream_info.format.sample_rate * 1000)
 
 
 def to_audio_info(stream_info: StreamInfo):

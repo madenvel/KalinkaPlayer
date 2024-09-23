@@ -28,7 +28,7 @@ TEST_F(AudioGraphHttpStreamTest, read) {
   std::vector<uint8_t> data(bufferSize);
   auto state =
       waitForStatus(*audioGraphHttpStream, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Bytes);
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::BYTES);
   size_t totalLength = state.streamInfo.value().streamSize;
   size_t bytesToRead = 0;
   size_t totalBytesRead = 0;

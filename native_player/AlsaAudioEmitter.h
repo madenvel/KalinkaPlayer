@@ -10,6 +10,7 @@
 #include <functional>
 #include <list>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class PlayedFramesCounter {
@@ -74,6 +75,8 @@ private:
   std::chrono::milliseconds pollTimeout = std::chrono::milliseconds(100);
   snd_pcm_t *pcmHandle = nullptr;
   std::vector<pollfd> ufds;
+  std::unordered_map<AudioSampleFormat, AudioSampleFormat> sampleSubstitute = {
+      {AudioSampleFormat::PCM24_LE, AudioSampleFormat::PCM32_LE}};
 
   Signal<size_t> seekRequestSignal;
   Signal<bool> pauseRequestSignal;
@@ -87,9 +90,12 @@ private:
   void openDevice();
   void closeDevice();
 
-  void initHwParams(unsigned int &rate, snd_pcm_format_t format);
+  void initHwParams(unsigned int &rate, AudioSampleFormat format);
+  void setSampleFormat(AudioSampleFormat requestedFormat,
+                       snd_pcm_hw_params_t *params);
   void setSwParams();
   void setLatencyBasedBufferSize(snd_pcm_hw_params_t *params);
+  size_t readAndConvertFrames(void *dest, size_t bytes);
 
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
   StreamState waitForInputToBeReady(std::stop_token token);

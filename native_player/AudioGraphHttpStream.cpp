@@ -44,7 +44,7 @@ size_t AudioGraphHttpStream::WriteCallback(void *contents, size_t size,
 
   if (setStreamingState) {
     setState(StreamState(AudioGraphNodeState::STREAMING, offset,
-                         StreamInfo{.streamType = StreamType::Bytes,
+                         StreamInfo{.streamType = StreamType::BYTES,
                                     .streamSize = contentLength}));
     setStreamingState = false;
   }

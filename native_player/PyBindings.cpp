@@ -54,7 +54,8 @@ PYBIND11_MODULE(native_player, m) {
   py::class_<StreamInfo>(m, "StreamInfo")
       .def(py::init<>())
       .def_readwrite("format", &StreamInfo::format)
-      .def_readwrite("total_samples", &StreamInfo::totalSamples)
+      .def_readwrite("stream_type", &StreamInfo::streamType)
+      .def_readwrite("stream_size", &StreamInfo::streamSize)
       .def("__repr__", [](const StreamInfo &a) { return a.toString(); })
       .def(pybind11::self == pybind11::self)
       .def(pybind11::self != pybind11::self);
@@ -75,6 +76,11 @@ PYBIND11_MODULE(native_player, m) {
       .def("__repr__", [](const StreamState &s) { return s.toString(); })
       .def(pybind11::self == pybind11::self)
       .def(pybind11::self != pybind11::self);
+
+  py::enum_<StreamType>(m, "StreamType")
+      .value("BYTES", StreamType::BYTES)
+      .value("FRAMES", StreamType::FRAMES)
+      .export_values();
 
   py::class_<StateMonitor>(m, "StateMonitor")
       .def("wait_state", &StateMonitor::waitState)

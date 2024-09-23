@@ -9,18 +9,18 @@
 enum StreamType {
   // Indicates that the stream is a sequence of bytes
   // that need to be processed (i.g. compressed data)
-  Bytes,
+  BYTES,
   // Indicates that the stream is a sequence of audio frames
   // that can be directly played (i.g. PCM data).
   // The format of the frames is defined by the StreamAudioFormat.
-  Frames
+  FRAMES
 };
 
 inline std::string streamTypeToString(StreamType type) {
   switch (type) {
-  case Bytes:
+  case BYTES:
     return "bytes";
-  case Frames:
+  case FRAMES:
     return "frames";
   default:
     return "unnknown";
@@ -40,7 +40,8 @@ struct StreamAudioFormat {
   std::string toString() const {
     return "<AudioFormat sampleRate=" + std::to_string(sampleRate) +
            ", channels=" + std::to_string(channels) +
-           ", bitsPerSample=" + std::to_string(bitsPerSample) + ">";
+           ", bitsPerSample=" + std::to_string(bitsPerSample) +
+           ", sampleFormat=" + sampleFormatToString(sampleFormat) + ">";
   }
 };
 
