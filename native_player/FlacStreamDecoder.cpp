@@ -48,6 +48,20 @@ void FlacStreamDecoder::disconnect(
   this->inputNode = nullptr;
 }
 
+namespace {
+constexpr AudioSampleFormat bitsToFormat(int bits) {
+  if (bits == 16) {
+    return AudioSampleFormat::PCM16_LE;
+  } else if (bits == 24) {
+    return AudioSampleFormat::PCM24_LE;
+  } else if (bits == 32) {
+    throw std::runtime_error("32-bit PCM not supported");
+  }
+
+  throw std::runtime_error("Unsupported bits depth per sample");
+}
+} // namespace
+
 ::FLAC__StreamDecoderWriteStatus
 FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
                                   const FLAC__int32 *const buffer[]) {
@@ -58,7 +72,7 @@ FlacStreamDecoder::write_callback(const ::FLAC__Frame *frame,
   }
 
   AudioSampleFormat format = bitsToFormat(frame->header.bits_per_sample);
-  auto const blockSizeInBytes = samplesToBytes(blockSize, format);
+  auto const blockSizeInBytes = sampleSize(format) * blockSize * blockNum;
 
   if (blockSizeInBytes > data.size()) {
     data.resize(blockSizeInBytes);
@@ -189,7 +203,7 @@ void FlacStreamDecoder::setStreamingState() {
               .bitsPerSample = flacStreamInfo.value().bits_per_sample,
               .sampleFormat =
                   bitsToFormat(flacStreamInfo.value().bits_per_sample)},
-      .streamType = StreamType::Frames,
+      .streamType = StreamType::FRAMES,
       .streamSize = flacStreamInfo.value().total_samples};
 
   setState({AudioGraphNodeState::STREAMING, streamReadPosition, streamInfo});

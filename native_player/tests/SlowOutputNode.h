@@ -23,7 +23,7 @@ public:
         AudioGraphNodeState::STREAMING, 0,
         StreamInfo{
             .format = {.sampleRate = 48000, .channels = 2, .bitsPerSample = 16},
-            .streamType = StreamType::Frames,
+            .streamType = StreamType::FRAMES,
             .streamSize = 48 * 2 * duration}});
   }
 

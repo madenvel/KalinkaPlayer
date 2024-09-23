@@ -28,21 +28,11 @@ inline int log_on_error_impl(int err, const std::string &message) {
   return err;
 }
 
-snd_pcm_format_t getFormat(AudioSampleFormat sampleFormat) {
-  switch (sampleFormat) {
-  case AudioSampleFormat::PCM16_LE:
-    return SND_PCM_FORMAT_S16_LE;
-  case AudioSampleFormat::PCM24_LE:
-    return SND_PCM_FORMAT_S24_LE;
-  case AudioSampleFormat::PCM32_LE:
-    return SND_PCM_FORMAT_S32_LE;
-  case AudioSampleFormat::PCM24_3LE:
-    return SND_PCM_FORMAT_S24_3LE;
-  default:
-    break;
-  }
-  throw std::runtime_error("Unsupported sample format");
-}
+std::unordered_map<AudioSampleFormat, snd_pcm_format_t> ALSA_FORMAT_MAP = {
+    {AudioSampleFormat::PCM16_LE, SND_PCM_FORMAT_S16_LE},
+    {AudioSampleFormat::PCM24_LE, SND_PCM_FORMAT_S24_LE},
+    {AudioSampleFormat::PCM32_LE, SND_PCM_FORMAT_S32_LE},
+    {AudioSampleFormat::PCM24_3LE, SND_PCM_FORMAT_S24_3LE}};
 
 int xrun_recovery(snd_pcm_t *handle, int err) {
   if (err == -EPIPE) { /* under-run */
@@ -415,8 +405,7 @@ AlsaAudioEmitter::readIntoAlsaFromStream(std::stop_token stopToken,
     } else {
       auto actualFrames = writeToAlsa(
           frames, [this](void *ptr, snd_pcm_uframes_t frames, size_t bytes) {
-            return snd_pcm_bytes_to_frames(pcmHandle,
-                                           inputNode->read(ptr, bytes));
+            return readAndConvertFrames(ptr, bytes);
           });
 
       framesRead += actualFrames;
@@ -509,7 +498,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       if (!streamInfo.has_value()) {
         throw std::runtime_error("No stream information available");
       }
-      if (streamInfo.value().streamType != StreamType::Frames) {
+      if (streamInfo.value().streamType != StreamType::FRAMES) {
         throw std::runtime_error("Unsupported stream type");
       }
 
@@ -603,12 +592,11 @@ void AlsaAudioEmitter::setupAudioFormat(
     openDevice();
   }
 
-  snd_pcm_format_t format = getFormat(streamAudioFormat.sampleFormat);
   unsigned sampleRate = streamAudioFormat.sampleRate;
   bufferSize = requestedBufferSize;
   periodSize = requestedPeriodSize;
 
-  initHwParams(sampleRate, format);
+  initHwParams(sampleRate, streamAudioFormat.sampleFormat);
   setSwParams();
 
   currentStreamAudioFormat = streamAudioFormat;
@@ -668,8 +656,43 @@ void PlayedFramesCounter::reset() {
   lastPlayedFrames = 0;
 }
 
+void AlsaAudioEmitter::setSampleFormat(AudioSampleFormat requestedFormat,
+                                       snd_pcm_hw_params_t *params) {
+  auto formatToProbe = sampleSubstitute.count(requestedFormat)
+                           ? sampleSubstitute[requestedFormat]
+                           : requestedFormat;
+
+  while (true) {
+    auto alsaFormat = ALSA_FORMAT_MAP.at(formatToProbe);
+    int err = snd_pcm_hw_params_set_format(pcmHandle, params, alsaFormat);
+    if (err >= 0) {
+      break;
+    }
+
+    switch (formatToProbe) {
+    case AudioSampleFormat::PCM24_LE:
+      spdlog::warn("PCM24_LE not supported, trying PCM32_LE");
+      formatToProbe = AudioSampleFormat::PCM32_LE;
+      break;
+    case AudioSampleFormat::PCM32_LE:
+      spdlog::warn("PCM32_LE not supported, trying PCM24_3LE");
+      formatToProbe = AudioSampleFormat::PCM24_3LE;
+    default:
+      throw std::runtime_error("Unsupported sample format, format=" +
+                               std::to_string(static_cast<int>(formatToProbe)));
+    }
+  }
+
+  if (requestedFormat != formatToProbe) {
+    spdlog::warn("Using sample format {} instead of {}",
+                 sampleFormatToString(formatToProbe),
+                 sampleFormatToString(requestedFormat));
+    sampleSubstitute[requestedFormat] = formatToProbe;
+  }
+}
+
 void AlsaAudioEmitter::initHwParams(unsigned int &rate,
-                                    snd_pcm_format_t format) {
+                                    AudioSampleFormat format) {
 
   unsigned int rrate;
   int dir = 0;
@@ -690,16 +713,10 @@ void AlsaAudioEmitter::initHwParams(unsigned int &rate,
     throw_on_error(snd_pcm_hw_params_set_access(
         pcmHandle, params, SND_PCM_ACCESS_MMAP_INTERLEAVED));
 
-    /* set the sample format mask*/
-    snd_pcm_format_mask_t *mask;
-    throw_on_error(snd_pcm_format_mask_malloc(&mask));
-    snd_pcm_format_mask_none(mask);
-    snd_pcm_format_mask_set(mask, format);
-
-    throw_on_error(snd_pcm_hw_params_set_format(pcmHandle, params, format));
-
     /* set the count of channels */
     throw_on_error(snd_pcm_hw_params_set_channels(pcmHandle, params, 2));
+
+    setSampleFormat(format, params);
 
     // Enabled resampling
     throw_on_error(snd_pcm_hw_params_set_rate_resample(pcmHandle, params, 1));
@@ -800,4 +817,28 @@ void AlsaAudioEmitter::setLatencyBasedBufferSize(snd_pcm_hw_params_t *params) {
   }
 
   snd_pcm_hw_params_free(paramsSaved);
+}
+
+size_t AlsaAudioEmitter::readAndConvertFrames(void *dest, size_t bytes) {
+  if (!sampleSubstitute.count(currentStreamAudioFormat.sampleFormat)) {
+    return snd_pcm_bytes_to_frames(pcmHandle, inputNode->read(dest, bytes));
+  }
+
+  auto sourceFormat = currentStreamAudioFormat.sampleFormat;
+  auto destFormat = sampleSubstitute[currentStreamAudioFormat.sampleFormat];
+  size_t destSampleCount = snd_pcm_bytes_to_samples(pcmHandle, bytes);
+  size_t sourceBytesToRead = destSampleCount * sampleSize(sourceFormat);
+
+  std::vector<uint8_t> sampleBuffer(sourceBytesToRead);
+  size_t bytesRead = inputNode->read(sampleBuffer.data(), sourceBytesToRead);
+  size_t sampleCount = bytesRead / sampleSize(sourceFormat);
+
+  size_t convertedSamples = convertSampleFormat(
+      sampleBuffer.data(), sourceFormat, sampleCount, dest, destFormat, bytes);
+  assert(convertedSamples == sampleCount);
+
+  auto frames = snd_pcm_bytes_to_frames(
+      pcmHandle, snd_pcm_samples_to_bytes(pcmHandle, convertedSamples));
+
+  return frames;
 }

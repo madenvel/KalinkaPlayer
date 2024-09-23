@@ -16,7 +16,7 @@ TEST_F(FileInputNodeTest, constructor_destructor) {
 TEST_F(FileInputNodeTest, read) {
   FileInputNode fileInputNode(filename);
   auto state = waitForStatus(fileInputNode, AudioGraphNodeState::STREAMING);
-  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Bytes);
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::BYTES);
   size_t fileSize = state.streamInfo.value().streamSize;
   uint8_t data[100];
   int bytesRead = 0;

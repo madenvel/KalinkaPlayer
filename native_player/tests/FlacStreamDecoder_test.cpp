@@ -44,7 +44,7 @@ TEST_F(FlacStreamDecoderTest, read) {
       waitForStatus(*flacStreamDecoder, AudioGraphNodeState::STREAMING);
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
   ASSERT_TRUE(state.streamInfo.has_value());
-  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::Frames);
+  EXPECT_EQ(state.streamInfo.value().streamType, StreamType::FRAMES);
   std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   EXPECT_EQ(flacStreamDecoder->read(data, 100), 100);
   flacStreamDecoder->disconnect(inputNode);
