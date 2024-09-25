@@ -1,6 +1,7 @@
 import time
 import httpx
 import logging
+from data_model.response_model import PlayerState
 from src.events import EventType
 
 from src.ext_device import SupportedFunction, Volume
@@ -52,18 +53,24 @@ class Device:
     def __init__(self, playqueue: PlayQueue, event_emitter: EventEmitter):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
+
         self.connected_input = config["addons"]["device"]["musiccast"][
             "connected_input"
         ]
         self.device_addr = config["addons"]["device"]["musiccast"]["device_addr"]
         self.device_port = config["addons"]["device"]["musiccast"]["device_port"]
+        self.volume_step_to_db = config["addons"]["device"]["musiccast"].get(
+            "volume_step_to_db", 0.5
+        )
         self.session = httpx.Client(timeout=5)
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
         )
         status = self._get_status()
         self.volume = Volume(
-            max_volume=status["max_volume"], current_volume=status["volume"]
+            max_volume=status["max_volume"],
+            current_volume=status["volume"],
+            replay_gain=0.0,
         )
 
         self.poweroff_timer = None
@@ -76,6 +83,9 @@ class Device:
         self.event_loop_thread.start()
         self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
         self.timer_thread.start()
+
+    def _db_to_device_units(self, db):
+        return round(db / self.volume_step_to_db)
 
     def _timer_loop(self):
         # Recommended poll time for main zone is 5 seconds
@@ -134,7 +144,7 @@ class Device:
             state.get("volume", self.volume.current_volume)
             != self.volume.current_volume
         ):
-            self.volume.current_volume = state["volume"]
+            self.volume.current_volume = state["volume"] - self.volume.replay_gain
             self.event_emitter.dispatch(
                 EventType.VolumeChanged, self.volume.current_volume
             )
@@ -150,7 +160,7 @@ class Device:
         if "state" not in state:
             return
         if state["state"] == "PLAYING":
-            self._on_playing()
+            self._on_playing(state)
         elif state["state"] == "PAUSED" or state["state"] == "STOPPED":
             self._on_paused_or_stopped()
 
@@ -164,16 +174,37 @@ class Device:
         self.poweroff_timer.daemon = True
         self.poweroff_timer.start()
 
+        # ReplayGain
+        if self.volume.replay_gain is not None and self.volume.replay_gain != 0.0:
+            self.set_volume(
+                self.volume.current_volume
+                - self._db_to_device_units(self.volume.replay_gain)
+            )
+            self.volume.replay_gain = 0.0
+
     def _self_power_off(self):
         status = self._get_status()
         if status["input"] == self.connected_input:
             self.power_off()
 
-    def _on_playing(self):
+    def _on_playing(self, state):
         if self.poweroff_timer is not None:
             self.poweroff_timer.cancel()
             self.poweroff_timer = None
         self.power_on()
+
+        # ReplayGain
+        if state.get("current_track", {}).get("replaygain_gain", None) is not None:
+            if self.volume.replay_gain == state["current_track"]["replaygain_gain"]:
+                return
+
+            self.set_volume(
+                self.volume.current_volume
+                - self._db_to_device_units(self.volume.replay_gain)
+                + self._db_to_device_units(state["current_track"]["replaygain_gain"])
+            )
+            self.volume.replay_gain = state["current_track"]["replaygain_gain"]
+            logger.info(f"Loudness correction applied: {self.volume.replay_gain}dB")
 
     def _get_status(self, headers=None):
         response = self._request_musiccast("/main/getStatus", headers=headers)

@@ -71,6 +71,11 @@ addons:
     # musiccast:
     #   device_addr: 10.10.10.1
     #   device_port: 80
+    # # This value is to map volume level to dB.
+    # # It is used to calculate the volume level for the device when using ReplayGain.
+    # # The value can be obtain by reading indicator on your device.
+    # # This is the smallest difference between to readings.
+    #   volume_step_to_db: 0.5
     #   connected_input: optical2
 
   input_module:

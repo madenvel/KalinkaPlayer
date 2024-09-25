@@ -60,6 +60,8 @@ class Track(BaseModel):
     duration: int
     performer: Optional[Artist] = None
     album: Album
+    replaygain_peak: Optional[float] = None
+    replaygain_gain: Optional[float] = None
 
 
 class Owner(BaseModel):

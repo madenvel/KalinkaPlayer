@@ -297,6 +297,12 @@ def metadata_from_track(track, album_meta={}):
                 id=str(album_info["genre"]["id"]), name=album_info["genre"]["name"]
             ),
         ),
+        "replaygain_peak": track.get("audio_info", {}).get(
+            "replaygain_track_peak", None
+        ),
+        "replaygain_gain": track.get("audio_info", {}).get(
+            "replaygain_track_gain", None
+        ),
     }
 
 
