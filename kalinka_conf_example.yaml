@@ -71,12 +71,14 @@ addons:
     # musiccast:
     #   device_addr: 10.10.10.1
     #   device_port: 80
+    #   connected_input: optical2
     # # This value is to map volume level to dB.
     # # It is used to calculate the volume level for the device when using ReplayGain.
     # # The value can be obtain by reading indicator on your device.
-    # # This is the smallest difference between to readings.
+    # # This is the smallest difference between to readings. Default is 0.5.
     #   volume_step_to_db: 0.5
-    #   connected_input: optical2
+    # # This enables automatic volume correction when ReplayGain information is present.
+    #   auto_volume_correcton: true
 
   input_module:
     qobuz:

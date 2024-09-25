@@ -62,6 +62,9 @@ class Device:
         self.volume_step_to_db = config["addons"]["device"]["musiccast"].get(
             "volume_step_to_db", 0.5
         )
+        self.auto_volume = config["addons"]["device"]["musiccast"].get(
+            "auto_volume_correcton", True
+        )
         self.session = httpx.Client(timeout=5)
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
@@ -184,7 +187,11 @@ class Device:
         self.poweroff_timer.start()
 
         # ReplayGain
-        if self.volume.replay_gain is not None and self.volume.replay_gain != 0.0:
+        if (
+            self.auto_volume is True
+            and self.volume.replay_gain is not None
+            and self.volume.replay_gain != 0.0
+        ):
             self.set_volume(
                 self.volume.current_volume
                 - self._db_to_device_units(self.volume.replay_gain)
@@ -203,7 +210,10 @@ class Device:
         self.power_on()
 
         # ReplayGain
-        if state.get("current_track", {}).get("replaygain_gain", None) is not None:
+        if (
+            self.auto_volume is True
+            and state.get("current_track", {}).get("replaygain_gain", None) is not None
+        ):
             if self.volume.replay_gain == state["current_track"]["replaygain_gain"]:
                 return
 
