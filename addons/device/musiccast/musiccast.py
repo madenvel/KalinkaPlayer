@@ -83,9 +83,20 @@ class Device:
         self.event_loop_thread.start()
         self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
         self.timer_thread.start()
+        self.volume_changed_event = threading.Event()
+        threading.Thread(target=self._event_sender, daemon=True).start()
 
     def _db_to_device_units(self, db):
         return round(db / self.volume_step_to_db)
+
+    def _event_sender(self):
+        while True:
+            self.volume_changed_event.wait()
+            self.volume_changed_event.clear()
+            self.event_emitter.dispatch(
+                EventType.VolumeChanged, self.volume.current_volume
+            )
+            time.sleep(1)
 
     def _timer_loop(self):
         # Recommended poll time for main zone is 5 seconds
@@ -144,10 +155,8 @@ class Device:
             state.get("volume", self.volume.current_volume)
             != self.volume.current_volume
         ):
-            self.volume.current_volume = state["volume"] - self.volume.replay_gain
-            self.event_emitter.dispatch(
-                EventType.VolumeChanged, self.volume.current_volume
-            )
+            self.volume.current_volume = state["volume"]
+            self.volume_changed_event.set()
 
         if (
             state.get("power", None) == "standby"
@@ -198,12 +207,13 @@ class Device:
             if self.volume.replay_gain == state["current_track"]["replaygain_gain"]:
                 return
 
-            self.set_volume(
+            new_volume = (
                 self.volume.current_volume
                 - self._db_to_device_units(self.volume.replay_gain)
                 + self._db_to_device_units(state["current_track"]["replaygain_gain"])
             )
             self.volume.replay_gain = state["current_track"]["replaygain_gain"]
+            self._request_musiccast(f"/main/setVolume?volume={new_volume}")
             logger.info(f"Loudness correction applied: {self.volume.replay_gain}dB")
 
     def _get_status(self, headers=None):
