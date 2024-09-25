@@ -76,6 +76,9 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    # Reduce logging level for httpx - it's too verbose
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     if args.config:
         config.set_config_path(args.config)
 
