@@ -75,8 +75,7 @@ private:
   std::chrono::milliseconds pollTimeout = std::chrono::milliseconds(100);
   snd_pcm_t *pcmHandle = nullptr;
   std::vector<pollfd> ufds;
-  std::unordered_map<AudioSampleFormat, AudioSampleFormat> sampleSubstitute = {
-      {AudioSampleFormat::PCM24_LE, AudioSampleFormat::PCM32_LE}};
+  std::unordered_map<AudioSampleFormat, AudioSampleFormat> sampleSubstitute;
 
   Signal<size_t> seekRequestSignal;
   Signal<bool> pauseRequestSignal;
