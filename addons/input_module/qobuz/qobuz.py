@@ -259,7 +259,6 @@ def extract_track_format(track):
 def qobuz_link_retriever(qobuz_client, id) -> str:
     track = qobuz_client.get_track_url(id, fmt_id=27)
     format = extract_track_format(track)
-    logger.info(f"Track link: {track['url']}")
     track_url = TrackUrl(url=track["url"], format=format)
     return track_url
 
