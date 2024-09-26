@@ -19,10 +19,10 @@ The target audience for this are DIY HiFi enthusiasts familiar with linux and co
 
 # Installation
 ## Debian-package
-[Pre-built packages](https://github.com/madenvel/KalinkaPrebuilt/tree/main/Kalinka%20Player)
+A deb package for arm64 (Raspbian) is provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section.
 
 A debian package can be built by running `make` in the root directory. Note, that there's no cross-compilation,
-the package is built for the platform it is being built on.
+the package is built for the platform it is being built for.
 
 Make sure you update the config file `/opt/kalinka/kalinka_conf.yaml` after you install the package (see below).
 
@@ -32,7 +32,7 @@ and the last log lines use `systemctl status kalinka.service`.
 # Running from sources
 ## Prepare environment
 1. Clone the repository, `git clone https://github.com/madenvel/KalinkaPlayer.git`
-2. Install pre-requisites [WIP]
+2. Install pre-requisites
 ```
 sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
 ```
@@ -49,36 +49,7 @@ cd native_player
 make
 cd ../
 ```
-5. Create a config file in the root folder of the cloned project
-```yaml
----
-server:
-  interface: <NETWORK INTERFACE> # i.g. wlan0
-  port: <PORT>
-  service_name: <SERVICE NAME> # i.g. MyPlayer
-output:
-  alsa:
-    device: <ALSA OUTPUT DEVICE> # typically hw:0,0
-addons:
-  device:
-    musiccast: # optional for musiccast device
-      device_addr: <MUSICCAST IP> # ip address of musiccast device
-      device_port: <MUSICCAST PORT> # port of musiccast device, typical 80
-      connected_input: <CONNECTED OUTPUT> # output port to switch to, i.g. optical2
-  input_module:
-    qobuz:
-      email: your@email.com # your qobuz email address
-      password_hash: <PASSWORD MD5 HASH> # hash only, not plain text! see below
-```
-
-* `<NETWORK INTERFACE>` is the interface the server will listen to HTTP requests, usually the interface looking to your home network (not localhost). Use `ifconfig` to find out available interfaces.
-* `<SERVICE NAME>` is a name you want to give to your service. It will be visible via ZeroConf
-* `<ALSA OUTPUT DEVICE>` is your output device. This player support ALSA device only at the moment. To see available devices use `aplay -l`. Please refer to your
-sound card or Raspberry Pi documentation on how to set it up correctly. Usually, this value is `hw:X,Y`, - where X is a device number and Y is subdevice.
-* `<PASSWORD HASH>` to generate an MD5 hash for your password you can use the following command:
-```
-echo -n 'your password' | md5sum
-```
+5. Create a config file based on the [example](https://github.com/madenvel/KalinkaPlayer/blob/main/kalinka_conf_example.yaml)
 6. Run the server
 ```
 nohup ./run_server.py &
