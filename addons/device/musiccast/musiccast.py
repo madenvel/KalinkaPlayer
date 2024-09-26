@@ -73,7 +73,7 @@ class Device:
         self.volume = Volume(
             max_volume=status["max_volume"],
             current_volume=status["volume"],
-            replay_gain=0.0,
+            volume_gain=0,
         )
 
         self.poweroff_timer = None
@@ -177,9 +177,9 @@ class Device:
         if state["state"] == "PLAYING":
             self._on_playing(state)
         elif state["state"] == "PAUSED" or state["state"] == "STOPPED":
-            self._on_paused_or_stopped()
+            self._on_paused_or_stopped(state["state"] == "STOPPED")
 
-    def _on_paused_or_stopped(self):
+    def _on_paused_or_stopped(self, stopped: bool):
         if self.poweroff_timer is not None:
             self.poweroff_timer.cancel()
             self.poweroff_timer = None
@@ -190,16 +190,9 @@ class Device:
         self.poweroff_timer.start()
 
         # ReplayGain
-        if (
-            self.auto_volume is True
-            and self.volume.replay_gain is not None
-            and self.volume.replay_gain != 0.0
-        ):
-            self.set_volume(
-                self.volume.current_volume
-                - self._db_to_device_units(self.volume.replay_gain)
-            )
-            self.volume.replay_gain = 0.0
+        if stopped is True and self.volume.volume_gain != 0:
+            self.set_volume(self.volume.current_volume - self.volume.volume_gain)
+            self.volume.volume_gain = 0
 
     def _self_power_off(self):
         status = self._get_status()
@@ -217,17 +210,18 @@ class Device:
             self.auto_volume is True
             and state.get("current_track", {}).get("replaygain_gain", None) is not None
         ):
-            if self.volume.replay_gain == state["current_track"]["replaygain_gain"]:
+            device_gain_units = self._db_to_device_units(
+                state["current_track"]["replaygain_gain"]
+            )
+            if self.volume.volume_gain == device_gain_units:
                 return
 
             new_volume = (
-                self.volume.current_volume
-                - self._db_to_device_units(self.volume.replay_gain)
-                + self._db_to_device_units(state["current_track"]["replaygain_gain"])
+                self.volume.current_volume - self.volume.volume_gain + device_gain_units
             )
-            self.volume.replay_gain = state["current_track"]["replaygain_gain"]
+            self.volume.volume_gain = device_gain_units
             self.set_volume(new_volume)
-            logger.info(f"Loudness correction applied: {self.volume.replay_gain}dB")
+            logger.info(f"Loudness correction applied: {device_gain_units}")
 
     def _get_status(self, headers=None):
         response = self._request_musiccast("/main/getStatus", headers=headers)
@@ -254,6 +248,8 @@ class Device:
     def set_volume(self, volume: int) -> None:
         if volume != self.volume.current_volume:
             self.volume.current_volume = volume
+            volume = min(volume, self.volume.max_volume)
+            volume = max(volume, 0)
             self._request_musiccast(f"/main/setVolume?volume={volume}")
 
     def power_on(self) -> None:
