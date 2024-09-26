@@ -14,7 +14,7 @@ class SupportedFunction(Enum):
 class Volume(BaseModel):
     max_volume: int
     current_volume: int
-    replay_gain: float = 0.0
+    volume_gain: int = 0
 
 
 class ExternalOutputDevice(ABC):
