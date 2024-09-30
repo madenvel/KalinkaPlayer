@@ -29,6 +29,8 @@ Make sure you update the config file `/opt/kalinka/kalinka_conf.yaml` after you 
 The service can be restarted with `sudo systemctl restart kalinka.service`, to check the status of the service
 and the last log lines use `systemctl status kalinka.service`.
 
+To check the full log: `journalctl -u kalinka.service`.
+
 # Running from sources
 ## Prepare environment
 1. Clone the repository, `git clone https://github.com/madenvel/KalinkaPlayer.git`
