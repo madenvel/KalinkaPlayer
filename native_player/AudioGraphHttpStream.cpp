@@ -196,37 +196,34 @@ void AudioGraphHttpStream::readContentChunks(std::stop_token stopToken) {
       }
     }
 
-    switch (responseCode) {
-    case 200:
+    if (responseCode >= 200 && responseCode < 300) {
+      numRetries = 3;
+    }
+
+    if (responseCode == 200) {
       break;
-    case 206:
+    } else if (responseCode == 206) {
       continue;
-    case 404:
-      throw std::runtime_error("HTTP GET request failed with code 404");
-    case 416:
+    } else if (responseCode == 416) {
       throw std::runtime_error("Request range not satisfiable, " +
                                std::to_string(offset) + "/" +
                                std::to_string(contentLength) +
                                ", chunk=" + std::to_string(chunkSize));
-    default:
-      if (responseCode != 200) {
-        if (numRetries == 0 || !acceptRange) {
-          std::string message = "HTTP GET request failed with code " +
-                                std::to_string(responseCode);
-          throw std::runtime_error(message);
-        } else {
-          --numRetries;
-          spdlog::warn(
-              "HTTP GET request failed with code {}, retrying {} more times",
-              responseCode, numRetries);
-        }
+    } else if (responseCode >= 400 && responseCode < 500) {
+      throw std::runtime_error("HTTP GET request failed with code " +
+                               std::to_string(responseCode));
+    } else if (responseCode >= 500 && responseCode < 600) {
+      if (numRetries == 0 || !acceptRange) {
+        std::string message =
+            "HTTP GET request failed with code " + std::to_string(responseCode);
+        throw std::runtime_error(message);
       } else {
-        numRetries = 3;
+        --numRetries;
+        spdlog::warn(
+            "HTTP GET request failed with code {}, retrying {} more times",
+            responseCode, numRetries);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
       }
-    }
-
-    if (responseCode == 206) {
-      continue;
     }
   }
 }

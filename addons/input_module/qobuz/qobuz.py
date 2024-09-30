@@ -87,8 +87,22 @@ class RetryTransport(httpx.HTTPTransport):
         while read_retries < self.read_retries:
             try:
                 response = super().handle_request(request)
+                if response.status_code >= 500 and response.status_code < 600:
+                    read_retries += 1
+                    time.sleep(self.backoff_factor * read_retries)
+                    print(
+                        f"Retry {read_retries} due to status code={response.status_code}"
+                    )
                 return response
-            except httpx.ProtocolError as exc:
+            except (
+                httpx.ProtocolError,
+                httpx.ConnectError,
+                httpx.ReadTimeout,
+                httpx.WriteTimeout,
+                httpx.ConnectTimeout,
+                httpx.ProxyError,
+                httpx.ConnectError,
+            ) as exc:
                 read_retries += 1
                 time.sleep(self.backoff_factor * read_retries)
                 print(f"Retry {read_retries} due to {exc}")
@@ -115,12 +129,7 @@ class QobuzClient:
                 "X-App-Id": self.id,
             }
         )
-        # self.session.mount(
-        #     "https://",
-        #     requests.adapters.HTTPAdapter(
-        #         max_retries=Retry(total=2, read=1, connect=1, redirect=True)
-        #     ),
-        # )
+
         self.base = "https://www.qobuz.com/api.json/0.2/"
         self.sec = None
         # a short living cache to be used for reporting purposes
