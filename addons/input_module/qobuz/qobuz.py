@@ -482,18 +482,6 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="recent-releases",
-                        name="Still Trending",
-                        url="/catalog/recent-releases",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id="recent-releases",
-                            title="Still Trending",
-                            can_genre_filter=True,
-                        ),
-                    ),
-                    BrowseItem(
                         id="press-awards",
                         name="Press Awards",
                         url="/catalog/press-awards",
@@ -513,7 +501,7 @@ class QobuzInputModule(InputModule):
                         can_add=False,
                         catalog=Catalog(
                             id="most-streamed",
-                            title="Most Streamed",
+                            title="Top Releases",
                             can_genre_filter=True,
                         ),
                     ),
@@ -523,8 +511,6 @@ class QobuzInputModule(InputModule):
             return self._get_new_releases("new-releases-full", offset, limit, genre_ids)
         elif endpoint == "qobuz-playlists":
             return self._get_qobuz_playlists(offset, limit, genre_ids)
-        elif endpoint == "recent-releases":
-            return self._get_new_releases("recent-releases", offset, limit, genre_ids)
         elif endpoint == "myweeklyq":
             return self._get_curated_tracks(offset, limit)
         elif endpoint == "playlists-by-category":
