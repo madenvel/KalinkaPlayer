@@ -3,7 +3,7 @@ from typing import List, Union
 from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from data_model.response_model import FavoriteIds, GenreList, PlayerState
+from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
 from src import state_keeper
 from src.ext_device import Volume
 from src.player_setup import setup
@@ -188,6 +188,19 @@ async def stream(request: Request):
 @app.get("/queue/state")
 async def state() -> PlayerState:
     return playqueue.get_state()
+
+
+@app.get("/queue/mode")
+async def mode() -> PlaybackMode:
+    return playqueue.get_playback_mode()
+
+
+@app.put("/queue/mode")
+async def set_mode(
+    shuffle: bool = None, repeat_single: bool = None, repeat_all: bool = None
+):
+    playqueue.set_playback_mode(shuffle, repeat_single, repeat_all)
+    return {"message": "Ok"}
 
 
 @app.put("/queue/clear")

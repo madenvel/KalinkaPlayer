@@ -2,12 +2,12 @@ import logging
 import time
 
 from functools import partial
-from typing import Optional
 from threading import Timer, Thread
 
 from collections import OrderedDict
+from typing import Optional
 
-from data_model.response_model import AudioInfo, PlayerState
+from data_model.response_model import AudioInfo, PlayerState, PlaybackMode
 from data_model.datamodel import Track
 
 from src.event_loop import AsyncExecutor, enqueue
@@ -88,6 +88,11 @@ class PlayQueue(AsyncExecutor):
         self.current_track_id = 0
         self.track_list: list[TrackInfo] = []
 
+        # Playback mode
+        self.shuffle = False  # TODO
+        self.repeat_single = False  # TODO
+        self.repeat_all = False  # TODO
+
         self.timer_thread = None
         self.state_monitor = self.track_player.monitor()
         self.prepared_tracks = OrderedDict()
@@ -141,6 +146,11 @@ class PlayQueue(AsyncExecutor):
                 message=new_state.message,
                 audio_info=to_audio_info(new_state.stream_info),
                 timestamp=state_update_ts,
+                playback_mode=PlaybackMode(
+                    shuffle=self.shuffle,
+                    repeat_single=self.repeat_single,
+                    repeat_all=self.repeat_all,
+                ),
             ).model_dump(exclude_none=True),
         )
 
@@ -281,6 +291,11 @@ class PlayQueue(AsyncExecutor):
             message=stream_state.message,
             audio_info=to_audio_info(stream_state.stream_info),
             timestamp=time.monotonic_ns(),
+            playback_mode=PlaybackMode(
+                shuffle=self.shuffle,
+                repeat_single=self.repeat_single,
+                repeat_all=self.repeat_all,
+            ),
         )
 
     @enqueue
@@ -299,6 +314,11 @@ class PlayQueue(AsyncExecutor):
                 position=self._estimated_progress(stream_state),
                 message=stream_state.message,
                 audio_info=to_audio_info(stream_state.stream_info),
+                playback_mode=PlaybackMode(
+                    shuffle=self.shuffle,
+                    repeat_single=self.repeat_single,
+                    repeat_all=self.repeat_all,
+                ),
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
         )
@@ -345,12 +365,12 @@ class PlayQueue(AsyncExecutor):
         return self.prepared_tracks[index]
 
     def _request_more_tracks(self):
-        if self.current_track_id == len(self.track_list) - 1:
+        if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:
             self.event_emitter.dispatch(EventType.RequestMoreTracks)
 
     def _setup_prefetch_timer(self, state: StreamInfo):
         self._cancel_prefetch_timer()
-        next_track_id = self.current_track_id + 1
+
         stream_info = state.stream_info
         if not stream_info:
             return
@@ -359,17 +379,26 @@ class PlayQueue(AsyncExecutor):
             get_duration_ms(stream_info) - state.position - PREFETCH_TIME_MS
         ) / 1000
 
-        if time_to_prefetch_s < 0:
-            self.play_next(next_track_id)
+        if time_to_prefetch_s <= 0:
+            self._play_next_track_timer()
             return
 
         logger.info(f"Prefetching next track in {time_to_prefetch_s} seconds")
 
         self.timer_thread = Timer(
             time_to_prefetch_s,
-            partial(self.play_next, next_track_id),
+            self._play_next_track_timer,
         )
         self.timer_thread.start()
+
+    def _play_next_track_timer(self):
+        next_track_id = self.current_track_id
+        if not self.repeat_single:
+            next_track_id += 1
+        if self.repeat_all and next_track_id >= len(self.track_list):
+            next_track_id = 0
+
+        self.play_next(next_track_id)
 
     def _cancel_prefetch_timer(self):
         if self.timer_thread is not None:
@@ -385,5 +414,56 @@ class PlayQueue(AsyncExecutor):
                 state=to_state_name(AudioGraphNodeState.STOPPED),
                 position=0,
                 timestamp=time.monotonic_ns(),
+                playback_mode=PlaybackMode(
+                    shuffle=self.shuffle,
+                    repeat_single=self.repeat_single,
+                    repeat_all=self.repeat_all,
+                ),
             ).model_dump(exclude_none=True),
         )
+
+    @enqueue
+    def set_playback_mode(
+        self,
+        shuffle: Optional[bool],
+        repeat_single: Optional[bool],
+        repeat_all: Optional[bool],
+    ):
+        self.shuffle = shuffle if shuffle is not None else self.shuffle
+        self.repeat_single = (
+            repeat_single if repeat_single is not None else self.repeat_single
+        )
+        self.repeat_all = repeat_all if repeat_all is not None else self.repeat_all
+        repeat_single_updated = (
+            self.repeat_single != repeat_single if repeat_single is not None else False
+        )
+        if (
+            self.shuffle is not None
+            or self.repeat_all is not None
+            or self.repeat_single is not None
+        ):
+            self.event_emitter.dispatch(
+                EventType.PlaybackModeChanged,
+                PlaybackMode(
+                    shuffle=self.shuffle,
+                    repeat_single=self.repeat_single,
+                    repeat_all=self.repeat_all,
+                ).model_dump(exclude_none=True),
+            )
+            if repeat_single_updated:
+                if self.prepared_tracks:
+                    last_url = self.prepared_tracks.popitem(last=False)
+                    self.track_player.remove(last_url)
+                    self._play_next_track_timer()
+        return PlaybackMode(
+            shuffle=self.shuffle,
+            repeat_single=self.repeat_single,
+            repeat_all=self.repeat_all,
+        ).model_dump(exclude_none=True)
+
+    def get_playback_mode(self):
+        return PlaybackMode(
+            shuffle=self.shuffle,
+            repeat_single=self.repeat_single,
+            repeat_all=self.repeat_all,
+        ).model_dump(exclude_none=True)

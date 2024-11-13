@@ -18,6 +18,12 @@ class AudioInfo(BaseModel):
     duration_ms: int
 
 
+class PlaybackMode(BaseModel):
+    shuffle: bool
+    repeat_single: bool
+    repeat_all: bool
+
+
 class PlayerState(BaseModel):
     state: Optional[str] = None
     current_track: Optional[Track] = None
