@@ -146,11 +146,6 @@ class PlayQueue(AsyncExecutor):
                 message=new_state.message,
                 audio_info=to_audio_info(new_state.stream_info),
                 timestamp=state_update_ts,
-                playback_mode=PlaybackMode(
-                    shuffle=self.shuffle,
-                    repeat_single=self.repeat_single,
-                    repeat_all=self.repeat_all,
-                ),
             ).model_dump(exclude_none=True),
         )
 
@@ -291,11 +286,6 @@ class PlayQueue(AsyncExecutor):
             message=stream_state.message,
             audio_info=to_audio_info(stream_state.stream_info),
             timestamp=time.monotonic_ns(),
-            playback_mode=PlaybackMode(
-                shuffle=self.shuffle,
-                repeat_single=self.repeat_single,
-                repeat_all=self.repeat_all,
-            ),
         )
 
     @enqueue
@@ -314,13 +304,13 @@ class PlayQueue(AsyncExecutor):
                 position=self._estimated_progress(stream_state),
                 message=stream_state.message,
                 audio_info=to_audio_info(stream_state.stream_info),
-                playback_mode=PlaybackMode(
-                    shuffle=self.shuffle,
-                    repeat_single=self.repeat_single,
-                    repeat_all=self.repeat_all,
-                ),
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
+            PlaybackMode(
+                shuffle=self.shuffle,
+                repeat_single=self.repeat_single,
+                repeat_all=self.repeat_all,
+            ).model_dump(exclude_none=True),
         )
 
     @enqueue
@@ -414,11 +404,6 @@ class PlayQueue(AsyncExecutor):
                 state=to_state_name(AudioGraphNodeState.STOPPED),
                 position=0,
                 timestamp=time.monotonic_ns(),
-                playback_mode=PlaybackMode(
-                    shuffle=self.shuffle,
-                    repeat_single=self.repeat_single,
-                    repeat_all=self.repeat_all,
-                ),
             ).model_dump(exclude_none=True),
         )
 
@@ -429,14 +414,14 @@ class PlayQueue(AsyncExecutor):
         repeat_single: Optional[bool],
         repeat_all: Optional[bool],
     ):
+        repeat_single_updated = (
+            self.repeat_single != repeat_single if repeat_single is not None else False
+        )
         self.shuffle = shuffle if shuffle is not None else self.shuffle
         self.repeat_single = (
             repeat_single if repeat_single is not None else self.repeat_single
         )
         self.repeat_all = repeat_all if repeat_all is not None else self.repeat_all
-        repeat_single_updated = (
-            self.repeat_single != repeat_single if repeat_single is not None else False
-        )
         if (
             self.shuffle is not None
             or self.repeat_all is not None
@@ -453,7 +438,7 @@ class PlayQueue(AsyncExecutor):
             if repeat_single_updated:
                 if self.prepared_tracks:
                     last_url = self.prepared_tracks.popitem(last=False)
-                    self.track_player.remove(last_url)
+                    self.track_player.remove(last_url[1])
                     self._play_next_track_timer()
         return PlaybackMode(
             shuffle=self.shuffle,
