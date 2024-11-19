@@ -246,3 +246,38 @@ TEST_F(AudioPlayerTest, test_play_pause_next) {
 
   EXPECT_EQ(i, statesCount);
 }
+
+TEST_F(AudioPlayerTest, test_remove_stream) {
+  auto monitor = audioPlayer.monitor();
+  audioPlayer.play(url1);
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  audioPlayer.remove(url1);
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  EXPECT_EQ(audioPlayer.getState().state, AudioGraphNodeState::FINISHED);
+
+  audioPlayer.play(url1);
+  audioPlayer.playNext(url2);
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  audioPlayer.remove(url2);
+
+  while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  }
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,   AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::FINISHED,  AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::FINISHED};
+
+  const auto statesCount = sizeof(states) / sizeof(AudioGraphNodeState);
+
+  int i = 0;
+  for (; i < statesCount && monitor->hasData(); ++i) {
+    auto state = monitor->waitState();
+    EXPECT_EQ(state.state, states[i]) << "i=" << i;
+  }
+
+  EXPECT_EQ(i, statesCount);
+}

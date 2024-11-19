@@ -26,6 +26,10 @@ public:
   // finished.
   void playNext(const std::string &url);
 
+  // Remove stream from the playback queue if exists. Stops the playback
+  // if the stream is currently playing.
+  void remove(const std::string &url);
+
   // Stop playback and close the device
   void stop();
 

@@ -43,7 +43,8 @@ struct StreamNodes {
     nodeChain.emplace_back(std::move(decoder));
   }
 
-  StreamNodes(StreamNodes &&other) : nodeChain(std::move(other.nodeChain)) {}
+  StreamNodes(StreamNodes &&other)
+      : nodeChain(std::move(other.nodeChain)), url(std::move(other.url)) {}
 
   ~StreamNodes() {
     for (NodeChain::reverse_iterator rit = nodeChain.rbegin();
@@ -96,6 +97,19 @@ void AudioPlayer::playNext(const std::string &url) {
   audioEmitter->connectTo(streamSwitcher);
   cleanUpFinishedStreams();
   streamNodesList.emplace_back(std::move(newStream));
+}
+
+void AudioPlayer::remove(const std::string &url) {
+  auto stream = std::find_if(streamNodesList.begin(), streamNodesList.end(),
+                             [&url](const StreamNodes &streamNodes) {
+                               return streamNodes.url == url;
+                             });
+  if (stream != streamNodesList.end()) {
+    streamSwitcher->disconnect(stream->nodeChain.back());
+    streamNodesList.erase(stream);
+  } else {
+    spdlog::warn("Stream {} not found", url);
+  }
 }
 
 void AudioPlayer::stop() {

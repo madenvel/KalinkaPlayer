@@ -11,3 +11,4 @@ class EventType(Enum):
     FavoriteRemoved = "favorite_removed"
     VolumeChanged = "volume_changed"
     StateReplay = "state_replay"
+    PlaybackModeChanged = "playback_mode_changed"
