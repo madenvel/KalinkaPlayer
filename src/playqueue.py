@@ -90,8 +90,8 @@ class PlayQueue(AsyncExecutor):
 
         # Playback mode
         self.shuffle = False  # TODO
-        self.repeat_single = False  # TODO
-        self.repeat_all = False  # TODO
+        self.repeat_single = False
+        self.repeat_all = False
 
         self.timer_thread = None
         self.state_monitor = self.track_player.monitor()
