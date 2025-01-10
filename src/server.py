@@ -277,3 +277,8 @@ def track_get(entity_id: str):
 @app.get("/get/playlist/{entity_id}")
 def playlist_get(entity_id: str):
     return inputmodule.playlist_get(entity_id).model_dump(exclude_unset=True)
+
+
+@app.post("/playlist/create")
+def playlist_create(name: str, description: str):
+    return inputmodule.playlist_create(name, description).model_dump(exclude_unset=True)

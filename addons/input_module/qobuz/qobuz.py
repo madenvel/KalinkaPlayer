@@ -806,6 +806,12 @@ class QobuzInputModule(InputModule):
         ]
 
     def _qobuz_playlist_to_playlist(self, playlist):
+        images = playlist.get("images", [None])
+        images150 = playlist.get("images150", [None])
+        images300 = playlist.get("images300", [None])
+        image_rectangle = playlist.get("image_rectangle", images300)
+        image_rectangle_mini = playlist.get("image_rectangle_mini", images)
+
         return Playlist(
             id=str(playlist["id"]),
             name=playlist["name"],
@@ -814,13 +820,9 @@ class QobuzInputModule(InputModule):
                 id=str(playlist["owner"]["id"]),
             ),
             image=PlaylistImage(
-                small=playlist.get("images150", [None])[0],
-                large=playlist.get(
-                    "image_rectangle", playlist.get("images300", [None])
-                )[0],
-                thumbnail=playlist.get(
-                    "image_rectangle_mini", playlist.get("images", [None])
-                )[0],
+                small=images150[0] if images150 else None,
+                large=image_rectangle[0] if image_rectangle else None,
+                thumbnail=image_rectangle_mini[0] if image_rectangle_mini else None,
             ),
             description=playlist["description"],
             track_count=playlist["tracks_count"],
@@ -1018,3 +1020,24 @@ class QobuzInputModule(InputModule):
     def track_get(self, id: str) -> BrowseItem:
         rjson = self.qobuz_client.get_track_meta(id)
         return self._tracks_to_browse_categories([rjson])[0]
+
+    def playlist_create(self, name, description) -> Playlist:
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/create",
+            params={"name": name, "description": description},
+        )
+
+        response.raise_for_status()
+
+        rjson = response.json()
+
+        return Playlist(
+            id=str(rjson.get("id", None)),
+            name=rjson.get("name", None),
+            description=rjson.get("description", None),
+            track_count=rjson.get("tracks_count", None),
+            owner=Owner(
+                name=rjson["owner"]["name"],
+                id=str(rjson["owner"]["id"]),
+            ),
+        )
