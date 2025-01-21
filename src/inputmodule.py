@@ -107,3 +107,13 @@ class InputModule(ABC):
     @abstractmethod
     def playlist_create(self, name: str, description: str) -> Playlist:
         pass
+
+    @abstractmethod
+    def playlist_update(
+        self, id: str, name: Optional[str], description: Optional[str]
+    ) -> Playlist:
+        pass
+
+    @abstractmethod
+    def playlist_delete(self, id: str):
+        pass

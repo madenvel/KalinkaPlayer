@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import List, Union
+from typing import List, Optional, Union
 from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -282,3 +282,16 @@ def playlist_get(entity_id: str):
 @app.post("/playlist/create")
 def playlist_create(name: str, description: str):
     return inputmodule.playlist_create(name, description).model_dump(exclude_unset=True)
+
+
+@app.put("/playlist/update")
+def playlist_update(entity_id: str, name: Optional[str], description: Optional[str]):
+    return inputmodule.playlist_update(entity_id, name, description).model_dump(
+        exclude_unset=True
+    )
+
+
+@app.delete("/playlist/delete")
+def playlist_delete(entity_id: str):
+    inputmodule.playlist_delete(entity_id)
+    return {"message": "Ok"}

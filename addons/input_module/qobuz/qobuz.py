@@ -1021,6 +1021,18 @@ class QobuzInputModule(InputModule):
         rjson = self.qobuz_client.get_track_meta(id)
         return self._tracks_to_browse_categories([rjson])[0]
 
+    def _to_playlist_response(self, obj):
+        return Playlist(
+            id=str(obj["id"]),
+            name=obj["name"],
+            description=obj["description"],
+            track_count=obj["tracks_count"],
+            owner=Owner(
+                name=obj["owner"]["name"],
+                id=str(obj["owner"]["id"]),
+            ),
+        )
+
     def playlist_create(self, name, description) -> Playlist:
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + "playlist/create",
@@ -1031,13 +1043,26 @@ class QobuzInputModule(InputModule):
 
         rjson = response.json()
 
-        return Playlist(
-            id=str(rjson.get("id", None)),
-            name=rjson.get("name", None),
-            description=rjson.get("description", None),
-            track_count=rjson.get("tracks_count", None),
-            owner=Owner(
-                name=rjson["owner"]["name"],
-                id=str(rjson["owner"]["id"]),
-            ),
+        return self._to_playlist_response(rjson)
+
+    def playlist_update(self, id, name, description) -> Playlist:
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/update",
+            params={"playlist_id": id, "name": name, "description": description},
         )
+
+        response.raise_for_status()
+
+        rjson = response.json()
+
+        return self._to_playlist_response(rjson)
+
+    def playlist_delete(self, id):
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/delete",
+            params={"playlist_id": id},
+        )
+
+        response.raise_for_status()
+
+        return response.json()
