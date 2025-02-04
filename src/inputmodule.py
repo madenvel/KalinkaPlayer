@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Callable, List, Optional
 
 from data_model.datamodel import BrowseItem, Playlist, Track, BrowseItemList
-from data_model.response_model import FavoriteIds, GenreList
+from data_model.response_model import FavoriteIds, GenreList, LastUpdate
 
 
 class TrackInfo(BaseModel):
@@ -105,6 +105,10 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
+    def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
+        pass
+
+    @abstractmethod
     def playlist_create(self, name: str, description: str) -> Playlist:
         pass
 
@@ -116,4 +120,16 @@ class InputModule(ABC):
 
     @abstractmethod
     def playlist_delete(self, id: str):
+        pass
+
+    @abstractmethod
+    def playlist_add_tracks(
+        self, id: str, track_ids: List[str], allow_duplicates: bool = False
+    ) -> Playlist:
+        pass
+
+    @abstractmethod
+    def playlist_remove_tracks(
+        self, id: str, playlist_track_ids: List[str]
+    ) -> Playlist:
         pass

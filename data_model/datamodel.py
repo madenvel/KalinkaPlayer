@@ -62,6 +62,7 @@ class Track(BaseModel):
     album: Album
     replaygain_peak: Optional[float] = None
     replaygain_gain: Optional[float] = None
+    playlist_track_id: Optional[str] = None
 
 
 class Owner(BaseModel):
