@@ -60,3 +60,10 @@ class GenreList(BaseModel):
     limit: int
     total: int
     items: List[Genre]
+
+
+class LastUpdate(BaseModel):
+    favorite_tracks_ts: int = 0
+    favorite_albums_ts: int = 0
+    favorite_artists_ts: int = 0
+    favorite_playlists_ts: int = 0

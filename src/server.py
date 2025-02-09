@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import List, Union
+from typing import List, Optional, Union
 from fastapi import FastAPI, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -277,3 +277,42 @@ def track_get(entity_id: str):
 @app.get("/get/playlist/{entity_id}")
 def playlist_get(entity_id: str):
     return inputmodule.playlist_get(entity_id).model_dump(exclude_unset=True)
+
+
+@app.post("/playlist/create")
+def playlist_create(name: str, description: str):
+    return inputmodule.playlist_create(name, description).model_dump(exclude_unset=True)
+
+
+@app.put("/playlist/update")
+def playlist_update(playlist_id: str, name: Optional[str], description: Optional[str]):
+    return inputmodule.playlist_update(playlist_id, name, description).model_dump(
+        exclude_unset=True
+    )
+
+
+@app.delete("/playlist/delete")
+def playlist_delete(playlist_id: str):
+    inputmodule.playlist_delete(playlist_id)
+    return {"message": "Ok"}
+
+
+@app.post("/playlist/add_tracks")
+def playlist_add_tracks(
+    playlist_id: str, track_ids: List[str], allow_duplicates: bool = True
+):
+    return inputmodule.playlist_add_tracks(
+        playlist_id, track_ids, allow_duplicates
+    ).model_dump(exclude_unset=True)
+
+
+@app.get("/playlist/list")
+def playlist_user_list(offset: int = 0, limit: int = 25):
+    return inputmodule.playlist_user_list(offset, limit).model_dump(exclude_unset=True)
+
+
+@app.delete("/playlist/remove_tracks")
+def playlist_remove_tracks(playlist_id: str, playlist_track_ids: List[str]):
+    return inputmodule.playlist_remove_tracks(
+        playlist_id, playlist_track_ids
+    ).model_dump(exclude_unset=True)

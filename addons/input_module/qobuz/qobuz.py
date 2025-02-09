@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import time
 from typing import List
@@ -9,6 +10,7 @@ from data_model.response_model import (
     FavoriteRemovedEvent,
     FavoriteIds,
     GenreList,
+    LastUpdate,
 )
 from src.events import EventType
 from src.async_common import EventEmitter
@@ -137,6 +139,9 @@ class QobuzClient:
         self.auth(email, pwd)
         self.cfg_setup()
 
+        self.last_update = LastUpdate()
+        self.cached = {"albums": {}, "artists": {}, "tracks": {}, "playlists": {}}
+
     def auth(self, email, pwd):
         params = {
             "email": email,
@@ -223,23 +228,81 @@ class QobuzClient:
         r.raise_for_status()
         return r.json()
 
-    def get_user_playlists(self, offset: int = 0, limit: int = 50):
-        r = self.session.get(
-            self.base + "playlist/getUserPlaylists",
-            params={"offset": offset, "limit": limit},
-        )
-
+    def get_qobuz_last_update(self):
+        r = self.session.get(self.base + "user/lastUpdate")
         r.raise_for_status()
-        return r.json()
+
+        return r.json()["last_update"]
+
+    def get_user_playlists(self, offset: int = 0, limit: int = 50, owner_id=None):
+        last_update = self.get_qobuz_last_update()["playlist"]
+
+        if self.last_update.favorite_playlists_ts != last_update:
+            logger.debug("Updating user playlists cache")
+            r = self.session.get(
+                self.base + "playlist/getUserPlaylists",
+                params={"limit": 500},
+            )
+
+            r.raise_for_status()
+
+            self.cached["playlists"] = copy.deepcopy(r.json()["playlists"])
+            logger.debug(
+                f"User playlists cache updated: {len(self.cached['playlists'])}"
+            )
+
+            self.last_update.favorite_playlists_ts = last_update
+
+        if owner_id is not None:
+            filtered_playlists = [
+                playlist
+                for playlist in self.cached["playlists"]["items"]
+                if playlist["owner"]["id"] == owner_id
+            ]
+        else:
+            filtered_playlists = self.cached["playlists"]["items"]
+
+        playlists = {
+            "offset": offset,
+            "limit": limit,
+            "total": len(filtered_playlists),
+            "items": filtered_playlists[offset : offset + limit],
+        }
+
+        return {"playlists": playlists}
 
     def get_user_favorites(self, type: SearchType, offset: int = 0, limit: int = 50):
-        r = self.session.get(
-            self.base + "favorite/getUserFavorites",
-            params={"type": type.value + "s", "offset": offset, "limit": limit},
-        )
+        last_update = self.get_qobuz_last_update()[
+            {
+                SearchType.album: "favorite_album",
+                SearchType.artist: "favorite_artist",
+                SearchType.track: "favorite_track",
+            }[type]
+        ]
 
-        r.raise_for_status()
-        return r.json()
+        type_name = f"{type.name}s"
+
+        if last_update != getattr(self.last_update, f"favorite_{type_name}_ts"):
+            logger.info(f"Updating user favorites cache for {type_name}")
+            r = self.session.get(
+                self.base + "favorite/getUserFavorites",
+                params={"type": type.value + "s", "offset": 0, "limit": 500},
+            )
+
+            r.raise_for_status()
+
+            self.cached[type_name] = copy.deepcopy(r.json()[type_name])
+
+            setattr(self.last_update, f"favorite_{type_name}_ts", last_update)
+
+        retval = {
+            "offset": offset,
+            "limit": limit,
+            "total": len(self.cached[type_name]["items"]),
+            "items": self.cached[type_name]["items"][offset : offset + limit],
+        }
+
+        return {type_name: retval}
 
 
 def get_config():
@@ -318,6 +381,8 @@ class QobuzInputModule(InputModule):
     def __init__(self, qobuz_client: QobuzClient, event_emitter: EventEmitter):
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
+        self.last_update = LastUpdate()
+        self.user_playlist = []
 
     def module_name(self) -> str:
         return "Qobuz"
@@ -679,6 +744,7 @@ class QobuzInputModule(InputModule):
                             ),
                             image=AlbumImage(**album["image"]),
                         ),
+                        playlist_track_id=str(track.get("playlist_track_id", None)),
                     ),
                 )
             )
@@ -806,6 +872,12 @@ class QobuzInputModule(InputModule):
         ]
 
     def _qobuz_playlist_to_playlist(self, playlist):
+        images = playlist.get("images", [None])
+        images150 = playlist.get("images150", [None])
+        images300 = playlist.get("images300", [None])
+        image_rectangle = playlist.get("image_rectangle", images300)
+        image_rectangle_mini = playlist.get("image_rectangle_mini", images)
+
         return Playlist(
             id=str(playlist["id"]),
             name=playlist["name"],
@@ -814,13 +886,9 @@ class QobuzInputModule(InputModule):
                 id=str(playlist["owner"]["id"]),
             ),
             image=PlaylistImage(
-                small=playlist.get("images150", [None])[0],
-                large=playlist.get(
-                    "image_rectangle", playlist.get("images300", [None])
-                )[0],
-                thumbnail=playlist.get(
-                    "image_rectangle_mini", playlist.get("images", [None])
-                )[0],
+                small=images150[0] if images150 else None,
+                large=image_rectangle[0] if image_rectangle else None,
+                thumbnail=image_rectangle_mini[0] if image_rectangle_mini else None,
             ),
             description=playlist["description"],
             track_count=playlist["tracks_count"],
@@ -1018,3 +1086,87 @@ class QobuzInputModule(InputModule):
     def track_get(self, id: str) -> BrowseItem:
         rjson = self.qobuz_client.get_track_meta(id)
         return self._tracks_to_browse_categories([rjson])[0]
+
+    def _to_playlist_response(self, obj):
+        return Playlist(
+            id=str(obj["id"]),
+            name=obj["name"],
+            description=obj["description"],
+            track_count=obj["tracks_count"],
+            owner=Owner(
+                name=obj["owner"]["name"],
+                id=str(obj["owner"]["id"]),
+            ),
+        )
+
+    def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
+        rjson = self.qobuz_client.get_user_playlists(
+            offset=offset, limit=limit, owner_id=self.qobuz_client.user_id
+        )
+
+        return self._format_list_response(rjson, offset, limit)
+
+    def playlist_create(self, name, description) -> Playlist:
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/create",
+            params={"name": name, "description": description},
+        )
+
+        response.raise_for_status()
+
+        rjson = response.json()
+
+        return self._to_playlist_response(rjson)
+
+    def playlist_update(self, id, name, description) -> Playlist:
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/update",
+            params={"playlist_id": id, "name": name, "description": description},
+        )
+
+        response.raise_for_status()
+
+        rjson = response.json()
+
+        return self._to_playlist_response(rjson)
+
+    def playlist_delete(self, id):
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/delete",
+            params={"playlist_id": id},
+        )
+
+        response.raise_for_status()
+
+        return response.json()
+
+    def playlist_add_tracks(
+        self, id: str, track_ids: List[str], allow_duplicates: bool
+    ) -> Playlist:
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/addTracks",
+            params={
+                "no_duplicate": not allow_duplicates,
+                "playlist_id": id,
+                "track_ids": ",".join(track_ids),
+            },
+        )
+
+        response.raise_for_status()
+        rjson = response.json()
+
+        return self._to_playlist_response(rjson)
+
+    def playlist_remove_tracks(self, id, playlist_track_ids):
+        response = self.qobuz_client.session.post(
+            self.qobuz_client.base + "playlist/deleteTracks",
+            params={
+                "playlist_id": id,
+                "playlist_track_ids": ",".join(playlist_track_ids),
+            },
+        )
+
+        response.raise_for_status()
+        rjson = response.json()
+
+        return self._to_playlist_response(rjson)
