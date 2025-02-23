@@ -2,10 +2,13 @@
 import logging
 import uvicorn
 
-from src import config, state_keeper
+from src import config_schema, state_keeper
+from src.config import Config
 from src.netutils import get_ip_address
 
 import argparse
+
+from src.server import create_app
 
 
 uvicorn_log_config = {
@@ -52,6 +55,7 @@ def parse_args():
     parser.add_argument(
         "--config",
         action="store",
+        default="kalinka_conf.yaml",
         help="Config file location",
     )
     parser.add_argument(
@@ -79,17 +83,17 @@ if __name__ == "__main__":
     # Reduce logging level for httpx - it's too verbose
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    if args.config:
-        config.set_config_path(args.config)
+    with open(args.config, "r") as f:
+        config = Config(config=f, schema=config_schema.schema)
 
     if args.state:
         state_keeper.set_state_file(args.state)
 
-    host = get_ip_address(config.config["server"]["interface"])
-    port = config.config["server"]["port"]
+    host = get_ip_address(config["server.interface"])
+    port = config["server.port"]
     logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(
-        "src.server:app",
+        create_app(config),
         host=host,
         port=port,
         reload=False,

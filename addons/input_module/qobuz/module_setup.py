@@ -6,6 +6,7 @@ from addons.input_module.qobuz import (
     get_client,
 )
 
+from src.config import Config
 from src.playqueue import EventType, PlayQueue
 from src.inputmodule import InputModule
 
@@ -31,9 +32,12 @@ def setup_reporter(
 
 
 def setup(
-    playqueue: PlayQueue, event_emitter: EventEmitter, event_listener: EventListener
+    config: Config,
+    playqueue: PlayQueue,
+    event_emitter: EventEmitter,
+    event_listener: EventListener,
 ):
-    client = get_client()
+    client = get_client(config)
     inputmodule = QobuzInputModule(client, event_emitter)
     setup_autoplay(client, playqueue, inputmodule, event_listener)
     setup_reporter(client, event_listener)

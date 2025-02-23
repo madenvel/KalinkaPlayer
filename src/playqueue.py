@@ -14,7 +14,7 @@ from src.event_loop import AsyncExecutor, enqueue
 from src.async_common import EventEmitter
 from src.inputmodule import TrackInfo
 from src.events import EventType
-from src.config import config
+from src.config import Config
 
 from native_player.native_player import (
     AudioPlayer,
@@ -80,10 +80,10 @@ def to_state_name(state: AudioGraphNodeState) -> str:
 
 
 class PlayQueue(AsyncExecutor):
-    def __init__(self, event_emitter: EventEmitter):
+    def __init__(self, config: Config, event_emitter: EventEmitter):
         super().__init__()
         self.event_emitter = event_emitter
-        self.config = py_dict_to_config(config)
+        self.config = py_dict_to_config(config.flatten_config())
         self.track_player = AudioPlayer(self.config)
         self.current_track_id = 0
         self.track_list: list[TrackInfo] = []

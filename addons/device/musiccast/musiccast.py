@@ -2,12 +2,12 @@ import time
 import httpx
 import logging
 from data_model.response_model import PlayerState
+from src.config import Config
 from src.events import EventType
 
 from src.ext_device import SupportedFunction, Volume
 from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
-from src.config import config
 
 import threading
 
@@ -50,21 +50,17 @@ def find_available_port(start_range=49152, end_range=65535):
 
 
 class Device:
-    def __init__(self, playqueue: PlayQueue, event_emitter: EventEmitter):
+    def __init__(
+        self, config: Config, playqueue: PlayQueue, event_emitter: EventEmitter
+    ):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
 
-        self.connected_input = config["addons"]["device"]["musiccast"][
-            "connected_input"
-        ]
-        self.device_addr = config["addons"]["device"]["musiccast"]["device_addr"]
-        self.device_port = config["addons"]["device"]["musiccast"]["device_port"]
-        self.volume_step_to_db = config["addons"]["device"]["musiccast"].get(
-            "volume_step_to_db", 0.5
-        )
-        self.auto_volume = config["addons"]["device"]["musiccast"].get(
-            "auto_volume_correcton", True
-        )
+        self.connected_input = config["connected_input"]
+        self.device_addr = config["device_addr"]
+        self.device_port = config["device_port"]
+        self.volume_step_to_db = config.get("volume_step_to_db", 0.5)
+        self.auto_volume = config.get("auto_volume_correcton", True)
         self.session = httpx.Client(timeout=5)
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"

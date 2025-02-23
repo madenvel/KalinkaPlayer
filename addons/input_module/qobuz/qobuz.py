@@ -2,6 +2,8 @@ import copy
 import hashlib
 import time
 from typing import List
+
+from src.config import Config
 from .bundle import Bundle
 
 from functools import partial
@@ -204,6 +206,8 @@ class QobuzClient:
             "format_id": fmt_id,
             "intent": "stream",
         }
+
+        logger.info(f"Track URL request: {params}")
         for _ in range(3):
             try:
                 r = self.session.get(self.base + epoint, params=params)
@@ -216,6 +220,7 @@ class QobuzClient:
 
         r.raise_for_status()
         self.track_url_response_cache[str(track_id)] = r.json()
+        logger.warning(f"Track URL: {r.json()}")
         return r.json()
 
     def get_track_meta(self, track_id):
@@ -305,14 +310,7 @@ class QobuzClient:
         return {type_name: retval}
 
 
-def get_config():
-    from src.config import config
-
-    return config["addons"]["input_module"]["qobuz"]
-
-
-def get_client() -> QobuzClient:
-    config = get_config()
+def get_client(config: Config) -> QobuzClient:
     email = config["email"]
     password = config["password_hash"]
     bundle = Bundle()
