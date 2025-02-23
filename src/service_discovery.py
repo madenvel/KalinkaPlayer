@@ -1,6 +1,6 @@
 import logging
 from src.netutils import get_ip_address
-from src.config import config
+from src.config import Config
 
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -13,7 +13,7 @@ desc = {
 }
 
 
-def get_service_info():
+def get_service_info(config: Config):
     server_cfg = config["server"]
 
     return ServiceInfo(
@@ -26,16 +26,17 @@ def get_service_info():
 
 
 class ServiceDiscovery:
+    def __init__(self, config: Config):
+        self.info = get_service_info(config)
+
     async def register_service(self):
         self.zci = AsyncZeroconf(ip_version=IPVersion.V4Only)
         logger.info("[Zeroconf] Registering service...")
-        info = get_service_info()
-        await self.zci.async_register_service(info)
+        await self.zci.async_register_service(self.info)
         logger.info("[Zeroconf] Completed registering service.")
 
     async def unregister_service(self):
         logger.info("[Zeroconf] Unregistering service...")
-        info = get_service_info()
-        await self.zci.async_unregister_service(info)
+        await self.zci.async_unregister_service(self.info)
         await self.zci.async_close()
         logger.info("[Zeroconf] Completed unregistering service.")

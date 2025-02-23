@@ -9,13 +9,13 @@ from src.playqueue import EventType, PlayQueue
 from src.inputmodule import InputModule
 from addons.device.musiccast.musiccast import Device
 
-from src.config import config
+from src.config import Config
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
-def setup_input_module(playqueue, event_emitter, event_listener) -> InputModule:
-    input_modules = config["addons"]["input_module"]
+def setup_input_module(config, playqueue, event_emitter, event_listener) -> InputModule:
+    input_modules = config["addons.input_module"]
 
     if not input_modules:
         return None
@@ -25,11 +25,15 @@ def setup_input_module(playqueue, event_emitter, event_listener) -> InputModule:
     input = import_module_by_path(
         "addons.input_module." + current_module[0].lower() + ".module_setup"
     )
-    return input.setup(playqueue, event_emitter, event_listener)
+    return input.setup(
+        input_modules[current_module[0]], playqueue, event_emitter, event_listener
+    )
 
 
-def setup_device(playqueue, event_emitter, event_listener) -> ExternalOutputDevice:
-    devices = config["addons"]["device"]
+def setup_device(
+    config, playqueue, event_emitter, event_listener
+) -> ExternalOutputDevice:
+    devices = config["addons.device"]
 
     if not devices:
         return None
@@ -40,15 +44,17 @@ def setup_device(playqueue, event_emitter, event_listener) -> ExternalOutputDevi
         "addons.device." + current_device[0].lower() + ".module_setup"
     )
 
-    return input.setup(playqueue, event_emitter, event_listener)
+    return input.setup(
+        devices[current_device[0]], playqueue, event_emitter, event_listener
+    )
 
 
-def setup():
+def setup(config: Config):
     queue = Queue()
     event_emitter = EventEmitter(queue)
     event_listener = EventListener(queue)
-    playqueue = PlayQueue(event_emitter)
-    inputmodule = setup_input_module(playqueue, event_emitter, event_listener)
-    device = setup_device(playqueue, event_emitter, event_listener)
+    playqueue = PlayQueue(config, event_emitter)
+    inputmodule = setup_input_module(config, playqueue, event_emitter, event_listener)
+    device = setup_device(config, playqueue, event_emitter, event_listener)
 
     return playqueue, event_listener, inputmodule, device
