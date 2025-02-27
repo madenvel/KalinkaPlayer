@@ -188,6 +188,9 @@ class Config:
                 if default is not None:
                     retval["default"] = default
 
+                if node_type == "enum":
+                    retval["values"] = schema_node.get("values", [])
+
                 return retval
 
         return add_values(self.config_dict, self.schema_dict)
