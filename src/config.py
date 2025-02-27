@@ -6,10 +6,20 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class Config:
-    def __init__(self, config, schema):
+    def __init__(self, config, schema, location):
         self.config_dict = yaml.safe_load(config)
         self.schema_dict = json.loads(schema)
+        self.location = location
         self._validate_config()
+
+    def dump(self):
+        return yaml.safe_dump(self.config_dict)
+
+    def save(self, location=None):
+        if location is None:
+            location = self.location
+        with open(location, "w") as f:
+            f.write(self.dump())
 
     def flatten_config(self):
         def flatten(node, schema_node, parent_key=""):
@@ -52,6 +62,98 @@ class Config:
 
         return value
 
+    def __setitem__(self, key, value):
+        keys = key.split(".")
+        node = self.config_dict
+        schema_node = self.schema_dict
+
+        for k in keys[:-1]:
+            if schema_node.get("type") != "section":
+                raise KeyError(f"Key {key} not found in configuration")
+
+            schema_node = schema_node.get("elements", {})
+
+            if k not in schema_node:
+                raise KeyError(f"Key {key} not found in configuration")
+
+            schema_node = schema_node[k]
+
+            if k not in node:
+                node[k] = {}
+            node = node[k]
+
+        last_key = keys[-1]
+        if last_key not in schema_node.get("elements", {}):
+            raise KeyError(f"Key {key} not found in configuration")
+
+        schema_node = schema_node["elements"][last_key]
+
+        # Validate the value against the schema
+        # Try to convert value to the appropriate type if needed
+        node_type = schema_node["type"]
+        try:
+            if node_type == "string" or node_type == "password":
+                value = str(value)
+            elif node_type == "integer":
+                value = int(value)
+            elif node_type == "number":
+                # Attempt to convert to int first, then float if that fails
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    value = float(value)
+            elif node_type == "boolean":
+                if isinstance(value, str):
+                    value = value.lower()
+                    if value in ("true", "yes", "1", "y"):
+                        value = True
+                    elif value in ("false", "no", "0", "n"):
+                        value = False
+                    else:
+                        raise ValueError(f"Cannot convert '{value}' to boolean")
+                else:
+                    value = bool(value)
+            elif node_type == "enum":
+                if value not in schema_node.get("values", []):
+                    raise ValueError(
+                        f"Invalid value for {schema_node['description']}, got {value}, expected one of: {schema_node.get('values', [])}"
+                    )
+        except (ValueError, TypeError) as e:
+            raise TypeError(
+                f"Cannot convert value to {node_type} for {schema_node['description']}: {str(e)}"
+            )
+
+        # Validate the converted value
+        self._validate_value(value, schema_node)
+
+        node[last_key] = value
+
+    def _validate_value(self, value, schema_node):
+        node_type = schema_node["type"]
+
+        if (node_type == "string" or node_type == "password") and not isinstance(
+            value, str
+        ):
+            raise TypeError(
+                f"Expected string for {schema_node['name']}, got {type(value).__name__}"
+            )
+        elif node_type == "integer" and not isinstance(value, int):
+            raise TypeError(
+                f"Expected integer for {schema_node['name']}, got {type(value).__name__}"
+            )
+        elif node_type == "boolean" and not isinstance(value, bool):
+            raise TypeError(
+                f"Expected boolean for {schema_node['name']}, got {type(value).__name__}"
+            )
+        elif node_type == "number" and not isinstance(value, (int, float)):
+            raise TypeError(
+                f"Expected number for {schema_node['name']}, got {type(value).__name__}"
+            )
+        elif node_type == "enum" and value not in schema_node.get("values", []):
+            raise ValueError(
+                f"Invalid value for {schema_node['name']}, got {value}, values {schema_node.get('values', [])}"
+            )
+
     def get(self, key, default=None):
         try:
             return self[key]
@@ -61,20 +163,27 @@ class Config:
     def get_full_config(self):
         def add_values(node, schema_node):
             if schema_node["type"] == "section":
-                result = {}
+                result = {
+                    "name": schema_node.get("name", "No name"),
+                    "description": schema_node.get("description", "No description"),
+                    "type": "section",
+                    "elements": {},
+                }
                 for k, v in schema_node.get("elements", {}).items():
                     if k in node or v.get("required", "no") == "yes" or "default" in v:
-                        result[k] = add_values(node.get(k, {}), v)
+                        result["elements"][k] = add_values(node.get(k, {}), v)
                 return result
             else:
                 default = schema_node.get("default", None)
                 value = node if node is not None else default
                 if value is None and schema_node.get("required", "no") == "no":
                     return None
+                node_type = schema_node["type"]
                 retval = {
-                    "description": schema_node["description"],
-                    "type": schema_node["type"],
-                    "value": value,
+                    "name": schema_node.get("name", "No name"),
+                    "description": schema_node.get("description", "No description"),
+                    "type": node_type,
+                    "value": value if node_type != "password" else "********",
                 }
                 if default is not None:
                     retval["default"] = default

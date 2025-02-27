@@ -83,20 +83,30 @@ if __name__ == "__main__":
     # Reduce logging level for httpx - it's too verbose
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    with open(args.config, "r") as f:
-        config = Config(config=f, schema=config_schema.schema)
+    while True:
+        with open(args.config, "r") as f:
+            config = Config(config=f, schema=config_schema.schema, location=args.config)
 
-    if args.state:
-        state_keeper.set_state_file(args.state)
+        if args.state:
+            state_keeper.set_state_file(args.state)
 
-    host = get_ip_address(config["server.interface"])
-    port = config["server.port"]
-    logger.info(f"Starting server on {host}:{port}")
-    uvicorn.run(
-        create_app(config),
-        host=host,
-        port=port,
-        reload=False,
-        timeout_graceful_shutdown=5,
-        log_config=uvicorn_log_config,
-    )
+        host = get_ip_address(config["server.interface"])
+        port = config["server.port"]
+        logger.info(f"Starting server on {host}:{port}")
+        app = create_app(config)
+        uvicorn_config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            reload=False,
+            timeout_graceful_shutdown=5,
+            log_config=uvicorn_log_config,
+        )
+        server = uvicorn.Server(uvicorn_config)
+        app.state.server = server
+        server.run()
+        if server.should_exit:
+            logger.info("Server restarting ...")
+        else:
+            logger.info("Server shut down")
+            break

@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
         await sd.unregister_service()
         app.state.event_listener.terminate()
         state_keeper.save_state(app.state.playqueue, app.state.inputmodule)
+        app.state.config.save()
         app.state.playqueue.terminate()
 
 
@@ -303,5 +304,15 @@ def create_app(config: Config):
     @app.get("/server/config")
     def get_config():
         return app.state.config.get_full_config()
+
+    @app.put("/server/restart")
+    def restart_server():
+        app.state.server.should_exit = True
+        return {"message": "Ok"}
+
+    @app.put("/server/config")
+    def set_config(key, value):
+        app.state.config[key] = value
+        return {"message": "Ok"}
 
     return app
