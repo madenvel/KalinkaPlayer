@@ -184,6 +184,7 @@ class Config:
                     "description": schema_node.get("description", "No description"),
                     "type": node_type,
                     "value": value if node_type != "password" else "********",
+                    "readonly": schema_node.get("readonly", "no").lower() == "yes",
                 }
                 if default is not None:
                     retval["default"] = default
