@@ -1,21 +1,22 @@
 CC = clang++
 CFLAGS = -Wall -g -std=c++23 -fsanitize=address -I../
-LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgtest -fsanitize=address
+LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgmock -lgtest -fsanitize=address
 
 # List of source files
 SRCS = $(wildcard *.cpp)
-SRCS += ../AudioGraphHttpStream.cpp \
+SRCS += ../AlsaAudioEmitter.cpp \
+		../AudioGraphHttpStream.cpp \
+		../AudioGraphNode.cpp \
+		../AudioPlayer.cpp \
+		../AudioSampleFormat.cpp \
+		../AudioStreamSwitcher.cpp \
 		../Buffer.cpp \
 		../FlacStreamDecoder.cpp \
-		../AudioSampleFormat.cpp \
-		../AudioGraphNode.cpp \
-		../AlsaAudioEmitter.cpp \
-		../AudioStreamSwitcher.cpp \
-		../AudioPlayer.cpp \
+		../Log.cpp \
+		../Mp3StreamDecoder.cpp \
 		../PerfMon.cpp \
-		../StreamState.cpp \
 		../StateMonitor.cpp \
-		../Log.cpp
+		../StreamState.cpp
 
 # List of object files
 OBJS = $(SRCS:.cpp=.o)
