@@ -31,6 +31,7 @@ class PlayerState(BaseModel):
     position: Optional[int] = None
     message: Optional[str] = None
     audio_info: Optional[AudioInfo] = None
+    mime_type: Optional[str] = None
     timestamp: PositiveInt = None
 
 

@@ -5,6 +5,7 @@
 #include "Config.h"
 #include "FlacStreamDecoder.h"
 #include "Log.h"
+#include "Mp3StreamDecoder.h"
 #include "PerfMon.h"
 #include "StateMonitor.h"
 
@@ -14,6 +15,7 @@ namespace {
 //
 // 1.5MB = 1s for 192KHz / 24bit audio / stereo
 const size_t FLAC_BUFFER_SIZE = 1536000;
+const size_t MPEG_BUFFER_SIZE = 768000;
 // 750KB, 50% of flac buffer size
 // approx. flac compression ratio is 50%
 const size_t HTTP_BUFFER_SIZE = 768000;
@@ -32,15 +34,41 @@ struct StreamNodes {
   NodeChain nodeChain;
   const std::string url;
 
-  StreamNodes(const std::string &url, const Config &config) : url(url) {
+  StreamNodes(const std::string &url, const Config &config,
+              const AudioFormat format)
+      : url(url) {
     nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
         url, value_or(config, "input.http.buffer_size", HTTP_BUFFER_SIZE),
         value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
 
-    auto decoder = std::make_shared<FlacStreamDecoder>(
-        value_or(config, "decoder.flac.buffer_size", FLAC_BUFFER_SIZE));
-    decoder->connectTo(nodeChain.back());
-    nodeChain.emplace_back(std::move(decoder));
+    auto decoder = connectDecoder(nodeChain.back(), config, format);
+    if (nodeChain.back() != decoder) {
+      nodeChain.emplace_back(std::move(decoder));
+    }
+  }
+
+  std::shared_ptr<AudioGraphOutputNode>
+  connectDecoder(std::shared_ptr<AudioGraphOutputNode> outputNode,
+                 const Config &config, const AudioFormat format) {
+    switch (format) {
+    case AudioFormat::FormatFlac: {
+      auto decoder = std::make_shared<FlacStreamDecoder>(
+          value_or(config, "decoder.flac.buffer_size", FLAC_BUFFER_SIZE));
+      decoder->connectTo(outputNode);
+      return decoder;
+    }
+    case AudioFormat::FormatMpeg: {
+      auto decoder = std::make_shared<Mp3StreamDecoder>(
+          value_or(config, "decoder.mpeg.buffer_size", MPEG_BUFFER_SIZE));
+      decoder->connectTo(outputNode);
+      return decoder;
+    }
+    default:
+      spdlog::warn(
+          "Undefined format {}, assuming raw and not attaching any decoder",
+          static_cast<int>(format));
+      return outputNode;
+    }
   }
 
   StreamNodes(StreamNodes &&other)
@@ -69,7 +97,7 @@ AudioPlayer::AudioPlayer(const Config &config)
 
 AudioPlayer::~AudioPlayer() { stop(); }
 
-void AudioPlayer::play(const std::string &url) {
+void AudioPlayer::play(const std::string &url, const AudioFormat format) {
   for (auto it = streamNodesList.begin(); it != streamNodesList.end(); ++it) {
     if (it->url == url &&
         !isInvalidState(it->nodeChain.back()->getState().state)) {
@@ -83,16 +111,16 @@ void AudioPlayer::play(const std::string &url) {
     }
   }
 
-  StreamNodes newStream(url, config);
+  StreamNodes newStream(url, config, format);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   disconnectAllStreams();
   streamNodesList.emplace_back(std::move(newStream));
 }
 
-void AudioPlayer::playNext(const std::string &url) {
+void AudioPlayer::playNext(const std::string &url, const AudioFormat format) {
   spdlog::debug("Adding new track to play next");
-  StreamNodes newStream(url, config);
+  StreamNodes newStream(url, config, format);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   cleanUpFinishedStreams();

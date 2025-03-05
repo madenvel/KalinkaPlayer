@@ -90,8 +90,9 @@ PYBIND11_MODULE(native_player, m) {
 
   py::class_<AudioPlayer>(m, "AudioPlayer")
       .def(py::init<const Config &>(), py::arg("config"))
-      .def("play", &AudioPlayer::play, py::arg("url"))
-      .def("play_next", &AudioPlayer::playNext, py::arg("url"))
+      .def("play", &AudioPlayer::play, py::arg("url"), py::arg("format"))
+      .def("play_next", &AudioPlayer::playNext, py::arg("url"),
+           py::arg("format"))
       .def("remove", &AudioPlayer::remove, py::arg("url"))
       .def("stop", &AudioPlayer::stop)
       .def("pause", &AudioPlayer::pause, py::arg("paused"))
@@ -107,6 +108,11 @@ PYBIND11_MODULE(native_player, m) {
       .value("PAUSED", AudioGraphNodeState::PAUSED)
       .value("FINISHED", AudioGraphNodeState::FINISHED)
       .value("SOURCE_CHANGED", AudioGraphNodeState::SOURCE_CHANGED)
+      .export_values();
+
+  py::enum_<AudioFormat>(m, "AudioFormat")
+      .value("FLAC", AudioFormat::FormatFlac)
+      .value("MPEG", AudioFormat::FormatMpeg)
       .export_values();
 
   m.def("py_dict_to_config", &dict_to_map);

@@ -321,15 +321,9 @@ def get_client(config: Config) -> QobuzClient:
     return client
 
 
-def extract_track_format(track):
-    mime_type = track["mime_type"].split("/")[1]
-    return mime_type
-
-
 def qobuz_link_retriever(qobuz_client, id) -> str:
-    track = qobuz_client.get_track_url(id, fmt_id=27)
-    format = extract_track_format(track)
-    track_url = TrackUrl(url=track["url"], format=format)
+    track = qobuz_client.get_track_url(id, fmt_id=5)
+    track_url = TrackUrl(url=track["url"], format=track["mime_type"])
     return track_url
 
 

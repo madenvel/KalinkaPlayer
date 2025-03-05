@@ -1,7 +1,6 @@
 import logging
 import time
 
-from functools import partial
 from threading import Timer, Thread
 
 from collections import OrderedDict
@@ -21,6 +20,7 @@ from native_player.native_player import (
     StreamState,
     AudioGraphNodeState,
     StreamInfo,
+    AudioFormat,
     py_dict_to_config,
 )
 
@@ -66,6 +66,14 @@ def to_audio_info(stream_info: StreamInfo):
     )
 
 
+def mime_to_format(mime: str) -> AudioFormat:
+    logger.info(f"Detected mime: {mime}")
+    if mime.count("flac") > 0:
+        return AudioFormat.FLAC
+
+    return AudioFormat.MPEG
+
+
 def to_state_name(state: AudioGraphNodeState) -> str:
     if state == AudioGraphNodeState.ERROR:
         return "ERROR"
@@ -86,6 +94,7 @@ class PlayQueue(AsyncExecutor):
         self.config = py_dict_to_config(config.flatten_config())
         self.track_player = AudioPlayer(self.config)
         self.current_track_id = 0
+        self.current_format = None
         self.track_list: list[TrackInfo] = []
 
         # Playback mode
@@ -121,6 +130,7 @@ class PlayQueue(AsyncExecutor):
             if self.prepared_tracks:
                 item = self.prepared_tracks.popitem(last=False)
                 self.current_track_id = item[0]
+                self.current_format = item[1].format
                 self._request_more_tracks()
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
@@ -145,6 +155,7 @@ class PlayQueue(AsyncExecutor):
                 position=new_state.position + position_diff,
                 message=new_state.message,
                 audio_info=to_audio_info(new_state.stream_info),
+                mime_type=self.current_format,
                 timestamp=state_update_ts,
             ).model_dump(exclude_none=True),
         )
@@ -163,13 +174,13 @@ class PlayQueue(AsyncExecutor):
         if index is None:
             index = self.current_track_id
 
-        track_url = self._setup_track_to_play(index)
-        if track_url is None:
+        track_info = self._setup_track_to_play(index)
+        if track_info is None:
             return
 
         self.prepared_tracks.clear()
-        self.prepared_tracks[index] = track_url
-        self.track_player.play(track_url)
+        self.prepared_tracks[index] = track_info
+        self.track_player.play(track_info.url, mime_to_format(track_info.format))
 
     @enqueue
     def play_next(self, index):
@@ -185,12 +196,12 @@ class PlayQueue(AsyncExecutor):
 
         logger.info(f"Playing next track index={index}")
 
-        track_url = self._setup_track_to_play(index)
-        if track_url is None:
+        track_info = self._setup_track_to_play(index)
+        if track_info is None:
             return
 
-        self.prepared_tracks[index] = track_url
-        self.track_player.play_next(track_url)
+        self.prepared_tracks[index] = track_info
+        self.track_player.play_next(track_info.url, mime_to_format(track_info.format))
 
     @enqueue
     def pause(self, paused: bool):
@@ -285,6 +296,7 @@ class PlayQueue(AsyncExecutor):
             position=self._estimated_progress(stream_state),
             message=stream_state.message,
             audio_info=to_audio_info(stream_state.stream_info),
+            mime_type=self.current_format,
             timestamp=time.monotonic_ns(),
         )
 
@@ -304,6 +316,7 @@ class PlayQueue(AsyncExecutor):
                 position=self._estimated_progress(stream_state),
                 message=stream_state.message,
                 audio_info=to_audio_info(stream_state.stream_info),
+                mime_type=self.current_format,
             ).model_dump(exclude_none=True),
             self.list(0, len(self.track_list)),
             PlaybackMode(
@@ -350,7 +363,7 @@ class PlayQueue(AsyncExecutor):
                 )
                 return None
 
-            return track_info.url
+            return track_info
 
         return self.prepared_tracks[index]
 

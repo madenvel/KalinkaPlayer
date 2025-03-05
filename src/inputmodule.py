@@ -7,15 +7,15 @@ from data_model.datamodel import BrowseItem, Playlist, Track, BrowseItemList
 from data_model.response_model import FavoriteIds, GenreList, LastUpdate
 
 
-class TrackInfo(BaseModel):
-    id: str
-    link_retriever: Callable[[], str]
-    metadata: Optional[Track]
-
-
 class TrackUrl(BaseModel):
     url: str
     format: str
+
+
+class TrackInfo(BaseModel):
+    id: str
+    link_retriever: Callable[[], TrackUrl]
+    metadata: Optional[Track]
 
 
 class SearchType(str, Enum):
