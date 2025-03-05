@@ -89,6 +89,11 @@ def test_getitem(config_instance):
     # Test default values
     assert config_instance["server.debug"] is False
     assert config_instance["app.mode"] == "development"
+    assert config_instance["app.mode#values"] == [
+        "development",
+        "production",
+        "testing",
+    ]
 
     # Test missing key
     with pytest.raises(KeyError):
@@ -111,7 +116,7 @@ def test_setitem(config_instance):
         config_instance["server.port"] = "not_an_integer"
 
     # Test enum validation
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         config_instance["app.mode"] = "invalid_mode"
 
     # Test setting nonexistent key
@@ -270,3 +275,27 @@ def test_update_and_save_config():
         # Clean up
         if os.path.exists(temp_path):
             os.unlink(temp_path)
+
+
+def test_slice(config_instance):
+    # Test slicing a section
+    server_config = config_instance.slice("server")
+    assert isinstance(server_config, Config)
+    assert server_config["host"] == "0.0.0.0"
+    assert server_config["port"] == 9090
+    assert server_config["debug"] is False
+
+    # Test slicing a nested section
+    app_config = config_instance.slice("app")
+    assert isinstance(app_config, Config)
+    assert app_config["name"] == "TestApp"
+    assert app_config["mode"] == "development"
+    assert app_config["mode#values"] == ["development", "production", "testing"]
+
+    # Test slicing a non-existent section
+    with pytest.raises(KeyError):
+        config_instance.slice("nonexistent.section")
+
+    # Test slicing a non-section key
+    with pytest.raises(KeyError):
+        config_instance.slice("server.host")

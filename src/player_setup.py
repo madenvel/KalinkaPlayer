@@ -5,9 +5,8 @@ from queue import Queue
 
 from src.ext_device import ExternalOutputDevice
 from src.module_import import import_module_by_path
-from src.playqueue import EventType, PlayQueue
+from src.playqueue import PlayQueue
 from src.inputmodule import InputModule
-from addons.device.musiccast.musiccast import Device
 
 from src.config import Config
 
@@ -26,7 +25,10 @@ def setup_input_module(config, playqueue, event_emitter, event_listener) -> Inpu
         "addons.input_module." + current_module[0].lower() + ".module_setup"
     )
     return input.setup(
-        input_modules[current_module[0]], playqueue, event_emitter, event_listener
+        config.slice("addons.input_module." + current_module[0]),
+        playqueue,
+        event_emitter,
+        event_listener,
     )
 
 
@@ -45,7 +47,10 @@ def setup_device(
     )
 
     return input.setup(
-        devices[current_device[0]], playqueue, event_emitter, event_listener
+        config.slice("addons.device." + current_device[0]),
+        playqueue,
+        event_emitter,
+        event_listener,
     )
 
 

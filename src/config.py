@@ -37,6 +37,30 @@ class Config:
 
         return flatten(self.config_dict, self.schema_dict)
 
+    def slice(self, key) -> "Config":
+        keys = key.split(".")
+        config_slice = self.config_dict
+        schema_slice = self.schema_dict
+
+        for k in keys:
+            if schema_slice.get("type") != "section":
+                raise KeyError(f"Key {key} not found in configuration schema")
+
+            schema_slice = schema_slice.get("elements", {}).get(k)
+            if schema_slice is None:
+                raise KeyError(f"Key {key} not found in configuration schema")
+            if schema_slice.get("type") != "section":
+                raise KeyError(
+                    f"Key {key} is not of type section in configuration schema"
+                )
+
+            config_slice = config_slice.get(k, {})
+
+        # Create a new Config object with the sliced config and schema
+        return Config(
+            yaml.safe_dump(config_slice), json.dumps(schema_slice), self.location
+        )
+
     def __getitem__(self, key):
         keys = key.split(".")
         value = self.config_dict
@@ -48,10 +72,22 @@ class Config:
 
             schema_value = schema_value.get("elements", {})
 
-            if k not in schema_value:
-                raise KeyError(f"Key {key} not found in configuration")
+            if "#" in k:
+                [split_key, suffix] = k.split("#")
+            else:
+                split_key, suffix = k, None
 
-            schema_value = schema_value[k]
+            if split_key not in schema_value:
+                raise KeyError(f"Key {key} not found in configuration schema")
+
+            schema_value = schema_value[split_key]
+
+            if suffix is not None:
+                if suffix in schema_value:
+                    value = schema_value[suffix]
+                    break
+                else:
+                    raise KeyError(f"Key {key} not found in configuration schema")
 
             if k in value:
                 value = value[k]
