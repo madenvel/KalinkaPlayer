@@ -213,8 +213,8 @@ size_t Mp3StreamDecoder::readCallback(void *buf, size_t size) {
     return 0;
   }
 
-  auto actuallyRead =
-      inputNode->read(static_cast<uint8_t *>(buf), dataAvailable);
+  auto actuallyRead = inputNode->read(static_cast<uint8_t *>(buf),
+                                      std::min(dataAvailable, size));
   spdlog::trace("Mp3StreamDecoder::readCallback({}) -> {}", size, actuallyRead);
   return actuallyRead;
 }
