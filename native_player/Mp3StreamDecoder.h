@@ -3,6 +3,7 @@
 
 #include "AudioGraphNode.h"
 
+#include "Utils.h"
 #include <thread>
 
 class Mp3StreamDecoder : public AudioGraphOutputNode,
@@ -31,6 +32,11 @@ private:
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   Buffer<uint8_t> buffer;
 
+  Signal<size_t> seekSignal;
+  Signal<bool> initCompleteSignal;
+
+  long currentPos = 0;
+
   void threadRun(std::stop_token token);
   void onEmptyBuffer(Buffer<uint8_t> &buffer);
 
@@ -39,6 +45,7 @@ private:
 
   size_t readCallback(void *buf, size_t size);
   int seekCallback(uint64_t position);
+  void handleSeekSignal(void *mp3dec_ex);
 };
 
 #endif // MP3STREAMDECODER_H

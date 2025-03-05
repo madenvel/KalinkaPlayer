@@ -24,17 +24,33 @@ size_t Mp3StreamDecoder::read(void *data, size_t size) {
 }
 
 size_t Mp3StreamDecoder::waitForData(std::stop_token stopToken, size_t size) {
-  auto availableSize = buffer.waitForData(stopToken, size);
+  auto combinedToken = combineStopTokens(stopToken, seekSignal.getStopToken());
+  auto availableSize = buffer.waitForData(combinedToken.get_token(), size);
   return availableSize;
 }
 
 size_t Mp3StreamDecoder::waitForDataFor(std::stop_token stopToken,
                                         std::chrono::milliseconds timeout,
                                         size_t size) {
-  return buffer.waitForDataFor(stopToken, timeout, size);
+  auto combinedToken = combineStopTokens(stopToken, seekSignal.getStopToken());
+  return buffer.waitForDataFor(combinedToken.get_token(), timeout, size);
 }
 
-size_t Mp3StreamDecoder::seekTo(size_t absolutePosition) { return size_t(); }
+size_t Mp3StreamDecoder::seekTo(size_t absolutePosition) {
+  if (getState().state == AudioGraphNodeState::ERROR || seekSignal.getValue()) {
+    return -1;
+  }
+  auto token = decodingThread.get_stop_token();
+
+  if (!initCompleteSignal.waitValue(token).value_or(false)) {
+    return -1;
+  }
+  spdlog::trace("Mp3StreamDecoder::seekTo({})", absolutePosition);
+  seekSignal.sendValue(absolutePosition);
+  auto retVal = seekSignal.getResponse(token);
+  spdlog::trace("Mp3StreamDecoder::seekTo({}) -> {}", absolutePosition, retVal);
+  return retVal;
+}
 
 void Mp3StreamDecoder::connectTo(
     std::shared_ptr<AudioGraphOutputNode> inputNode) {
@@ -56,7 +72,18 @@ void Mp3StreamDecoder::connectTo(
 }
 
 void Mp3StreamDecoder::disconnect(
-    std::shared_ptr<AudioGraphOutputNode> outputNode) {}
+    std::shared_ptr<AudioGraphOutputNode> outputNode) {
+  if (inputNode != this->inputNode) {
+    return;
+  }
+
+  if (decodingThread.joinable()) {
+    decodingThread.request_stop();
+    decodingThread.join();
+  }
+
+  this->inputNode = nullptr;
+}
 
 void Mp3StreamDecoder::threadRun(std::stop_token token) {
 
@@ -77,53 +104,75 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
 
   try {
 
-    if (mp3dec_ex_open_cb(&mp3, &io, MP3D_SEEK_TO_SAMPLE) != 0) {
+    int ret = mp3dec_ex_open_cb(&mp3, &io, MP3D_SEEK_TO_SAMPLE);
+    spdlog::trace("mp3dec_ex_open_cb ret: {}", ret);
+
+    if (ret != 0) {
+      initCompleteSignal.sendValue(false);
+      spdlog::error("Failed to open MP3 decoder: {}", ret);
       throw std::runtime_error("Failed to open MP3 decoder");
     };
+
+    initCompleteSignal.sendValue(true);
 
     constexpr size_t frameBufferSize = MINIMP3_MAX_SAMPLES_PER_FRAME;
     std::array<mp3d_sample_t, frameBufferSize> frameBuffer;
 
     while (!token.stop_requested()) {
-      size_t size = mp3dec_ex_read(&mp3, frameBuffer.data(), frameBufferSize);
-      spdlog::trace("Mp3StreamDecoder::threadRun size: {}", size);
+      while (!token.stop_requested()) {
+        if (seekSignal.getValue().has_value()) {
+          handleSeekSignal(&mp3);
+          continue;
+        }
+        size_t size = mp3dec_ex_read(&mp3, frameBuffer.data(), frameBufferSize);
 
-      if (size == 0) {
-        break;
-      } else if (size == MP3D_E_MEMORY) {
-        throw std::runtime_error("Failed to allocate memory for MP3 frame");
-      }
-
-      setState(StreamState{
-          AudioGraphNodeState::STREAMING, 0,
-          StreamInfo{
-              .format =
-                  StreamAudioFormat{
-                      .sampleRate = static_cast<unsigned int>(mp3.info.hz),
-                      .channels = static_cast<unsigned int>(mp3.info.channels),
-                      .bitsPerSample = 16,
-                      .sampleFormat = AudioSampleFormat::PCM16_LE},
-              .streamType = StreamType::FRAMES,
-              .streamSize = mp3.samples}});
-
-      const auto sizeInBytes = size * sizeof(mp3d_sample_t);
-      size_t bytesWritten = 0;
-      while (bytesWritten < sizeInBytes) {
-        spdlog::trace("Mp3StreamDecoder::threadRun wait for space {}",
-                      sizeInBytes - bytesWritten);
-        auto spaceAvailable = buffer.waitForSpace(token);
-
-        if (spaceAvailable == 0 || token.stop_requested()) {
-          break;
+        if (seekSignal.getValue().has_value()) {
+          continue;
         }
 
-        auto dataWritten = buffer.write(
-            reinterpret_cast<uint8_t *>(frameBuffer.data()) + bytesWritten,
-            sizeInBytes - bytesWritten);
-        spdlog::trace("Mp3StreamDecoder::threadRun dataWritten: {}",
-                      dataWritten);
-        bytesWritten += dataWritten;
+        if (size == 0) {
+          buffer.setEof();
+          break;
+        } else if (size == MP3D_E_MEMORY) {
+          throw std::runtime_error("Failed to allocate memory for MP3 frame");
+        }
+
+        setState(StreamState{
+            AudioGraphNodeState::STREAMING, currentPos,
+            StreamInfo{
+                .format =
+                    StreamAudioFormat{
+                        .sampleRate = static_cast<unsigned int>(mp3.info.hz),
+                        .channels =
+                            static_cast<unsigned int>(mp3.info.channels),
+                        .bitsPerSample = 16,
+                        .sampleFormat = AudioSampleFormat::PCM16_LE},
+                .streamType = StreamType::FRAMES,
+                .streamSize = mp3.samples}});
+
+        const auto sizeInBytes = size * sizeof(mp3d_sample_t);
+        size_t bytesWritten = 0;
+        auto combinedToken =
+            combineStopTokens(token, seekSignal.getStopToken());
+        while (bytesWritten < sizeInBytes) {
+          spdlog::trace("Mp3StreamDecoder::threadRun wait for space {}",
+                        sizeInBytes - bytesWritten);
+          auto spaceAvailable = buffer.waitForSpace(combinedToken.get_token());
+
+          if (spaceAvailable == 0 ||
+              combinedToken.get_token().stop_requested()) {
+            break;
+          }
+
+          auto dataWritten = buffer.write(
+              reinterpret_cast<uint8_t *>(frameBuffer.data()) + bytesWritten,
+              sizeInBytes - bytesWritten);
+          spdlog::trace("Mp3StreamDecoder::threadRun dataWritten: {}",
+                        dataWritten);
+          bytesWritten += dataWritten;
+        }
       }
+      seekSignal.waitValue(token);
     }
   } catch (std::exception &ex) {
     std::string message =
@@ -134,6 +183,12 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
 
   mp3dec_ex_close(&mp3);
   buffer.setEof();
+  if (seekSignal.getValue().has_value()) {
+    seekSignal.respond(-1);
+  }
+  initCompleteSignal.respond(false);
+  setState(StreamState{AudioGraphNodeState::STOPPED});
+  spdlog::trace("Mp3StreamDecoder::threadRun finished");
 }
 
 void Mp3StreamDecoder::onEmptyBuffer(Buffer<uint8_t> &buffer) {
@@ -143,14 +198,65 @@ void Mp3StreamDecoder::onEmptyBuffer(Buffer<uint8_t> &buffer) {
 }
 
 size_t Mp3StreamDecoder::readCallback(void *buf, size_t size) {
-  auto stopToken = decodingThread.get_stop_token();
-  auto dataAvailable = inputNode->waitForData(stopToken, size);
+  spdlog::trace("Mp3StreamDecoder::readCallback({})", size);
 
-  if (dataAvailable == 0 || stopToken.stop_requested()) {
+  auto stopToken = decodingThread.get_stop_token();
+  auto combinedToken = combineStopTokens(stopToken, seekSignal.getStopToken());
+  auto token = initCompleteSignal.getValue().value_or(false)
+                   ? combinedToken.get_token()
+                   : stopToken;
+  auto dataAvailable = inputNode->waitForData(token, size);
+  spdlog::trace("Mp3StreamDecoder::readCallback({}) -> {}", size,
+                dataAvailable);
+  if (dataAvailable == 0 || token.stop_requested()) {
+    spdlog::trace("Mp3StreamDecoder::readCallback() returning");
     return 0;
   }
 
-  return inputNode->read(static_cast<uint8_t *>(buf), dataAvailable);
+  auto actuallyRead =
+      inputNode->read(static_cast<uint8_t *>(buf), dataAvailable);
+  spdlog::trace("Mp3StreamDecoder::readCallback({}) -> {}", size, actuallyRead);
+  return actuallyRead;
 }
 
-int Mp3StreamDecoder::seekCallback(uint64_t position) { return 0; }
+int Mp3StreamDecoder::seekCallback(uint64_t position) {
+  spdlog::trace("Mp3StreamDecoder::seekCallback({})", position);
+  auto actualPosition = inputNode->seekTo(position);
+  spdlog::trace("Mp3StreamDecoder::seekCallback({}) -> {}", position,
+                actualPosition);
+  return position - actualPosition;
+}
+
+void Mp3StreamDecoder::handleSeekSignal(void *mp3dec_ex) {
+  mp3dec_ex_t *mp3 = static_cast<mp3dec_ex_t *>(mp3dec_ex);
+  auto seekPos = seekSignal.getValue().value();
+
+  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {}", seekPos);
+  setState(StreamState{AudioGraphNodeState::PREPARING});
+
+  buffer.clear();
+  if (seekPos >= mp3->samples) {
+    spdlog::trace(
+        "Mp3StreamDecoder::handleSeekSignal seekPos is too large {} -> {}",
+        seekPos, mp3->samples);
+    seekPos = mp3->samples;
+    seekSignal.respond(seekPos);
+    return;
+  }
+
+  if (!mp3->indexes_built) {
+    spdlog::trace("Index is not built, seeking to {}", seekPos);
+  }
+
+  seekSignal.respond(seekPos);
+  buffer.resetEof();
+  int ret = mp3dec_ex_seek(mp3, seekPos);
+  if (ret != 0) {
+    spdlog::error("MP3 decoder seek failure: {}", ret);
+    throw std::runtime_error("MP3 decoder seek failure");
+  }
+
+  currentPos = seekPos;
+  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {} -> {}", seekPos,
+                currentPos);
+}

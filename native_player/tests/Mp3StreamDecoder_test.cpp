@@ -2,6 +2,8 @@
 #include "Mp3StreamDecoder.h"
 #include "TestHelpers.h"
 
+#include "Log.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -20,7 +22,10 @@ public:
 
 class Mp3StreamDecoderTest : public ::testing::Test {
 protected:
-  void SetUp() override { decoder = std::make_unique<Mp3StreamDecoder>(1024); }
+  void SetUp() override {
+    initLogger("info");
+    decoder = std::make_unique<Mp3StreamDecoder>(1024);
+  }
 
   std::unique_ptr<Mp3StreamDecoder> decoder;
 
@@ -58,6 +63,7 @@ TEST_F(Mp3StreamDecoderTest, ReadFromFileStream) {
                              std::chrono::seconds(2));
 
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  ASSERT_TRUE(state.streamInfo.has_value());
   EXPECT_EQ(state.streamInfo.value().streamType, StreamType::FRAMES);
   EXPECT_EQ(state.streamInfo.value().format.sampleRate, 44100);
   EXPECT_EQ(state.streamInfo.value().format.channels, 2);
@@ -96,4 +102,42 @@ TEST_F(Mp3StreamDecoderTest, ReadWholeFile) {
   }
 
   EXPECT_EQ(decoder->getState().state, AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(Mp3StreamDecoderTest, SeekTo) {
+  auto outputNode = std::make_shared<FileInputNode>(mp3file);
+  decoder->connectTo(outputNode);
+
+  // Seek to 2s from the start
+  decoder->seekTo(44100 * 2);
+
+  auto state = waitForStatus(*decoder, AudioGraphNodeState::STREAMING,
+                             std::chrono::seconds(2));
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, 44100 * 2);
+
+  std::vector<uint8_t> data(256);
+
+  auto dataAvailable = decoder->waitForDataFor(
+      std::stop_token(), std::chrono::milliseconds(1000), 256);
+
+  EXPECT_GE(dataAvailable, 256);
+  EXPECT_EQ(decoder->read(data.data(), 256), 256);
+
+  // Seek to 2s and read again
+  decoder->seekTo(44100 * 2); // 2s from the start
+
+  state = waitForStatus(*decoder, AudioGraphNodeState::STREAMING,
+                        std::chrono::seconds(2));
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  EXPECT_EQ(state.position, 44100 * 2);
+
+  std::vector<uint8_t> newData(256);
+
+  dataAvailable = decoder->waitForDataFor(std::stop_token(),
+                                          std::chrono::milliseconds(1000), 256);
+
+  EXPECT_GE(dataAvailable, 256);
+  EXPECT_EQ(decoder->read(newData.data(), 256), 256);
+  EXPECT_EQ(data, newData);
 }
