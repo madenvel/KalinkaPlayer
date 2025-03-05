@@ -47,13 +47,7 @@ import logging
 
 import httpx
 
-from httpx import HTTPTransport
-
 logger = logging.getLogger(__name__.split(".")[-1])
-
-
-TrackInfoCache: dict[str, TrackInfo] = {}
-AlbumInfoCache: dict[str, Album] = {}
 
 
 class AuthenticationError(Exception):
@@ -321,8 +315,8 @@ def get_client(config: Config) -> QobuzClient:
     return client
 
 
-def qobuz_link_retriever(qobuz_client, id) -> str:
-    track = qobuz_client.get_track_url(id, fmt_id=5)
+def qobuz_link_retriever(qobuz_client, id, format_id) -> str:
+    track = qobuz_client.get_track_url(id, fmt_id=format_id)
     track_url = TrackUrl(url=track["url"], format=track["mime_type"])
     return track_url
 
@@ -370,7 +364,11 @@ def metadata_from_track(track, album_meta={}):
 
 
 class QobuzInputModule(InputModule):
-    def __init__(self, qobuz_client: QobuzClient, event_emitter: EventEmitter):
+    def __init__(
+        self, config: Config, qobuz_client: QobuzClient, event_emitter: EventEmitter
+    ):
+        self.format_id = (5, 6, 7, 27)[config["format#values"].index(config["format"])]
+        logger.info(f"Selecting Format '{config["format"]}', id = {self.format_id}")
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
         self.last_update = LastUpdate()
@@ -676,31 +674,21 @@ class QobuzInputModule(InputModule):
         return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
 
     def _track_to_track_info(self, track_id: str):
-        if track_id in TrackInfoCache:
-            return TrackInfoCache[track_id]
         track = self.qobuz_client.get_track_meta(track_id)
         track_info = TrackInfo(
             id=track_id,
             link_retriever=partial(
-                qobuz_link_retriever, self.qobuz_client, track["id"]
+                qobuz_link_retriever, self.qobuz_client, track["id"], self.format_id
             ),
             metadata=metadata_from_track(track),
         )
 
-        TrackInfoCache[track_id] = track_info
         return track_info
 
     def _tracks_to_browse_categories(self, tracks, album_meta={}):
         result = []
         for track in tracks:
             track_id = str(track["id"])
-            TrackInfoCache[track_id] = TrackInfo(
-                id=track_id,
-                link_retriever=partial(
-                    qobuz_link_retriever, self.qobuz_client, track["id"]
-                ),
-                metadata=metadata_from_track(track, album_meta),
-            )
             album = track.get("album", album_meta)
             album_version = album.get("version", None)
             result.append(

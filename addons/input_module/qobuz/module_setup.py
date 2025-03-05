@@ -38,7 +38,7 @@ def setup(
     event_listener: EventListener,
 ):
     client = get_client(config)
-    inputmodule = QobuzInputModule(client, event_emitter)
+    inputmodule = QobuzInputModule(config, client, event_emitter)
     setup_autoplay(client, playqueue, inputmodule, event_listener)
     setup_reporter(client, event_listener)
 
