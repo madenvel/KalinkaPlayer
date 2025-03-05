@@ -121,6 +121,22 @@ schema = """
                             "name": "Buffer size",
                             "description": "FLAC buffer size in bytes",
                             "type": "integer",
+                            "required": "no",
+                            "default": 1536000
+                        }
+                    }
+                },
+                "mpeg": {
+                    "name": "MPEG",
+                    "description": "MPEG decoder settings",
+                    "type": "section",
+                    "required": "no",
+                    "elements": {
+                        "buffer_size": {
+                            "name": "Buffer size",
+                            "description": "Buffer size in bytes",
+                            "type": "integer",
+                            "default": 176400,
                             "required": "no"
                         }
                     }
