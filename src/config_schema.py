@@ -248,6 +248,14 @@ schema = """
                                     "description": "Qobuz password",
                                     "type": "password",
                                     "required": "yes"
+                                },
+                                "format": {
+                                    "name": "Quality",
+                                    "description": "Audio quality",
+                                    "type": "enum",
+                                    "values": ["MP3 320kbps", "CD 16-bit 44.1KHz", "Hi-Res 24-bit 96KHz", "Hi-Res 24-bit 192KHz"],
+                                    "required": "no",
+                                    "default": "Hi-Res 24-bit 192KHz"
                                 }
                             }
                         }

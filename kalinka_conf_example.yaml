@@ -91,3 +91,4 @@ addons:
       # `echo -n "your_password" | md5sum`
       email: my@email.com
       password_hash: hash
+      format: CD 16-bit 44.1KHz
