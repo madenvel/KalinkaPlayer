@@ -148,7 +148,7 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
                         .bitsPerSample = 16,
                         .sampleFormat = AudioSampleFormat::PCM16_LE},
                 .streamType = StreamType::FRAMES,
-                .streamSize = mp3.samples}});
+                .streamSize = mp3.samples / mp3.info.channels}});
 
         const auto sizeInBytes = size * sizeof(mp3d_sample_t);
         size_t bytesWritten = 0;
@@ -229,34 +229,41 @@ int Mp3StreamDecoder::seekCallback(uint64_t position) {
 
 void Mp3StreamDecoder::handleSeekSignal(void *mp3dec_ex) {
   mp3dec_ex_t *mp3 = static_cast<mp3dec_ex_t *>(mp3dec_ex);
-  auto seekPos = seekSignal.getValue().value();
+  const auto seekPosFrames = seekSignal.getValue().value();
+  // minimp3 returns interleaved data and counts
+  // every sample for each channel,so we need
+  // to multiply the position by the number of channels.
+  auto seekPosSamples = seekPosFrames * mp3->info.channels;
+  const auto totalFrames = mp3->samples / mp3->info.channels;
 
-  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {}", seekPos);
+  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {}/{}",
+                seekPosFrames, totalFrames);
   setState(StreamState{AudioGraphNodeState::PREPARING});
 
   buffer.clear();
-  if (seekPos >= mp3->samples) {
+  if (seekPosSamples >= mp3->samples) {
     spdlog::trace(
         "Mp3StreamDecoder::handleSeekSignal seekPos is too large {} -> {}",
-        seekPos, mp3->samples);
-    seekPos = mp3->samples;
-    seekSignal.respond(seekPos);
+        seekPosSamples, mp3->samples);
+    seekPosSamples = mp3->samples;
+    seekSignal.respond(seekPosSamples / mp3->info.channels);
+    buffer.setEof();
     return;
   }
 
   if (!mp3->indexes_built) {
-    spdlog::trace("Index is not built, seeking to {}", seekPos);
+    spdlog::trace("Index is not built, seeking to {}", seekPosFrames);
   }
 
-  seekSignal.respond(seekPos);
+  seekSignal.respond(seekPosFrames);
   buffer.resetEof();
-  int ret = mp3dec_ex_seek(mp3, seekPos);
+  int ret = mp3dec_ex_seek(mp3, seekPosSamples);
   if (ret != 0) {
     spdlog::error("MP3 decoder seek failure: {}", ret);
     throw std::runtime_error("MP3 decoder seek failure");
   }
 
-  currentPos = seekPos;
-  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {} -> {}", seekPos,
-                currentPos);
+  currentPos = seekPosFrames;
+  spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {} -> {}",
+                seekPosFrames, currentPos);
 }

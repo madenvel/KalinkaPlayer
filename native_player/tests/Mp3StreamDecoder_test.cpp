@@ -23,7 +23,7 @@ public:
 class Mp3StreamDecoderTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    initLogger("info");
+    initLogger("warn");
     decoder = std::make_unique<Mp3StreamDecoder>(1024);
   }
 
@@ -68,7 +68,7 @@ TEST_F(Mp3StreamDecoderTest, ReadFromFileStream) {
   EXPECT_EQ(state.streamInfo.value().format.sampleRate, 44100);
   EXPECT_EQ(state.streamInfo.value().format.channels, 2);
   EXPECT_EQ(state.streamInfo.value().format.bitsPerSample, 16);
-  EXPECT_EQ(state.streamInfo.value().streamSize, 44100 * 5 * 2);
+  EXPECT_EQ(state.streamInfo.value().streamSize, 44100 * 5);
   EXPECT_EQ(state.streamInfo.value().format.sampleFormat,
             AudioSampleFormat::PCM16_LE);
 
@@ -104,7 +104,7 @@ TEST_F(Mp3StreamDecoderTest, ReadWholeFile) {
   EXPECT_EQ(decoder->getState().state, AudioGraphNodeState::FINISHED);
 }
 
-TEST_F(Mp3StreamDecoderTest, SeekTo) {
+TEST_F(Mp3StreamDecoderTest, test_SeekTo_consistent) {
   auto outputNode = std::make_shared<FileInputNode>(mp3file);
   decoder->connectTo(outputNode);
 
@@ -140,4 +140,39 @@ TEST_F(Mp3StreamDecoderTest, SeekTo) {
   EXPECT_GE(dataAvailable, 256);
   EXPECT_EQ(decoder->read(newData.data(), 256), 256);
   EXPECT_EQ(data, newData);
+}
+
+TEST_F(Mp3StreamDecoderTest, test_seekTo_correctness) {
+  auto outputNode = std::make_shared<FileInputNode>(mp3file);
+  decoder->connectTo(outputNode);
+
+  auto state = waitForStatus(*decoder, AudioGraphNodeState::STREAMING,
+                             std::chrono::seconds(2));
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+  const auto totalFrames = state.streamInfo.value().streamSize;
+  const auto totalBytes = (state.streamInfo.value().format.bitsPerSample / 8) *
+                          state.streamInfo.value().format.channels *
+                          totalFrames;
+  const auto seekPos = totalFrames / 2;
+
+  decoder->seekTo(seekPos);
+  EXPECT_EQ(waitForStatus(*decoder, AudioGraphNodeState::STREAMING,
+                          std::chrono::seconds(2))
+                .state,
+            AudioGraphNodeState::STREAMING);
+
+  std::vector<uint8_t> data(1024);
+  size_t dataRead = 0;
+
+  while (decoder->getState().state != AudioGraphNodeState::FINISHED) {
+    auto dataAvailable = decoder->waitForDataFor(
+        std::stop_token(), std::chrono::milliseconds(2000), 1024);
+
+    EXPECT_GE(dataAvailable, 0);
+
+    dataRead +=
+        decoder->read(data.data(), std::min(data.size(), dataAvailable));
+  }
+
+  EXPECT_EQ(dataRead, totalBytes / (totalFrames / seekPos));
 }
