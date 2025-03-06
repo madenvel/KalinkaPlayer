@@ -227,6 +227,17 @@ class QobuzClient:
         r.raise_for_status()
         return r.json()
 
+    def get_tracks_meta(self, track_ids: list[int]):
+        epoint = "track/getList"
+        params = {"tracks_id": track_ids}
+        r = self.session.post(self.base + epoint, json=params)
+
+        if r.status_code == 400:
+            raise InvalidAppSecretError(f"Invalid app secret: {r.json()}.")
+
+        r.raise_for_status()
+        return r.json()["tracks"]["items"]
+
     def get_qobuz_last_update(self):
         r = self.session.get(self.base + "user/lastUpdate")
         r.raise_for_status()
@@ -671,12 +682,20 @@ class QobuzInputModule(InputModule):
         )
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
-        return [self._track_to_track_info(str(track_id)) for track_id in track_ids]
+        if len(track_ids) == 0:
+            return []
 
-    def _track_to_track_info(self, track_id: str):
-        track = self.qobuz_client.get_track_meta(track_id)
+        all_tracks = []
+        chunk_size = 49
+        for i in range(0, len(track_ids), chunk_size):
+            chunk = track_ids[i : i + chunk_size]
+            tracks = self.qobuz_client.get_tracks_meta([int(_) for _ in chunk])
+            all_tracks.extend(tracks)
+        return [self._track_to_track_info(track) for track in all_tracks]
+
+    def _track_to_track_info(self, track):
         track_info = TrackInfo(
-            id=track_id,
+            id=str(track["id"]),
             link_retriever=partial(
                 qobuz_link_retriever, self.qobuz_client, track["id"], self.format_id
             ),

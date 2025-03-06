@@ -225,6 +225,9 @@ class PlayQueue(AsyncExecutor):
 
     @enqueue
     def add(self, tracks: list[TrackInfo]):
+        if len(tracks) == 0:
+            return
+
         index = len(self.track_list)
         self.track_list.extend(tracks)
         self.event_emitter.dispatch(
