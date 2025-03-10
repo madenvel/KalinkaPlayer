@@ -31,6 +31,7 @@ from data_model.datamodel import (
     ArtistImage,
     BrowseItem,
     BrowseItemList,
+    CardSize,
     Catalog,
     CatalogImage,
     EmptyList,
@@ -39,6 +40,8 @@ from data_model.datamodel import (
     Owner,
     Playlist,
     PlaylistImage,
+    Preview,
+    PreviewType,
     Track,
 )
 
@@ -489,7 +492,7 @@ class QobuzInputModule(InputModule):
             return BrowseItemList(
                 offset=offset,
                 limit=limit,
-                total=4,
+                total=6,
                 items=[
                     BrowseItem(
                         id="new-releases",
@@ -501,6 +504,12 @@ class QobuzInputModule(InputModule):
                             id="new-releases",
                             title="New Releases",
                             can_genre_filter=True,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                items_count=14,
+                                rows_count=2,
+                                aspect_ratio=1.0,
+                            ),
                         ),
                     ),
                     BrowseItem(
@@ -513,6 +522,12 @@ class QobuzInputModule(InputModule):
                             id="qobuz-playlists",
                             title="Qobuz Playlists",
                             can_genre_filter=True,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                rows_count=2,
+                                items_count=14,
+                                aspect_ratio=0.475,
+                            ),
                         ),
                     ),
                     BrowseItem(
@@ -525,6 +540,11 @@ class QobuzInputModule(InputModule):
                             id="playlists-by-category",
                             title="Playlist By Category",
                             can_genre_filter=True,
+                            preview_config=Preview(
+                                type=PreviewType.TEXT_ONLY,
+                                rows_count=2,
+                                aspect_ratio=0.475,
+                            ),
                         ),
                     ),
                     BrowseItem(
@@ -542,6 +562,7 @@ class QobuzInputModule(InputModule):
                                 small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
                                 large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
                             ),
+                            preview_config=Preview(type=PreviewType.NONE),
                         ),
                     ),
                     BrowseItem(
@@ -554,6 +575,12 @@ class QobuzInputModule(InputModule):
                             id="press-awards",
                             title="Press Awards",
                             can_genre_filter=True,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                rows_count=1,
+                                aspect_ratio=1.0,
+                                card_size=CardSize.LARGE,
+                            ),
                         ),
                     ),
                     BrowseItem(
@@ -566,6 +593,13 @@ class QobuzInputModule(InputModule):
                             id="most-streamed",
                             title="Top Releases",
                             can_genre_filter=True,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                rows_count=2,
+                                aspect_ratio=1.0,
+                                items_count=14,
+                                card_size=CardSize.SMALL,
+                            ),
                         ),
                     ),
                 ],
