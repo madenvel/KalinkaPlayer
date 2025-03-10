@@ -1,5 +1,18 @@
 from typing import Optional, List
 from pydantic import BaseModel
+from enum import Enum
+
+
+class PreviewType(str, Enum):
+    IMAGE_TEXT = "image"
+    TEXT_ONLY = "text"
+    CAROUSEL = "carousel"
+    NONE = "none"
+
+
+class CardSize(str, Enum):
+    SMALL = "small"
+    LARGE = "large"
 
 
 class AlbumImage(BaseModel):
@@ -79,12 +92,21 @@ class Playlist(BaseModel):
     track_count: int
 
 
+class Preview(BaseModel):
+    items_count: Optional[int] = None
+    type: PreviewType
+    rows_count: Optional[int] = None
+    aspect_ratio: Optional[float] = None
+    card_size: Optional[CardSize] = None
+
+
 class Catalog(BaseModel):
     id: str
     title: str
     image: Optional[CatalogImage] = None
     can_genre_filter: bool = False
     description: Optional[str] = ""
+    preview_config: Optional[Preview] = None
 
 
 class BrowseItem(BaseModel):
