@@ -4,6 +4,8 @@
 #include "StateMonitor.h"
 #include "StreamState.h"
 
+#include "Log.h"
+
 #include <gtest/gtest.h>
 
 class AudioPlayerTest : public ::testing::Test {
@@ -14,6 +16,8 @@ protected:
       "https://getsamplefiles.com/download/flac/sample-4.flac";
   const std::string url3 =
       "https://getsamplefiles.com/download/flac/sample-2.flac";
+  const std::string url4 = "https://download.samplelib.com/mp3/sample-6s.mp3";
+  const std::string url5 = "https://download.samplelib.com/mp3/sample-9s.mp3";
 
   Config config = {{"input.http.buffer_size", "768000"},
                    {"input.http.chunk_size", "384000"},
@@ -24,7 +28,7 @@ protected:
 
   AudioPlayer audioPlayer;
 
-  AudioPlayerTest() : audioPlayer(config) {}
+  AudioPlayerTest() : audioPlayer(config) { initLogger("warn"); }
 };
 
 TEST_F(AudioPlayerTest, constructor_destructor) {}
@@ -280,4 +284,34 @@ TEST_F(AudioPlayerTest, test_remove_stream) {
   }
 
   EXPECT_EQ(i, statesCount);
+}
+
+TEST_F(AudioPlayerTest, play_different_formats) {
+  auto monitor = audioPlayer.monitor();
+  audioPlayer.play(url3, AudioFormat::FormatFlac);
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  audioPlayer.play(url5, AudioFormat::FormatMpeg);
+  std::this_thread::sleep_for(std::chrono::seconds(2));
+  audioPlayer.play(url4, AudioFormat::FormatMpeg);
+  for (int i = 0;
+       i < 7 && audioPlayer.getState().state != AudioGraphNodeState::FINISHED;
+       ++i) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,        AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::SOURCE_CHANGED, AudioGraphNodeState::PREPARING,
+      AudioGraphNodeState::STREAMING,      AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING,      AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::FINISHED};
+
+  int i = 0;
+  while (monitor->hasData()) {
+    auto state = monitor->waitState();
+    ASSERT_LT(i, sizeof(states) / sizeof(states[0]));
+    EXPECT_EQ(state.state, states[i++]) << "i=" << (i - 1);
+  }
+  EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
 }

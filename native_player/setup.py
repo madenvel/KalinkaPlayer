@@ -15,6 +15,7 @@ extensions = [
             "AudioPlayer.cpp",
             "AudioStreamSwitcher.cpp",
             "FlacStreamDecoder.cpp",
+            "Mp3StreamDecoder.cpp",
             "PerfMon.cpp",
             "StreamState.cpp",
             "StateMonitor.cpp",

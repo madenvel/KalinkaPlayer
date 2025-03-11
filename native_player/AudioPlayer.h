@@ -13,6 +13,8 @@ class AudioStreamSwitcher;
 struct StreamNodes;
 class StateMonitor;
 
+enum AudioFormat { FormatFlac = 0, FormatMpeg };
+
 class AudioPlayer {
 public:
   AudioPlayer(const Config &config);
@@ -20,11 +22,13 @@ public:
 
   // Open a stream and start playing it immediately.
   // Cleans the list of the next streams to be played.
-  void play(const std::string &url);
+  void play(const std::string &url,
+            const AudioFormat format = AudioFormat::FormatFlac);
 
   // Open a stream and set it to be played next after the current one is
   // finished.
-  void playNext(const std::string &url);
+  void playNext(const std::string &url,
+                const AudioFormat format = AudioFormat::FormatFlac);
 
   // Remove stream from the playback queue if exists. Stops the playback
   // if the stream is currently playing.

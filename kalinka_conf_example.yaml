@@ -54,8 +54,13 @@ decoder:
   flac:
     # Buffer for the decoded audio data in bytes.
     # Increase the size if you have a slow device.
-    # Recommended to be twice as large as HTTP buffer.
+    # Default is 1s for 192KHz 24bit audio.
     buffer_size: 1536000
+  mpeg:
+    # Buffer for the decoded audio data in bytes.
+    # Increase the size if you have a slow device.
+    # Default is 1s for 44.1Khz 16bit audio.
+    buffer_size: 176400
 
 fixups:
   # Needs to be set for Raspberry Pi / HiFiBerry boards.
@@ -86,3 +91,4 @@ addons:
       # `echo -n "your_password" | md5sum`
       email: my@email.com
       password_hash: hash
+      format: CD 16-bit 44.1KHz

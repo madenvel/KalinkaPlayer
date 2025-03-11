@@ -121,6 +121,22 @@ schema = """
                             "name": "Buffer size",
                             "description": "FLAC buffer size in bytes",
                             "type": "integer",
+                            "required": "no",
+                            "default": 1536000
+                        }
+                    }
+                },
+                "mpeg": {
+                    "name": "MPEG",
+                    "description": "MPEG decoder settings",
+                    "type": "section",
+                    "required": "no",
+                    "elements": {
+                        "buffer_size": {
+                            "name": "Buffer size",
+                            "description": "Buffer size in bytes",
+                            "type": "integer",
+                            "default": 176400,
                             "required": "no"
                         }
                     }
@@ -232,6 +248,14 @@ schema = """
                                     "description": "Qobuz password",
                                     "type": "password",
                                     "required": "yes"
+                                },
+                                "format": {
+                                    "name": "Quality",
+                                    "description": "Audio quality",
+                                    "type": "enum",
+                                    "values": ["MP3 320kbps", "CD 16-bit 44.1KHz", "Hi-Res 24-bit 96KHz", "Hi-Res 24-bit 192KHz"],
+                                    "required": "no",
+                                    "default": "Hi-Res 24-bit 192KHz"
                                 }
                             }
                         }

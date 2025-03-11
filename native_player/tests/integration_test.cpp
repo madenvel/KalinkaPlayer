@@ -10,6 +10,7 @@
 
 #include "Config.h"
 #include "TestHelpers.h"
+#include <Mp3StreamDecoder.h>
 
 class IntegrationTest : public ::testing::Test {
 protected:
@@ -306,4 +307,14 @@ TEST_F(IntegrationTest, test_switch_different_formats_files) {
       EXPECT_EQ(state.streamInfo.value().format.sampleRate, freq2);
     }
   }
+}
+
+TEST_F(IntegrationTest, test_play_mp3_file) {
+  auto outputNode = std::make_shared<FileInputNode>("files/tone440.mp3");
+  auto codec = std::make_shared<Mp3StreamDecoder>(65536);
+  codec->connectTo(outputNode);
+  alsaAudioEmitter->connectTo(codec);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
+      AudioGraphNodeState::FINISHED);
 }
