@@ -509,7 +509,7 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=True,
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
-                                items_count=14,
+                                items_count=20,
                                 rows_count=2,
                                 aspect_ratio=1.0,
                             ),
@@ -528,7 +528,7 @@ class QobuzInputModule(InputModule):
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
                                 rows_count=2,
-                                items_count=14,
+                                items_count=20,
                                 aspect_ratio=0.475,
                             ),
                         ),
@@ -545,6 +545,7 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=True,
                             preview_config=Preview(
                                 type=PreviewType.TEXT_ONLY,
+                                items_count=20,
                                 rows_count=2,
                                 aspect_ratio=0.475,
                             ),
@@ -580,6 +581,7 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=True,
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
+                                items_count=14,
                                 rows_count=1,
                                 aspect_ratio=1.0,
                                 card_size=CardSize.LARGE,
@@ -600,7 +602,7 @@ class QobuzInputModule(InputModule):
                                 type=PreviewType.IMAGE_TEXT,
                                 rows_count=2,
                                 aspect_ratio=1.0,
-                                items_count=14,
+                                items_count=20,
                                 card_size=CardSize.SMALL,
                             ),
                         ),
@@ -709,6 +711,10 @@ class QobuzInputModule(InputModule):
                         id=tags[i]["slug"],
                         title=json.loads(tags[i]["name_json"])["en"],
                         can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            aspect_ratio=0.475,
+                        ),
                     ),
                 )
                 for i in range(offset, min(len(tags), limit))
