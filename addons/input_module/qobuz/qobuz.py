@@ -382,7 +382,7 @@ class QobuzInputModule(InputModule):
         self, config: Config, qobuz_client: QobuzClient, event_emitter: EventEmitter
     ):
         self.format_id = (5, 6, 7, 27)[config["format#values"].index(config["format"])]
-        logger.info(f"Selecting Format '{config["format"]}', id = {self.format_id}")
+        logger.info(f"Selecting Format '{config['format']}', id = {self.format_id}")
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
         self.last_update = LastUpdate()
