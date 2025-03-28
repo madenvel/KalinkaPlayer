@@ -200,6 +200,13 @@ schema = {
                                     "type": "string",
                                     "required": "yes",
                                 },
+                                "auto_volume_correcton": {
+                                    "name": "Auto volume correction",
+                                    "description": "Automatically adjust loudness using replaygain",
+                                    "type": "boolean",
+                                    "required": "no",
+                                    "default": False,
+                                },
                             },
                         },
                     },
