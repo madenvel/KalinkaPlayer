@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class Config:
     def __init__(self, config, schema, location):
         self.config_dict = yaml.safe_load(config)
-        self.schema_dict = json.loads(schema)
+        self.schema_dict = schema
         self.location = location
         self._validate_config()
 
@@ -57,9 +57,7 @@ class Config:
             config_slice = config_slice.get(k, {})
 
         # Create a new Config object with the sliced config and schema
-        return Config(
-            yaml.safe_dump(config_slice), json.dumps(schema_slice), self.location
-        )
+        return Config(yaml.safe_dump(config_slice), schema_slice, self.location)
 
     def __getitem__(self, key):
         keys = key.split(".")
@@ -206,8 +204,10 @@ class Config:
                     "elements": {},
                 }
                 for k, v in schema_node.get("elements", {}).items():
-                    if k in node or v.get("required", "no") == "yes" or "default" in v:
-                        result["elements"][k] = add_values(node.get(k, {}), v)
+                    if k in node:
+                        result["elements"][k] = add_values(node[k], v)
+                    elif "default" in v or v.get("required", "no") == "yes":
+                        result["elements"][k] = add_values(v.get("default", None), v)
                 return result
             else:
                 default = schema_node.get("default", None)

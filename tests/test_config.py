@@ -60,7 +60,7 @@ def sample_schema():
             },
         },
     }
-    return json.dumps(schema)
+    return schema
 
 
 @pytest.fixture
@@ -154,6 +154,10 @@ def test_get_full_config(config_instance):
     assert "default" in full_config["elements"]["server"]["elements"]["debug"]
     assert full_config["elements"]["server"]["elements"]["debug"]["default"] is False
 
+    # Check values missing in the config but present in the schema with default set
+    assert full_config["elements"]["server"]["elements"]["debug"]["value"] is False
+    assert full_config["elements"]["app"]["elements"]["mode"]["value"] == "development"
+
 
 def test_dump_and_save():
     schema = {
@@ -168,7 +172,7 @@ def test_dump_and_save():
 
     try:
         # Initialize config and save
-        config_obj = Config(yaml.dump(config), json.dumps(schema), temp_path)
+        config_obj = Config(yaml.dump(config), schema, temp_path)
         config_obj.save()
 
         # Read the saved file and verify
@@ -221,7 +225,7 @@ def test_validation_on_init():
 
     # Should raise TypeError due to invalid port type
     with pytest.raises(TypeError) as excinfo:
-        Config(yaml.dump(invalid_config), json.dumps(schema), "test.yaml")
+        Config(yaml.dump(invalid_config), schema, "test.yaml")
 
     assert "Expected integer" in str(excinfo.value)
 
@@ -247,7 +251,7 @@ def test_update_and_save_config():
 
     try:
         # Initialize config
-        config_obj = Config(yaml.dump(config), json.dumps(schema), temp_path)
+        config_obj = Config(yaml.dump(config), schema, temp_path)
 
         # Update a value
         config_obj["server.port"] = 9000
@@ -266,7 +270,7 @@ def test_update_and_save_config():
 
         # Create new config instance from the saved file
         with open(temp_path, "r") as f:
-            reloaded_config = Config(f.read(), json.dumps(schema), temp_path)
+            reloaded_config = Config(f.read(), schema, temp_path)
 
         # Verify the updated value persisted
         assert reloaded_config["server.port"] == 9000

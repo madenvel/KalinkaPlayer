@@ -1,5 +1,4 @@
-schema = """
-{
+schema = {
     "type": "section",
     "name": "Kalinka",
     "description": "Kalinka configuration",
@@ -16,20 +15,20 @@ schema = """
                     "description": "Network interface to bind",
                     "type": "string",
                     "required": "yes",
-                    "readonly": "yes"
+                    "readonly": "yes",
                 },
                 "port": {
                     "name": "Port",
                     "description": "Port number to listen on",
                     "type": "integer",
                     "required": "yes",
-                    "readonly": "yes"
+                    "readonly": "yes",
                 },
                 "service_name": {
                     "name": "Service name",
                     "description": "Name of the service",
                     "type": "string",
-                    "required": "yes"
+                    "required": "yes",
                 },
                 "log_level": {
                     "name": "Log level",
@@ -37,9 +36,9 @@ schema = """
                     "type": "enum",
                     "values": ["debug", "info", "warning", "error"],
                     "required": "no",
-                    "default": "info"
-                }
-            }
+                    "default": "info",
+                },
+            },
         },
         "output": {
             "name": "Output",
@@ -57,25 +56,25 @@ schema = """
                             "name": "Device",
                             "description": "ALSA device name",
                             "type": "string",
-                            "required": "yes"
+                            "required": "yes",
                         },
                         "latency_ms": {
                             "name": "Latency",
                             "description": "Output latency in milliseconds",
                             "type": "integer",
                             "required": "no",
-                            "default": 160
+                            "default": 160,
                         },
                         "period_ms": {
                             "name": "Period",
                             "description": "Output period in milliseconds",
                             "type": "integer",
                             "required": "no",
-                            "default": 40
-                        }
-                    }
+                            "default": 40,
+                        },
+                    },
                 }
-            }
+            },
         },
         "input": {
             "name": "Input",
@@ -92,18 +91,18 @@ schema = """
                             "description": "HTTP buffer size in bytes",
                             "type": "integer",
                             "required": "no",
-                            "default": 384000
+                            "default": 384000,
                         },
                         "chunk_size": {
                             "name": "Chunk size",
                             "description": "HTTP chunk size in bytes",
                             "type": "integer",
                             "required": "no",
-                            "default": 768000
-                        }
-                    }
+                            "default": 768000,
+                        },
+                    },
                 }
-            }
+            },
         },
         "decoder": {
             "name": "Decoder",
@@ -122,9 +121,9 @@ schema = """
                             "description": "FLAC buffer size in bytes",
                             "type": "integer",
                             "required": "no",
-                            "default": 1536000
+                            "default": 1536000,
                         }
-                    }
+                    },
                 },
                 "mpeg": {
                     "name": "MPEG",
@@ -137,11 +136,11 @@ schema = """
                             "description": "Buffer size in bytes",
                             "type": "integer",
                             "default": 176400,
-                            "required": "no"
+                            "required": "no",
                         }
-                    }
-                }
-            }
+                    },
+                },
+            },
         },
         "fixups": {
             "name": "Fixups",
@@ -154,16 +153,16 @@ schema = """
                     "description": "ALSA sleep time after format setup in milliseconds",
                     "type": "integer",
                     "required": "no",
-                    "default": 0
+                    "default": 0,
                 },
                 "alsa_reopen_device_with_new_format": {
                     "name": "Always reopen device",
                     "description": "Reopen ALSA device with new format",
                     "type": "boolean",
                     "required": "no",
-                    "default": false
-                }
-            }
+                    "default": False,
+                },
+            },
         },
         "addons": {
             "name": "Addons",
@@ -187,15 +186,15 @@ schema = """
                                     "name": "Name",
                                     "description": "Mixer control name",
                                     "type": "string",
-                                    "required": "yes"
+                                    "required": "yes",
                                 },
                                 "volume_step_to_db": {
                                     "name": "Volume step",
                                     "description": "Volume step in dB",
                                     "type": "number",
-                                    "required": "yes"
-                                }
-                            }
+                                    "required": "yes",
+                                },
+                            },
                         },
                         "musiccast": {
                             "name": "MusicCast",
@@ -207,23 +206,23 @@ schema = """
                                     "name": "Address",
                                     "description": "MusicCast device address",
                                     "type": "string",
-                                    "required": "yes"
+                                    "required": "yes",
                                 },
                                 "device_port": {
                                     "name": "Port",
                                     "description": "MusicCast device port",
                                     "type": "integer",
-                                    "required": "yes"
+                                    "required": "yes",
                                 },
                                 "connected_input": {
                                     "name": "Connected input",
                                     "description": "Connected input name",
                                     "type": "string",
-                                    "required": "yes"
-                                }
-                            }
-                        }
-                    }
+                                    "required": "yes",
+                                },
+                            },
+                        },
+                    },
                 },
                 "input_module": {
                     "name": "Input",
@@ -241,28 +240,32 @@ schema = """
                                     "name": "Email",
                                     "description": "Qobuz login",
                                     "type": "string",
-                                    "required": "yes"
+                                    "required": "yes",
                                 },
                                 "password_hash": {
                                     "name": "Password",
                                     "description": "Qobuz password",
                                     "type": "password",
-                                    "required": "yes"
+                                    "required": "yes",
                                 },
                                 "format": {
                                     "name": "Quality",
                                     "description": "Audio quality",
                                     "type": "enum",
-                                    "values": ["MP3 320kbps", "CD 16-bit 44.1KHz", "Hi-Res 24-bit 96KHz", "Hi-Res 24-bit 192KHz"],
+                                    "values": [
+                                        "MP3 320kbps",
+                                        "CD 16-bit 44.1KHz",
+                                        "Hi-Res 24-bit 96KHz",
+                                        "Hi-Res 24-bit 192KHz",
+                                    ],
                                     "required": "no",
-                                    "default": "Hi-Res 24-bit 192KHz"
-                                }
-                            }
+                                    "default": "Hi-Res 24-bit 192KHz",
+                                },
+                            },
                         }
-                    }
-                }
-            }
-        }
-    }
+                    },
+                },
+            },
+        },
+    },
 }
-"""
