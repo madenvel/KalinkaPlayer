@@ -204,7 +204,7 @@ class Config:
                     "elements": {},
                 }
                 for k, v in schema_node.get("elements", {}).items():
-                    if k in node:
+                    if node is not None and k in node:
                         result["elements"][k] = add_values(node[k], v)
                     elif "default" in v or v.get("required", "no") == "yes":
                         result["elements"][k] = add_values(v.get("default", None), v)

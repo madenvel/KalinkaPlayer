@@ -174,28 +174,8 @@ schema = {
                     "name": "Devices",
                     "description": "Device-specific addons",
                     "type": "section",
-                    "required": "yes",
+                    "required": "no",
                     "elements": {
-                        "alsamixer": {
-                            "name": "ALSA mixer",
-                            "description": "ALSA mixer settings",
-                            "type": "section",
-                            "required": "no",
-                            "elements": {
-                                "name": {
-                                    "name": "Name",
-                                    "description": "Mixer control name",
-                                    "type": "string",
-                                    "required": "yes",
-                                },
-                                "volume_step_to_db": {
-                                    "name": "Volume step",
-                                    "description": "Volume step in dB",
-                                    "type": "number",
-                                    "required": "yes",
-                                },
-                            },
-                        },
                         "musiccast": {
                             "name": "MusicCast",
                             "description": "MusicCast device settings",
