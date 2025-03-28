@@ -315,4 +315,10 @@ def create_app(config: Config):
         app.state.config[key] = value
         return {"message": "Ok"}
 
+    @app.get("/suggest/album")
+    def suggest_albums_similar_to(album_id: str, offset: int = 0, limit: int = 25):
+        return inputmodule.suggest_albums_similar_to(
+            album_id, offset, limit
+        ).model_dump(exclude_unset=True)
+
     return app

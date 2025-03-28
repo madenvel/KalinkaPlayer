@@ -1,7 +1,7 @@
 import copy
 import hashlib
 import time
-from typing import List
+from typing import List, Optional
 
 from src.config import Config
 from .bundle import Bundle
@@ -867,16 +867,14 @@ class QobuzInputModule(InputModule):
             BrowseItem(
                 id=str(album["id"]),
                 name=append_str(album["title"], album.get("version", None)),
-                subname=album["artist"]["name"],
+                subname=(artist := self._extract_artist_from_album(album)).name,
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
                 album=Album(
                     id=str(album["id"]),
                     title=append_str(album["title"], album.get("version", None)),
-                    artist=Artist(
-                        name=album["artist"]["name"], id=str(album["artist"]["id"])
-                    ),
+                    artist=artist,
                     image=(
                         AlbumImage(
                             thumbnail=album["image"].get("thumbnail", None),
@@ -887,7 +885,7 @@ class QobuzInputModule(InputModule):
                         else None
                     ),
                     duration=album["duration"],
-                    track_count=album["tracks_count"],
+                    track_count=album.get("track_count", album.get("tracks_count", 0)),
                     genre=Genre(
                         id=str(album["genre"]["id"]), name=album["genre"]["name"]
                     ),
@@ -895,6 +893,25 @@ class QobuzInputModule(InputModule):
             )
             for album in albums
         ]
+
+    def _extract_artist_from_album(self, album) -> Optional[Artist]:
+        if "artist" in album:
+            return Artist(
+                id=str(album["artist"]["id"]),
+                name=album["artist"]["name"],
+            )
+        elif "performer" in album:
+            return Artist(
+                id=str(album["performer"]["id"]),
+                name=album["performer"]["name"],
+            )
+        elif "artists" in album:
+            return Artist(
+                id=str(album["artists"][0]["id"]),
+                name=album["artists"][0]["name"],
+            )
+        else:
+            return None
 
     def _playlists_to_browse_category(self, playlists):
         return [
@@ -1209,3 +1226,24 @@ class QobuzInputModule(InputModule):
         rjson = response.json()
 
         return self._to_playlist_response(rjson)
+
+    def suggest_albums_similar_to(
+        self, id: str, offset: int = 0, limit: int = 25
+    ) -> BrowseItemList:
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "album/suggest",
+            params={"album_id": id},
+        )
+
+        if response.is_success != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+        albums = rjson["albums"]["items"][offset : offset + limit]
+
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=int(rjson["albums"]["limit"]),
+            items=self._albums_to_browse_category(albums),
+        )
