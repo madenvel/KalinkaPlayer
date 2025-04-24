@@ -124,7 +124,8 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
           handleSeekSignal(&mp3);
           continue;
         }
-        size_t size = mp3dec_ex_read(&mp3, frameBuffer.data(), frameBufferSize);
+        ssize_t size =
+            mp3dec_ex_read(&mp3, frameBuffer.data(), frameBufferSize);
 
         if (seekSignal.getValue().has_value()) {
           continue;
