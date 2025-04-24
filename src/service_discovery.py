@@ -8,9 +8,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-desc = {
-    "kalinka_api_version": "0.1",
-}
+desc = {"kalinka_api_version": "0.1", "server_version": "1.4.0"}
 
 
 def get_service_info(config: Config):
