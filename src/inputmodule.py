@@ -68,7 +68,7 @@ class InputModule(ABC):
 
     @abstractmethod
     def list_favorite(
-        self, type: SearchType, offset: int = 0, limit: int = 50
+        self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         pass
 
@@ -132,10 +132,4 @@ class InputModule(ABC):
     def playlist_remove_tracks(
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
-        pass
-
-    @abstractmethod
-    def suggest_albums_similar_to(
-        self, id: str, offset: int = 0, limit: int = 25
-    ) -> BrowseItemList:
         pass

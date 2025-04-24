@@ -103,6 +103,7 @@ class RetryTransport(httpx.HTTPTransport):
                 httpx.ConnectTimeout,
                 httpx.ProxyError,
                 httpx.ConnectError,
+                httpx.ReadError,
             ) as exc:
                 read_retries += 1
                 time.sleep(self.backoff_factor * read_retries)
@@ -248,32 +249,38 @@ class QobuzClient:
         return r.json()["last_update"]
 
     def get_user_playlists(self, offset: int = 0, limit: int = 50, owner_id=None):
-        last_update = self.get_qobuz_last_update()["playlist"]
+        # Disable user playlist cache till we figure out how to deal with new playlists.
+        # last_update = self.get_qobuz_last_update()["playlist"]
 
-        if self.last_update.favorite_playlists_ts != last_update:
-            logger.debug("Updating user playlists cache")
-            r = self.session.get(
-                self.base + "playlist/getUserPlaylists",
-                params={"limit": 500},
-            )
+        # if self.last_update.favorite_playlists_ts != last_update:
+        #     logger.info(
+        #         f"Updating user playlists cache, last_update={last_update}, stored_update={self.last_update.favorite_playlists_ts}"
+        #     )
+        r = self.session.get(
+            self.base + "playlist/getUserPlaylists",
+            # params={"limit": 500},
+            params={"offset": offset, "limit": limit},
+        )
 
-            r.raise_for_status()
+        r.raise_for_status()
 
-            self.cached["playlists"] = copy.deepcopy(r.json()["playlists"])
-            logger.debug(
-                f"User playlists cache updated: {len(self.cached['playlists'])}"
-            )
+        cached = {"playlists": r.json()["playlists"]}
 
-            self.last_update.favorite_playlists_ts = last_update
+        # self.cached["playlists"] = copy.deepcopy(r.json()["playlists"])
+        # logger.info(
+        #     f"User playlists cache updated: {len(self.cached['playlists']['items'])}"
+        # )
+
+        # self.last_update.favorite_playlists_ts = last_update
 
         if owner_id is not None:
             filtered_playlists = [
                 playlist
-                for playlist in self.cached["playlists"]["items"]
+                for playlist in cached["playlists"]["items"]
                 if playlist["owner"]["id"] == owner_id
             ]
         else:
-            filtered_playlists = self.cached["playlists"]["items"]
+            filtered_playlists = cached["playlists"]["items"]
 
         playlists = {
             "offset": offset,
@@ -473,16 +480,32 @@ class QobuzInputModule(InputModule):
         )
 
     def list_favorite(
-        self, type: SearchType, offset: int = 0, limit: int = 50
+        self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         if type == SearchType.playlist:
-            rjson = self.qobuz_client.get_user_playlists(offset=offset, limit=limit)
+            rjson = self.qobuz_client.get_user_playlists(offset=0, limit=500)
         else:
-            rjson = self.qobuz_client.get_user_favorites(
-                type, offset=offset, limit=limit
-            )
+            rjson = self.qobuz_client.get_user_favorites(type, offset=0, limit=500)
 
-        return self._format_list_response(rjson, offset, limit)
+        result = self._format_list_response(rjson, offset, limit)
+        filtered_items = [
+            result.items[i]
+            for i in range(len(result.items))
+            if (result.items[i].name and filter.lower() in result.items[i].name.lower())
+            or (
+                result.items[i].subname
+                and filter.lower() in result.items[i].subname.lower()
+            )
+        ]
+
+        filtered_result = BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=len(filtered_items),
+            items=filtered_items[offset : offset + limit],
+        )
+
+        return filtered_result
 
     def browse_catalog(
         self,
@@ -623,8 +646,15 @@ class QobuzInputModule(InputModule):
             return self._get_new_releases("most-streamed", offset, limit, genre_ids)
         else:
             ep = endpoint.split("/")
-            if len(ep) > 1 and ep[0] == "playlists-by-category":
-                return self._get_qobuz_playlists(offset, limit, genre_ids, ep[1])
+            if len(ep) > 1:
+                if ep[0] == "playlists-by-category":
+                    return self._get_qobuz_playlists(offset, limit, genre_ids, ep[1])
+                elif ep[0] == "album-suggestions":
+                    return self._suggest_albums_similar_to(ep[1], offset, limit)
+                elif ep[0] == "playlist-suggestions":
+                    return self._suggest_playlists_similar_to(ep[1], offset, limit)
+                elif ep[0] == "similar-artists":
+                    return self._suggest_artists_similar_to(ep[1], offset, limit)
 
     def _get_new_releases(
         self, type: str, offset: int, limit: int, genre_ids: list[int]
@@ -752,7 +782,7 @@ class QobuzInputModule(InputModule):
             album_version = album.get("version", None)
             result.append(
                 BrowseItem(
-                    id=str(track["id"]),
+                    id=track_id,
                     name=append_str(track["title"], track.get("version", None)),
                     subname=(
                         track["performer"]["name"]
@@ -763,7 +793,7 @@ class QobuzInputModule(InputModule):
                     can_add=True,
                     url="/track/" + str(track["id"]),
                     track=Track(
-                        id=str(track["id"]),
+                        id=track_id,
                         title=append_str(track["title"], track.get("version", None)),
                         duration=track["duration"],
                         performer=(
@@ -858,6 +888,27 @@ class QobuzInputModule(InputModule):
                     ),
                     album_count=artist["albums_count"],
                 ),
+                extra_sections=[
+                    BrowseItem(
+                        id="similar_artists_" + str(artist["id"]),
+                        name="Similar artists",
+                        url="/catalog/similar-artists/" + str(artist["id"]),
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="similar_artists_" + str(artist["id"]),
+                            title="Similar artists",
+                            can_genre_filter=False,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                items_count=5,
+                                rows_count=1,
+                                aspect_ratio=1.0,
+                                card_size=CardSize.SMALL,
+                            ),
+                        ),
+                    )
+                ],
             )
             for artist in artists
         ]
@@ -890,6 +941,46 @@ class QobuzInputModule(InputModule):
                         id=str(album["genre"]["id"]), name=album["genre"]["name"]
                     ),
                 ),
+                extra_sections=[
+                    BrowseItem(
+                        id="artists_albums_" + str(album["id"]),
+                        name="More from this artist",
+                        url="/artist/" + str(artist.id),
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="artists_albums_" + str(album["id"]),
+                            title="More from this artist",
+                            can_genre_filter=False,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                items_count=10,
+                                rows_count=1,
+                                aspect_ratio=1.0,
+                                card_size=CardSize.SMALL,
+                            ),
+                        ),
+                    ),
+                    BrowseItem(
+                        id="album_suggestions_" + str(album["id"]),
+                        name="You may also like",
+                        url="/catalog/album-suggestions/" + str(album["id"]),
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="album_suggestions_" + str(album["id"]),
+                            title="You may also like",
+                            can_genre_filter=False,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                items_count=5,
+                                rows_count=1,
+                                aspect_ratio=1.0,
+                                card_size=CardSize.SMALL,
+                            ),
+                        ),
+                    ),
+                ],
             )
             for album in albums
         ]
@@ -923,6 +1014,27 @@ class QobuzInputModule(InputModule):
                 can_browse=True,
                 can_add=True,
                 playlist=self._qobuz_playlist_to_playlist(playlist),
+                extra_sections=[
+                    BrowseItem(
+                        id="playlist_suggestions_" + str(playlist["id"]),
+                        name="Similar playlists",
+                        url="/catalog/playlist-suggestions/" + str(playlist["id"]),
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id="playlist_suggestions_" + str(playlist["id"]),
+                            title="Similar playlists",
+                            can_genre_filter=False,
+                            preview_config=Preview(
+                                type=PreviewType.IMAGE_TEXT,
+                                items_count=9,
+                                rows_count=1,
+                                aspect_ratio=0.475,
+                                card_size=CardSize.LARGE,
+                            ),
+                        ),
+                    )
+                ],
             )
             for playlist in playlists
         ]
@@ -1227,7 +1339,7 @@ class QobuzInputModule(InputModule):
 
         return self._to_playlist_response(rjson)
 
-    def suggest_albums_similar_to(
+    def _suggest_albums_similar_to(
         self, id: str, offset: int = 0, limit: int = 25
     ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
@@ -1246,4 +1358,39 @@ class QobuzInputModule(InputModule):
             limit=limit,
             total=int(rjson["albums"]["limit"]),
             items=self._albums_to_browse_category(albums),
+        )
+
+    def _suggest_playlists_similar_to(self, id: str, offset: int, limit: int = 10):
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "playlist/get",
+            params={"playlist_id": id, "extra": "getSimilarPlaylists"},
+        )
+
+        if response.is_success != True:
+            return EmptyList(offset, limit)
+
+        rjson = response.json()
+        playlists = rjson["similarPlaylist"]["items"][offset : offset + limit]
+
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=len(rjson["similarPlaylist"]["items"]),
+            items=self._playlists_to_browse_category(playlists),
+        )
+
+    def _suggest_artists_similar_to(self, id: str, offset: int, limit: int = 10):
+        response = self.qobuz_client.session.get(
+            self.qobuz_client.base + "artist/getSimilarArtists",
+            params={"artist_id": id, "offset": offset, "limit": limit},
+        )
+        if response.is_success != True:
+            return EmptyList(offset, limit)
+        rjson = response.json()
+        artists = rjson["artists"]["items"]
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=rjson["artists"]["total"],
+            items=self._artists_to_browse_category(artists),
         )

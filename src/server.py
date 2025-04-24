@@ -225,8 +225,8 @@ def create_app(config: Config):
         return {"message": "Ok"}
 
     @app.get("/favorite/list/{type}")
-    def list_favorite(type: SearchType, offset: int = 0, limit: int = 10):
-        return inputmodule.list_favorite(type, offset, limit).model_dump(
+    def list_favorite(type: SearchType, filter: str, offset: int = 0, limit: int = 10):
+        return inputmodule.list_favorite(type, filter, offset, limit).model_dump(
             exclude_unset=True
         )
 
@@ -314,11 +314,5 @@ def create_app(config: Config):
     def set_config(key, value):
         app.state.config[key] = value
         return {"message": "Ok"}
-
-    @app.get("/suggest/album")
-    def suggest_albums_similar_to(album_id: str, offset: int = 0, limit: int = 25):
-        return inputmodule.suggest_albums_similar_to(
-            album_id, offset, limit
-        ).model_dump(exclude_unset=True)
 
     return app
