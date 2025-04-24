@@ -121,6 +121,7 @@ class BrowseItem(BaseModel):
     playlist: Optional[Playlist] = None
     catalog: Optional[Catalog] = None
     track: Optional[Track] = None
+    extra_sections: Optional[List["BrowseItem"]] = None
 
 
 class BrowseItemList(BaseModel):
