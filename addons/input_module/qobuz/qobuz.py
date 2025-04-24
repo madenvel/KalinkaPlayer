@@ -918,7 +918,7 @@ class QobuzInputModule(InputModule):
             BrowseItem(
                 id=str(album["id"]),
                 name=append_str(album["title"], album.get("version", None)),
-                subname=(artist := self._extract_artist_from_album(album)).name,
+                subname=(artist := self._extract_artist_from_album(album)).name if artist else None,
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
