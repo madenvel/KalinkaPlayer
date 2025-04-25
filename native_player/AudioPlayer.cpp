@@ -3,6 +3,7 @@
 #include "AudioGraphHttpStream.h"
 #include "AudioStreamSwitcher.h"
 #include "Config.h"
+#include "FileInputNode.h"
 #include "FlacStreamDecoder.h"
 #include "Log.h"
 #include "Mp3StreamDecoder.h"
@@ -37,9 +38,18 @@ struct StreamNodes {
   StreamNodes(const std::string &url, const Config &config,
               const AudioFormat format)
       : url(url) {
-    nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
-        url, value_or(config, "input.http.buffer_size", HTTP_BUFFER_SIZE),
-        value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
+    if (url.substr(0, 7) == "file://") {
+      // Use FileInputNode for local files
+      std::string filePath = url.substr(7);
+      spdlog::info("Creating FileInputNode for local file: {}", filePath);
+      nodeChain.emplace_back(std::make_shared<FileInputNode>(filePath));
+    } else {
+      // Use AudioGraphHttpStream for network streams
+      spdlog::info("Creating AudioGraphHttpStream for URL: {}", url);
+      nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
+          url, value_or(config, "input.http.buffer_size", HTTP_BUFFER_SIZE),
+          value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
+    }
 
     auto decoder = connectDecoder(nodeChain.back(), config, format);
     if (nodeChain.back() != decoder) {
