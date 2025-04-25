@@ -1,7 +1,6 @@
-CC = clang++
-CFLAGS = -Wall -g -std=c++23 -fsanitize=address -I../
-LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgmock -lgtest -fsanitize=address
-
+CC = g++
+CFLAGS = -Wall -g -std=c++23 -fpermissive -fsanitize=address -I../
+LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog -lgtest_main -lgmock -lgtest  -fsanitize=address
 # List of source files
 SRCS = $(wildcard *.cpp)
 SRCS += ../AlsaAudioEmitter.cpp \
