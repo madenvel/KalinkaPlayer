@@ -2,10 +2,11 @@ import os
 import threading
 import logging
 from enum import Enum
-from typing import List, Optional, Set
+from typing import List
 
 from .filedb import FileDb
 from data_model.datamodel import Track, Album, Artist
+import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +100,17 @@ class FileIndexer:
                             track = Track(
                                 id=rel_path,
                                 title=title,
-                                duration=0,  # No duration needed as specified
-                                album=Album(id="unknown_album", title="Unknown Album"),
-                                performer=None,
                             )
 
                             # Add the track to the database
+                            # Get the file modification timestamp in ISO format
+                            file_update_ts = os.path.getmtime(file_path)
+                            # Convert timestamp to ISO 8601 format
+                            iso_timestamp = datetime.datetime.fromtimestamp(
+                                file_update_ts
+                            ).isoformat()
+                            track.file_update_ts = iso_timestamp
+
                             self.db.add_track(track)
                             logger.debug(f"Added track: {rel_path}")
                         except Exception as e:
