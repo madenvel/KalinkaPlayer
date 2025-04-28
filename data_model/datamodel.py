@@ -72,7 +72,7 @@ class Track(BaseModel):
     title: str
     duration: int
     performer: Optional[Artist] = None
-    album: Album
+    album: Optional[Album] = None
     replaygain_peak: Optional[float] = None
     replaygain_gain: Optional[float] = None
     playlist_track_id: Optional[str] = None
