@@ -7,3 +7,4 @@ pyyaml
 pybind11
 pytest
 httpx[http2]
+mutagen

@@ -22,7 +22,7 @@ def main():
     db = FileDb(db_path)
 
     # Create FileIndexer instance
-    indexer = FileIndexer(music_dir, db)
+    indexer = FileIndexer(music_dir, db, ".cache")
 
     # Check the initial status
     logger.info(f"Initial indexer status: {indexer.get_status()}")
