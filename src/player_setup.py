@@ -19,13 +19,25 @@ def setup_input_module(config, playqueue, event_emitter, event_listener) -> Inpu
     if not input_modules:
         return None
 
-    current_module = list(input_modules.items())[0]
-    logger.info(f"Setting up input module: {current_module[0]}")
+    current_module = None
+
+    for key in input_modules.keys():
+        if config["addons.input_module." + key + "#enabled"].lower() in [
+            "yes",
+            "true",
+            "1",
+        ]:
+            logger.info(f"Enabling input module: {key}")
+            current_module = key
+            break
+
+    # current_module = list(input_modules.items())[0]
+    logger.info(f"Setting up input module: {current_module}")
     input = import_module_by_path(
-        "addons.input_module." + current_module[0].lower() + ".module_setup"
+        "addons.input_module." + current_module.lower() + ".module_setup"
     )
     return input.setup(
-        config.slice("addons.input_module." + current_module[0]),
+        config.slice("addons.input_module." + current_module),
         playqueue,
         event_emitter,
         event_listener,

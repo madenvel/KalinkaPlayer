@@ -222,6 +222,7 @@ schema = {
                             "description": "Qobuz input module settings",
                             "type": "section",
                             "required": "no",
+                            "enabled": "yes",
                             "elements": {
                                 "email": {
                                     "name": "Email",
