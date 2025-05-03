@@ -1396,3 +1396,6 @@ class QobuzInputModule(InputModule):
             total=rjson["artists"]["total"],
             items=self._artists_to_browse_category(artists),
         )
+
+    def get_resource_path(self, id) -> str:
+        return None

@@ -133,3 +133,7 @@ class InputModule(ABC):
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
         pass
+
+    @abstractmethod
+    def get_resource_path(self, id: str) -> str:
+        pass

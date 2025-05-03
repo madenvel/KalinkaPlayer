@@ -93,6 +93,8 @@ class Playlist(BaseModel):
 
 
 class Preview(BaseModel):
+    # Maximum number of items to be shown in the preview section.
+    # This is a UI configuration value, not the actual count of items available.
     items_count: Optional[int] = None
     type: PreviewType
     rows_count: Optional[int] = None
@@ -121,6 +123,9 @@ class BrowseItem(BaseModel):
     playlist: Optional[Playlist] = None
     catalog: Optional[Catalog] = None
     track: Optional[Track] = None
+    # Used for additional catalog sections to display alongside the current item
+    # Examples: "Similar albums", "From the same artist", "Recommended" etc.
+    # Not to be used for preview content in the root catalog
     extra_sections: Optional[List["BrowseItem"]] = None
 
 

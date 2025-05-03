@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+import mimetypes
+from pathlib import Path
 from typing import List, Optional, Union
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
 from src import config, state_keeper
 from src.ext_device import Volume
@@ -314,5 +316,16 @@ def create_app(config: Config):
     def set_config(key, value):
         app.state.config[key] = value
         return {"message": "Ok"}
+
+    @app.get("/resource/{file_name:path}")
+    async def get_resource(file_name: str):
+        file_path = Path(inputmodule.get_resource_path(file_name)).resolve()
+        logger.info(f"File path: {file_path}")
+        if not file_path or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+
+        return FileResponse(file_path, media_type=mime_type)
 
     return app

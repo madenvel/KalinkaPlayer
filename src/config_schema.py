@@ -222,7 +222,7 @@ schema = {
                             "description": "Qobuz input module settings",
                             "type": "section",
                             "required": "no",
-                            "enabled": "yes",
+                            "enabled": "no",
                             "elements": {
                                 "email": {
                                     "name": "Email",
@@ -250,7 +250,110 @@ schema = {
                                     "default": "Hi-Res 24-bit 192KHz",
                                 },
                             },
-                        }
+                        },
+                        "localfiles": {
+                            "name": "Local Files",
+                            "description": "Local music files input module settings",
+                            "type": "section",
+                            "required": "no",
+                            "enabled": "yes",
+                            "elements": {
+                                "music_folders": {
+                                    "name": "Music Folders",
+                                    "description": "Paths to scan for music files (comma-separated)",
+                                    "type": "string",
+                                    "required": "yes",
+                                },
+                                "db_path": {
+                                    "name": "Database Path",
+                                    "description": "Path to the SQLite database file",
+                                    "type": "string",
+                                    "required": "yes",
+                                    "default": "/var/lib/kalinka/localfiles.db",
+                                },
+                                "artwork_path": {
+                                    "name": "Artwork Path",
+                                    "description": "Path to store extracted artwork images",
+                                    "type": "string",
+                                    "required": "yes",
+                                    "default": "/var/lib/kalinka/artwork",
+                                },
+                                "scan_interval_minutes": {
+                                    "name": "Scan Interval",
+                                    "description": "Interval between scans in minutes",
+                                    "type": "integer",
+                                    "required": "no",
+                                    "default": 5,
+                                },
+                                "enricher": {
+                                    "name": "Enricher",
+                                    "description": "Metadata enricher settings",
+                                    "type": "section",
+                                    "required": "no",
+                                    "elements": {
+                                        "enabled": {
+                                            "name": "Enable Enricher",
+                                            "description": "Enable metadata enrichment",
+                                            "type": "boolean",
+                                            "required": "no",
+                                            "default": True,
+                                        },
+                                        "plugins": {
+                                            "name": "Plugins",
+                                            "description": "Metadata enrichment plugins",
+                                            "type": "section",
+                                            "required": "no",
+                                            "elements": {
+                                                "musicbrainz": {
+                                                    "name": "MusicBrainz",
+                                                    "description": "MusicBrainz metadata enrichment",
+                                                    "type": "section",
+                                                    "required": "no",
+                                                    "elements": {
+                                                        "enabled": {
+                                                            "name": "Enable MusicBrainz",
+                                                            "description": "Enable MusicBrainz metadata enrichment",
+                                                            "type": "boolean",
+                                                            "required": "no",
+                                                            "default": True,
+                                                        },
+                                                        "match_threshold": {
+                                                            "name": "Match Threshold",
+                                                            "description": "Minimum score for accepting a match (0-100)",
+                                                            "type": "integer",
+                                                            "required": "no",
+                                                            "default": 80,
+                                                        },
+                                                        "user_agent": {
+                                                            "name": "User Agent",
+                                                            "description": "User agent for MusicBrainz API requests",
+                                                            "type": "string",
+                                                            "required": "no",
+                                                            "default": "Kalinka/1.0 (https://github.com/yourproject/kalinka)",
+                                                        },
+                                                    },
+                                                },
+                                                "wikidata": {
+                                                    "name": "Wikidata",
+                                                    "description": "Wikidata enrichment for artist images",
+                                                    "type": "section",
+                                                    "required": "no",
+                                                    "elements": {
+                                                        "enabled": {
+                                                            "name": "Enable Wikidata",
+                                                            "description": "Enable Wikidata enrichment",
+                                                            "type": "boolean",
+                                                            "required": "no",
+                                                            "default": False,
+                                                        }
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             },
