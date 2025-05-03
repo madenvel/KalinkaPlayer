@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from typing import List, Dict, Optional, Callable
 import time
 import mimetypes
@@ -450,6 +451,7 @@ class LocalFilesInputModule(InputModule):
 
         # Add image if available
         cover_path = self._get_album_image_urls(album["id"])
+        logger.info(f"Album ID: {album['id']}, Cover path: {cover_path}")
         if cover_path:
             album_obj.image = cover_path
 
@@ -484,31 +486,43 @@ class LocalFilesInputModule(InputModule):
 
     def _get_album_image_urls(self, album_id: str) -> Optional[AlbumImage]:
         """Get image URLs for an album"""
-        base_path = f"file://{self.artwork_path}/album"
+        # Define relative paths for album images including the /resource/ prefix
+        thumbnail = f"/resource/album/{album_id}_thumbnail.jpg"
+        small = f"/resource/album/{album_id}_small.jpg"
+        large = f"/resource/album/{album_id}_large.jpg"
 
-        # Check if the image files exist
-        thumbnail = f"{base_path}/{album_id}_thumbnail.jpg"
-        small = f"{base_path}/{album_id}_small.jpg"
-        large = f"{base_path}/{album_id}_large.jpg"
+        # Check if the image files exist using absolute path for the check
+        # but without the /resource/ prefix
+        thumbnail_path = os.path.join(
+            self.artwork_path, f"album/{album_id}_thumbnail.jpg"
+        )
 
-        if os.path.exists(thumbnail.replace("file://", "")):
+        # Only return image URLs if the thumbnail file exists
+        if os.path.exists(thumbnail_path):
             return AlbumImage(thumbnail=thumbnail, small=small, large=large)
+
         return None
 
     def _get_artist_image_urls(self, artist_id: str) -> Optional[ArtistImage]:
         """Get image URLs for an artist"""
-        base_path = f"file://{self.artwork_path}/artist"
+        # Define relative paths for artist images including the /resource/ prefix
+        thumbnail = f"/resource/artist/{artist_id}_thumbnail.jpg"
+        small = f"/resource/artist/{artist_id}_small.jpg"
+        large = f"/resource/artist/{artist_id}_large.jpg"
 
-        # Check if the image files exist
-        thumbnail = f"{base_path}/{artist_id}_thumbnail.jpg"
-        small = f"{base_path}/{artist_id}_small.jpg"
-        large = f"{base_path}/{artist_id}_large.jpg"
+        # Check if the image files exist using absolute path for the check
+        # but without the /resource/ prefix
+        thumbnail_path = os.path.join(
+            self.artwork_path, f"artist/{artist_id}_thumbnail.jpg"
+        )
 
-        if os.path.exists(thumbnail.replace("file://", "")):
+        # Only return image URLs if the thumbnail file exists
+        if os.path.exists(thumbnail_path):
             return ArtistImage(thumbnail=thumbnail, small=small, large=large)
+
         return None
 
     def get_resource_path(self, id: str) -> str:
         """Get full path to a resource"""
         # Assuming the ID is the file path
-        return os.path.join(self.artwork_path, id)
+        return (Path(self.artwork_path) / id).resolve()
