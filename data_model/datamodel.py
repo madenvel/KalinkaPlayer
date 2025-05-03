@@ -70,6 +70,7 @@ class Album(BaseModel):
 class Track(BaseModel):
     id: str
     title: str
+    # Duration in seconds
     duration: int
     performer: Optional[Artist] = None
     album: Album

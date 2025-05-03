@@ -238,7 +238,7 @@ class FileIndexer:
 
             metadata = {
                 "format": "mp3",
-                "duration": int(mp3.info.length * 1000),  # Convert to ms
+                "duration": int(mp3.info.length),  # Store in seconds
             }
 
             # Extract basic tags
@@ -305,7 +305,7 @@ class FileIndexer:
 
             metadata = {
                 "format": "flac",
-                "duration": int(flac.info.length * 1000),  # Convert to ms
+                "duration": int(flac.info.length),  # Store in seconds
             }
 
             # Extract basic tags
