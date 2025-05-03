@@ -13,6 +13,7 @@ from PIL import Image
 import io
 import threading
 import queue
+import mimetypes
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -237,7 +238,7 @@ class FileIndexer:
             id3 = ID3(file_path)
 
             metadata = {
-                "format": "mp3",
+                "format": mimetypes.guess_type(file_path)[0] or "audio/mpeg",
                 "duration": int(mp3.info.length),  # Store in seconds
             }
 
@@ -304,7 +305,7 @@ class FileIndexer:
             flac = FLAC(file_path)
 
             metadata = {
-                "format": "flac",
+                "format": mimetypes.guess_type(file_path)[0] or "audio/flac",
                 "duration": int(flac.info.length),  # Store in seconds
             }
 

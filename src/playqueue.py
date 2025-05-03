@@ -67,10 +67,21 @@ def to_audio_info(stream_info: StreamInfo):
 
 
 def mime_to_format(mime: str) -> AudioFormat:
-    logger.info(f"Detected mime: {mime}")
-    if mime.count("flac") > 0:
-        return AudioFormat.FLAC
+    """Convert MIME type to AudioFormat enum value used by the native player"""
+    logger.info(f"Detected mime type: {mime}")
 
+    # Handle standard MIME types
+    if mime:
+        mime_lower = mime.lower()
+        if mime_lower == "audio/flac" or mime_lower == "application/x-flac":
+            return AudioFormat.FLAC
+        elif mime_lower == "audio/mpeg" or mime_lower == "audio/mp3":
+            return AudioFormat.MPEG
+        # Fall back to substring check for non-standard MIME types
+        elif "flac" in mime_lower:
+            return AudioFormat.FLAC
+
+    # Default to MPEG for all other formats
     return AudioFormat.MPEG
 
 
