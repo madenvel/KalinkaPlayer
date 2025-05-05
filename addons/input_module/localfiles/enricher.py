@@ -6,6 +6,7 @@ import queue
 from .enricher_plugin import EnricherPlugin
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .wikidata_plugin import WikidataPlugin
+from .deezer_plugin import DeezerPlugin
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -35,6 +36,9 @@ class MetadataEnricher:
 
         if config["enricher.plugins.wikidata.enabled"]:
             self.plugins.append(WikidataPlugin(config, db_manager))
+
+        if config["enricher.plugins.deezer.enabled"]:
+            self.plugins.append(DeezerPlugin(config, db_manager))
 
     def process_changed_items(self, changed_items):
         """Process specific items that were changed by the indexer"""
@@ -106,14 +110,23 @@ class MetadataEnricher:
 
     def _enrich_artist(self, artist):
         """Enrich a single artist"""
+        updated_artist = artist.copy()  # Make a copy to carry updates between plugins
+        had_updates = False
+
         for plugin in self.plugins:
             if not plugin.can_enrich_artist():
                 continue
 
-            result = plugin.enrich_artist(artist)
+            result = plugin.enrich_artist(updated_artist)
             if result and "updates" in result:
-                # Apply updates to the database
-                self.db_manager.update_artist(artist["id"], result["updates"])
+                # Apply updates to our working copy
+                updated_artist.update(result["updates"])
+                # Track that we have updates
+                had_updates = True
+
+        # Only update the database once at the end if we had any updates
+        if had_updates:
+            self.db_manager.update_artist(artist["id"], updated_artist)
 
     def _process_albums(self, batch_size=10):
         """Process non-enriched albums"""
@@ -124,14 +137,23 @@ class MetadataEnricher:
 
     def _enrich_album(self, album):
         """Enrich a single album"""
+        updated_album = album.copy()  # Make a copy to carry updates between plugins
+        had_updates = False
+
         for plugin in self.plugins:
             if not plugin.can_enrich_album():
                 continue
 
-            result = plugin.enrich_album(album)
+            result = plugin.enrich_album(updated_album)
             if result and "updates" in result:
-                # Apply updates to the database
-                self.db_manager.update_album(album["id"], result["updates"])
+                # Apply updates to our working copy
+                updated_album.update(result["updates"])
+                # Track that we had updates
+                had_updates = True
+
+        # Only update the database once at the end if we had any updates
+        if had_updates:
+            self.db_manager.update_album(album["id"], updated_album)
 
     def _process_tracks(self, batch_size=50):
         """Process non-enriched tracks"""
@@ -142,14 +164,23 @@ class MetadataEnricher:
 
     def _enrich_track(self, track):
         """Enrich a single track"""
+        updated_track = track.copy()  # Make a copy to carry updates between plugins
+        had_updates = False
+
         for plugin in self.plugins:
             if not plugin.can_enrich_track():
                 continue
 
-            result = plugin.enrich_track(track)
+            result = plugin.enrich_track(updated_track)
             if result and "updates" in result:
-                # Apply updates to the database
-                self.db_manager.update_track(track["id"], result["updates"])
+                # Apply updates to our working copy
+                updated_track.update(result["updates"])
+                # Track that we had updates
+                had_updates = True
+
+        # Only update the database once at the end if we had any updates
+        if had_updates:
+            self.db_manager.update_track(track["id"], updated_track)
 
 
 def _enricher_worker(config, db_manager):

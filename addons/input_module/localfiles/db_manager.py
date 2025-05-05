@@ -35,6 +35,8 @@ class DbManager:
                     mbid TEXT,
                     image_url TEXT,
                     enriched INTEGER DEFAULT 0,
+                    match_score INTEGER,
+                    match_similarity INTEGER,
                     last_updated INTEGER
                 )
             """
@@ -54,6 +56,8 @@ class DbManager:
                     track_count INTEGER DEFAULT 0,
                     duration INTEGER DEFAULT 0,
                     enriched INTEGER DEFAULT 0,
+                    match_score INTEGER,
+                    match_similarity INTEGER,
                     last_updated INTEGER,
                     FOREIGN KEY (artist_id) REFERENCES artists (id)
                 )
@@ -75,6 +79,8 @@ class DbManager:
                     file_size BIGINT,
                     modified_time INTEGER,
                     mbid TEXT,
+                    match_score INTEGER,
+                    match_similarity INTEGER,
                     replaygain_peak REAL,
                     replaygain_gain REAL,
                     enriched INTEGER DEFAULT 0,

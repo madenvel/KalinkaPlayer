@@ -217,8 +217,6 @@ class FileIndexer:
             # Determine file format
             ext = os.path.splitext(file_path.lower())[1]
 
-            metadata = {}
-
             if ext == ".mp3":
                 return self._extract_mp3_metadata(file_path)
             elif ext == ".flac":
