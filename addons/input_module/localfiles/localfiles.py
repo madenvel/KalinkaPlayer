@@ -20,6 +20,7 @@ from data_model.datamodel import (
     CardSize,
     EmptyList,
     Playlist,
+    Catalog,
 )
 from data_model.response_model import FavoriteIds, GenreList, LastUpdate
 
@@ -117,19 +118,35 @@ class LocalFilesInputModule(InputModule):
 
         # Recently Added section
         if recent_total > 0:
+            preview = Preview(
+                type=PreviewType.IMAGE_TEXT,
+                items_count=10,  # Fixed value: maximum number of items to display in preview
+                rows_count=1,
+                card_size=CardSize.SMALL,
+            )
+
+            catalog = Catalog(
+                id="recent",
+                title="Recently Added",
+                can_genre_filter=False,
+                description="Recently added tracks",
+                preview_config=preview,
+            )
+
             recent_section = BrowseItem(
                 id="recent",
                 name="Recently Added",
                 url="/catalog/recent",
                 can_browse=True,
                 can_add=False,
-                catalog=None,
-                album=None,
-                artist=None,
-                track=None,
+                catalog=catalog,
                 subname=f"{recent_total} tracks",
             )
 
+            items.append(recent_section)
+
+        # Albums section
+        if albums_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
                 items_count=10,  # Fixed value: maximum number of items to display in preview
@@ -137,31 +154,28 @@ class LocalFilesInputModule(InputModule):
                 card_size=CardSize.SMALL,
             )
 
-            recent_section.catalog = {
-                "id": "recent",
-                "title": "Recently Added",
-                "can_genre_filter": False,
-                "description": "Recently added tracks",
-                "preview_config": preview,
-            }
+            catalog = Catalog(
+                id="albums",
+                title="My Albums",
+                can_genre_filter=False,
+                description="Browse your album collection",
+                preview_config=preview,
+            )
 
-            items.append(recent_section)
-
-        # Albums section
-        if albums_total > 0:
             album_section = BrowseItem(
                 id="albums",
                 name="My Albums",
                 url="/catalog/albums",
                 can_browse=True,
                 can_add=False,
-                catalog=None,
-                album=None,
-                artist=None,
-                track=None,
+                catalog=catalog,
                 subname=f"{albums_total} albums",
             )
 
+            items.append(album_section)
+
+        # Artists section
+        if artists_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
                 items_count=10,  # Fixed value: maximum number of items to display in preview
@@ -169,45 +183,23 @@ class LocalFilesInputModule(InputModule):
                 card_size=CardSize.SMALL,
             )
 
-            album_section.catalog = {
-                "id": "albums",
-                "title": "My Albums",
-                "can_genre_filter": False,
-                "description": "Browse your album collection",
-                "preview_config": preview,
-            }
+            catalog = Catalog(
+                id="artists",
+                title="My Artists",
+                can_genre_filter=False,
+                description="Browse your artist collection",
+                preview_config=preview,
+            )
 
-            items.append(album_section)
-
-        # Artists section
-        if artists_total > 0:
             artist_section = BrowseItem(
                 id="artists",
                 name="My Artists",
                 url="/catalog/artists",
                 can_browse=True,
                 can_add=False,
-                catalog=None,
-                album=None,
-                artist=None,
-                track=None,
+                catalog=catalog,
                 subname=f"{artists_total} artists",
             )
-
-            preview = Preview(
-                type=PreviewType.IMAGE_TEXT,
-                items_count=10,  # Fixed value: maximum number of items to display in preview
-                rows_count=1,
-                card_size=CardSize.SMALL,
-            )
-
-            artist_section.catalog = {
-                "id": "artists",
-                "title": "My Artists",
-                "can_genre_filter": False,
-                "description": "Browse your artist collection",
-                "preview_config": preview,
-            }
 
             items.append(artist_section)
 
@@ -275,26 +267,32 @@ class LocalFilesInputModule(InputModule):
         """Get track info for a list of track IDs"""
         tracks = self.db_manager.get_tracks_by_ids(track_ids)
 
+        # Create a dictionary of tracks indexed by ID for quick lookup
+        track_dict = {track["id"]: track for track in tracks}
+
+        # Maintain the same order as track_ids
         result = []
-        for track in tracks:
-            track_metadata = self._create_track_metadata(track)
+        for track_id in track_ids:
+            if track_id in track_dict:
+                track = track_dict[track_id]
+                track_metadata = self._create_track_metadata(track)
 
-            # Create a link retriever function for this track
-            def create_link_retriever(track_path, track_format):
-                def link_retriever():
-                    return TrackUrl(url=f"file://{track_path}", format=track_format)
+                # Create a link retriever function for this track
+                def create_link_retriever(track_path, track_format):
+                    def link_retriever():
+                        return TrackUrl(url=f"file://{track_path}", format=track_format)
 
-                return link_retriever
+                    return link_retriever
 
-            result.append(
-                TrackInfo(
-                    id=track["id"],
-                    link_retriever=create_link_retriever(
-                        track["file_path"], track["format"]
-                    ),
-                    metadata=track_metadata,
+                result.append(
+                    TrackInfo(
+                        id=track["id"],
+                        link_retriever=create_link_retriever(
+                            track["file_path"], track["format"]
+                        ),
+                        metadata=track_metadata,
+                    )
                 )
-            )
 
         return result
 

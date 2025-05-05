@@ -315,7 +315,7 @@ schema = {
                                                             "description": "Enable MusicBrainz metadata enrichment",
                                                             "type": "boolean",
                                                             "required": "no",
-                                                            "default": True,
+                                                            "default": False,
                                                         },
                                                         "match_threshold": {
                                                             "name": "Match Threshold",
@@ -329,7 +329,7 @@ schema = {
                                                             "description": "User agent for MusicBrainz API requests",
                                                             "type": "string",
                                                             "required": "no",
-                                                            "default": "Kalinka/1.0 (https://github.com/yourproject/kalinka)",
+                                                            "default": "Kalinka/1.0 (https://github.com/madenvel/KalinkaPlayer)",
                                                         },
                                                     },
                                                 },
@@ -342,6 +342,21 @@ schema = {
                                                         "enabled": {
                                                             "name": "Enable Wikidata",
                                                             "description": "Enable Wikidata enrichment",
+                                                            "type": "boolean",
+                                                            "required": "no",
+                                                            "default": False,
+                                                        }
+                                                    },
+                                                },
+                                                "deezer": {
+                                                    "name": "Deezer",
+                                                    "description": "Deezer enrichment for artist images (for personal use only)",
+                                                    "type": "section",
+                                                    "required": "no",
+                                                    "elements": {
+                                                        "enabled": {
+                                                            "name": "Enable Deezer",
+                                                            "description": "Enable Deezer enrichment for artist images",
                                                             "type": "boolean",
                                                             "required": "no",
                                                             "default": False,

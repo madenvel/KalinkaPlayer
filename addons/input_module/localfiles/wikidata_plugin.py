@@ -22,9 +22,16 @@ class WikidataPlugin(EnricherPlugin):
         self.artwork_path = config["artwork_path"]
         self.session = requests.Session()
 
+        # Set a proper User-Agent to avoid 403 errors from Wikimedia
+        user_agent = config.get(
+            "enricher.plugins.wikidata.user_agent",
+            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer; envelsavinds@gmail.com)",
+        )
+        self.session.headers.update({"User-Agent": user_agent})
+
         # Rate limiting
         self.last_request_time = 0
-        self.request_interval = 1  # 1 request per second
+        self.request_interval = 1 / 3  # 3 requests per second
 
     def _wait_for_rate_limit(self):
         """Wait to respect rate limits"""
@@ -97,13 +104,13 @@ class WikidataPlugin(EnricherPlugin):
 
             image_filename = image_claims[0]["mainsnak"]["datavalue"]["value"]
 
-            # Format the image URL (Wikimedia Commons)
-            # MD5 hash the filename for the URL path
-            filename_md5 = hashlib.md5(
-                image_filename.replace(" ", "_").encode("utf-8")
-            ).hexdigest()
-
-            image_url = f"https://upload.wikimedia.org/wikipedia/commons/{filename_md5[0]}/{filename_md5[0:2]}/{image_filename.replace(' ', '_')}"
+            # Get proper image URL using the MediaWiki API
+            image_url = self._get_wikimedia_image_url(image_filename)
+            if not image_url:
+                logger.error(
+                    f"Failed to construct image URL for artist {artist['name']}"
+                )
+                return None
 
             # Download the image
             self._wait_for_rate_limit()
@@ -128,6 +135,48 @@ class WikidataPlugin(EnricherPlugin):
         except Exception as e:
             logger.error(
                 f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"
+            )
+            return None
+
+    def _get_wikimedia_image_url(self, image_filename: str) -> Optional[str]:
+        """Get the proper URL for a Wikimedia Commons image using the MediaWiki API"""
+        try:
+            # Use the MediaWiki API to get the proper URL
+            self._wait_for_rate_limit()
+            commons_api_url = "https://commons.wikimedia.org/w/api.php"
+            params = {
+                "action": "query",
+                "titles": f"File:{image_filename}",
+                "prop": "imageinfo",
+                "iiprop": "url",
+                "format": "json",
+            }
+
+            response = self.session.get(commons_api_url, params=params)
+            if response.status_code != 200:
+                logger.error(
+                    f"Failed to query MediaWiki API for image {image_filename}: {response.status_code}"
+                )
+                return None
+
+            data = response.json()
+
+            # Extract image URL from response
+            pages = data.get("query", {}).get("pages", {})
+            if not pages:
+                return None
+
+            # Get the first (and only) page
+            page = next(iter(pages.values()))
+
+            if "imageinfo" not in page or not page["imageinfo"]:
+                return None
+
+            return page["imageinfo"][0]["url"]
+
+        except Exception as e:
+            logger.error(
+                f"Error getting Wikimedia image URL for {image_filename}: {str(e)}"
             )
             return None
 
