@@ -186,17 +186,22 @@ class DeezerPlugin(EnricherPlugin):
             return None
 
         try:
-            # If artist_name is missing, try to get it from the artist record
-            if "artist_name" not in album and "artist_id" in album:
+            artist_name = None
+
+            # Try to get artist name from various possible sources
+            if "artist_name" in album:
+                artist_name = album["artist_name"]
+            elif "artist_id" in album:
                 artist = self.db_manager.get_artist_by_id(album["artist_id"])
-                if artist:
-                    album["artist_name"] = artist["name"]
-                else:
-                    logger.error(f"Could not find artist for album: {album['title']}")
-                    return None
+                if artist and "name" in artist:
+                    artist_name = artist["name"]
+
+            if not artist_name:
+                logger.error(f"Could not find artist name for album: {album['title']}")
+                return None
 
             logger.debug(
-                f"Searching for album cover on Deezer: {album['title']} by {album['artist_name']}"
+                f"Searching for album cover on Deezer: {album['title']} by {artist_name}"
             )
 
             # Search for album on Deezer
@@ -205,7 +210,7 @@ class DeezerPlugin(EnricherPlugin):
             response = self.session.get(
                 search_url,
                 params={
-                    "q": f"artist:'{album['artist_name']}' album:'{album['title']}'",
+                    "q": f"artist:'{artist_name}' album:'{album['title']}'",
                     "limit": 5,
                 },
             )
@@ -270,7 +275,7 @@ class DeezerPlugin(EnricherPlugin):
                         )
 
                 logger.info(
-                    f"Added cover image from Deezer for album: {album['title']} by {album['artist_name']}"
+                    f"Added cover image from Deezer for album: {album['title']} by {artist_name}"
                 )
                 return {"updates": updates}
             else:

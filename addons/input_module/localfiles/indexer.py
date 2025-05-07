@@ -15,6 +15,9 @@ import threading
 import queue
 import mimetypes
 
+# Import ID generation utilities
+from .utils.id_generator import generate_artist_id, generate_album_id, generate_track_id
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 # Global variables to manage indexer state
@@ -135,7 +138,7 @@ class FileIndexer:
 
         # Process artist
         artist_name = metadata.get("artist", "Unknown Artist")
-        artist_id = self._get_artist_id(artist_name)
+        artist_id = generate_artist_id(artist_name)
 
         # Check if artist exists, create if not
         artist = self.db_manager.get_artist_by_id(artist_id)
@@ -152,7 +155,7 @@ class FileIndexer:
 
         # Process album
         album_title = metadata.get("album", "Unknown Album")
-        album_id = self._get_album_id(album_title, artist_id)
+        album_id = generate_album_id(album_title, artist_id)
 
         # Check if album exists, create if not
         album = self.db_manager.get_album_by_id(album_id)
@@ -183,7 +186,7 @@ class FileIndexer:
             changes["albums"] = album_id
 
         # Process track
-        track_id = self._get_track_id(file_path)
+        track_id = generate_track_id(file_path)
 
         track_data = {
             "id": track_id,

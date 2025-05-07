@@ -249,11 +249,17 @@ class MusicBrainzPlugin(EnricherPlugin):
         try:
             if album["id"] == "unknown_album":
                 return None
-
+            logger.debug(f"Enriching album: {album['title']}")
             # If artist_name is missing, try to get it from the artist record
             if "artist_name" not in album and "artist_id" in album:
+                logger.debug(
+                    "Artist name not found, trying to get it from the artist record"
+                )
                 artist = self.db_manager.get_artist_by_id(album["artist_id"])
                 if artist:
+                    logger.debug(
+                        f"Found artist for album: {album['title']} -> {artist['name']}"
+                    )
                     album["artist_name"] = artist["name"]
                 else:
                     logger.error(f"Could not find artist for album: {album['title']}")

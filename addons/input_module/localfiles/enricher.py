@@ -5,6 +5,7 @@ import queue
 
 from .enricher_plugin import EnricherPlugin
 from .musicbrainz_plugin import MusicBrainzPlugin
+from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
 from .deezer_plugin import DeezerPlugin
 
@@ -30,7 +31,13 @@ class MetadataEnricher:
         self.lock = threading.Lock()
         self.plugins = []
 
-        # Initialize plugins
+        # The order of plugins matters for the enrichment process
+        # AcoustID should be first to make sure it finds the metadata
+        # for the files missing tags before we can get additional
+        #  metadata from MusicBrainz
+        if config["enricher.plugins.acoustid.enabled"]:
+            self.plugins.append(AcoustIdPlugin(config, db_manager))
+
         if config["enricher.plugins.musicbrainz.enabled"]:
             self.plugins.append(MusicBrainzPlugin(config, db_manager))
 
@@ -128,7 +135,7 @@ class MetadataEnricher:
         if had_updates:
             self.db_manager.update_artist(artist["id"], updated_artist)
 
-    def _process_albums(self, batch_size=10):
+    def _process_albums(self, batch_size=500):
         """Process non-enriched albums"""
         albums = self.db_manager.get_non_enriched_albums(batch_size)
 
@@ -143,19 +150,30 @@ class MetadataEnricher:
         for plugin in self.plugins:
             if not plugin.can_enrich_album():
                 continue
-
+            logger.debug(
+                f"Enriching album {album['id']} with {plugin.__class__.__name__}"
+            )
             result = plugin.enrich_album(updated_album)
+            logger.debug(f"Result from {plugin.__class__.__name__}: {result}")
             if result and "updates" in result:
+                logger.debug(f"Updates found: {result['updates']}")
                 # Apply updates to our working copy
                 updated_album.update(result["updates"])
                 # Track that we had updates
                 had_updates = True
 
         # Only update the database once at the end if we had any updates
+        logger.debug(
+            f"Enrichment for album {album['id']} completed with updates: {had_updates}"
+        )
         if had_updates:
+            logger.debug(f"Updating album {album['id']} in database")
             self.db_manager.update_album(album["id"], updated_album)
+            logger.debug(
+                f"Album {album['id']} updated in database with: {updated_album}"
+            )
 
-    def _process_tracks(self, batch_size=50):
+    def _process_tracks(self, batch_size=500):
         """Process non-enriched tracks"""
         tracks = self.db_manager.get_non_enriched_tracks(batch_size)
 
