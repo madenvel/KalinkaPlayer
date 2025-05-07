@@ -786,3 +786,85 @@ class DbManager:
             conn.commit()
         finally:
             conn.close()
+
+    def get_all_tracks(self) -> List[Dict]:
+        """Get all tracks in the database"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM tracks
+                ORDER BY file_path
+            """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def delete_track(self, track_id: str) -> bool:
+        """Delete a track by ID. Returns True if successful."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
+    def delete_orphaned_albums_and_artists(self) -> Tuple[int, int]:
+        """Delete albums and artists that have no tracks referencing them.
+        Returns tuple of (deleted_albums_count, deleted_artists_count)"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Get albums with no tracks
+            cursor.execute(
+                """
+                SELECT id FROM albums 
+                WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks)
+                AND id != 'unknown_album'
+                """
+            )
+            orphaned_albums = [row["id"] for row in cursor.fetchall()]
+
+            # Delete orphaned albums
+            if orphaned_albums:
+                albums_placeholders = ", ".join(["?"] * len(orphaned_albums))
+                cursor.execute(
+                    f"DELETE FROM albums WHERE id IN ({albums_placeholders})",
+                    orphaned_albums,
+                )
+                deleted_albums = cursor.rowcount
+            else:
+                deleted_albums = 0
+
+            # Get artists with no tracks or albums
+            cursor.execute(
+                """
+                SELECT id FROM artists 
+                WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks)
+                AND id NOT IN (SELECT DISTINCT artist_id FROM albums)
+                AND id != 'unknown_artist'
+                """
+            )
+            orphaned_artists = [row["id"] for row in cursor.fetchall()]
+
+            # Delete orphaned artists
+            if orphaned_artists:
+                artists_placeholders = ", ".join(["?"] * len(orphaned_artists))
+                cursor.execute(
+                    f"DELETE FROM artists WHERE id IN ({artists_placeholders})",
+                    orphaned_artists,
+                )
+                deleted_artists = cursor.rowcount
+            else:
+                deleted_artists = 0
+
+            conn.commit()
+            return deleted_albums, deleted_artists
+        finally:
+            conn.close()

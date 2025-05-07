@@ -26,7 +26,9 @@ class AcoustIdPlugin(EnricherPlugin):
 
         # Rate limiting
         self.last_request_time = 0
-        self.request_interval = 1.0  # 1 request per second to respect AcoustID limits
+        self.request_interval = (
+            1.0 / 3
+        )  # 3 request per second to respect AcoustID limits
 
         # Match confidence thresholds (0-1.0)
         self.min_score_threshold = 0.7  # Minimum score to consider a match valid

@@ -31,7 +31,7 @@ class WikidataPlugin(EnricherPlugin):
 
         # Rate limiting
         self.last_request_time = 0
-        self.request_interval = 1 / 3  # 3 requests per second
+        self.request_interval = 1 / 5  # 5 requests per second
 
     def _wait_for_rate_limit(self):
         """Wait to respect rate limits"""

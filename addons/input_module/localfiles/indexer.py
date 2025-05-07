@@ -3,7 +3,7 @@ import logging
 import time
 import hashlib
 import threading
-from typing import Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 import uuid
 import mutagen
 from mutagen.mp3 import MP3
@@ -72,15 +72,25 @@ class FileIndexer:
             logger.info(f"Scanning folder: {folder}")
             self.scan_folder(folder, changed_items)
 
+        # Delete stale entries after scanning but before enrichment
+        cleanup_results = self.cleanup_stale_tracks()
+
+        # If we removed any tracks, ensure we don't trigger enrichment for them
+        if cleanup_results["tracks"] > 0:
+            logger.info(
+                "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
+            )
+
         # If anything changed and we have an enricher callback, notify it
         if any(changed_items.values()) and _enricher_trigger_callback:
             logger.info(
                 f"Scan completed with changes: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            _enricher_trigger_callback(changed_items)
+            _enricher_trigger_callback({"changed_items": changed_items})
         else:
             logger.info("Scan completed with no changes")
+            _enricher_trigger_callback("scan_complete")
 
     def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
         """Recursively scan a folder for music files"""
@@ -434,6 +444,45 @@ class FileIndexer:
         # Create a hash from the file path for a stable ID
         hash_obj = hashlib.md5(file_path.encode("utf-8"))
         return f"track_{hash_obj.hexdigest()[:16]}"
+
+    def cleanup_stale_tracks(self) -> Dict[str, int]:
+        """Remove entries for files that no longer exist in the file system"""
+        logger.info("Checking for stale files in the database...")
+
+        # Get all tracks from the database
+        all_tracks = self.db_manager.get_all_tracks()
+
+        removed_tracks = 0
+
+        # Check each track to see if the file still exists
+        for track in all_tracks:
+            file_path = track["file_path"]
+            if not os.path.exists(file_path):
+                logger.info(
+                    f"File no longer exists, removing from database: {file_path}"
+                )
+                track_id = track["id"]
+                self.db_manager.delete_track(track_id)
+                removed_tracks += 1
+
+        # Clean up orphaned albums and artists
+        removed_albums, removed_artists = (
+            self.db_manager.delete_orphaned_albums_and_artists()
+        )
+
+        if removed_tracks > 0 or removed_albums > 0 or removed_artists > 0:
+            logger.info(
+                f"Cleanup completed: {removed_tracks} tracks, {removed_albums} albums, "
+                f"and {removed_artists} artists removed"
+            )
+        else:
+            logger.info("No stale entries found in the database")
+
+        return {
+            "tracks": removed_tracks,
+            "albums": removed_albums,
+            "artists": removed_artists,
+        }
 
 
 def _indexer_worker(config, db_manager):

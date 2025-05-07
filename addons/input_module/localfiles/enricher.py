@@ -207,19 +207,26 @@ def _enricher_worker(config, db_manager):
 
     _enricher_instance = MetadataEnricher(config, db_manager)
 
-    # Don't run initial enrichment immediately - wait for indexer to finish first
-    time.sleep(30)
-    logger.info("Starting initial metadata enrichment")
-    _enricher_instance.start()
-
     logger.info("Metadata enricher thread running")
+    logger.info("Waiting for indexer to complete initial scan")
 
+    initial_scan_complete = False
     # Process queue commands
     while True:
         try:
             # Check for commands
             try:
                 command = _enricher_queue.get(timeout=60)  # Check every minute
+
+                if initial_scan_complete is False:
+                    logger.info("Starting enricher after initial scan")
+                    initial_scan_complete = True
+                    # Start the enricher process
+                    _enricher_instance.start()
+                    logger.info(
+                        "Initial enrichment finished, listening for indexer updates"
+                    )
+                    command = None
 
                 if command == "stop":
                     logger.info("Stopping enricher thread")
@@ -244,11 +251,11 @@ def _enricher_worker(config, db_manager):
             time.sleep(5)  # Sleep longer on errors
 
 
-def indexer_callback(changed_items):
+def indexer_callback(event):
     """Callback function to be registered with the indexer"""
     if _enricher_thread and _enricher_thread.is_alive():
         logger.info("Received change notification from indexer")
-        _enricher_queue.put({"changed_items": changed_items})
+        _enricher_queue.put(event)
         return True
     else:
         logger.warning("Cannot process indexer changes - enricher thread not running")
