@@ -449,7 +449,6 @@ class LocalFilesInputModule(InputModule):
 
         # Add image if available
         cover_path = self._get_album_image_urls(album["id"])
-        logger.info(f"Album ID: {album['id']}, Cover path: {cover_path}")
         if cover_path:
             album_obj.image = cover_path
 

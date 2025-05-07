@@ -333,6 +333,28 @@ schema = {
                                                         },
                                                     },
                                                 },
+                                                "acoustid": {
+                                                    "name": "AcoustID",
+                                                    "description": "AcoustID audio fingerprinting",
+                                                    "type": "section",
+                                                    "required": "no",
+                                                    "elements": {
+                                                        "enabled": {
+                                                            "name": "Enable AcoustID",
+                                                            "description": "Enable AcoustID audio fingerprinting",
+                                                            "type": "boolean",
+                                                            "required": "no",
+                                                            "default": False,
+                                                        },
+                                                        "api_key": {
+                                                            "name": "API Key",
+                                                            "description": "AcoustID API key (get from https://acoustid.org/api-key)",
+                                                            "type": "string",
+                                                            "required": "no",
+                                                            "default": "",
+                                                        },
+                                                    },
+                                                },
                                                 "wikidata": {
                                                     "name": "Wikidata",
                                                     "description": "Wikidata enrichment for artist images",

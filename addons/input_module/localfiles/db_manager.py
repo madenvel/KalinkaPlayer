@@ -521,8 +521,8 @@ class DbManager:
                 """
                 SELECT t.*, a.title as album_title, ar.name as artist_name
                 FROM tracks t
-                JOIN albums a ON t.album_id = a.id
-                JOIN artists ar ON t.artist_id = ar.id
+                LEFT JOIN albums a ON t.album_id = a.id
+                LEFT JOIN artists ar ON t.artist_id = ar.id
                 WHERE t.enriched = 0
                 LIMIT ?
             """,
@@ -533,16 +533,89 @@ class DbManager:
         finally:
             conn.close()
 
+    # def get_artist_by_name(self, name: str) -> Optional[Dict]:
+    #     """Get artist information by name (exact match)"""
+    #     conn = self._get_connection()
+    #     try:
+    #         cursor = conn.cursor()
+    #         cursor.execute("SELECT * FROM artists WHERE name = ? LIMIT 1", (name,))
+    #         row = cursor.fetchone()
+    #         return dict(row) if row else None
+    #     finally:
+    #         conn.close()
+
+    def get_artist_by_mbid(self, mbid: str) -> Optional[Dict]:
+        """Get artist information by MusicBrainz ID"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM artists WHERE mbid = ? LIMIT 1", (mbid,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_album_by_mbid(self, mbid: str) -> Optional[Dict]:
+        """Get album information by MusicBrainz ID"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT a.*, ar.name as artist_name
+                FROM albums a
+                LEFT JOIN artists ar ON a.artist_id = ar.id
+                WHERE a.mbid = ? LIMIT 1
+                """,
+                (mbid,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def get_album_by_title_and_artist(
+        self, title: str, artist_id: str
+    ) -> Optional[Dict]:
+        """Get album information by title and artist ID"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT a.*, ar.name as artist_name
+                FROM albums a
+                LEFT JOIN artists ar ON a.artist_id = ar.id
+                WHERE a.title = ? AND a.artist_id = ? LIMIT 1
+                """,
+                (title, artist_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
         """Update artist information"""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
 
-            # Build the SET clause
+            # Get artist table column names
+            cursor.execute("PRAGMA table_info(artists)")
+            valid_columns = {row["name"] for row in cursor.fetchall()}
+
+            # Filter out data keys that don't exist in the artists table
+            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
+
+            if not filtered_data:
+                logger.debug(f"No valid columns to update for artist {artist_id}")
+                return
+
+            # Build the SET clause with only valid columns
             fields = []
             values = []
-            for key, value in data.items():
+            for key, value in filtered_data.items():
                 fields.append(f"{key} = ?")
                 values.append(value)
 
@@ -552,6 +625,14 @@ class DbManager:
             query = f"UPDATE artists SET {', '.join(fields)} WHERE id = ?"
             cursor.execute(query, values)
             conn.commit()
+
+            # Log if any fields were filtered out
+            filtered_out = set(data.keys()) - valid_columns
+            if filtered_out:
+                logger.debug(
+                    f"Filtered out non-existent columns for artist {artist_id}: {', '.join(filtered_out)}"
+                )
+
         finally:
             conn.close()
 
@@ -561,10 +642,21 @@ class DbManager:
         try:
             cursor = conn.cursor()
 
-            # Build the SET clause
+            # Get album table column names
+            cursor.execute("PRAGMA table_info(albums)")
+            valid_columns = {row["name"] for row in cursor.fetchall()}
+
+            # Filter out data keys that don't exist in the albums table
+            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
+
+            if not filtered_data:
+                logger.debug(f"No valid columns to update for album {album_id}")
+                return
+
+            # Build the SET clause with only valid columns
             fields = []
             values = []
-            for key, value in data.items():
+            for key, value in filtered_data.items():
                 fields.append(f"{key} = ?")
                 values.append(value)
 
@@ -574,6 +666,14 @@ class DbManager:
             query = f"UPDATE albums SET {', '.join(fields)} WHERE id = ?"
             cursor.execute(query, values)
             conn.commit()
+
+            # Log if any fields were filtered out
+            filtered_out = set(data.keys()) - valid_columns
+            if filtered_out:
+                logger.debug(
+                    f"Filtered out non-existent columns for album {album_id}: {', '.join(filtered_out)}"
+                )
+
         finally:
             conn.close()
 
@@ -583,10 +683,21 @@ class DbManager:
         try:
             cursor = conn.cursor()
 
-            # Build the SET clause
+            # Get track table column names
+            cursor.execute("PRAGMA table_info(tracks)")
+            valid_columns = {row["name"] for row in cursor.fetchall()}
+
+            # Filter out data keys that don't exist in the tracks table
+            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
+
+            if not filtered_data:
+                logger.debug(f"No valid columns to update for track {track_id}")
+                return
+
+            # Build the SET clause with only valid columns
             fields = []
             values = []
-            for key, value in data.items():
+            for key, value in filtered_data.items():
                 fields.append(f"{key} = ?")
                 values.append(value)
 
@@ -596,6 +707,14 @@ class DbManager:
             query = f"UPDATE tracks SET {', '.join(fields)} WHERE id = ?"
             cursor.execute(query, values)
             conn.commit()
+
+            # Log if any fields were filtered out
+            filtered_out = set(data.keys()) - valid_columns
+            if filtered_out:
+                logger.debug(
+                    f"Filtered out non-existent columns for track {track_id}: {', '.join(filtered_out)}"
+                )
+
         finally:
             conn.close()
 
