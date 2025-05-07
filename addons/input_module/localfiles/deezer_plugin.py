@@ -36,7 +36,7 @@ class DeezerPlugin(EnricherPlugin):
 
         # Rate limiting
         self.last_request_time = 0
-        self.request_interval = 1 / 2  # 2 requests per second to be respectful
+        self.request_interval = 1 / 10  # 10 requests per second to be respectful
 
     def _wait_for_rate_limit(self):
         """Wait to respect rate limits"""
