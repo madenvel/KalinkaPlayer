@@ -285,6 +285,13 @@ schema = {
                                     "required": "no",
                                     "default": 5,
                                 },
+                                "file_watch_enabled": {
+                                    "name": "File Watching",
+                                    "description": "Enable real-time file monitoring for changes",
+                                    "type": "boolean",
+                                    "required": "no",
+                                    "default": True,
+                                },
                                 "enricher": {
                                     "name": "Enricher",
                                     "description": "Metadata enricher settings",

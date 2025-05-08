@@ -4,8 +4,6 @@ import time
 import hashlib
 import threading
 from typing import Dict, Optional, Set
-import uuid
-import mutagen
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
@@ -14,9 +12,14 @@ import io
 import threading
 import queue
 import mimetypes
+from watchfiles import watch, Change
 
 # Import ID generation utilities
 from .utils.id_generator import generate_artist_id, generate_album_id, generate_track_id
+
+# Configure logger for watchfiles.main only to WARNING level
+watchfiles_logger = logging.getLogger("watchfiles.main")
+watchfiles_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -25,6 +28,7 @@ _indexer_thread = None
 _indexer_instance = None
 _indexer_queue = queue.Queue()
 _enricher_trigger_callback = None
+_file_watcher_thread = None
 
 
 class FileIndexer:
@@ -90,6 +94,128 @@ class FileIndexer:
             _enricher_trigger_callback({"changed_items": changed_items})
         else:
             logger.info("Scan completed with no changes")
+            _enricher_trigger_callback("scan_complete")
+
+    def handle_incremental_changes(self, changes: Set[Change]):
+        """Process file changes detected by watchfiles"""
+        changed_items = {
+            "artists": set(),
+            "albums": set(),
+            "tracks": set(),
+        }
+
+        # Track directories we've already processed to avoid double-processing
+        processed_dirs = set()
+        processed_files = set()
+
+        # First stage: collect all directory and file paths for analysis
+        dir_additions = set()
+        all_files = set()
+
+        for change_type, file_path in changes:
+            if os.path.isdir(file_path) and change_type == Change.added:
+                dir_additions.add(file_path)
+            elif not os.path.isdir(file_path):
+                all_files.add(file_path)
+
+        # Second stage: identify files that are within added directories
+        files_in_added_dirs = set()
+        for file_path in all_files:
+            for dir_path in dir_additions:
+                if file_path.startswith(dir_path + os.sep):
+                    files_in_added_dirs.add(file_path)
+                    break
+
+        # Process sorted changes - directories first, then files not in added directories
+        sorted_changes = []
+        for change_type, file_path in changes:
+            if os.path.isdir(file_path) and change_type == Change.added:
+                sorted_changes.append((change_type, file_path))
+
+        for change_type, file_path in changes:
+            if not os.path.isdir(file_path) and file_path not in files_in_added_dirs:
+                sorted_changes.append((change_type, file_path))
+
+        # Process directory additions first, then individual files
+        for change_type, file_path in sorted_changes:
+            logger.debug(f"Change detected: {change_type} - {file_path}")
+
+            # Handle directory additions by scanning them
+            if os.path.isdir(file_path) and change_type == Change.added:
+                logger.info(f"New directory detected: {file_path}")
+                try:
+                    # Scan the newly added directory
+                    self.scan_folder(file_path, changed_items)
+                    processed_dirs.add(file_path)
+                    continue
+                except Exception as e:
+                    logger.error(f"Error scanning new directory {file_path}: {str(e)}")
+                    continue
+
+            # Skip other directories, we'll handle deleted directories during cleanup
+            if os.path.isdir(file_path):
+                continue
+
+            # Skip files we've already processed or that are in processed directories
+            if file_path in processed_files:
+                continue
+
+            # Check if this file is within a directory we've already processed
+            parent_processed = False
+            for processed_dir in processed_dirs:
+                if file_path.startswith(processed_dir + os.sep):
+                    logger.debug(
+                        f"Skipping file in already processed directory: {file_path}"
+                    )
+                    parent_processed = True
+                    break
+
+            if parent_processed:
+                continue
+
+            # Only process audio files
+            if not self._is_supported_audio_file(file_path):
+                continue
+
+            # Handle file creation or modification
+            if change_type in (Change.added, Change.modified):
+                try:
+                    # Process the file
+                    logger.info(f"Processing changed file: {file_path}")
+                    changes = self.process_file(file_path)
+                    processed_files.add(file_path)
+                    if changes:
+                        for key, value in changes.items():
+                            if value:
+                                changed_items[key].add(value)
+                except Exception as e:
+                    logger.error(f"Error processing changed file {file_path}: {str(e)}")
+
+            # Handle file deletion
+            elif change_type == Change.deleted:
+                try:
+                    # Find the track in the database
+                    track = self.db_manager.get_track_by_path(file_path)
+                    if track:
+                        logger.info(f"Removing deleted file from database: {file_path}")
+                        # Delete the track and update affected albums/artists
+                        self.db_manager.delete_track(track["id"])
+                except Exception as e:
+                    logger.error(f"Error processing deleted file {file_path}: {str(e)}")
+
+        # After processing all changes, clean up any orphaned items
+        # This will handle removal of tracks in deleted directories
+        cleanup_results = self.cleanup_stale_tracks()
+
+        # Notify enricher if we have changes
+        if any(changed_items.values()) and _enricher_trigger_callback:
+            logger.info(
+                f"File changes detected: Artists={len(changed_items['artists'])}, "
+                f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
+            )
+            _enricher_trigger_callback({"changed_items": changed_items})
+        elif cleanup_results["tracks"] > 0 and _enricher_trigger_callback:
+            logger.info(f"Cleanup removed {cleanup_results['tracks']} tracks")
             _enricher_trigger_callback("scan_complete")
 
     def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
@@ -512,6 +638,11 @@ def _indexer_worker(config, db_manager):
                 elif command == "stop":
                     logger.info("Stopping indexer thread")
                     break
+                elif isinstance(command, dict) and "incremental_changes" in command:
+                    logger.info("File watcher detected changes, processing...")
+                    _indexer_instance.handle_incremental_changes(
+                        command["incremental_changes"]
+                    )
                 _indexer_queue.task_done()
             except queue.Empty:
                 # No command received, check if it's time for scheduled scan
@@ -526,6 +657,27 @@ def _indexer_worker(config, db_manager):
         except Exception as e:
             logger.error(f"Error in indexer worker: {str(e)}")
             time.sleep(5)  # Sleep longer on errors
+
+
+def _file_watcher_worker(config):
+    """Background worker thread for real-time filesystem monitoring"""
+    global _indexer_queue, _file_watcher_stop_event
+
+    music_folders = [folder.strip() for folder in config["music_folders"].split(",")]
+    logger.info(f"Starting file watcher for folders: {music_folders}")
+
+    try:
+        # Start watching the music folders for changes, using the stop_event
+        for changes in watch(
+            *music_folders, watch_filter=None, stop_event=_file_watcher_stop_event
+        ):
+            # Process detected changes
+            _indexer_queue.put({"incremental_changes": changes})
+
+    except Exception as e:
+        logger.error(f"Error in file watcher: {str(e)}")
+
+    logger.info("File watcher thread exited")
 
 
 def register_enricher_callback(callback):
@@ -577,5 +729,55 @@ def stop_indexer():
     if _indexer_thread and _indexer_thread.is_alive():
         logger.info("Sending stop command to indexer thread")
         _indexer_queue.put("stop")
+        _indexer_thread.join(5.0)
         return True
     return False
+
+
+# Create a global stop event for the file watcher
+_file_watcher_stop_event = threading.Event()
+
+
+def stop_file_watcher():
+    """Stop the file watcher thread"""
+    global _file_watcher_thread, _file_watcher_stop_event
+
+    if _file_watcher_thread and _file_watcher_thread.is_alive():
+        logger.info("Sending stop signal to file watcher thread")
+        _file_watcher_stop_event.set()
+
+        # Wait for thread to terminate (with timeout)
+        _file_watcher_thread.join(5.0)
+
+        if _file_watcher_thread.is_alive():
+            logger.warning("File watcher thread did not terminate in time")
+            return False
+        else:
+            logger.info("File watcher thread successfully stopped")
+            return True
+    return False
+
+
+def start_file_watcher(config):
+    """Start the file watcher process in a background thread if enabled"""
+    global _file_watcher_thread, _file_watcher_stop_event
+
+    # Ensure we don't start multiple file watcher threads
+    if _file_watcher_thread and _file_watcher_thread.is_alive():
+        logger.warning("File watcher thread already running, not starting another")
+        return _file_watcher_thread
+
+    # Reset the stop event in case it was previously set
+    _file_watcher_stop_event.clear()
+
+    # Start the worker thread
+    _file_watcher_thread = threading.Thread(
+        target=_file_watcher_worker,
+        args=(config,),  # Added comma to create a single-element tuple
+        daemon=True,
+    )
+    _file_watcher_thread.name = "LocalFiles-FileWatcher"
+    _file_watcher_thread.start()
+
+    logger.info("Started file watcher background thread")
+    return _file_watcher_thread

@@ -12,3 +12,4 @@ mutagen
 pillow
 musicbrainzngs
 requests
+watchfiles

@@ -163,15 +163,8 @@ class MetadataEnricher:
                 had_updates = True
 
         # Only update the database once at the end if we had any updates
-        logger.debug(
-            f"Enrichment for album {album['id']} completed with updates: {had_updates}"
-        )
         if had_updates:
-            logger.debug(f"Updating album {album['id']} in database")
             self.db_manager.update_album(album["id"], updated_album)
-            logger.debug(
-                f"Album {album['id']} updated in database with: {updated_album}"
-            )
 
     def _process_tracks(self, batch_size=500):
         """Process non-enriched tracks"""
@@ -185,20 +178,51 @@ class MetadataEnricher:
         updated_track = track.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
+        # Collect any entities that need further enrichment
+        entities_for_enrichment = {"artists": set(), "albums": set(), "tracks": set()}
+
         for plugin in self.plugins:
             if not plugin.can_enrich_track():
                 continue
 
             result = plugin.enrich_track(updated_track)
-            if result and "updates" in result:
-                # Apply updates to our working copy
-                updated_track.update(result["updates"])
-                # Track that we had updates
-                had_updates = True
+            if result:
+                if "updates" in result:
+                    # Apply updates to our working copy
+                    updated_track.update(result["updates"])
+                    # Track that we had updates
+                    had_updates = True
+
+                # Check if plugin identified entities that need further enrichment
+                if "changed_items" in result:
+                    for entity_type in ["artists", "albums", "tracks"]:
+                        if entity_type in result["changed_items"]:
+                            entities_for_enrichment[entity_type].update(
+                                result["changed_items"][entity_type]
+                            )
 
         # Only update the database once at the end if we had any updates
         if had_updates:
             self.db_manager.update_track(track["id"], updated_track)
+
+        # If we have entities that need further enrichment, add them to the enricher queue
+        if any(entities_for_enrichment.values()):
+            changed_items = {
+                "artists": list(entities_for_enrichment["artists"]),
+                "albums": list(entities_for_enrichment["albums"]),
+                "tracks": list(entities_for_enrichment["tracks"]),
+            }
+
+            logger.info(
+                f"Queueing additional enrichment for entities from track {track['id']}: "
+                f"Artists={len(changed_items['artists'])}, "
+                f"Albums={len(changed_items['albums'])}, "
+                f"Tracks={len(changed_items['tracks'])}"
+            )
+
+            # Add to the enricher queue
+            global _enricher_queue
+            _enricher_queue.put({"changed_items": changed_items})
 
 
 def _enricher_worker(config, db_manager):
@@ -304,5 +328,6 @@ def stop_enricher():
     if _enricher_thread and _enricher_thread.is_alive():
         logger.info("Sending stop command to enricher thread")
         _enricher_queue.put("stop")
+        _enricher_thread.join(5)
         return True
     return False

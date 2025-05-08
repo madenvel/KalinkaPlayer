@@ -401,8 +401,14 @@ class AcoustIdPlugin(EnricherPlugin):
 
             updates["title"] = match_info["title"]
 
+            # Track items that need further enrichment
+            changed_items = {"artists": set(), "albums": set(), "tracks": set()}
+
             # Create or get artist if needed
             if match_info.get("artist_name"):
+                # Store original artist ID to check if a new one was created
+                original_artist_id = track.get("artist_id")
+
                 artist_id = self._create_or_get_artist(
                     match_info["artist_name"], match_info.get("artist_mbid")
                 )
@@ -411,8 +417,18 @@ class AcoustIdPlugin(EnricherPlugin):
                     updates["artist_id"] = artist_id
                     updates["artist_name"] = match_info["artist_name"]
 
+                    # Check if this is a newly created or different artist
+                    if artist_id != original_artist_id:
+                        logger.debug(
+                            f"Adding artist {artist_id} to changed items for further enrichment"
+                        )
+                        changed_items["artists"].add(artist_id)
+
                     # Create or get album if we have artist and album info
                     if match_info.get("album_title") and artist_id:
+                        # Store original album ID to check if a new one was created
+                        original_album_id = track.get("album_id")
+
                         album_id = self._create_or_get_album(
                             match_info["album_title"],
                             artist_id,
@@ -423,8 +439,25 @@ class AcoustIdPlugin(EnricherPlugin):
                             updates["album_id"] = album_id
                             updates["album_title"] = match_info["album_title"]
 
+                            # Check if this is a newly created or different album
+                            if album_id != original_album_id:
+                                logger.debug(
+                                    f"Adding album {album_id} to changed items for further enrichment"
+                                )
+                                changed_items["albums"].add(album_id)
+
+            result = {"updates": updates}
+
+            # If we have any items that need further enrichment, add them to result
+            if any(changed_items.values()):
+                result["changed_items"] = {
+                    "artists": list(changed_items["artists"]),
+                    "albums": list(changed_items["albums"]),
+                    "tracks": list(changed_items["tracks"]),
+                }
+
             # Return the updates for this track
-            return {"updates": updates}
+            return result
 
         except Exception as e:
             logger.error(

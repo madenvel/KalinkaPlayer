@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
 from src import config, state_keeper
 from src.ext_device import Volume
-from src.player_setup import setup
+from src.player_setup import setup, shutdown
 from src.rest_event_proxy import EventStream
 
 import logging
@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Shutting down...")
         await sd.unregister_service()
+        shutdown()
         app.state.event_listener.terminate()
         state_keeper.save_state(app.state.playqueue, app.state.inputmodule)
         app.state.config.save()
