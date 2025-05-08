@@ -12,6 +12,14 @@ from src.config import Config
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+prepared_input_modules = []
+prepared_devices = []
+
+queue = None
+event_emitter = None
+event_listener = None
+playqueue = None
+
 
 def setup_input_module(config, playqueue, event_emitter, event_listener) -> InputModule:
     input_modules = config["addons.input_module"]
@@ -36,12 +44,16 @@ def setup_input_module(config, playqueue, event_emitter, event_listener) -> Inpu
     input = import_module_by_path(
         "addons.input_module." + current_module.lower() + ".module_setup"
     )
-    return input.setup(
+    inputmodule = input.setup(
         config.slice("addons.input_module." + current_module),
         playqueue,
         event_emitter,
         event_listener,
     )
+    global prepared_input_modules
+    prepared_input_modules.append(input)
+
+    return inputmodule
 
 
 def setup_device(
@@ -58,20 +70,42 @@ def setup_device(
         "addons.device." + current_device[0].lower() + ".module_setup"
     )
 
-    return input.setup(
+    device = input.setup(
         config.slice("addons.device." + current_device[0]),
         playqueue,
         event_emitter,
         event_listener,
     )
 
+    global prepared_devices
+    prepared_devices.append(device)
+    return device
+
 
 def setup(config: Config):
-    queue = Queue()
-    event_emitter = EventEmitter(queue)
-    event_listener = EventListener(queue)
-    playqueue = PlayQueue(config, event_emitter)
+    global queue, event_emitter, event_listener, playqueue
+
+    if not queue:
+        queue = Queue()
+
+    if not event_emitter:
+        event_emitter = EventEmitter(queue)
+
+    if not event_listener:
+        event_listener = EventListener(queue)
+    if not playqueue:
+        playqueue = PlayQueue(config, event_emitter)
+
     inputmodule = setup_input_module(config, playqueue, event_emitter, event_listener)
     device = setup_device(config, playqueue, event_emitter, event_listener)
 
     return playqueue, event_listener, inputmodule, device
+
+
+def shutdown():
+    global prepared_input_modules, prepared_devices
+    for inputmodule in prepared_input_modules:
+        inputmodule.shutdown()
+
+    for device in prepared_devices:
+        device.shutdown()

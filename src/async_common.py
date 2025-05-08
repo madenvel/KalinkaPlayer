@@ -126,7 +126,7 @@ class EventListener(AsyncLoop):
         self.subscribers = {}
         super().__init__(queue)
 
-    def subscribe(self, event_name, callback) -> UUID:
+    def subscribe(self, event_name, callback) -> Subscription:
         uuid = uuid4()
         self.subscribers.setdefault(event_name, [])
         self.subscribers[event_name].append({"uuid": uuid, "cb": callback})

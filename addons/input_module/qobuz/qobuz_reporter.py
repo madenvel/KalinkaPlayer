@@ -24,6 +24,7 @@ class QobuzReporter:
         self.mqueue = Queue()
         self.last_report_time = 0
         self.current_track_id = None
+        self._isRunning = True
         threading.Thread(target=self._sender_worker, daemon=True).start()
 
     def get_last_duration(self):
@@ -133,9 +134,12 @@ class QobuzReporter:
         }
 
     def _sender_worker(self):
-        while True:
+        while self._isRunning:
             try:
                 message = self.mqueue.get()
+                if message is None:
+                    break
+
                 response = self.qobuz_client.session.post(
                     self.qobuz_client.base + message["endpoint"],
                     params={"events": json.dumps([message["params"]])},
@@ -153,3 +157,8 @@ class QobuzReporter:
                 logger.warn("Exception while sending event to Qobuz:", e)
 
             time.sleep(REPORTS_PER_SEC_LIMIT)
+
+    def shutdown(self):
+        self._isRunning = False
+        self.mqueue.put(None)
+        self._sender_worker.join()
