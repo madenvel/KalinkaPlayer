@@ -53,3 +53,20 @@ def generate_track_id(file_path: str) -> str:
     # Create a hash from the file path for a stable ID
     hash_obj = hashlib.md5(file_path.encode("utf-8"))
     return f"track_{hash_obj.hexdigest()[:16]}"
+
+
+def generate_playlist_id(name: str, created_by: str) -> str:
+    """
+    Generate a stable ID for a playlist.
+
+    Args:
+        name: The name of the playlist
+        created_by: Creator identifier (can be system name)
+
+    Returns:
+        A stable ID string for the playlist
+    """
+    # Create a hash from the name and creator for a stable ID
+    hash_input = f"{name.lower()}{created_by}"
+    hash_obj = hashlib.md5(hash_input.encode("utf-8"))
+    return f"playlist_{hash_obj.hexdigest()[:16]}"
