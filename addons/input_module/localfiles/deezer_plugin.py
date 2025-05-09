@@ -251,7 +251,6 @@ class DeezerPlugin(EnricherPlugin):
                 # Update album data
                 updates = {
                     "image_url": album["id"],
-                    "enriched": 1,
                 }
 
                 # Add genre if available from Deezer

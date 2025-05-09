@@ -395,14 +395,13 @@ class AcoustIdPlugin(EnricherPlugin):
 
             updates = {
                 "mbid": match_info["recording_mbid"],
-                "enriched": 1,
                 "match_score": int(match_info["score"] * 100),  # Convert to 0-100 scale
             }
 
             updates["title"] = match_info["title"]
 
             # Track items that need further enrichment
-            changed_items = {"artists": set(), "albums": set(), "tracks": set()}
+            changed_items = {"artists": set(), "albums": set()}
 
             # Create or get artist if needed
             if match_info.get("artist_name"):
@@ -453,7 +452,7 @@ class AcoustIdPlugin(EnricherPlugin):
                 result["changed_items"] = {
                     "artists": list(changed_items["artists"]),
                     "albums": list(changed_items["albums"]),
-                    "tracks": list(changed_items["tracks"]),
+                    "tracks": [track["id"]],
                 }
 
             # Return the updates for this track
