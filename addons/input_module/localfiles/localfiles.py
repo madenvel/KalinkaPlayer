@@ -20,9 +20,12 @@ from data_model.datamodel import (
     CardSize,
     EmptyList,
     Playlist,
+    PlaylistImage,
     Catalog,
 )
 from data_model.response_model import FavoriteIds, GenreList, LastUpdate
+from .utils.id_generator import generate_playlist_id
+from .utils.image_utils import create_playlist_cover_collage
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -35,6 +38,11 @@ class LocalFilesInputModule(InputModule):
         self.db_manager = db_manager
         self.event_emitter = event_emitter
         self.artwork_path = config["artwork_path"]
+
+        # Ensure artwork directories exist
+        os.makedirs(os.path.join(self.artwork_path, "album"), exist_ok=True)
+        os.makedirs(os.path.join(self.artwork_path, "artist"), exist_ok=True)
+        os.makedirs(os.path.join(self.artwork_path, "playlist"), exist_ok=True)
 
         # Initialize mime types for serving files
         mimetypes.init()
@@ -55,8 +63,7 @@ class LocalFilesInputModule(InputModule):
         elif type == SearchType.artist:
             return self._search_artists(query, offset, limit)
         elif type == SearchType.playlist:
-            # Playlists not supported yet
-            return EmptyList(offset, limit)
+            return self._search_playlists(query, offset, limit)
         else:
             logger.warning(f"Unsupported search type: {type}")
             return EmptyList(offset, limit)
@@ -91,6 +98,16 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
+    def _search_playlists(self, query: str, offset: int, limit: int) -> BrowseItemList:
+        """Search for playlists"""
+        playlists, total = self.db_manager.search_playlists(query, offset, limit)
+
+        items = []
+        for playlist in playlists:
+            items.append(self._create_playlist_browse_item(playlist))
+
+        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
+
     def browse_catalog(
         self, endpoint: str, offset: int = 0, limit: int = 50, genre_ids: List[int] = []
     ) -> BrowseItemList:
@@ -103,6 +120,8 @@ class LocalFilesInputModule(InputModule):
             return self._browse_albums(offset, limit)
         elif endpoint == "artists":
             return self._browse_artists(offset, limit)
+        elif endpoint == "playlists":
+            return self._browse_playlists(offset, limit)
         else:
             logger.warning(f"Unknown catalog endpoint: {endpoint}")
             return EmptyList(offset, limit)
@@ -112,6 +131,7 @@ class LocalFilesInputModule(InputModule):
         recent_tracks, recent_total = self.db_manager.get_recently_added_tracks(0, 10)
         albums, albums_total = self.db_manager.get_all_albums(0, 10)
         artists, artists_total = self.db_manager.get_all_artists(0, 10)
+        playlists, playlists_total = self.db_manager.get_all_playlists(0, 10)
 
         # Create the main sections
         items = []
@@ -203,6 +223,35 @@ class LocalFilesInputModule(InputModule):
 
             items.append(artist_section)
 
+        # Playlists section
+        if playlists_total > 0:
+            preview = Preview(
+                type=PreviewType.IMAGE_TEXT,
+                items_count=10,
+                rows_count=1,
+                card_size=CardSize.SMALL,
+            )
+
+            catalog = Catalog(
+                id="playlists",
+                title="My Playlists",
+                can_genre_filter=False,
+                description="Browse your playlists",
+                preview_config=preview,
+            )
+
+            playlist_section = BrowseItem(
+                id="playlists",
+                name="My Playlists",
+                url="/catalog/playlists",
+                can_browse=True,
+                can_add=False,
+                catalog=catalog,
+                subname=f"{playlists_total} playlists",
+            )
+
+            items.append(playlist_section)
+
         return BrowseItemList(offset=0, limit=10, total=len(items), items=items)
 
     def _browse_recently_added(self, offset: int, limit: int) -> BrowseItemList:
@@ -235,6 +284,16 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
+    def _browse_playlists(self, offset: int, limit: int) -> BrowseItemList:
+        """Browse all playlists"""
+        playlists, total = self.db_manager.get_all_playlists(offset, limit)
+
+        items = []
+        for playlist in playlists:
+            items.append(self._create_playlist_browse_item(playlist))
+
+        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
+
     def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
         """Browse tracks in an album"""
         tracks, total = self.db_manager.get_album_tracks(id, offset, limit)
@@ -260,8 +319,14 @@ class LocalFilesInputModule(InputModule):
     def browse_playlist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """Browse tracks in a playlist (not supported)"""
-        return EmptyList(offset, limit)
+        """Browse tracks in a playlist"""
+        tracks, total = self.db_manager.get_playlist_tracks(id, offset, limit)
+
+        items = []
+        for track in tracks:
+            items.append(self._create_track_browse_item(track))
+
+        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
     def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         """Get track info for a list of track IDs"""
@@ -299,8 +364,13 @@ class LocalFilesInputModule(InputModule):
     def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """List favorites (not supported)"""
-        return EmptyList(offset, limit)
+        """List favorites - for playlists, returns all user playlists"""
+        if type == SearchType.playlist:
+            # Return all user playlists as favorites
+            return self.playlist_user_list(offset, limit)
+        else:
+            # For other types, return an empty list as before
+            return EmptyList(offset, limit)
 
     def get_favorite_ids(self) -> FavoriteIds:
         """Get favorite IDs (not supported)"""
@@ -346,47 +416,172 @@ class LocalFilesInputModule(InputModule):
         return self._create_track_browse_item(track)
 
     def playlist_get(self, id: str) -> BrowseItem:
-        """Get playlist details (not supported)"""
-        logger.warning("Playlists are not supported in local files input module")
-        return None
+        """Get playlist details"""
+        playlist = self.db_manager.get_playlist_by_id(id)
+        if not playlist:
+            logger.warning(f"Playlist not found: {id}")
+            return None
+
+        return self._create_playlist_browse_item(playlist)
 
     def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
-        """List user playlists (not supported)"""
-        return EmptyList(offset, limit)
+        """List user playlists"""
+        playlists, total = self.db_manager.get_all_playlists(offset, limit)
+
+        items = []
+        for playlist in playlists:
+            items.append(self._create_playlist_browse_item(playlist))
+
+        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
     def playlist_create(self, name: str, description: str) -> Playlist:
-        """Create playlist (not supported)"""
-        logger.warning("Playlist creation not supported in local files input module")
-        return None
+        """Create playlist"""
+        # Generate playlist ID using the name and system as creator
+        playlist_id = generate_playlist_id(name, "localfiles_system")
+        # Create the playlist record
+        self.db_manager.create_playlist(playlist_id, name, description, "localfiles_system")
+        
+        # Get the created playlist
+        playlist = self.db_manager.get_playlist_by_id(playlist_id)
+
+        # Create the Owner object required by the Playlist model
+        from data_model.datamodel import Owner
+        owner = Owner(name="Local System", id="localfiles_system")
+
+        return Playlist(
+            id=playlist_id,
+            name=name,
+            description=description,
+            count=0,
+            track_count=playlist.get("track_count", 0),
+            duration=0,
+            last_updated=playlist["last_updated"],
+            owner=owner
+        )
 
     def playlist_update(
         self, id: str, name: Optional[str], description: Optional[str]
     ) -> Playlist:
-        """Update playlist (not supported)"""
-        logger.warning("Playlist updates not supported in local files input module")
-        return None
+        """Update playlist"""
+        self.db_manager.update_playlist(id, name, description)
+        playlist = self.db_manager.get_playlist_by_id(id)
+        
+        # Create the Owner object required by the Playlist model
+        from data_model.datamodel import Owner
+        owner = Owner(name="Local System", id="localfiles_system")
+
+        playlist_obj = Playlist(
+            id=playlist["id"],
+            name=playlist["name"],
+            description=playlist["description"],
+            count=playlist.get("track_count", 0),
+            track_count=playlist.get("track_count", 0),
+            duration=playlist.get("duration", 0),
+            last_updated=playlist["last_updated"],
+            owner=owner
+        )
+        
+        # Add image if available
+        image_path = self._get_playlist_image_urls(playlist["id"])
+        if image_path:
+            playlist_obj.image = image_path
+            
+        return playlist_obj
 
     def playlist_delete(self, id: str):
-        """Delete playlist (not supported)"""
-        logger.warning("Playlist deletion not supported in local files input module")
+        """Delete playlist"""
+        self.db_manager.delete_playlist(id)
 
     def playlist_add_tracks(
         self, id: str, track_ids: List[str], allow_duplicates: bool = False
     ) -> Playlist:
-        """Add tracks to playlist (not supported)"""
-        logger.warning(
-            "Playlist modification not supported in local files input module"
+        """Add tracks to playlist"""
+        # Add tracks to the playlist
+        tracks_added = self.db_manager.add_tracks_to_playlist(id, track_ids, allow_duplicates)
+        
+        # Generate playlist cover image if tracks were added
+        if tracks_added > 0:
+            self._generate_playlist_cover(id)
+            
+        # Get updated playlist
+        playlist = self.db_manager.get_playlist_by_id(id)
+
+        # Create the Owner object required by the Playlist model
+        from data_model.datamodel import Owner
+        owner = Owner(name="Local System", id="localfiles_system")
+        
+        # Create Playlist object
+        playlist_obj = Playlist(
+            id=playlist["id"],
+            name=playlist["name"],
+            description=playlist["description"],
+            count=playlist.get("track_count", 0),
+            track_count=playlist.get("track_count", 0),
+            duration=playlist.get("duration", 0),
+            last_updated=playlist["last_updated"],
+            owner=owner
         )
-        return None
+        
+        # Add image if available
+        image_path = self._get_playlist_image_urls(playlist["id"])
+        if image_path:
+            playlist_obj.image = image_path
+
+        return playlist_obj
+
+    def _generate_playlist_cover(self, playlist_id: str) -> bool:
+        """
+        Generate a cover image for a playlist based on its tracks.
+
+        For playlists with tracks from 4 or more different albums, creates a 2x2 collage.
+        For playlists with fewer unique albums, copies the album cover of the first track.
+
+        Args:
+            playlist_id: The ID of the playlist
+
+        Returns:
+            True if the cover was generated successfully, False otherwise
+        """
+        # Get up to 4 distinct album IDs from the playlist
+        album_ids = self.db_manager.get_playlist_track_album_ids(playlist_id, limit=4)
+
+        if not album_ids:
+            logger.warning(
+                f"No tracks in playlist {playlist_id} to generate cover image"
+            )
+            return False
+
+        # Create the cover image
+        return create_playlist_cover_collage(album_ids, self.artwork_path, playlist_id)
 
     def playlist_remove_tracks(
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
-        """Remove tracks from playlist (not supported)"""
-        logger.warning(
-            "Playlist modification not supported in local files input module"
+        """Remove tracks from playlist"""
+        self.db_manager.remove_tracks_from_playlist(id, playlist_track_ids)
+        playlist = self.db_manager.get_playlist_by_id(id)
+        
+        # Create the Owner object required by the Playlist model
+        from data_model.datamodel import Owner
+        owner = Owner(name="Local System", id="localfiles_system")
+
+        playlist_obj = Playlist(
+            id=playlist["id"],
+            name=playlist["name"],
+            description=playlist["description"],
+            count=playlist.get("track_count", 0),
+            track_count=playlist.get("track_count", 0),
+            duration=playlist.get("duration", 0),
+            last_updated=playlist["last_updated"],
+            owner=owner
         )
-        return None
+        
+        # Add image if available
+        image_path = self._get_playlist_image_urls(playlist["id"])
+        if image_path:
+            playlist_obj.image = image_path
+            
+        return playlist_obj
 
     def _create_track_metadata(self, track: Dict) -> Track:
         """Create a Track object from database data"""
@@ -481,6 +676,39 @@ class LocalFilesInputModule(InputModule):
             artist=artist_obj,
         )
 
+    def _create_playlist_browse_item(self, playlist: Dict) -> BrowseItem:
+        """Create a BrowseItem for a playlist"""
+        # Create the Owner object required by the Playlist model
+        from data_model.datamodel import Owner
+        owner = Owner(name="Local System", id="localfiles_system")
+        
+        # Create playlist object
+        playlist_obj = Playlist(
+            id=playlist["id"],
+            name=playlist["name"],
+            description=playlist["description"],
+            count=playlist.get("track_count", 0),
+            track_count=playlist.get("track_count", 0),
+            duration=playlist.get("duration", 0),
+            last_updated=playlist["last_updated"],
+            owner=owner
+        )
+
+        # Add image if available
+        image_path = self._get_playlist_image_urls(playlist["id"])
+        if image_path:
+            playlist_obj.image = image_path
+
+        return BrowseItem(
+            id=playlist["id"],
+            name=playlist["name"],
+            url=f"/playlist/{playlist['id']}",
+            can_browse=True,
+            can_add=True,
+            subname=f"{playlist.get('track_count', 0)} tracks",
+            playlist=playlist_obj,
+        )
+
     def _get_album_image_urls(self, album_id: str) -> Optional[AlbumImage]:
         """Get image URLs for an album"""
         # Define relative paths for album images including the /resource/ prefix
@@ -516,6 +744,25 @@ class LocalFilesInputModule(InputModule):
         # Only return image URLs if the thumbnail file exists
         if os.path.exists(thumbnail_path):
             return ArtistImage(thumbnail=thumbnail, small=small, large=large)
+
+        return None
+
+    def _get_playlist_image_urls(self, playlist_id: str) -> Optional[PlaylistImage]:
+        """Get image URLs for a playlist"""
+        # Define relative paths for playlist images including the /resource/ prefix
+        thumbnail = f"/resource/playlist/{playlist_id}_thumbnail.jpg"
+        small = f"/resource/playlist/{playlist_id}_small.jpg"
+        large = f"/resource/playlist/{playlist_id}_large.jpg"
+
+        # Check if the image files exist using absolute path for the check
+        # but without the /resource/ prefix
+        thumbnail_path = os.path.join(
+            self.artwork_path, f"playlist/{playlist_id}_thumbnail.jpg"
+        )
+
+        # Only return image URLs if the thumbnail file exists
+        if os.path.exists(thumbnail_path):
+            return PlaylistImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
 
