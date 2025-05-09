@@ -232,7 +232,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Update artist data
             updates = {
                 "mbid": artist_mbid,
-                "enriched": 1,
                 "match_score": score,
                 "match_similarity": round(similarity * 100),
             }
@@ -307,7 +306,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Update album data
             updates = {
                 "mbid": release_mbid,
-                "enriched": 1,
                 "match_score": score,
                 "match_similarity": round(similarity * 100),
             }
@@ -396,7 +394,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             recording_mbid = best_match["id"]
             updates = {
                 "mbid": recording_mbid,
-                "enriched": 1,
                 "match_score": score,
                 "match_similarity": round(similarity * 100),
             }
