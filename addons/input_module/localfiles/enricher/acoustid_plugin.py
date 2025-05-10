@@ -5,10 +5,17 @@ import os
 import subprocess
 import requests
 import json
+import os
+import logging
+import time
+import json
+import math
+import subprocess
+import requests
 from typing import Dict, Optional, List, Tuple
 
 from .enricher_plugin import EnricherPlugin
-from .utils.id_generator import generate_artist_id, generate_album_id
+from .id_generator import generate_artist_id, generate_album_id
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

@@ -26,6 +26,7 @@ from data_model.datamodel import (
 from data_model.response_model import FavoriteIds, GenreList, LastUpdate
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
+from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -35,6 +36,7 @@ class LocalFilesInputModule(InputModule):
 
     def __init__(self, config, db_manager, event_emitter: EventEmitter):
         self.config = config
+        # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
         self.event_emitter = event_emitter
         self.artwork_path = config["artwork_path"]
@@ -439,13 +441,16 @@ class LocalFilesInputModule(InputModule):
         # Generate playlist ID using the name and system as creator
         playlist_id = generate_playlist_id(name, "localfiles_system")
         # Create the playlist record
-        self.db_manager.create_playlist(playlist_id, name, description, "localfiles_system")
-        
+        self.db_manager.create_playlist(
+            playlist_id, name, description, "localfiles_system"
+        )
+
         # Get the created playlist
         playlist = self.db_manager.get_playlist_by_id(playlist_id)
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
+
         owner = Owner(name="Local System", id="localfiles_system")
 
         return Playlist(
@@ -456,7 +461,7 @@ class LocalFilesInputModule(InputModule):
             track_count=playlist.get("track_count", 0),
             duration=0,
             last_updated=playlist["last_updated"],
-            owner=owner
+            owner=owner,
         )
 
     def playlist_update(
@@ -465,9 +470,10 @@ class LocalFilesInputModule(InputModule):
         """Update playlist"""
         self.db_manager.update_playlist(id, name, description)
         playlist = self.db_manager.get_playlist_by_id(id)
-        
+
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
+
         owner = Owner(name="Local System", id="localfiles_system")
 
         playlist_obj = Playlist(
@@ -478,14 +484,14 @@ class LocalFilesInputModule(InputModule):
             track_count=playlist.get("track_count", 0),
             duration=playlist.get("duration", 0),
             last_updated=playlist["last_updated"],
-            owner=owner
+            owner=owner,
         )
-        
+
         # Add image if available
         image_path = self._get_playlist_image_urls(playlist["id"])
         if image_path:
             playlist_obj.image = image_path
-            
+
         return playlist_obj
 
     def playlist_delete(self, id: str):
@@ -497,19 +503,22 @@ class LocalFilesInputModule(InputModule):
     ) -> Playlist:
         """Add tracks to playlist"""
         # Add tracks to the playlist
-        tracks_added = self.db_manager.add_tracks_to_playlist(id, track_ids, allow_duplicates)
-        
+        tracks_added = self.db_manager.add_tracks_to_playlist(
+            id, track_ids, allow_duplicates
+        )
+
         # Generate playlist cover image if tracks were added
         if tracks_added > 0:
             self._generate_playlist_cover(id)
-            
+
         # Get updated playlist
         playlist = self.db_manager.get_playlist_by_id(id)
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
+
         owner = Owner(name="Local System", id="localfiles_system")
-        
+
         # Create Playlist object
         playlist_obj = Playlist(
             id=playlist["id"],
@@ -519,9 +528,9 @@ class LocalFilesInputModule(InputModule):
             track_count=playlist.get("track_count", 0),
             duration=playlist.get("duration", 0),
             last_updated=playlist["last_updated"],
-            owner=owner
+            owner=owner,
         )
-        
+
         # Add image if available
         image_path = self._get_playlist_image_urls(playlist["id"])
         if image_path:
@@ -560,9 +569,10 @@ class LocalFilesInputModule(InputModule):
         """Remove tracks from playlist"""
         self.db_manager.remove_tracks_from_playlist(id, playlist_track_ids)
         playlist = self.db_manager.get_playlist_by_id(id)
-        
+
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
+
         owner = Owner(name="Local System", id="localfiles_system")
 
         playlist_obj = Playlist(
@@ -573,14 +583,14 @@ class LocalFilesInputModule(InputModule):
             track_count=playlist.get("track_count", 0),
             duration=playlist.get("duration", 0),
             last_updated=playlist["last_updated"],
-            owner=owner
+            owner=owner,
         )
-        
+
         # Add image if available
         image_path = self._get_playlist_image_urls(playlist["id"])
         if image_path:
             playlist_obj.image = image_path
-            
+
         return playlist_obj
 
     def _create_track_metadata(self, track: Dict) -> Track:
@@ -680,8 +690,9 @@ class LocalFilesInputModule(InputModule):
         """Create a BrowseItem for a playlist"""
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
+
         owner = Owner(name="Local System", id="localfiles_system")
-        
+
         # Create playlist object
         playlist_obj = Playlist(
             id=playlist["id"],
@@ -691,7 +702,7 @@ class LocalFilesInputModule(InputModule):
             track_count=playlist.get("track_count", 0),
             duration=playlist.get("duration", 0),
             last_updated=playlist["last_updated"],
-            owner=owner
+            owner=owner,
         )
 
         # Add image if available
