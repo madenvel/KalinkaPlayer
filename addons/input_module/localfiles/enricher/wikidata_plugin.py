@@ -8,8 +8,11 @@ import musicbrainzngs
 from PIL import Image
 from typing import Dict, Optional
 
-from .enricher_plugin import EnricherPlugin
-from .enricher_db import EnricherDb
+try:
+    from .enricher_plugin import EnricherPlugin
+except ImportError:
+    from enricher_plugin import EnricherPlugin
+
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

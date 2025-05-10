@@ -5,8 +5,10 @@ import re
 from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
-from .enricher_plugin import EnricherPlugin
-from .enricher_db import EnricherDb
+try:
+    from .enricher_plugin import EnricherPlugin
+except ImportError:
+    from enricher_plugin import EnricherPlugin
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
