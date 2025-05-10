@@ -14,8 +14,13 @@ import subprocess
 import requests
 from typing import Dict, Optional, List, Tuple
 
-from .enricher_plugin import EnricherPlugin
-from .id_generator import generate_artist_id, generate_album_id
+try:
+    from .enricher_plugin import EnricherPlugin
+    from .id_generator import generate_artist_id, generate_album_id
+except ImportError:
+    from enricher_plugin import EnricherPlugin
+    from id_generator import generate_artist_id, generate_album_id
+
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

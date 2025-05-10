@@ -1,15 +1,24 @@
+#!/usr/bin/env python3
+
 import logging
 import time
 import threading
 import queue
 import enum
 
-from .enricher_plugin import EnricherPlugin
-from .musicbrainz_plugin import MusicBrainzPlugin
-from .acoustid_plugin import AcoustIdPlugin
-from .wikidata_plugin import WikidataPlugin
-from .deezer_plugin import DeezerPlugin
-from .enricher_db import EnricherDb
+
+try:
+    from musicbrainz_plugin import MusicBrainzPlugin
+    from acoustid_plugin import AcoustIdPlugin
+    from wikidata_plugin import WikidataPlugin
+    from deezer_plugin import DeezerPlugin
+    from enricher_db import EnricherDb
+except ImportError:
+    from .musicbrainz_plugin import MusicBrainzPlugin
+    from .acoustid_plugin import AcoustIdPlugin
+    from .wikidata_plugin import WikidataPlugin
+    from .deezer_plugin import DeezerPlugin
+    from .enricher_db import EnricherDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -456,3 +465,131 @@ def stop_enricher():
         _enricher_thread.join(5)
         return True
     return False
+
+
+def print_default_config():
+    """Print a default configuration template as JSON"""
+    default_config = {
+        "enricher.plugins.acoustid.enabled": True,
+        "enricher.plugins.acoustid.api_key": "YOUR_ACOUSTID_API_KEY",
+        "enricher.plugins.musicbrainz.enabled": True,
+        "enricher.plugins.musicbrainz.app_name": "YourAppName",
+        "enricher.plugins.musicbrainz.app_version": "1.0",
+        "enricher.plugins.musicbrainz.contact_info": "your@email.com",
+        "enricher.plugins.wikidata.enabled": True,
+        "enricher.plugins.deezer.enabled": True,
+        "database.path": "/path/to/your/database.sqlite",
+    }
+    return json.dumps(default_config, indent=2)
+
+
+if __name__ == "__main__":
+    """Run the enricher as a standalone script
+
+    Example usage:
+    # Show default configuration:
+    python -m addons.input_module.localfiles.enricher.enricher --show-default-config
+
+    # Run full enrichment process:
+    python -m addons.input_module.localfiles.enricher.enricher --config '{"enricher.plugins.acoustid.enabled": true, "enricher.plugins.musicbrainz.enabled": true, "enricher.plugins.wikidata.enabled": true, "enricher.plugins.deezer.enabled": true, "database.path": "/path/to/db.sqlite"}' --log-level INFO
+
+    # Enrich specific items:
+    python -m addons.input_module.localfiles.enricher.enricher --config '{"enricher.plugins.acoustid.enabled": true, "database.path": "/path/to/db.sqlite"}' --enrich-artist "artist_id_123" --log-level DEBUG
+    """
+
+    import json
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Standalone metadata enricher")
+    parser.add_argument(
+        "--config",
+        type=str,
+        help="JSON string containing configuration",
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Set logging level",
+    )
+    parser.add_argument(
+        "--enrich-artist", type=str, help="Enrich a specific artist by ID", default=None
+    )
+    parser.add_argument(
+        "--enrich-album", type=str, help="Enrich a specific album by ID", default=None
+    )
+    parser.add_argument(
+        "--enrich-track", type=str, help="Enrich a specific track by ID", default=None
+    )
+    parser.add_argument(
+        "--show-default-config",
+        action="store_true",
+        help="Print default configuration template and exit",
+    )
+    args = parser.parse_args()
+
+    # Show default config if requested
+    if args.show_default_config:
+        print(print_default_config())
+        sys.exit(0)
+
+    # Require config if not showing default config
+    if not args.config:
+        parser.error("--config is required unless --show-default-config is used")
+
+    # Configure logging
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    logging.basicConfig(level=getattr(logging, args.log_level), format=log_format)
+
+    try:
+        # Parse config from JSON string
+        config = json.loads(args.config)
+
+        # Initialize the database manager
+        enricher_db = EnricherDb(config)
+
+        logger.info("Starting enricher in standalone mode")
+
+        # Create the enricher
+        enricher = MetadataEnricher(config, enricher_db)
+
+        # Check if we need to enrich specific items
+        if args.enrich_artist:
+            logger.info(f"Enriching specific artist: {args.enrich_artist}")
+            artist = enricher_db.get_artist_by_id(args.enrich_artist)
+            if artist:
+                enricher._enrich_artist(artist)
+            else:
+                logger.error(f"Artist not found: {args.enrich_artist}")
+
+        elif args.enrich_album:
+            logger.info(f"Enriching specific album: {args.enrich_album}")
+            album = enricher_db.get_album_by_id(args.enrich_album)
+            if album:
+                enricher._enrich_album(album)
+            else:
+                logger.error(f"Album not found: {args.enrich_album}")
+
+        elif args.enrich_track:
+            logger.info(f"Enriching specific track: {args.enrich_track}")
+            track = enricher_db.get_track_by_id(args.enrich_track)
+            if track:
+                enricher._enrich_track(track)
+            else:
+                logger.error(f"Track not found: {args.enrich_track}")
+
+        else:
+            # Run the full enrichment process
+            logger.info("Running full enrichment process")
+            enricher.start()
+
+        logger.info("Enrichment process completed")
+
+    except json.JSONDecodeError:
+        logger.error("Failed to parse config JSON string")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error running enricher: {str(e)}")
+        sys.exit(1)
