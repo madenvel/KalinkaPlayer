@@ -83,30 +83,40 @@ if __name__ == "__main__":
     # Reduce logging level for httpx - it's too verbose
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    while True:
-        with open(args.config, "r") as f:
-            config = Config(config=f, schema=config_schema.schema, location=args.config)
+    try:
 
-        if args.state:
-            state_keeper.set_state_file(args.state)
+        while True:
+            with open(args.config, "r") as f:
+                config = Config(
+                    config=f, schema=config_schema.schema, location=args.config
+                )
 
-        host = get_ip_address(config["server.interface"])
-        port = config["server.port"]
-        logger.info(f"Starting server on {host}:{port}")
-        app = create_app(config)
-        uvicorn_config = uvicorn.Config(
-            app,
-            host=host,
-            port=port,
-            reload=False,
-            timeout_graceful_shutdown=5,
-            log_config=uvicorn_log_config,
-        )
-        server = uvicorn.Server(uvicorn_config)
-        app.state.server = server
-        server.run()
-        if server.should_exit:
-            logger.info("Server restarting ...")
-        else:
-            logger.info("Server shut down")
-            break
+            if args.state:
+                state_keeper.set_state_file(args.state)
+
+            host = get_ip_address(config["server.interface"])
+            port = config["server.port"]
+            logger.info(f"Starting server on {host}:{port}")
+            app = create_app(config)
+            uvicorn_config = uvicorn.Config(
+                app,
+                host=host,
+                port=port,
+                reload=False,
+                timeout_graceful_shutdown=5,
+                log_config=uvicorn_log_config,
+            )
+            server = uvicorn.Server(uvicorn_config)
+            app.state.server = server
+            server.run()
+            if server.should_exit:
+                logger.info("Server restarting ...")
+            else:
+                logger.info("Server shut down")
+                break
+
+    except KeyboardInterrupt:
+        logger.info("Server shut down")
+    except Exception as e:
+        logger.error(f"Error starting server: {e}")
+        raise
