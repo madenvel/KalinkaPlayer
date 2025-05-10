@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import logging
 import time
@@ -15,12 +16,22 @@ import mimetypes
 from watchfiles import watch, Change
 
 # Import ID generation utilities
-from .id_generator import (
-    generate_artist_id,
-    generate_album_id,
-    generate_track_id,
-)
-from .indexer_db import IndexerDb
+# Try using relative imports if not running as __main__
+if __name__ == "__main__":
+    from id_generator import (
+        generate_artist_id,
+        generate_album_id,
+        generate_track_id,
+    )
+    from indexer_db import IndexerDb
+else:
+    # Use relative imports when imported as a module
+    from .id_generator import (
+        generate_artist_id,
+        generate_album_id,
+        generate_track_id,
+    )
+    from .indexer_db import IndexerDb
 
 # Configure logger for watchfiles.main only to WARNING level
 watchfiles_logger = logging.getLogger("watchfiles.main")
@@ -28,11 +39,17 @@ watchfiles_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+
+def default_enricher_trigger_callback(data):
+    """Callback function to be called when the indexer finds changes"""
+    logger.info(f"Enricher callback triggered with data: {data}")
+
+
 # Global variables to manage indexer state
 _indexer_thread = None
 _indexer_instance = None
 _indexer_queue = queue.Queue()
-_enricher_trigger_callback = None
+_enricher_trigger_callback = default_enricher_trigger_callback
 _file_watcher_thread = None
 
 
@@ -620,9 +637,7 @@ def _indexer_worker(config, db_manager):
     """Background worker thread for the indexer"""
     global _indexer_instance
 
-    # Create IndexerDb instance if we don't already have one
-    indexer_db = IndexerDb(config)
-    _indexer_instance = FileIndexer(config, indexer_db)
+    _indexer_instance = FileIndexer(config, db_manager)
 
     # Run initial scan
     _indexer_instance.start()
@@ -788,3 +803,89 @@ def start_file_watcher(config):
 
     logger.info("Started file watcher background thread")
     return _file_watcher_thread
+
+
+if __name__ == "__main__":
+    import argparse
+    import signal
+    import sys
+    import json
+    import os.path
+
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        # handlers=[logging.StreamHandler(), logging.FileHandler("indexer.log")],
+    )
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Music file indexer daemon")
+    parser.add_argument(
+        "-c", "--config", help="JSON configuration string", required=True
+    )
+    parser.add_argument("-d", "--daemon", action="store_true", help="Run as daemon")
+    args = parser.parse_args()
+
+    # Load configuration from JSON string
+    logger.info("Loading configuration from command line JSON")
+    try:
+        import json
+
+        config = json.loads(args.config)
+        # Extract the localfiles section if it exists
+        if "input_modules" in config and "localfiles" in config["input_modules"]:
+            config = config["input_modules"]["localfiles"]
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing JSON configuration: {str(e)}")
+        sys.exit(1)
+
+    # Initialize database
+    try:
+        db_manager = IndexerDb(config)
+    except Exception as e:
+        logger.error(f"Error initializing database: {str(e)}")
+        sys.exit(1)
+
+    # Set up signal handlers for graceful termination
+    def signal_handler(sig, frame):
+        logger.info(f"Received signal {sig}, shutting down...")
+        stop_file_watcher()
+        stop_indexer()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # Start the indexer and file watcher
+    logger.info("Starting indexer daemon")
+    indexer_thread = start_indexer(config, db_manager)
+    watcher_thread = None
+
+    if config.get("use_file_watcher", False):
+        logger.info("Starting file watcher")
+        watcher_thread = start_file_watcher(config)
+
+    # Keep the main thread alive
+    try:
+        while True:
+            time.sleep(5)
+
+            # Check that threads are still running
+            if not indexer_thread.is_alive():
+                logger.error("Indexer thread has died, restarting")
+                indexer_thread = start_indexer(config, db_manager)
+
+            if (
+                config.get("use_file_watcher", False)
+                and watcher_thread
+                and not watcher_thread.is_alive()
+            ):
+                logger.error("File watcher thread has died, restarting")
+                watcher_thread = start_file_watcher(config)
+
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received, shutting down...")
+        stop_file_watcher()
+        stop_indexer()
+        sys.exit(0)
