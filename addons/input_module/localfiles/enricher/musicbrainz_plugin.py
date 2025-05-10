@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
 from .enricher_plugin import EnricherPlugin
+from .enricher_db import EnricherDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

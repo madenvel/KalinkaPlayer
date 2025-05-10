@@ -1,7 +1,11 @@
 import logging
-from addons.input_module.localfiles.db_manager import DbManager
-from addons.input_module.localfiles.enricher import stop_enricher
-from addons.input_module.localfiles.indexer import stop_file_watcher, stop_indexer
+from addons.input_module.localfiles.input_module_db import LocalFilesInputModuleDb
+from addons.input_module.localfiles.indexer import (
+    IndexerDb,
+    stop_file_watcher,
+    stop_indexer,
+)
+from addons.input_module.localfiles.enricher import EnricherDb, stop_enricher
 from src.async_common import EventEmitter, EventListener
 from addons.input_module.localfiles import LocalFilesInputModule
 from src.config import Config
@@ -17,14 +21,19 @@ def setup(
     event_listener: EventListener,
 ):
     logger.info("Setting up localfiles input module")
-    db_manager = DbManager(config)
-    inputmodule = LocalFilesInputModule(config, db_manager, event_emitter)
+    # Create specialized databases for each component
+    input_module_db = LocalFilesInputModuleDb(config)
+    indexer_db = IndexerDb(config)
+    enricher_db = EnricherDb(config)
+
+    # The LocalFilesInputModule will use its own specialized DB
+    inputmodule = LocalFilesInputModule(config, input_module_db, event_emitter)
 
     # Start the indexer and enricher processes
     from addons.input_module.localfiles.indexer import start_indexer, start_file_watcher
     from addons.input_module.localfiles.enricher import start_enricher
 
-    start_indexer(config, db_manager)
+    start_indexer(config, indexer_db)
 
     # Start file watcher if enabled in configuration
     if config.get("file_watch_enabled", True):
@@ -34,7 +43,7 @@ def setup(
         logger.info("Real-time file system monitoring is disabled")
 
     if config.get("enricher.enabled", True):
-        start_enricher(config, db_manager)
+        start_enricher(config, enricher_db)
 
     return inputmodule
 

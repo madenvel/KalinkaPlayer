@@ -15,7 +15,12 @@ import mimetypes
 from watchfiles import watch, Change
 
 # Import ID generation utilities
-from .utils.id_generator import generate_artist_id, generate_album_id, generate_track_id
+from .id_generator import (
+    generate_artist_id,
+    generate_album_id,
+    generate_track_id,
+)
+from .indexer_db import IndexerDb
 
 # Configure logger for watchfiles.main only to WARNING level
 watchfiles_logger = logging.getLogger("watchfiles.main")
@@ -615,7 +620,9 @@ def _indexer_worker(config, db_manager):
     """Background worker thread for the indexer"""
     global _indexer_instance
 
-    _indexer_instance = FileIndexer(config, db_manager)
+    # Create IndexerDb instance if we don't already have one
+    indexer_db = IndexerDb(config)
+    _indexer_instance = FileIndexer(config, indexer_db)
 
     # Run initial scan
     _indexer_instance.start()

@@ -7,6 +7,7 @@ from PIL import Image
 from typing import Dict, Optional
 
 from .enricher_plugin import EnricherPlugin
+from .enricher_db import EnricherDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

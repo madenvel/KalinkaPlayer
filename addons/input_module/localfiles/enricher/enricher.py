@@ -9,6 +9,7 @@ from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
 from .deezer_plugin import DeezerPlugin
+from .enricher_db import EnricherDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -43,16 +44,16 @@ class MetadataEnricher:
         # The order of plugins matters for the enrichment process
         # as the first one found a match will be used
         if config["enricher.plugins.acoustid.enabled"]:
-            self.plugins.append(AcoustIdPlugin(config, db_manager))
+            self.plugins.append(AcoustIdPlugin(config, self.db_manager))
 
         if config["enricher.plugins.musicbrainz.enabled"]:
-            self.plugins.append(MusicBrainzPlugin(config, db_manager))
+            self.plugins.append(MusicBrainzPlugin(config, self.db_manager))
 
         if config["enricher.plugins.wikidata.enabled"]:
-            self.plugins.append(WikidataPlugin(config, db_manager))
+            self.plugins.append(WikidataPlugin(config, self.db_manager))
 
         if config["enricher.plugins.deezer.enabled"]:
-            self.plugins.append(DeezerPlugin(config, db_manager))
+            self.plugins.append(DeezerPlugin(config, self.db_manager))
 
     def process_changed_items(self, changed_items):
         """Process specific items that were changed by the indexer"""
@@ -351,7 +352,9 @@ def _enricher_worker(config, db_manager):
     """Background worker thread for the enricher"""
     global _enricher_instance
 
-    _enricher_instance = MetadataEnricher(config, db_manager)
+    # Create EnricherDb instance
+    enricher_db = EnricherDb(config)
+    _enricher_instance = MetadataEnricher(config, enricher_db)
 
     logger.info("Metadata enricher thread running")
     logger.info("Waiting for indexer to complete initial scan")
