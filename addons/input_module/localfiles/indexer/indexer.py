@@ -47,7 +47,6 @@ def default_enricher_trigger_callback(data):
 
 # Global variables to manage indexer state
 _indexer_thread = None
-_indexer_instance = None
 _indexer_queue = queue.Queue()
 _enricher_trigger_callback = default_enricher_trigger_callback
 _file_watcher_thread = None
@@ -635,12 +634,10 @@ class FileIndexer:
 
 def _indexer_worker(config, db_manager):
     """Background worker thread for the indexer"""
-    global _indexer_instance
-
-    _indexer_instance = FileIndexer(config, db_manager)
+    indexer_instance = FileIndexer(config, db_manager)
 
     # Run initial scan
-    _indexer_instance.start()
+    indexer_instance.start()
 
     # Set up regular interval scanning
     interval_minutes = config.get("scan_interval_minutes", 5)
@@ -655,14 +652,14 @@ def _indexer_worker(config, db_manager):
                 command = _indexer_queue.get(timeout=10)
                 if command == "scan":
                     logger.info("Manual indexer scan triggered")
-                    _indexer_instance.start()
+                    indexer_instance.start()
                     last_run = time.time()
                 elif command == "stop":
                     logger.info("Stopping indexer thread")
                     break
                 elif isinstance(command, dict) and "incremental_changes" in command:
                     logger.info("File watcher detected changes, processing...")
-                    _indexer_instance.handle_incremental_changes(
+                    indexer_instance.handle_incremental_changes(
                         command["incremental_changes"]
                     )
                 _indexer_queue.task_done()
@@ -672,7 +669,7 @@ def _indexer_worker(config, db_manager):
 
             # Check if it's time for a scheduled scan
             if time.time() - last_run > interval_minutes * 60:
-                _indexer_instance.start()
+                indexer_instance.start()
                 last_run = time.time()
 
             time.sleep(1)  # Sleep to avoid busy-waiting
@@ -707,17 +704,6 @@ def register_enricher_callback(callback):
     global _enricher_trigger_callback
     _enricher_trigger_callback = callback
     logger.info("Registered enricher callback with indexer")
-
-
-def trigger_scan():
-    """Manually trigger a scan (can be called from other modules)"""
-    if _indexer_thread and _indexer_thread.is_alive():
-        logger.info("Triggering manual indexer scan")
-        _indexer_queue.put("scan")
-        return True
-    else:
-        logger.warning("Cannot trigger scan - indexer thread not running")
-        return False
 
 
 def start_indexer(config, db_manager):
