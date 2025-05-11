@@ -28,21 +28,40 @@ watchfiles_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka.sock")
-
-
-def default_enricher_trigger_callback(data):
-    """Callback function to be called when the indexer finds changes"""
-    logger.info(f"Enricher callback triggered with data: {data}")
+SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
+ENRICHER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
 
 
 # Global variables to manage indexer state
 _server = None
 _indexer_task: Optional[asyncio.Task] = None
 _indexer_queue: asyncio.Queue = asyncio.Queue()
-_enricher_trigger_callback = default_enricher_trigger_callback
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
+
+
+async def trigger_enricher_update(data):
+    """Trigger the enricher update with the given data"""
+    if not data:
+        logger.warning("No data provided to trigger enricher update")
+        return
+
+    reader, writer = await asyncio.open_unix_connection(ENRICHER_SOCKET_PATH)
+
+    # Handle dictionary by converting to JSON string
+    if isinstance(data, dict):
+        import json
+
+        message = json.dumps(data) + "\n"
+    else:
+        # Handle string data
+        message = str(data) + "\n"
+
+    writer.write(message.encode())
+    await writer.drain()
+
+    writer.close()
+    await writer.wait_closed()
 
 
 class FileIndexer:
@@ -101,15 +120,15 @@ class FileIndexer:
             )
 
         # If anything changed and we have an enricher callback, notify it
-        if any(changed_items.values()) and _enricher_trigger_callback:
+        if any(changed_items.values()):
             logger.info(
                 f"Scan completed with changes: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            _enricher_trigger_callback({"changed_items": changed_items})
+            await trigger_enricher_update({"changed_items": changed_items})
         else:
             logger.info("Scan completed with no changes")
-            _enricher_trigger_callback("scan_complete")
+            await trigger_enricher_update("scan_complete")
 
     async def handle_incremental_changes(self, changes: Set[Tuple[Change, str]]):
         """Process file changes detected by watchfiles"""
@@ -202,15 +221,23 @@ class FileIndexer:
 
         cleanup_results = await self.cleanup_stale_tracks()
 
-        if any(changed_items.values()) and _enricher_trigger_callback:
+        if any(changed_items.values()):
             logger.info(
                 f"File changes detected: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            _enricher_trigger_callback({"changed_items": changed_items})
-        elif cleanup_results["tracks"] > 0 and _enricher_trigger_callback:
+            await trigger_enricher_update(
+                {
+                    "changed_items": {
+                        "artists": list(changed_items["artists"]),
+                        "albums": list(changed_items["albums"]),
+                        "tracks": list(changed_items["tracks"]),
+                    }
+                }
+            )
+        elif cleanup_results["tracks"] > 0:
             logger.info(f"Cleanup removed {cleanup_results['tracks']} tracks")
-            _enricher_trigger_callback("scan_complete")
+            await trigger_enricher_update("scan_complete")
 
     async def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
         """Recursively scan a folder for music files"""
@@ -525,11 +552,14 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
     while True:
         try:
             try:
-                command = await asyncio.wait_for(_indexer_queue.get(), timeout=10.0)
+                command = await _indexer_queue.get()
                 if command == "scan":
                     logger.info("Manual indexer scan triggered")
                     await indexer_instance.start()
                     last_run = time.time()
+                elif command == "stop":
+                    logger.info("Stopping indexer worker")
+                    break
                 elif isinstance(command, dict) and "incremental_changes" in command:
                     logger.info("File watcher detected changes, processing...")
                     await indexer_instance.handle_incremental_changes(
@@ -551,7 +581,7 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
             logger.info("Indexer worker cancelled.")
             break
         except Exception as e:
-            logger.error(f"Error in indexer worker: {str(e)}")
+            logger.exception(f"Error in indexer worker: {str(e)}")
             await asyncio.sleep(5)
 
 
@@ -575,13 +605,6 @@ async def _file_watcher_worker(config):
         logger.error(f"Error in file watcher: {str(e)}")
     finally:
         logger.info("File watcher task exited")
-
-
-def register_enricher_callback(callback):
-    """Register a callback to be called when the indexer finds changes"""
-    global _enricher_trigger_callback
-    _enricher_trigger_callback = callback
-    logger.info("Registered enricher callback with indexer")
 
 
 def start_indexer(config, db_manager: AsyncIndexerDb) -> Optional[asyncio.Task]:

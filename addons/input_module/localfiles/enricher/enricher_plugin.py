@@ -21,16 +21,16 @@ class EnricherPlugin(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def enrich_artist(self, artist: Dict) -> Optional[Dict]:
+    async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """Enrich artist metadata"""
         pass
 
     @abc.abstractmethod
-    def enrich_album(self, album: Dict) -> Optional[Dict]:
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """Enrich album metadata"""
         pass
 
     @abc.abstractmethod
-    def enrich_track(self, track: Dict) -> Optional[Dict]:
+    async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """Enrich track metadata"""
         pass

@@ -57,7 +57,7 @@ class WikidataPlugin(EnricherPlugin):
     def can_enrich_track(self) -> bool:
         return False
 
-    def enrich_artist(self, artist: Dict) -> Optional[Dict]:
+    async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """Enrich artist with image from Wikidata via MusicBrainz"""
         try:
             if not artist.get("mbid"):
@@ -184,11 +184,11 @@ class WikidataPlugin(EnricherPlugin):
             )
             return None
 
-    def enrich_album(self, album: Dict) -> Optional[Dict]:
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """Placeholder for album enrichment - not implemented"""
         return None
 
-    def enrich_track(self, track: Dict) -> Optional[Dict]:
+    async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """Placeholder for track enrichment - not implemented"""
         return None
 

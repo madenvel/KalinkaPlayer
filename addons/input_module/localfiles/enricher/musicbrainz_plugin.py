@@ -44,7 +44,10 @@ class MusicBrainzPlugin(EnricherPlugin):
             "enricher.plugins.musicbrainz.debug_matching", False
         )
 
-        self.user_agent = config["enricher.plugins.musicbrainz.user_agent"]
+        self.user_agent = config.get(
+            "enricher.plugins.musicbrainz.user_agent",
+            "KalinkaEnricher/1.0 (https://github.com/madenvel/kalinka-file-indexer)",
+        )
 
         # Set up MusicBrainz API
         musicbrainzngs.set_useragent(
@@ -192,7 +195,7 @@ class MusicBrainzPlugin(EnricherPlugin):
     def can_enrich_track(self) -> bool:
         return True
 
-    def enrich_artist(self, artist: Dict) -> Optional[Dict]:
+    async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """Enrich artist metadata with MusicBrainz data"""
         try:
             if artist["id"] == "unknown_artist":
@@ -246,7 +249,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
             return None
 
-    def enrich_album(self, album: Dict) -> Optional[Dict]:
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """Enrich album metadata with MusicBrainz data"""
         try:
             if album["id"] == "unknown_album":
@@ -257,7 +260,7 @@ class MusicBrainzPlugin(EnricherPlugin):
                 logger.debug(
                     "Artist name not found, trying to get it from the artist record"
                 )
-                artist = self.db_manager.get_artist_by_id(album["artist_id"])
+                artist = await self.db_manager.get_artist_by_id(album["artist_id"])
                 if artist:
                     logger.debug(
                         f"Found artist for album: {album['title']} -> {artist['name']}"
@@ -340,12 +343,12 @@ class MusicBrainzPlugin(EnricherPlugin):
             logger.error(f"Error enriching album {album['title']}: {str(e)}")
             return None
 
-    def enrich_track(self, track: Dict) -> Optional[Dict]:
+    async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """Enrich track metadata with MusicBrainz data"""
         try:
             # If artist_name is missing, try to get it from the artist record
             if "artist_name" not in track and "artist_id" in track:
-                artist = self.db_manager.get_artist_by_id(track["artist_id"])
+                artist = await self.db_manager.get_artist_by_id(track["artist_id"])
                 if artist:
                     track["artist_name"] = artist["name"]
                 else:
@@ -354,7 +357,7 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             # If album_title is missing, try to get it from the album record
             if "album_title" not in track and "album_id" in track:
-                album = self.db_manager.get_album_by_id(track["album_id"])
+                album = await self.db_manager.get_album_by_id(track["album_id"])
                 if album:
                     track["album_title"] = album["title"]
                 else:
