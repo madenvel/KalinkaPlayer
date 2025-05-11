@@ -1,43 +1,34 @@
 #!/usr/bin/env python3
 import os
 import logging
+import socket
+import tempfile
 import time
-import hashlib
-import threading
-from typing import Dict, Optional, Set
+import asyncio
+from typing import Dict, Optional, Set, Any, Tuple
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from PIL import Image
 import io
-import threading
-import queue
 import mimetypes
-from watchfiles import watch, Change
+from watchfiles import awatch, Change
 
-# Import ID generation utilities
-# Try using relative imports if not running as __main__
-if __name__ == "__main__":
-    from id_generator import (
-        generate_artist_id,
-        generate_album_id,
-        generate_track_id,
-    )
-    from indexer_db import IndexerDb
-else:
-    # Use relative imports when imported as a module
-    from .id_generator import (
-        generate_artist_id,
-        generate_album_id,
-        generate_track_id,
-    )
-    from .indexer_db import IndexerDb
+from id_generator import (
+    generate_artist_id,
+    generate_album_id,
+    generate_track_id,
+)
+from indexer_db_async import AsyncIndexerDb
+
 
 # Configure logger for watchfiles.main only to WARNING level
 watchfiles_logger = logging.getLogger("watchfiles.main")
 watchfiles_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka.sock")
 
 
 def default_enricher_trigger_callback(data):
@@ -46,14 +37,16 @@ def default_enricher_trigger_callback(data):
 
 
 # Global variables to manage indexer state
-_indexer_thread = None
-_indexer_queue = queue.Queue()
+_server = None
+_indexer_task: Optional[asyncio.Task] = None
+_indexer_queue: asyncio.Queue = asyncio.Queue()
 _enricher_trigger_callback = default_enricher_trigger_callback
-_file_watcher_thread = None
+_file_watcher_task: Optional[asyncio.Task] = None
+_file_watcher_stop_event: asyncio.Event = asyncio.Event()
 
 
 class FileIndexer:
-    def __init__(self, config, db_manager):
+    def __init__(self, config, db_manager: AsyncIndexerDb):
         self.config = config
         self.db_manager = db_manager
         self.music_folders = [
@@ -61,29 +54,30 @@ class FileIndexer:
         ]
         self.artwork_path = config["artwork_path"]
         self.running = False
-        self.lock = threading.Lock()
+        self.lock = asyncio.Lock()
 
-    def start(self):
+    async def start(self):
         """Start the indexer process"""
-        if self.running:
-            logger.warning("Indexer already running, skipping")
-            return
-
-        with self.lock:
+        async with self.lock:
+            if self.running:
+                logger.warning("Indexer already running, skipping")
+                return
             self.running = True
-            try:
-                self.run_scan()
-                logger.info("Indexer scan completed")
-            except Exception as e:
-                logger.error(f"Error running indexer scan: {str(e)}")
-            finally:
+
+        try:
+            await self.run_scan()
+            logger.info("Indexer scan completed")
+        except Exception as e:
+            logger.error(f"Error running indexer scan: {str(e)}")
+        finally:
+            async with self.lock:
                 self.running = False
 
-    def run_scan(self):
+    async def run_scan(self):
         """Scan all music folders for files"""
         logger.info(f"Starting music file scan in folders: {self.music_folders}")
 
-        changed_items = {
+        changed_items: Dict[str, Set[str]] = {
             "artists": set(),
             "albums": set(),
             "tracks": set(),
@@ -95,10 +89,10 @@ class FileIndexer:
                 continue
 
             logger.info(f"Scanning folder: {folder}")
-            self.scan_folder(folder, changed_items)
+            await self.scan_folder(folder, changed_items)
 
         # Delete stale entries after scanning but before enrichment
-        cleanup_results = self.cleanup_stale_tracks()
+        cleanup_results = await self.cleanup_stale_tracks()
 
         # If we removed any tracks, ensure we don't trigger enrichment for them
         if cleanup_results["tracks"] > 0:
@@ -117,19 +111,16 @@ class FileIndexer:
             logger.info("Scan completed with no changes")
             _enricher_trigger_callback("scan_complete")
 
-    def handle_incremental_changes(self, changes: Set[Change]):
+    async def handle_incremental_changes(self, changes: Set[Tuple[Change, str]]):
         """Process file changes detected by watchfiles"""
-        changed_items = {
+        changed_items: Dict[str, Set[str]] = {
             "artists": set(),
             "albums": set(),
             "tracks": set(),
         }
 
-        # Track directories we've already processed to avoid double-processing
         processed_dirs = set()
         processed_files = set()
-
-        # First stage: collect all directory and file paths for analysis
         dir_additions = set()
         all_files = set()
 
@@ -139,7 +130,6 @@ class FileIndexer:
             elif not os.path.isdir(file_path):
                 all_files.add(file_path)
 
-        # Second stage: identify files that are within added directories
         files_in_added_dirs = set()
         for file_path in all_files:
             for dir_path in dir_additions:
@@ -147,7 +137,6 @@ class FileIndexer:
                     files_in_added_dirs.add(file_path)
                     break
 
-        # Process sorted changes - directories first, then files not in added directories
         sorted_changes = []
         for change_type, file_path in changes:
             if os.path.isdir(file_path) and change_type == Change.added:
@@ -157,31 +146,25 @@ class FileIndexer:
             if not os.path.isdir(file_path) and file_path not in files_in_added_dirs:
                 sorted_changes.append((change_type, file_path))
 
-        # Process directory additions first, then individual files
         for change_type, file_path in sorted_changes:
-            logger.debug(f"Change detected: {change_type} - {file_path}")
+            logger.debug(f"Change detected: {change_type.name} - {file_path}")
 
-            # Handle directory additions by scanning them
             if os.path.isdir(file_path) and change_type == Change.added:
                 logger.info(f"New directory detected: {file_path}")
                 try:
-                    # Scan the newly added directory
-                    self.scan_folder(file_path, changed_items)
+                    await self.scan_folder(file_path, changed_items)
                     processed_dirs.add(file_path)
                     continue
                 except Exception as e:
                     logger.error(f"Error scanning new directory {file_path}: {str(e)}")
                     continue
 
-            # Skip other directories, we'll handle deleted directories during cleanup
             if os.path.isdir(file_path):
                 continue
 
-            # Skip files we've already processed or that are in processed directories
             if file_path in processed_files:
                 continue
 
-            # Check if this file is within a directory we've already processed
             parent_processed = False
             for processed_dir in processed_dirs:
                 if file_path.startswith(processed_dir + os.sep):
@@ -190,45 +173,35 @@ class FileIndexer:
                     )
                     parent_processed = True
                     break
-
             if parent_processed:
                 continue
 
-            # Only process audio files
             if not self._is_supported_audio_file(file_path):
                 continue
 
-            # Handle file creation or modification
             if change_type in (Change.added, Change.modified):
                 try:
-                    # Process the file
                     logger.info(f"Processing changed file: {file_path}")
-                    changes = self.process_file(file_path)
+                    result_changes = await self.process_file(file_path)
                     processed_files.add(file_path)
-                    if changes:
-                        for key, value in changes.items():
+                    if result_changes:
+                        for key, value in result_changes.items():
                             if value:
                                 changed_items[key].add(value)
                 except Exception as e:
                     logger.error(f"Error processing changed file {file_path}: {str(e)}")
 
-            # Handle file deletion
             elif change_type == Change.deleted:
                 try:
-                    # Find the track in the database
-                    track = self.db_manager.get_track_by_path(file_path)
+                    track = await self.db_manager.get_track_by_path(file_path)
                     if track:
                         logger.info(f"Removing deleted file from database: {file_path}")
-                        # Delete the track and update affected albums/artists
-                        self.db_manager.delete_track(track["id"])
+                        await self.db_manager.delete_track(track["id"])
                 except Exception as e:
                     logger.error(f"Error processing deleted file {file_path}: {str(e)}")
 
-        # After processing all changes, clean up any orphaned items
-        # This will handle removal of tracks in deleted directories
-        cleanup_results = self.cleanup_stale_tracks()
+        cleanup_results = await self.cleanup_stale_tracks()
 
-        # Notify enricher if we have changes
         if any(changed_items.values()) and _enricher_trigger_callback:
             logger.info(
                 f"File changes detected: Artists={len(changed_items['artists'])}, "
@@ -239,17 +212,18 @@ class FileIndexer:
             logger.info(f"Cleanup removed {cleanup_results['tracks']} tracks")
             _enricher_trigger_callback("scan_complete")
 
-    def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
+    async def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
         """Recursively scan a folder for music files"""
         for root, _, files in os.walk(folder):
             for file in files:
                 if self._is_supported_audio_file(file):
                     file_path = os.path.join(root, file)
                     try:
-                        changes = self.process_file(file_path)
-                        if changes:
-                            for key, value in changes.items():
-                                changed_items[key].add(value)
+                        result_changes = await self.process_file(file_path)
+                        if result_changes:
+                            for key, value in result_changes.items():
+                                if value:
+                                    changed_items[key].add(value)
                     except Exception as e:
                         logger.error(f"Error processing file {file_path}: {str(e)}")
 
@@ -258,15 +232,13 @@ class FileIndexer:
         ext = os.path.splitext(filename.lower())[1]
         return ext in [".mp3", ".flac"]
 
-    def process_file(self, file_path: str):
+    async def process_file(self, file_path: str) -> Optional[Dict[str, Optional[str]]]:
         """Process a music file and update the database. Returns changed items IDs."""
-        # Check if file exists in database and if it has been modified
         stat = os.stat(file_path)
         file_size = stat.st_size
         modified_time = int(stat.st_mtime)
 
-        # Check if the file is already in the database
-        existing_track = self.db_manager.get_track_by_path(file_path)
+        existing_track = await self.db_manager.get_track_by_path(file_path)
         if (
             existing_track
             and existing_track["modified_time"] == modified_time
@@ -275,32 +247,28 @@ class FileIndexer:
             logger.debug(f"File unchanged, skipping: {file_path}")
             return None
 
-        # Extract metadata from the file
-        metadata = self._extract_metadata(file_path)
+        metadata = await asyncio.to_thread(self._extract_metadata, file_path)
         if not metadata:
             logger.warning(f"Failed to extract metadata from {file_path}")
             return None
 
-        changes = {
+        changes: Dict[str, Optional[str]] = {
             "artists": None,
             "albums": None,
             "tracks": None,
         }
 
-        # Add file metadata
         metadata["file_path"] = file_path
         metadata["file_size"] = file_size
         metadata["modified_time"] = modified_time
         metadata["last_updated"] = int(time.time())
 
-        # Process artist
         artist_name = metadata.get("artist", "Unknown Artist")
         artist_id = generate_artist_id(artist_name)
 
-        # Check if artist exists, create if not
-        artist = self.db_manager.get_artist_by_id(artist_id)
+        artist = await self.db_manager.get_artist_by_id(artist_id)
         if not artist:
-            self.db_manager.insert_artist(
+            await self.db_manager.insert_artist(
                 {
                     "id": artist_id,
                     "name": artist_name,
@@ -310,42 +278,33 @@ class FileIndexer:
             )
             changes["artists"] = artist_id
 
-        # Process album
         album_title = metadata.get("album", "Unknown Album")
         album_id = generate_album_id(album_title, artist_id)
 
-        # Check if album exists, create if not
-        album = self.db_manager.get_album_by_id(album_id)
+        album = await self.db_manager.get_album_by_id(album_id)
         if not album:
-            album_data = {
+            album_data: Dict[str, Any] = {
                 "id": album_id,
                 "title": album_title,
                 "artist_id": artist_id,
                 "enriched": 0,
                 "last_updated": int(time.time()),
             }
-
-            # Process year if available
             if "year" in metadata:
                 album_data["year"] = metadata["year"]
-
-            # Process genre if available
             if "genre" in metadata:
                 album_data["genre"] = metadata["genre"]
-
-            # Process album art if available
             if "album_art" in metadata:
                 cover_art_filename = f"{album_id}.jpg"
-                self._save_images(metadata["album_art"], album_id, "album")
+                await asyncio.to_thread(
+                    self._save_images, metadata["album_art"], album_id, "album"
+                )
                 album_data["cover_art"] = cover_art_filename
-
-            self.db_manager.insert_album(album_data)
+            await self.db_manager.insert_album(album_data)
             changes["albums"] = album_id
 
-        # Process track
         track_id = generate_track_id(file_path)
-
-        track_data = {
+        track_data: Dict[str, Any] = {
             "id": track_id,
             "title": metadata.get("title", os.path.basename(file_path)),
             "album_id": album_id,
@@ -361,22 +320,17 @@ class FileIndexer:
             "enriched": 0,
             "last_updated": int(time.time()),
         }
-
-        self.db_manager.insert_track(track_data)
+        await self.db_manager.insert_track(track_data)
         changes["tracks"] = track_id
 
-        # Update album statistics
-        self.db_manager.update_album_stats(album_id)
-
+        await self.db_manager.update_album_stats(album_id)
         logger.debug(f"Processed file: {file_path}")
         return changes
 
     def _extract_metadata(self, file_path: str) -> Optional[Dict]:
         """Extract metadata from a music file"""
         try:
-            # Determine file format
             ext = os.path.splitext(file_path.lower())[1]
-
             if ext == ".mp3":
                 return self._extract_mp3_metadata(file_path)
             elif ext == ".flac":
@@ -384,7 +338,6 @@ class FileIndexer:
             else:
                 logger.warning(f"Unsupported file format: {file_path}")
                 return None
-
         except Exception as e:
             logger.error(f"Error extracting metadata from {file_path}: {str(e)}")
             return None
@@ -394,23 +347,17 @@ class FileIndexer:
         try:
             mp3 = MP3(file_path)
             id3 = ID3(file_path)
-
             metadata = {
                 "format": mimetypes.guess_type(file_path)[0] or "audio/mpeg",
-                "duration": int(mp3.info.length),  # Store in seconds
+                "duration": int(mp3.info.length),
             }
-
-            # Extract basic tags
-            if "TIT2" in id3:  # Title
+            if "TIT2" in id3:
                 metadata["title"] = str(id3["TIT2"])
-
-            if "TPE1" in id3:  # Artist
+            if "TPE1" in id3:
                 metadata["artist"] = str(id3["TPE1"])
-
-            if "TALB" in id3:  # Album
+            if "TALB" in id3:
                 metadata["album"] = str(id3["TALB"])
-
-            if "TRCK" in id3:  # Track number
+            if "TRCK" in id3:
                 track_str = str(id3["TRCK"])
                 if "/" in track_str:
                     track_str = track_str.split("/")[0]
@@ -418,41 +365,31 @@ class FileIndexer:
                     metadata["track_number"] = int(track_str)
                 except ValueError:
                     pass
-
-            if "TDRC" in id3:  # Year
+            if "TDRC" in id3:
                 try:
                     metadata["year"] = int(str(id3["TDRC"]).split("-")[0])
                 except (ValueError, IndexError):
                     pass
-
-            if "TCON" in id3:  # Genre
+            if "TCON" in id3:
                 metadata["genre"] = str(id3["TCON"])
-
-            # Extract ReplayGain info
             if "TXXX:replaygain_track_gain" in id3:
                 gain_str = str(id3["TXXX:replaygain_track_gain"])
                 try:
-                    # Extract the numeric part and convert to float
                     metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
                 except ValueError:
                     pass
-
             if "TXXX:replaygain_track_peak" in id3:
                 peak_str = str(id3["TXXX:replaygain_track_peak"])
                 try:
                     metadata["replaygain_peak"] = float(peak_str)
                 except ValueError:
                     pass
-
-            # Extract album art
             for tag in ["APIC:", "APIC:Cover", "APIC:CoverFront"]:
                 if tag in id3:
                     apic = id3[tag]
                     metadata["album_art"] = apic.data
                     break
-
             return metadata
-
         except Exception as e:
             logger.error(f"Error extracting MP3 metadata from {file_path}: {str(e)}")
             raise
@@ -461,22 +398,16 @@ class FileIndexer:
         """Extract metadata from a FLAC file"""
         try:
             flac = FLAC(file_path)
-
             metadata = {
                 "format": mimetypes.guess_type(file_path)[0] or "audio/flac",
-                "duration": int(flac.info.length),  # Store in seconds
+                "duration": int(flac.info.length),
             }
-
-            # Extract basic tags
             if "title" in flac:
                 metadata["title"] = flac["title"][0]
-
             if "artist" in flac:
                 metadata["artist"] = flac["artist"][0]
-
             if "album" in flac:
                 metadata["album"] = flac["album"][0]
-
             if "tracknumber" in flac:
                 track_str = flac["tracknumber"][0]
                 if "/" in track_str:
@@ -485,43 +416,34 @@ class FileIndexer:
                     metadata["track_number"] = int(track_str)
                 except ValueError:
                     pass
-
             if "date" in flac:
                 try:
                     metadata["year"] = int(flac["date"][0].split("-")[0])
                 except (ValueError, IndexError):
                     pass
-
             if "genre" in flac:
                 metadata["genre"] = flac["genre"][0]
-
-            # Extract ReplayGain info
             if "replaygain_track_gain" in flac:
                 gain_str = flac["replaygain_track_gain"][0]
                 try:
                     metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
                 except ValueError:
                     pass
-
             if "replaygain_track_peak" in flac:
                 peak_str = flac["replaygain_track_peak"][0]
                 try:
                     metadata["replaygain_peak"] = float(peak_str)
                 except ValueError:
                     pass
-
-            # Extract album art
             pictures = flac.pictures
             if pictures:
                 for pic in pictures:
                     if pic.type == 3:  # Cover (front)
                         metadata["album_art"] = pic.data
                         break
-                else:  # If no cover front was found, use the first picture
+                else:
                     metadata["album_art"] = pictures[0].data
-
             return metadata
-
         except Exception as e:
             logger.error(f"Error extracting FLAC metadata from {file_path}: {str(e)}")
             raise
@@ -530,36 +452,28 @@ class FileIndexer:
         """Save artwork images in different sizes"""
         try:
             img = Image.open(io.BytesIO(image_data))
-
-            # Create the directory if it doesn't exist
             dir_path = os.path.join(self.artwork_path, entity_type)
             os.makedirs(dir_path, exist_ok=True)
-
-            # Convert to RGB if needed (for PNG, etc.)
             if img.mode != "RGB":
                 img = img.convert("RGB")
 
-            # Save thumbnail (50x50)
             thumbnail = img.copy()
             thumbnail.thumbnail((50, 50), Image.LANCZOS)
             thumbnail.save(
                 os.path.join(dir_path, f"{entity_id}_thumbnail.jpg"), "JPEG", quality=90
             )
 
-            # Save small (230x230)
             small = img.copy()
             small.thumbnail((230, 230), Image.LANCZOS)
             small.save(
                 os.path.join(dir_path, f"{entity_id}_small.jpg"), "JPEG", quality=90
             )
 
-            # Save large (600x600 or original if smaller)
             large = img.copy()
             large.thumbnail((600, 600), Image.LANCZOS)
             large.save(
                 os.path.join(dir_path, f"{entity_id}_large.jpg"), "JPEG", quality=90
             )
-
             return True
         except Exception as e:
             logger.error(
@@ -567,41 +481,11 @@ class FileIndexer:
             )
             return False
 
-    def _get_artist_id(self, artist_name: str) -> str:
-        """Generate a stable ID for an artist"""
-        if not artist_name or artist_name == "Unknown Artist":
-            return "unknown_artist"
-
-        # Create a hash from the artist name for a stable ID
-        hash_obj = hashlib.md5(artist_name.lower().encode("utf-8"))
-        return f"artist_{hash_obj.hexdigest()[:16]}"
-
-    def _get_album_id(self, album_title: str, artist_id: str) -> str:
-        """Generate a stable ID for an album"""
-        if not album_title or album_title == "Unknown Album":
-            return "unknown_album"
-
-        # Create a hash from the album title and artist ID for a stable ID
-        hash_input = f"{album_title.lower()}{artist_id}"
-        hash_obj = hashlib.md5(hash_input.encode("utf-8"))
-        return f"album_{hash_obj.hexdigest()[:16]}"
-
-    def _get_track_id(self, file_path: str) -> str:
-        """Generate a stable ID for a track"""
-        # Create a hash from the file path for a stable ID
-        hash_obj = hashlib.md5(file_path.encode("utf-8"))
-        return f"track_{hash_obj.hexdigest()[:16]}"
-
-    def cleanup_stale_tracks(self) -> Dict[str, int]:
+    async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries for files that no longer exist in the file system"""
         logger.info("Checking for stale files in the database...")
-
-        # Get all tracks from the database
-        all_tracks = self.db_manager.get_all_tracks()
-
+        all_tracks = await self.db_manager.get_all_tracks()
         removed_tracks = 0
-
-        # Check each track to see if the file still exists
         for track in all_tracks:
             file_path = track["file_path"]
             if not os.path.exists(file_path):
@@ -609,14 +493,12 @@ class FileIndexer:
                     f"File no longer exists, removing from database: {file_path}"
                 )
                 track_id = track["id"]
-                self.db_manager.delete_track(track_id)
+                await self.db_manager.delete_track(track_id)
                 removed_tracks += 1
 
-        # Clean up orphaned albums and artists
         removed_albums, removed_artists = (
-            self.db_manager.delete_orphaned_albums_and_artists()
+            await self.db_manager.delete_orphaned_albums_and_artists()
         )
-
         if removed_tracks > 0 or removed_albums > 0 or removed_artists > 0:
             logger.info(
                 f"Cleanup completed: {removed_tracks} tracks, {removed_albums} albums, "
@@ -624,7 +506,6 @@ class FileIndexer:
             )
         else:
             logger.info("No stale entries found in the database")
-
         return {
             "tracks": removed_tracks,
             "albums": removed_albums,
@@ -632,71 +513,68 @@ class FileIndexer:
         }
 
 
-def _indexer_worker(config, db_manager):
-    """Background worker thread for the indexer"""
+async def _indexer_worker(config, db_manager: AsyncIndexerDb):
+    """Background worker task for the indexer"""
     indexer_instance = FileIndexer(config, db_manager)
+    await indexer_instance.start()
 
-    # Run initial scan
-    indexer_instance.start()
-
-    # Set up regular interval scanning
     interval_minutes = config.get("scan_interval_minutes", 5)
     logger.info(f"Scheduled file indexer to run every {interval_minutes} minutes")
-
     last_run = time.time()
 
     while True:
         try:
-            # Check for manual trigger commands with a timeout
             try:
-                command = _indexer_queue.get(timeout=10)
+                command = await asyncio.wait_for(_indexer_queue.get(), timeout=10.0)
                 if command == "scan":
                     logger.info("Manual indexer scan triggered")
-                    indexer_instance.start()
+                    await indexer_instance.start()
                     last_run = time.time()
-                elif command == "stop":
-                    logger.info("Stopping indexer thread")
-                    break
                 elif isinstance(command, dict) and "incremental_changes" in command:
                     logger.info("File watcher detected changes, processing...")
-                    indexer_instance.handle_incremental_changes(
+                    await indexer_instance.handle_incremental_changes(
                         command["incremental_changes"]
                     )
                 _indexer_queue.task_done()
-            except queue.Empty:
-                # No command received, check if it's time for scheduled scan
+            except asyncio.TimeoutError:
                 pass
 
-            # Check if it's time for a scheduled scan
             if time.time() - last_run > interval_minutes * 60:
-                indexer_instance.start()
+                logger.info(
+                    f"Scheduled indexer scan triggered (interval: {interval_minutes} mins)"
+                )
+                await indexer_instance.start()
                 last_run = time.time()
 
-            time.sleep(1)  # Sleep to avoid busy-waiting
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.info("Indexer worker cancelled.")
+            break
         except Exception as e:
             logger.error(f"Error in indexer worker: {str(e)}")
-            time.sleep(5)  # Sleep longer on errors
+            await asyncio.sleep(5)
 
 
-def _file_watcher_worker(config):
-    """Background worker thread for real-time filesystem monitoring"""
+async def _file_watcher_worker(config):
+    """Background worker task for real-time filesystem monitoring"""
     global _indexer_queue, _file_watcher_stop_event
 
     music_folders = [folder.strip() for folder in config["music_folders"].split(",")]
     logger.info(f"Starting file watcher for folders: {music_folders}")
 
     try:
-        # Start watching the music folders for changes, using the stop_event
-        for changes in watch(
+        async for changes in awatch(
             *music_folders, watch_filter=None, stop_event=_file_watcher_stop_event
         ):
-            # Process detected changes
-            _indexer_queue.put({"incremental_changes": changes})
-
+            if changes:
+                logger.debug(f"File watcher detected {len(changes)} changes.")
+                await _indexer_queue.put({"incremental_changes": changes})
+    except asyncio.CancelledError:
+        logger.info("File watcher worker cancelled.")
     except Exception as e:
         logger.error(f"Error in file watcher: {str(e)}")
-
-    logger.info("File watcher thread exited")
+    finally:
+        logger.info("File watcher task exited")
 
 
 def register_enricher_callback(callback):
@@ -706,172 +584,234 @@ def register_enricher_callback(callback):
     logger.info("Registered enricher callback with indexer")
 
 
-def start_indexer(config, db_manager):
-    """Start the indexer process in a background thread"""
-    global _indexer_thread
+def start_indexer(config, db_manager: AsyncIndexerDb) -> Optional[asyncio.Task]:
+    """Start the indexer process in a background task"""
+    global _indexer_task
+    if _indexer_task and not _indexer_task.done():
+        logger.warning("Indexer task already running, not starting another")
+        return _indexer_task
 
-    # Ensure we don't start multiple indexer threads
-    if _indexer_thread and _indexer_thread.is_alive():
-        logger.warning("Indexer thread already running, not starting another")
-        return _indexer_thread
-
-    # Create directories if they don't exist
     os.makedirs(os.path.dirname(config["db_path"]), exist_ok=True)
     os.makedirs(config["artwork_path"], exist_ok=True)
+    os.makedirs(os.path.join(config["artwork_path"], "album"), exist_ok=True)
+    os.makedirs(os.path.join(config["artwork_path"], "artist"), exist_ok=True)
 
-    # Start the worker thread
-    _indexer_thread = threading.Thread(
-        target=_indexer_worker,
-        args=(config, db_manager),
-        daemon=True,
-    )
-    _indexer_thread.name = "LocalFiles-Indexer"
-    _indexer_thread.start()
-
-    logger.info("Started file indexer background thread")
-    return _indexer_thread
+    _indexer_task = asyncio.create_task(_indexer_worker(config, db_manager))
+    logger.info("Started file indexer background task")
+    return _indexer_task
 
 
-def stop_indexer():
-    """Stop the indexer thread"""
-    if _indexer_thread and _indexer_thread.is_alive():
-        logger.info("Sending stop command to indexer thread")
-        _indexer_queue.put("stop")
-        _indexer_thread.join(5.0)
-        return True
-    return False
-
-
-# Create a global stop event for the file watcher
-_file_watcher_stop_event = threading.Event()
-
-
-def stop_file_watcher():
-    """Stop the file watcher thread"""
-    global _file_watcher_thread, _file_watcher_stop_event
-
-    if _file_watcher_thread and _file_watcher_thread.is_alive():
-        logger.info("Sending stop signal to file watcher thread")
-        _file_watcher_stop_event.set()
-
-        # Wait for thread to terminate (with timeout)
-        _file_watcher_thread.join(5.0)
-
-        if _file_watcher_thread.is_alive():
-            logger.warning("File watcher thread did not terminate in time")
-            return False
-        else:
-            logger.info("File watcher thread successfully stopped")
+async def stop_indexer() -> bool:
+    """Stop the indexer task"""
+    global _indexer_task, _indexer_queue
+    if _indexer_task and not _indexer_task.done():
+        logger.info("Sending stop command to indexer task")
+        try:
+            await _indexer_queue.put("stop")
+            await asyncio.wait_for(_indexer_task, timeout=7.0)
+            logger.info("Indexer task successfully stopped")
             return True
+        except asyncio.TimeoutError:
+            logger.warning("Indexer task did not stop in time, cancelling.")
+            _indexer_task.cancel()
+            try:
+                await _indexer_task
+            except asyncio.CancelledError:
+                logger.info("Indexer task was cancelled.")
+            return False
+        except Exception as e:
+            logger.error(f"Error stopping indexer task: {e}")
+            return False
+    elif _indexer_task and _indexer_task.done():
+        logger.info("Indexer task was already done.")
+        return True
+    logger.info("No active indexer task to stop.")
     return False
 
 
-def start_file_watcher(config):
-    """Start the file watcher process in a background thread if enabled"""
-    global _file_watcher_thread, _file_watcher_stop_event
+async def stop_file_watcher() -> bool:
+    """Stop the file watcher task"""
+    global _file_watcher_task, _file_watcher_stop_event
+    if _file_watcher_task and not _file_watcher_task.done():
+        logger.info("Sending stop signal to file watcher task")
+        _file_watcher_stop_event.set()
+        try:
+            await asyncio.wait_for(_file_watcher_task, timeout=7.0)
+            logger.info("File watcher task successfully stopped")
+            return True
+        except asyncio.TimeoutError:
+            logger.warning("File watcher task did not stop in time, cancelling.")
+            _file_watcher_task.cancel()
+            try:
+                await _file_watcher_task
+            except asyncio.CancelledError:
+                logger.info("File watcher task was cancelled.")
+            return False
+        except Exception as e:
+            logger.error(f"Error stopping file watcher task: {e}")
+            return False
+    elif _file_watcher_task and _file_watcher_task.done():
+        logger.info("File watcher task was already done.")
+        return True
+    logger.info("No active file watcher task to stop.")
+    return False
 
-    # Ensure we don't start multiple file watcher threads
-    if _file_watcher_thread and _file_watcher_thread.is_alive():
-        logger.warning("File watcher thread already running, not starting another")
-        return _file_watcher_thread
 
-    # Reset the stop event in case it was previously set
+def start_file_watcher(config) -> Optional[asyncio.Task]:
+    """Start the file watcher process in a background task if enabled"""
+    global _file_watcher_task, _file_watcher_stop_event
+    if not config.get("use_file_watcher", False):
+        logger.info("File watcher is disabled in config.")
+        return None
+
+    if _file_watcher_task and not _file_watcher_task.done():
+        logger.warning("File watcher task already running, not starting another")
+        return _file_watcher_task
+
     _file_watcher_stop_event.clear()
+    _file_watcher_task = asyncio.create_task(_file_watcher_worker(config))
+    logger.info("Started file watcher background task")
+    return _file_watcher_task
 
-    # Start the worker thread
-    _file_watcher_thread = threading.Thread(
-        target=_file_watcher_worker,
-        args=(config,),  # Added comma to create a single-element tuple
-        daemon=True,
-    )
-    _file_watcher_thread.name = "LocalFiles-FileWatcher"
-    _file_watcher_thread.start()
 
-    logger.info("Started file watcher background thread")
-    return _file_watcher_thread
+async def handle_client(reader, writer):
+    data = await reader.readline()
+    message = data.decode().strip()
+    await _indexer_queue.put(message)
+
+
+def ensure_single_instance():
+    """Try to connect to the existing socket to see if it's already running."""
+    if os.path.exists(SOCKET_PATH):
+        try:
+            # Try to connect to see if the socket is active
+            test_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            test_socket.connect(SOCKET_PATH)
+            test_socket.close()
+            print("Another instance is already running.")
+            sys.exit(1)
+        except (ConnectionRefusedError, FileNotFoundError):
+            print("Stale socket found. Cleaning up.")
+            os.remove(SOCKET_PATH)  # stale socket
+
+
+async def start_server():
+    """Start the server process"""
+    global _server
+
+    if _server and not _server.should_exit:
+        logger.warning("Server already running, not starting another")
+        return _server
+
+    if os.path.exists(SOCKET_PATH):
+        os.remove(SOCKET_PATH)
+
+    _server = await asyncio.start_unix_server(handle_client, path=SOCKET_PATH)
+    logger.info(f"Server started at {SOCKET_PATH}")
+
+    return _server
+
+
+async def main(config_data: Dict[str, Any]):
+    """Runs the main application logic asynchronously."""
+    global _indexer_task, _file_watcher_task
+
+    ensure_single_instance()
+
+    db_manager = AsyncIndexerDb(config_data)
+    try:
+        await db_manager.init_db()
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.error(f"Fatal: Error initializing database: {str(e)}")
+        sys.exit(1)
+
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    import signal
+    import sys
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, shutdown_event.set)
+
+    _indexer_task = start_indexer(config_data, db_manager)
+    _file_watcher_task = start_file_watcher(config_data)
+    _server = await start_server()
+
+    try:
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        logger.info("Server cancelled, shutting down...")
+    except Exception as e:
+        logger.error(f"Error in main loop: {str(e)}")
+    finally:
+        logger.info("Main async runner initiating shutdown of tasks...")
+        if _file_watcher_task and not _file_watcher_task.done():
+            logger.info("Stopping file watcher task...")
+            await stop_file_watcher()
+        else:
+            logger.info("File watcher task was not running or already done.")
+
+        if _indexer_task and not _indexer_task.done():
+            logger.info("Stopping indexer task...")
+            await stop_indexer()
+        else:
+            logger.info("Indexer task was not running or already done.")
+
+        logger.info("All background tasks processed for shutdown.")
+
+        if _server:
+            _server.close()
+            await _server.wait_closed()
+
+        if os.path.exists(SOCKET_PATH):
+            os.remove(SOCKET_PATH)
+
+        logger.info("Server shutdown complete.")
 
 
 if __name__ == "__main__":
     import argparse
-    import signal
     import sys
     import json
-    import os.path
 
-    # Set up logging
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        # handlers=[logging.StreamHandler(), logging.FileHandler("indexer.log")],
     )
 
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Music file indexer daemon")
+    parser = argparse.ArgumentParser(description="Async Music file indexer daemon")
     parser.add_argument(
         "-c", "--config", help="JSON configuration string", required=True
     )
-    parser.add_argument("-d", "--daemon", action="store_true", help="Run as daemon")
     args = parser.parse_args()
 
-    # Load configuration from JSON string
     logger.info("Loading configuration from command line JSON")
     try:
-        import json
-
-        config = json.loads(args.config)
-        # Extract the localfiles section if it exists
-        if "input_modules" in config and "localfiles" in config["input_modules"]:
-            config = config["input_modules"]["localfiles"]
+        loaded_config = json.loads(args.config)
+        if (
+            "input_modules" in loaded_config
+            and "localfiles" in loaded_config["input_modules"]
+        ):
+            app_config = loaded_config["input_modules"]["localfiles"]
+        else:
+            app_config = loaded_config
     except json.JSONDecodeError as e:
         logger.error(f"Error parsing JSON configuration: {str(e)}")
         sys.exit(1)
-
-    # Initialize database
-    try:
-        db_manager = IndexerDb(config)
-    except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
+    except KeyError as e:
+        logger.error(
+            f"Configuration missing expected keys (e.g., input_modules.localfiles): {str(e)}"
+        )
         sys.exit(1)
 
-    # Set up signal handlers for graceful termination
-    def signal_handler(sig, frame):
-        logger.info(f"Received signal {sig}, shutting down...")
-        stop_file_watcher()
-        stop_indexer()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Start the indexer and file watcher
-    logger.info("Starting indexer daemon")
-    indexer_thread = start_indexer(config, db_manager)
-    watcher_thread = None
-
-    if config.get("use_file_watcher", False):
-        logger.info("Starting file watcher")
-        watcher_thread = start_file_watcher(config)
-
-    # Keep the main thread alive
     try:
-        while True:
-            time.sleep(5)
-
-            # Check that threads are still running
-            if not indexer_thread.is_alive():
-                logger.error("Indexer thread has died, restarting")
-                indexer_thread = start_indexer(config, db_manager)
-
-            if (
-                config.get("use_file_watcher", False)
-                and watcher_thread
-                and not watcher_thread.is_alive()
-            ):
-                logger.error("File watcher thread has died, restarting")
-                watcher_thread = start_file_watcher(config)
+        asyncio.run(main(app_config))
 
     except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received, shutting down...")
-        stop_file_watcher()
-        stop_indexer()
-        sys.exit(0)
+        logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
+    except Exception as e:
+        logger.critical(f"Unhandled exception in asyncio.run: {e}", exc_info=True)
+    finally:
+        logger.info("Indexer daemon finished.")

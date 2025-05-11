@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__.split(".")[-1])
 musicbrainz_logger = logging.getLogger("musicbrainzngs")
 musicbrainz_logger.setLevel(logging.WARNING)
 
+# Required fields for each entity type
+# These define what metadata fields are required for an entity to be considered fully enriched
+ARTIST_REQUIRED_FIELDS = ["name", "mbid", "image_url"]
+ALBUM_REQUIRED_FIELDS = ["title", "artist_id", "mbid", "cover_art", "year", "genre"]
+TRACK_REQUIRED_FIELDS = [
+    "title",
+    "artist_id",
+    "album_id",
+    "mbid",
+    "duration",
+    "track_number",
+]
+
 # Global variables to manage enricher state
 _enricher_thread = None
 _enricher_instance = None
@@ -137,11 +150,10 @@ class MetadataEnricher:
         updated_artist = artist.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Define required fields for an artist to be considered fully enriched
-        required_fields = ["name", "mbid", "image_url"]
-
         # Check if all required fields already exist and have values
-        is_fully_enriched = all(updated_artist.get(field) for field in required_fields)
+        is_fully_enriched = all(
+            updated_artist.get(field) for field in ARTIST_REQUIRED_FIELDS
+        )
         if is_fully_enriched:
             logger.debug(f"Artist {artist['id']} already has all required fields")
             updated_artist["enriched"] = EnrichmentStatus.ENRICHED
@@ -163,7 +175,7 @@ class MetadataEnricher:
 
                 # Check if we're now fully enriched after this plugin
                 is_fully_enriched = all(
-                    updated_artist.get(field) for field in required_fields
+                    updated_artist.get(field) for field in ARTIST_REQUIRED_FIELDS
                 )
                 if is_fully_enriched:
                     logger.debug(f"Artist {artist['name']} now fully enriched")
@@ -197,11 +209,10 @@ class MetadataEnricher:
         updated_album = album.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Define required fields for an album to be considered fully enriched
-        required_fields = ["title", "artist_id", "mbid", "cover_art", "year", "genre"]
-
         # Check if all required fields already exist and have values
-        is_fully_enriched = all(updated_album.get(field) for field in required_fields)
+        is_fully_enriched = all(
+            updated_album.get(field) for field in ALBUM_REQUIRED_FIELDS
+        )
         if is_fully_enriched:
             logger.debug(f"Album {album['id']} already has all required fields")
             updated_album["enriched"] = EnrichmentStatus.ENRICHED
@@ -228,7 +239,7 @@ class MetadataEnricher:
 
                 # Check if we're now fully enriched after this plugin
                 is_fully_enriched = all(
-                    updated_album.get(field) for field in required_fields
+                    updated_album.get(field) for field in ALBUM_REQUIRED_FIELDS
                 )
                 if is_fully_enriched:
                     logger.debug(f"Album {album['title']} now fully enriched")
@@ -263,18 +274,10 @@ class MetadataEnricher:
         updated_track = track.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Define required fields for a track to be considered fully enriched
-        required_fields = [
-            "title",
-            "artist_id",
-            "album_id",
-            "mbid",
-            "duration",
-            "track_number",
-        ]
-
         # Check if all required fields already exist and have values
-        is_fully_enriched = all(updated_track.get(field) for field in required_fields)
+        is_fully_enriched = all(
+            updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
+        )
         if is_fully_enriched:
             logger.debug(f"Track {track['id']} already has all required fields")
             updated_track["enriched"] = EnrichmentStatus.ENRICHED
@@ -307,7 +310,7 @@ class MetadataEnricher:
 
                     # Check if we're now fully enriched after this plugin
                     is_fully_enriched = all(
-                        updated_track.get(field) for field in required_fields
+                        updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
                     )
                     if is_fully_enriched:
                         logger.debug(f"Track {track['title']} now fully enriched")
