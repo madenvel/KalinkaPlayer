@@ -235,7 +235,7 @@ class AcoustIdPlugin(EnricherPlugin):
             "album_mbid": album_id,
         }
 
-    def _create_or_get_artist(
+    async def _create_or_get_artist(
         self, artist_name: str, artist_mbid: Optional[str] = None
     ) -> Optional[str]:
         """
@@ -249,12 +249,12 @@ class AcoustIdPlugin(EnricherPlugin):
 
         # Try to find existing artist by MBID first (most accurate)
         if artist_mbid:
-            existing_artist = self.db_manager.get_artist_by_mbid(artist_mbid)
+            existing_artist = await self.db_manager.get_artist_by_mbid(artist_mbid)
             if existing_artist:
                 return existing_artist["id"]
 
         # Try to find by name
-        artists, _ = self.db_manager.search_artists(artist_name, limit=1)
+        artists, _ = await self.db_manager.search_artists(artist_name, limit=1)
         # Check for exact match
         existing_artist = next(
             (a for a in artists if a["name"].lower() == artist_name.lower()), None
@@ -262,7 +262,7 @@ class AcoustIdPlugin(EnricherPlugin):
         if existing_artist:
             # If found and we have an MBID but they don't, update it
             if artist_mbid and not existing_artist.get("mbid"):
-                self.db_manager.update_artist(
+                await self.db_manager.update_artist(
                     existing_artist["id"], {"mbid": artist_mbid}
                 )
             return existing_artist["id"]
@@ -277,10 +277,10 @@ class AcoustIdPlugin(EnricherPlugin):
         artist_data["id"] = artist_id
         artist_data["last_updated"] = int(time.time())
 
-        self.db_manager.insert_artist(artist_data)
+        await self.db_manager.insert_artist(artist_data)
         return artist_data["id"]
 
-    def _create_or_get_album(
+    async def _create_or_get_album(
         self, album_title: str, artist_id: str, album_mbid: Optional[str] = None
     ) -> Optional[str]:
         """
@@ -294,18 +294,20 @@ class AcoustIdPlugin(EnricherPlugin):
 
         # Try to find existing album by MBID first
         if album_mbid:
-            existing_album = self.db_manager.get_album_by_mbid(album_mbid)
+            existing_album = await self.db_manager.get_album_by_mbid(album_mbid)
             if existing_album:
                 return existing_album["id"]
 
         # Try to find by title and artist
-        existing_album = self.db_manager.get_album_by_title_and_artist(
+        existing_album = await self.db_manager.get_album_by_title_and_artist(
             album_title, artist_id
         )
         if existing_album:
             # If found and we have MBID but they don't, update it
             if album_mbid and not existing_album.get("mbid"):
-                self.db_manager.update_album(existing_album["id"], {"mbid": album_mbid})
+                await self.db_manager.update_album(
+                    existing_album["id"], {"mbid": album_mbid}
+                )
             return existing_album["id"]
 
         # Create new album
@@ -320,7 +322,7 @@ class AcoustIdPlugin(EnricherPlugin):
             "last_updated": int(time.time()),
         }
 
-        self.db_manager.insert_album(album_data)
+        await self.db_manager.insert_album(album_data)
         return album_id
 
     def can_enrich_artist(self) -> bool:
@@ -332,21 +334,21 @@ class AcoustIdPlugin(EnricherPlugin):
     def can_enrich_track(self) -> bool:
         return bool(self.api_key)  # Only if API key is configured
 
-    def enrich_artist(self, artist: Dict) -> Optional[Dict]:
+    async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """
         AcoustID doesn't directly enrich artists.
         This is a placeholder to satisfy the abstract method requirement.
         """
         return None
 
-    def enrich_album(self, album: Dict) -> Optional[Dict]:
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """
         AcoustID doesn't directly enrich albums.
         This is a placeholder to satisfy the abstract method requirement.
         """
         return None
 
-    def enrich_track(self, track: Dict) -> Optional[Dict]:
+    async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """
         Enrich track using audio fingerprinting
 
@@ -420,7 +422,7 @@ class AcoustIdPlugin(EnricherPlugin):
                 # Store original artist ID to check if a new one was created
                 original_artist_id = track.get("artist_id")
 
-                artist_id = self._create_or_get_artist(
+                artist_id = await self._create_or_get_artist(
                     match_info["artist_name"], match_info.get("artist_mbid")
                 )
 
@@ -440,7 +442,7 @@ class AcoustIdPlugin(EnricherPlugin):
                         # Store original album ID to check if a new one was created
                         original_album_id = track.get("album_id")
 
-                        album_id = self._create_or_get_album(
+                        album_id = await self._create_or_get_album(
                             match_info["album_title"],
                             artist_id,
                             match_info.get("album_mbid"),

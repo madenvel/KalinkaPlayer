@@ -62,7 +62,7 @@ class DeezerPlugin(EnricherPlugin):
     def can_enrich_track(self) -> bool:
         return False
 
-    def enrich_artist(self, artist: Dict) -> Optional[Dict]:
+    async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """
         Enrich artist with image from Deezer API
 
@@ -176,7 +176,7 @@ class DeezerPlugin(EnricherPlugin):
             )
             return False
 
-    def enrich_album(self, album: Dict) -> Optional[Dict]:
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """
         Enrich album with cover artwork from Deezer API
 
@@ -196,7 +196,7 @@ class DeezerPlugin(EnricherPlugin):
             if "artist_name" in album:
                 artist_name = album["artist_name"]
             elif "artist_id" in album:
-                artist = self.db_manager.get_artist_by_id(album["artist_id"])
+                artist = await self.db_manager.get_artist_by_id(album["artist_id"])
                 if artist and "name" in artist:
                     artist_name = artist["name"]
 
@@ -290,6 +290,6 @@ class DeezerPlugin(EnricherPlugin):
             )
             return None
 
-    def enrich_track(self, track: Dict) -> Optional[Dict]:
+    async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """Placeholder for track enrichment - not implemented"""
         return None
