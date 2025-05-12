@@ -19,14 +19,14 @@ from id_generator import (
     generate_album_id,
     generate_track_id,
 )
-from indexer_db_async import AsyncIndexerDb
+from indexer_db import AsyncIndexerDb
 
 
 # Configure logger for watchfiles.main only to WARNING level
 watchfiles_logger = logging.getLogger("watchfiles.main")
 watchfiles_logger.setLevel(logging.WARNING)
 
-logger = logging.getLogger(__name__.split(".")[-1])
+logger = logging.getLogger("indexer")
 
 SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
 ENRICHER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
@@ -46,22 +46,27 @@ async def trigger_enricher_update(data):
         logger.warning("No data provided to trigger enricher update")
         return
 
-    reader, writer = await asyncio.open_unix_connection(ENRICHER_SOCKET_PATH)
+    try:
+        reader, writer = await asyncio.open_unix_connection(ENRICHER_SOCKET_PATH)
 
-    # Handle dictionary by converting to JSON string
-    if isinstance(data, dict):
-        import json
+        # Handle dictionary by converting to JSON string
+        if isinstance(data, dict):
+            import json
 
-        message = json.dumps(data) + "\n"
-    else:
-        # Handle string data
-        message = str(data) + "\n"
+            message = json.dumps(data) + "\n"
+        else:
+            # Handle string data
+            message = str(data) + "\n"
 
-    writer.write(message.encode())
-    await writer.drain()
+        writer.write(message.encode())
+        await writer.drain()
 
-    writer.close()
-    await writer.wait_closed()
+        writer.close()
+        await writer.wait_closed()
+    except FileNotFoundError:
+        logger.warning(
+            f"Enricher socket not found at {ENRICHER_SOCKET_PATH}, skipping update"
+        )
 
 
 class FileIndexer:
@@ -87,7 +92,7 @@ class FileIndexer:
             await self.run_scan()
             logger.info("Indexer scan completed")
         except Exception as e:
-            logger.error(f"Error running indexer scan: {str(e)}")
+            logger.exception(f"Error running indexer scan: {str(e)}")
         finally:
             async with self.lock:
                 self.running = False
@@ -125,7 +130,15 @@ class FileIndexer:
                 f"Scan completed with changes: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            await trigger_enricher_update({"changed_items": changed_items})
+            await trigger_enricher_update(
+                {
+                    "changed_items": {
+                        "artists": list(changed_items["artists"]),
+                        "albums": list(changed_items["albums"]),
+                        "tracks": list(changed_items["tracks"]),
+                    }
+                }
+            )
         else:
             logger.info("Scan completed with no changes")
             await trigger_enricher_update("scan_complete")
@@ -175,7 +188,9 @@ class FileIndexer:
                     processed_dirs.add(file_path)
                     continue
                 except Exception as e:
-                    logger.error(f"Error scanning new directory {file_path}: {str(e)}")
+                    logger.exception(
+                        f"Error scanning new directory {file_path}: {str(e)}"
+                    )
                     continue
 
             if os.path.isdir(file_path):
@@ -208,7 +223,9 @@ class FileIndexer:
                             if value:
                                 changed_items[key].add(value)
                 except Exception as e:
-                    logger.error(f"Error processing changed file {file_path}: {str(e)}")
+                    logger.exception(
+                        f"Error processing changed file {file_path}: {str(e)}"
+                    )
 
             elif change_type == Change.deleted:
                 try:
@@ -217,7 +234,9 @@ class FileIndexer:
                         logger.info(f"Removing deleted file from database: {file_path}")
                         await self.db_manager.delete_track(track["id"])
                 except Exception as e:
-                    logger.error(f"Error processing deleted file {file_path}: {str(e)}")
+                    logger.exception(
+                        f"Error processing deleted file {file_path}: {str(e)}"
+                    )
 
         cleanup_results = await self.cleanup_stale_tracks()
 
@@ -252,7 +271,7 @@ class FileIndexer:
                                 if value:
                                     changed_items[key].add(value)
                     except Exception as e:
-                        logger.error(f"Error processing file {file_path}: {str(e)}")
+                        logger.exception(f"Error processing file {file_path}: {str(e)}")
 
     def _is_supported_audio_file(self, filename: str) -> bool:
         """Check if the file is a supported audio format"""
@@ -366,7 +385,7 @@ class FileIndexer:
                 logger.warning(f"Unsupported file format: {file_path}")
                 return None
         except Exception as e:
-            logger.error(f"Error extracting metadata from {file_path}: {str(e)}")
+            logger.exception(f"Error extracting metadata from {file_path}: {str(e)}")
             return None
 
     def _extract_mp3_metadata(self, file_path: str) -> Dict:
@@ -418,7 +437,9 @@ class FileIndexer:
                     break
             return metadata
         except Exception as e:
-            logger.error(f"Error extracting MP3 metadata from {file_path}: {str(e)}")
+            logger.exception(
+                f"Error extracting MP3 metadata from {file_path}: {str(e)}"
+            )
             raise
 
     def _extract_flac_metadata(self, file_path: str) -> Dict:
@@ -472,7 +493,9 @@ class FileIndexer:
                     metadata["album_art"] = pictures[0].data
             return metadata
         except Exception as e:
-            logger.error(f"Error extracting FLAC metadata from {file_path}: {str(e)}")
+            logger.exception(
+                f"Error extracting FLAC metadata from {file_path}: {str(e)}"
+            )
             raise
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
@@ -503,7 +526,7 @@ class FileIndexer:
             )
             return True
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
             )
             return False
@@ -602,7 +625,7 @@ async def _file_watcher_worker(config):
     except asyncio.CancelledError:
         logger.info("File watcher worker cancelled.")
     except Exception as e:
-        logger.error(f"Error in file watcher: {str(e)}")
+        logger.exception(f"Error in file watcher: {str(e)}")
     finally:
         logger.info("File watcher task exited")
 
@@ -643,7 +666,7 @@ async def stop_indexer() -> bool:
                 logger.info("Indexer task was cancelled.")
             return False
         except Exception as e:
-            logger.error(f"Error stopping indexer task: {e}")
+            logger.exception(f"Error stopping indexer task: {e}")
             return False
     elif _indexer_task and _indexer_task.done():
         logger.info("Indexer task was already done.")
@@ -671,7 +694,7 @@ async def stop_file_watcher() -> bool:
                 logger.info("File watcher task was cancelled.")
             return False
         except Exception as e:
-            logger.error(f"Error stopping file watcher task: {e}")
+            logger.exception(f"Error stopping file watcher task: {e}")
             return False
     elif _file_watcher_task and _file_watcher_task.done():
         logger.info("File watcher task was already done.")
@@ -746,7 +769,7 @@ async def main(config_data: Dict[str, Any]):
         await db_manager.init_db()
         logger.info("Database initialized successfully.")
     except Exception as e:
-        logger.error(f"Fatal: Error initializing database: {str(e)}")
+        logger.exception(f"Fatal: Error initializing database: {str(e)}")
         sys.exit(1)
 
     shutdown_event = asyncio.Event()
@@ -767,7 +790,7 @@ async def main(config_data: Dict[str, Any]):
     except asyncio.CancelledError:
         logger.info("Server cancelled, shutting down...")
     except Exception as e:
-        logger.error(f"Error in main loop: {str(e)}")
+        logger.exception(f"Error in main loop: {str(e)}")
     finally:
         logger.info("Main async runner initiating shutdown of tasks...")
         if _file_watcher_task and not _file_watcher_task.done():
@@ -821,7 +844,7 @@ if __name__ == "__main__":
         else:
             app_config = loaded_config
     except json.JSONDecodeError as e:
-        logger.error(f"Error parsing JSON configuration: {str(e)}")
+        logger.exception(f"Error parsing JSON configuration: {str(e)}")
         sys.exit(1)
     except KeyError as e:
         logger.error(
