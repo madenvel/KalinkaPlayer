@@ -1,15 +1,16 @@
+#!/usr/bin/env python3
 import os
-import sqlite3
+import aiosqlite
 import logging
-from typing import List, Dict, Optional, Any, Tuple
 import time
+from typing import List, Dict, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
-class EnricherDb:
+class AsyncEnricherDb:
     """
-    Database manager specifically for the metadata enricher.
+    Asynchronous database manager specifically for the metadata enricher.
     Handles operations required for enrichment of music metadata.
     """
 
@@ -17,18 +18,47 @@ class EnricherDb:
         self.db_path = config["db_path"]
         self.artwork_path = config["artwork_path"]
 
+        # Ensure directories exist
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        os.makedirs(self.artwork_path, exist_ok=True)
+        os.makedirs(os.path.join(self.artwork_path, "album"), exist_ok=True)
+        os.makedirs(os.path.join(self.artwork_path, "artist"), exist_ok=True)
+
     def _get_connection(self):
         """Get a database connection with row factory"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = aiosqlite.connect(self.db_path)
+
         return conn
 
-    def get_track_by_id(self, track_id: str) -> Optional[Dict]:
+    async def init_db(self):
+        """Initialize the database schema if it doesn't exist.
+        This should already be initialized by the indexer, but we double-check here."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            try:
+                cursor = await conn.cursor()
+
+                # Check if tables exist
+                await cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='artists'"
+                )
+                if not await cursor.fetchone():
+                    logger.warning(
+                        "Database not initialized. Please run the indexer first."
+                    )
+
+                logger.info("Database check completed")
+            except Exception as e:
+                logger.error(f"Error initializing database: {str(e)}")
+                await conn.rollback()
+                raise
+
+    async def get_track_by_id(self, track_id: str) -> Optional[Dict]:
         """Get track information by ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT t.*, a.title as album_title, ar.name as artist_name 
                 FROM tracks t
@@ -38,21 +68,19 @@ class EnricherDb:
             """,
                 (track_id,),
             )
-            row = cursor.fetchone()
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_tracks_by_ids(self, track_ids: List[str]) -> List[Dict]:
+    async def get_tracks_by_ids(self, track_ids: List[str]) -> List[Dict]:
         """Get track information by IDs"""
         if not track_ids:
             return []
 
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
             placeholders = ", ".join("?" for _ in track_ids)
-            cursor.execute(
+            await cursor.execute(
                 f"""
                 SELECT t.*, a.title as album_title, ar.name as artist_name 
                 FROM tracks t
@@ -62,38 +90,35 @@ class EnricherDb:
             """,
                 track_ids,
             )
-            return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
-    def get_artist_by_id(self, artist_id: str) -> Optional[Dict]:
+    async def get_artist_by_id(self, artist_id: str) -> Optional[Dict]:
         """Get artist information by ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM artists WHERE id = ?", (artist_id,))
-            row = cursor.fetchone()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute("SELECT * FROM artists WHERE id = ?", (artist_id,))
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_artist_by_mbid(self, mbid: str) -> Optional[Dict]:
+    async def get_artist_by_mbid(self, mbid: str) -> Optional[Dict]:
         """Get artist information by MusicBrainz ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM artists WHERE mbid = ? LIMIT 1", (mbid,))
-            row = cursor.fetchone()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT * FROM artists WHERE mbid = ? LIMIT 1", (mbid,)
+            )
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_album_by_id(self, album_id: str) -> Optional[Dict]:
+    async def get_album_by_id(self, album_id: str) -> Optional[Dict]:
         """Get album information by ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
@@ -102,17 +127,15 @@ class EnricherDb:
             """,
                 (album_id,),
             )
-            row = cursor.fetchone()
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_album_by_mbid(self, mbid: str) -> Optional[Dict]:
+    async def get_album_by_mbid(self, mbid: str) -> Optional[Dict]:
         """Get album information by MusicBrainz ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
@@ -121,19 +144,17 @@ class EnricherDb:
                 """,
                 (mbid,),
             )
-            row = cursor.fetchone()
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_album_by_title_and_artist(
+    async def get_album_by_title_and_artist(
         self, title: str, artist_id: str
     ) -> Optional[Dict]:
         """Get album information by title and artist ID"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
@@ -142,17 +163,15 @@ class EnricherDb:
                 """,
                 (title, artist_id),
             )
-            row = cursor.fetchone()
+            row = await cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
 
-    def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
+    async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT * FROM artists
                 WHERE enriched = 0 AND id != 'unknown_artist'
@@ -160,17 +179,15 @@ class EnricherDb:
             """,
                 (limit,),
             )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
-            return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
-
-    def get_non_enriched_albums(self, limit: int = 50) -> List[Dict]:
+    async def get_non_enriched_albums(self, limit: int = 50) -> List[Dict]:
         """Get albums that haven't been enriched yet"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
@@ -180,17 +197,15 @@ class EnricherDb:
             """,
                 (limit,),
             )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
-            return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
-
-    def get_non_enriched_tracks(self, limit: int = 50) -> List[Dict]:
+    async def get_non_enriched_tracks(self, limit: int = 50) -> List[Dict]:
         """Get tracks that haven't been enriched yet"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
                 """
                 SELECT t.*, a.title as album_title, ar.name as artist_name
                 FROM tracks t
@@ -201,27 +216,28 @@ class EnricherDb:
             """,
                 (limit,),
             )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
 
-            return [dict(row) for row in cursor.fetchall()]
-        finally:
-            conn.close()
-
-    def search_artists(self, query: str, limit: int = 50) -> Tuple[List[Dict], int]:
+    async def search_artists(
+        self, query: str, limit: int = 50
+    ) -> Tuple[List[Dict], int]:
         """Search artists by query"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
             search_term = f"%{query}%"
 
             # Get total count
-            cursor.execute(
+            await cursor.execute(
                 "SELECT COUNT(*) as count FROM artists WHERE name LIKE ?",
                 (search_term,),
             )
-            total = cursor.fetchone()["count"]
+            row = await cursor.fetchone()
+            total = row["count"] if row else 0
 
             # Get results
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT * FROM artists
                 WHERE name LIKE ?
@@ -230,20 +246,19 @@ class EnricherDb:
             """,
                 (search_term, limit),
             )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows], total
 
-            return [dict(row) for row in cursor.fetchall()], total
-        finally:
-            conn.close()
-
-    def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
+    async def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
         """Update artist information"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
 
             # Get artist table column names
-            cursor.execute("PRAGMA table_info(artists)")
-            valid_columns = {row["name"] for row in cursor.fetchall()}
+            await cursor.execute("PRAGMA table_info(artists)")
+            rows = await cursor.fetchall()
+            valid_columns = {row["name"] for row in rows}
 
             # Filter out data keys that don't exist in the artists table
             filtered_data = {k: v for k, v in data.items() if k in valid_columns}
@@ -263,8 +278,8 @@ class EnricherDb:
             values.append(artist_id)
 
             query = f"UPDATE artists SET {', '.join(fields)} WHERE id = ?"
-            cursor.execute(query, values)
-            conn.commit()
+            await cursor.execute(query, values)
+            await conn.commit()
 
             # Log if any fields were filtered out
             filtered_out = set(data.keys()) - valid_columns
@@ -273,18 +288,16 @@ class EnricherDb:
                     f"Filtered out non-existent columns for artist {artist_id}: {', '.join(filtered_out)}"
                 )
 
-        finally:
-            conn.close()
-
-    def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
+    async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
         """Update album information"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
 
             # Get album table column names
-            cursor.execute("PRAGMA table_info(albums)")
-            valid_columns = {row["name"] for row in cursor.fetchall()}
+            await cursor.execute("PRAGMA table_info(albums)")
+            rows = await cursor.fetchall()
+            valid_columns = {row["name"] for row in rows}
 
             # Filter out data keys that don't exist in the albums table
             filtered_data = {k: v for k, v in data.items() if k in valid_columns}
@@ -304,8 +317,8 @@ class EnricherDb:
             values.append(album_id)
 
             query = f"UPDATE albums SET {', '.join(fields)} WHERE id = ?"
-            cursor.execute(query, values)
-            conn.commit()
+            await cursor.execute(query, values)
+            await conn.commit()
 
             # Log if any fields were filtered out
             filtered_out = set(data.keys()) - valid_columns
@@ -314,18 +327,16 @@ class EnricherDb:
                     f"Filtered out non-existent columns for album {album_id}: {', '.join(filtered_out)}"
                 )
 
-        finally:
-            conn.close()
-
-    def update_track(self, track_id: str, data: Dict[str, Any]) -> None:
+    async def update_track(self, track_id: str, data: Dict[str, Any]) -> None:
         """Update track information"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
 
             # Get track table column names
-            cursor.execute("PRAGMA table_info(tracks)")
-            valid_columns = {row["name"] for row in cursor.fetchall()}
+            await cursor.execute("PRAGMA table_info(tracks)")
+            rows = await cursor.fetchall()
+            valid_columns = {row["name"] for row in rows}
 
             # Filter out data keys that don't exist in the tracks table
             filtered_data = {k: v for k, v in data.items() if k in valid_columns}
@@ -345,8 +356,8 @@ class EnricherDb:
             values.append(track_id)
 
             query = f"UPDATE tracks SET {', '.join(fields)} WHERE id = ?"
-            cursor.execute(query, values)
-            conn.commit()
+            await cursor.execute(query, values)
+            await conn.commit()
 
             # Log if any fields were filtered out
             filtered_out = set(data.keys()) - valid_columns
@@ -355,14 +366,10 @@ class EnricherDb:
                     f"Filtered out non-existent columns for track {track_id}: {', '.join(filtered_out)}"
                 )
 
-        finally:
-            conn.close()
-
-    def insert_artist(self, data: Dict[str, Any]) -> None:
+    async def insert_artist(self, data: Dict[str, Any]) -> None:
         """Insert a new artist"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            cursor = await conn.cursor()
 
             # Build the query
             fields = ", ".join(data.keys())
@@ -370,16 +377,13 @@ class EnricherDb:
             values = list(data.values())
 
             query = f"INSERT OR REPLACE INTO artists ({fields}) VALUES ({placeholders})"
-            cursor.execute(query, values)
-            conn.commit()
-        finally:
-            conn.close()
+            await cursor.execute(query, values)
+            await conn.commit()
 
-    def insert_album(self, data: Dict[str, Any]) -> None:
+    async def insert_album(self, data: Dict[str, Any]) -> None:
         """Insert a new album"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
+        async with self._get_connection() as conn:
+            cursor = await conn.cursor()
 
             # Build the query
             fields = ", ".join(data.keys())
@@ -387,7 +391,19 @@ class EnricherDb:
             values = list(data.values())
 
             query = f"INSERT OR REPLACE INTO albums ({fields}) VALUES ({placeholders})"
-            cursor.execute(query, values)
-            conn.commit()
-        finally:
-            conn.close()
+            await cursor.execute(query, values)
+            await conn.commit()
+
+    async def insert_track(self, data: Dict[str, Any]) -> None:
+        """Insert a new track"""
+        async with self._get_connection() as conn:
+            cursor = await conn.cursor()
+
+            # Build the query
+            fields = ", ".join(data.keys())
+            placeholders = ", ".join("?" for _ in data)
+            values = list(data.values())
+
+            query = f"INSERT OR REPLACE INTO tracks ({fields}) VALUES ({placeholders})"
+            await cursor.execute(query, values)
+            await conn.commit()
