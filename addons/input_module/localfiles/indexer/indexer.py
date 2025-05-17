@@ -11,7 +11,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from PIL import Image
 import io
-import mimetypes
+import magic
 from watchfiles import awatch, Change
 
 from id_generator import (
@@ -358,11 +358,15 @@ class FileIndexer:
     def _extract_metadata(self, file_path: str) -> Optional[Dict]:
         """Extract metadata from a music file"""
         try:
-            ext = os.path.splitext(file_path.lower())[1]
-            if ext == ".mp3":
-                return self._extract_mp3_metadata(file_path)
-            elif ext == ".flac":
-                return self._extract_flac_metadata(file_path)
+            mime = magic.Magic(mime=True)
+            magic_mime = mime.from_file(file_path)
+            metadata = {
+                "format": magic_mime,
+            }
+            if "audio/mpeg" in magic_mime:
+                return self._extract_mp3_metadata(file_path, metadata)
+            elif "audio/flac" in magic_mime:
+                return self._extract_flac_metadata(file_path, metadata)
             else:
                 logger.warning(f"Unsupported file format: {file_path}")
                 return None
@@ -370,15 +374,12 @@ class FileIndexer:
             logger.exception(f"Error extracting metadata from {file_path}: {str(e)}")
             return None
 
-    def _extract_mp3_metadata(self, file_path: str) -> Dict:
+    def _extract_mp3_metadata(self, file_path: str, metadata: Dict) -> Dict:
         """Extract metadata from an MP3 file"""
         try:
             mp3 = MP3(file_path)
             id3 = ID3(file_path)
-            metadata = {
-                "format": mimetypes.guess_type(file_path)[0] or "audio/mpeg",
-                "duration": int(mp3.info.length),
-            }
+            metadata["duration"] = int(mp3.info.length)
             if "TIT2" in id3:
                 metadata["title"] = str(id3["TIT2"])
             if "TPE1" in id3:
@@ -424,14 +425,11 @@ class FileIndexer:
             )
             raise
 
-    def _extract_flac_metadata(self, file_path: str) -> Dict:
+    def _extract_flac_metadata(self, file_path: str, metadata: Dict) -> Dict:
         """Extract metadata from a FLAC file"""
         try:
             flac = FLAC(file_path)
-            metadata = {
-                "format": mimetypes.guess_type(file_path)[0] or "audio/flac",
-                "duration": int(flac.info.length),
-            }
+            metadata["duration"] = int(flac.info.length)
             if "title" in flac:
                 metadata["title"] = flac["title"][0]
             if "artist" in flac:
