@@ -130,6 +130,10 @@ class LocalFilesInputModule(InputModule):
 
     def _browse_root(self) -> BrowseItemList:
         """Return the root catalog with main sections"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         recent_tracks, recent_total = self.db_manager.get_recently_added_tracks(0, 10)
         albums, albums_total = self.db_manager.get_all_albums(0, 10)
         artists, artists_total = self.db_manager.get_all_artists(0, 10)
@@ -298,6 +302,10 @@ class LocalFilesInputModule(InputModule):
 
     def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
         """Browse tracks in an album"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         tracks, total = self.db_manager.get_album_tracks(id, offset, limit)
 
         items = []
@@ -310,6 +318,10 @@ class LocalFilesInputModule(InputModule):
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """Browse albums by an artist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         albums, total = self.db_manager.get_artist_albums(id, offset, limit)
 
         items = []
@@ -322,6 +334,10 @@ class LocalFilesInputModule(InputModule):
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """Browse tracks in a playlist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         tracks, total = self.db_manager.get_playlist_tracks(id, offset, limit)
 
         items = []
@@ -332,6 +348,10 @@ class LocalFilesInputModule(InputModule):
 
     def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         """Get track info for a list of track IDs"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return []
+
         tracks = self.db_manager.get_tracks_by_ids(track_ids)
 
         # Create a dictionary of tracks indexed by ID for quick lookup
@@ -367,6 +387,10 @@ class LocalFilesInputModule(InputModule):
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """List favorites - for playlists, returns all user playlists"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         if type == SearchType.playlist:
             # Return all user playlists as favorites
             return self.playlist_user_list(offset, limit)
@@ -392,6 +416,10 @@ class LocalFilesInputModule(InputModule):
 
     def album_get(self, id: str) -> BrowseItem:
         """Get album details"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         album = self.db_manager.get_album_by_id(id)
         if not album:
             logger.warning(f"Album not found: {id}")
@@ -401,6 +429,10 @@ class LocalFilesInputModule(InputModule):
 
     def artist_get(self, id: str) -> BrowseItem:
         """Get artist details"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         artist = self.db_manager.get_artist_by_id(id)
         if not artist:
             logger.warning(f"Artist not found: {id}")
@@ -410,6 +442,10 @@ class LocalFilesInputModule(InputModule):
 
     def track_get(self, id: str) -> BrowseItem:
         """Get track details"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         track = self.db_manager.get_track_by_id(id)
         if not track:
             logger.warning(f"Track not found: {id}")
@@ -419,6 +455,10 @@ class LocalFilesInputModule(InputModule):
 
     def playlist_get(self, id: str) -> BrowseItem:
         """Get playlist details"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         playlist = self.db_manager.get_playlist_by_id(id)
         if not playlist:
             logger.warning(f"Playlist not found: {id}")
@@ -428,6 +468,10 @@ class LocalFilesInputModule(InputModule):
 
     def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
         """List user playlists"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
         playlists, total = self.db_manager.get_all_playlists(offset, limit)
 
         items = []
@@ -438,6 +482,9 @@ class LocalFilesInputModule(InputModule):
 
     def playlist_create(self, name: str, description: str) -> Playlist:
         """Create playlist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
         # Generate playlist ID using the name and system as creator
         playlist_id = generate_playlist_id(name, "localfiles_system")
         # Create the playlist record
@@ -468,6 +515,10 @@ class LocalFilesInputModule(InputModule):
         self, id: str, name: Optional[str], description: Optional[str]
     ) -> Playlist:
         """Update playlist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         self.db_manager.update_playlist(id, name, description)
         playlist = self.db_manager.get_playlist_by_id(id)
 
@@ -496,12 +547,20 @@ class LocalFilesInputModule(InputModule):
 
     def playlist_delete(self, id: str):
         """Delete playlist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return
+
         self.db_manager.delete_playlist(id)
 
     def playlist_add_tracks(
         self, id: str, track_ids: List[str], allow_duplicates: bool = False
     ) -> Playlist:
         """Add tracks to playlist"""
+
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
         # Add tracks to the playlist
         tracks_added = self.db_manager.add_tracks_to_playlist(
             id, track_ids, allow_duplicates
@@ -567,6 +626,11 @@ class LocalFilesInputModule(InputModule):
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
         """Remove tracks from playlist"""
+
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
         self.db_manager.remove_tracks_from_playlist(id, playlist_track_ids)
         playlist = self.db_manager.get_playlist_by_id(id)
 

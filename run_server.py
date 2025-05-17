@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from asyncio import CancelledError
 import logging
 import uvicorn
 
@@ -116,6 +117,8 @@ if __name__ == "__main__":
                 break
 
     except KeyboardInterrupt:
+        logger.info("Server shut down")
+    except CancelledError:
         logger.info("Server shut down")
     except Exception as e:
         logger.error(f"Error starting server: {e}")

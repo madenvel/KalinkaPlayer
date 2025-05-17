@@ -1,7 +1,7 @@
 import logging
 import time
 import os
-import requests
+import httpx
 import io
 from PIL import Image
 from typing import Dict, Optional
@@ -29,29 +29,17 @@ class DeezerPlugin(EnricherPlugin):
         self.config = config
         self.db_manager = db_manager
         self.artwork_path = config["artwork_path"]
-        self.session = requests.Session()
 
         # Set a proper User-Agent
         user_agent = config.get(
             "enricher.plugins.deezer.user_agent",
-            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer; envelsavinds@gmail.com)",
+            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer)",
         )
-        self.session.headers.update({"User-Agent": user_agent})
+        # Common headers
+        self.headers = {"User-Agent": user_agent}
 
-        # Rate limiting
-        self.last_request_time = 0
-        self.request_interval = 1 / 10  # 10 requests per second to be respectful
-
-    def _wait_for_rate_limit(self):
-        """Wait to respect rate limits"""
-        now = time.time()
-        elapsed = now - self.last_request_time
-
-        if elapsed < self.request_interval:
-            sleep_time = self.request_interval - elapsed
-            time.sleep(sleep_time)
-
-        self.last_request_time = time.time()
+        # Initialize httpx async client for async requests
+        self.async_client = httpx.AsyncClient(headers=self.headers)
 
     def can_enrich_artist(self) -> bool:
         return True
@@ -80,9 +68,8 @@ class DeezerPlugin(EnricherPlugin):
             logger.debug(f"Searching for artist image on Deezer: {artist['name']}")
 
             # Search for artist on Deezer
-            self._wait_for_rate_limit()
-            search_url = f"https://api.deezer.com/search/artist"
-            response = self.session.get(
+            search_url = "https://api.deezer.com/search/artist"
+            response = await self.async_client.get(
                 search_url, params={"q": artist["name"], "limit": 10}
             )
 
@@ -108,8 +95,7 @@ class DeezerPlugin(EnricherPlugin):
                 return None
 
             # Download the image
-            self._wait_for_rate_limit()
-            image_response = self.session.get(deezer_artist["picture_xl"])
+            image_response = await self.async_client.get(deezer_artist["picture_xl"])
             if image_response.status_code != 200:
                 logger.error(
                     f"Failed to download image for artist {artist['name']}: {image_response.status_code}"
@@ -209,9 +195,8 @@ class DeezerPlugin(EnricherPlugin):
             )
 
             # Search for album on Deezer
-            self._wait_for_rate_limit()
             search_url = "https://api.deezer.com/search/album"
-            response = self.session.get(
+            response = await self.async_client.get(
                 search_url,
                 params={
                     "q": f"artist:'{artist_name}' album:'{album['title']}'",
@@ -241,8 +226,7 @@ class DeezerPlugin(EnricherPlugin):
                 return None
 
             # Download the cover
-            self._wait_for_rate_limit()
-            image_response = self.session.get(deezer_album["cover_xl"])
+            image_response = await self.async_client.get(deezer_album["cover_xl"])
             if image_response.status_code != 200:
                 logger.error(
                     f"Failed to download cover for album {album['title']}: {image_response.status_code}"
@@ -260,9 +244,8 @@ class DeezerPlugin(EnricherPlugin):
                 # Add genre if available from Deezer
                 if "genre_id" in deezer_album and deezer_album.get("genre_id"):
                     # Get detailed genre info
-                    self._wait_for_rate_limit()
                     try:
-                        genre_response = self.session.get(
+                        genre_response = await self.async_client.get(
                             f"https://api.deezer.com/genre/{deezer_album['genre_id']}"
                         )
                         if genre_response.status_code == 200:

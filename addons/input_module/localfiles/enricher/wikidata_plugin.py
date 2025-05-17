@@ -1,9 +1,8 @@
 import logging
 import time
 import os
-import requests
+import httpx
 import io
-import hashlib
 import musicbrainzngs
 from PIL import Image
 from typing import Dict, Optional
@@ -24,29 +23,14 @@ class WikidataPlugin(EnricherPlugin):
         self.config = config
         self.db_manager = db_manager
         self.artwork_path = config["artwork_path"]
-        self.session = requests.Session()
 
         # Set a proper User-Agent to avoid 403 errors from Wikimedia
         user_agent = config.get(
             "enricher.plugins.wikidata.user_agent",
-            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer; envelsavinds@gmail.com)",
+            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer)",
         )
-        self.session.headers.update({"User-Agent": user_agent})
 
-        # Rate limiting
-        self.last_request_time = 0
-        self.request_interval = 1 / 5  # 5 requests per second
-
-    def _wait_for_rate_limit(self):
-        """Wait to respect rate limits"""
-        now = time.time()
-        elapsed = now - self.last_request_time
-
-        if elapsed < self.request_interval:
-            sleep_time = self.request_interval - elapsed
-            time.sleep(sleep_time)
-
-        self.last_request_time = time.time()
+        self.async_client = httpx.AsyncClient(headers={"User-Agent": user_agent})
 
     def can_enrich_artist(self) -> bool:
         return True
@@ -67,7 +51,6 @@ class WikidataPlugin(EnricherPlugin):
             # Get MusicBrainz artist with relations
             artist_mbid = artist["mbid"]
 
-            self._wait_for_rate_limit()
             mb_result = musicbrainzngs.get_artist_by_id(
                 artist_mbid, includes=["url-rels"]
             )
@@ -88,7 +71,6 @@ class WikidataPlugin(EnricherPlugin):
             wikidata_id = wikidata_url.split("/")[-1]
 
             # Query Wikidata API for P18 (image) property
-            self._wait_for_rate_limit()
             wikidata_api_url = "https://www.wikidata.org/w/api.php"
             params = {
                 "action": "wbgetclaims",
@@ -97,7 +79,7 @@ class WikidataPlugin(EnricherPlugin):
                 "format": "json",
             }
 
-            response = self.session.get(wikidata_api_url, params=params)
+            response = await self.async_client.get(wikidata_api_url, params=params)
             data = response.json()
 
             # Extract image filename from response
@@ -109,7 +91,7 @@ class WikidataPlugin(EnricherPlugin):
             image_filename = image_claims[0]["mainsnak"]["datavalue"]["value"]
 
             # Get proper image URL using the MediaWiki API
-            image_url = self._get_wikimedia_image_url(image_filename)
+            image_url = await self._get_wikimedia_image_url(image_filename)
             if not image_url:
                 logger.error(
                     f"Failed to construct image URL for artist {artist['name']}"
@@ -117,8 +99,7 @@ class WikidataPlugin(EnricherPlugin):
                 return None
 
             # Download the image
-            self._wait_for_rate_limit()
-            image_response = self.session.get(image_url)
+            image_response = await self.async_client.get(image_url)
             if image_response.status_code != 200:
                 logger.error(
                     f"Failed to download image for artist {artist['name']}: {image_response.status_code}"
@@ -142,11 +123,10 @@ class WikidataPlugin(EnricherPlugin):
             )
             return None
 
-    def _get_wikimedia_image_url(self, image_filename: str) -> Optional[str]:
+    async def _get_wikimedia_image_url(self, image_filename: str) -> Optional[str]:
         """Get the proper URL for a Wikimedia Commons image using the MediaWiki API"""
         try:
             # Use the MediaWiki API to get the proper URL
-            self._wait_for_rate_limit()
             commons_api_url = "https://commons.wikimedia.org/w/api.php"
             params = {
                 "action": "query",
@@ -156,7 +136,7 @@ class WikidataPlugin(EnricherPlugin):
                 "format": "json",
             }
 
-            response = self.session.get(commons_api_url, params=params)
+            response = await self.async_client.get(commons_api_url, params=params)
             if response.status_code != 200:
                 logger.error(
                     f"Failed to query MediaWiki API for image {image_filename}: {response.status_code}"

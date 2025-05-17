@@ -56,21 +56,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             self.user_agent.split(" ", 1)[1].strip("()"),
         )
 
-        # Rate limiting
-        self.last_request_time = 0
-        self.request_interval = 1 / 3  # 3 requests per second
-
-    def _wait_for_rate_limit(self):
-        """Wait to respect rate limits"""
-        now = time.time()
-        elapsed = now - self.last_request_time
-
-        if elapsed < self.request_interval:
-            sleep_time = self.request_interval - elapsed
-            time.sleep(sleep_time)
-
-        self.last_request_time = time.time()
-
     def _normalize_string(self, text: str) -> str:
         """Normalize string for comparison by removing special characters and lowercasing"""
         if not text:
@@ -203,9 +188,6 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             logger.debug(f"Enriching artist: {artist['name']}")
 
-            # Search for artist in MusicBrainz with better query parameters
-            self._wait_for_rate_limit()
-
             # Use alias to improve search, and limit results for faster processing
             result = musicbrainzngs.search_artists(
                 artist["name"],
@@ -233,7 +215,6 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             # Get more details from artist
             artist_mbid = best_match["id"]
-            self._wait_for_rate_limit()
 
             # Update artist data
             updates = {
@@ -273,7 +254,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             logger.debug(f"Enriching album: {album['title']} by {album['artist_name']}")
 
             # Search for album in MusicBrainz with better query parameters
-            self._wait_for_rate_limit()
             result = musicbrainzngs.search_releases(
                 album["title"],
                 artistname=album["artist_name"],
@@ -303,7 +283,6 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             # Get more details about the release
             release_mbid = best_match["id"]
-            self._wait_for_rate_limit()
             mb_release_details = musicbrainzngs.get_release_by_id(
                 release_mbid, includes=["recordings", "artist-credits", "tags"]
             )
@@ -369,7 +348,6 @@ class MusicBrainzPlugin(EnricherPlugin):
             )
 
             # Search for recording in MusicBrainz with better parameters
-            self._wait_for_rate_limit()
             result = musicbrainzngs.search_recordings(
                 track["title"],
                 artistname=track["artist_name"],

@@ -76,37 +76,6 @@ class MetadataEnricher:
         if config.get("enricher.plugins.deezer.enabled", False):
             self.plugins.append(DeezerPlugin(config, self.db_manager))
 
-    async def process_changed_items(self, changed_items):
-        """Process specific items that were changed by the indexer"""
-        if not changed_items:
-            return
-
-        logger.info(
-            f"Processing changed items: Artists={len(changed_items.get('artists', []))}, "
-            f"Albums={len(changed_items.get('albums', []))}, Tracks={len(changed_items.get('tracks', []))}"
-        )
-
-        # Process specific artists
-        for artist_id in changed_items.get("artists", []):
-            if artist_id and artist_id != "unknown_artist":
-                artist = await self.db_manager.get_artist_by_id(artist_id)
-                if artist:
-                    await self._enrich_artist(artist)
-
-        # Process specific albums
-        for album_id in changed_items.get("albums", []):
-            if album_id and album_id != "unknown_album":
-                album = await self.db_manager.get_album_by_id(album_id)
-                if album:
-                    await self._enrich_album(album)
-
-        # Process specific tracks
-        for track_id in changed_items.get("tracks", []):
-            if track_id:
-                track = await self.db_manager.get_track_by_id(track_id)
-                if track:
-                    await self._enrich_track(track)
-
     async def start(self):
         """Start the enricher process for general enrichment"""
         async with self.lock:
@@ -126,24 +95,48 @@ class MetadataEnricher:
 
     async def run_enrichment(self):
         """Run the enrichment process"""
-        # Process artists
-        logger.info("Processing artists for enrichment")
-        await self._process_artists()
+        while True:
+            # Process artists
+            logger.info("Processing artists for enrichment")
+            artist_update_count = await self._process_artists()
 
-        # Process albums
-        logger.info("Processing albums for enrichment")
-        await self._process_albums()
+            # Process albums
+            logger.info("Processing albums for enrichment")
+            album_update_count = await self._process_albums()
 
-        # Process tracks
-        logger.info("Processing tracks for enrichment")
-        await self._process_tracks()
+            # Process tracks
+            logger.info("Processing tracks for enrichment")
+            track_update_count = await self._process_tracks()
 
-    async def _process_artists(self, batch_size=10):
+            total_updates = (
+                artist_update_count + album_update_count + track_update_count
+            )
+
+            if total_updates == 0:
+                logger.info("No more items to process, finishing enrichment")
+                break
+
+    async def _process_artists(self) -> int:
         """Process non-enriched artists"""
-        artists = await self.db_manager.get_non_enriched_artists(batch_size)
 
-        for artist in artists:
+        processed_artists = set()
+        last_artist_id = None
+        while True:
+            artists = await self.db_manager.get_non_enriched_artists(limit=1)
+            if not artists:
+                logger.info("No more artists to process")
+                return len(processed_artists)
+            artist = artists[0]
+            if artist["id"] == last_artist_id:
+                logger.warning("No new artists to process, breaking")
+                return len(processed_artists)
+            if artist["id"] in processed_artists:
+                logger.info("Already processed this artist, skipping")
+                continue
             await self._enrich_artist(artist)
+            last_artist_id = artist["id"]
+            processed_artists.add(artist["id"])
+            logger.info(f"Processed artist {artist['name']}")
 
     async def _enrich_artist(self, artist):
         """Enrich a single artist"""
@@ -197,12 +190,26 @@ class MetadataEnricher:
         if had_updates:
             await self.db_manager.update_artist(artist["id"], updated_artist)
 
-    async def _process_albums(self, batch_size=500):
+    async def _process_albums(self) -> int:
         """Process non-enriched albums"""
-        albums = await self.db_manager.get_non_enriched_albums(batch_size)
-
-        for album in albums:
+        processed_albums = set()
+        last_album_id = None
+        while True:
+            albums = await self.db_manager.get_non_enriched_albums(limit=1)
+            if not albums:
+                logger.info("No more albums to process")
+                return len(processed_albums)
+            album = albums[0]
+            if album["id"] == last_album_id:
+                logger.warning("No new albums to process, breaking")
+                return len(processed_albums)
+            if album["id"] in processed_albums:
+                logger.info(f"Already processed album {album['id']}, skipping")
+                continue
             await self._enrich_album(album)
+            last_album_id = album["id"]
+            processed_albums.add(album["id"])
+            logger.info(f"Processed album {album['title']}")
 
     async def _enrich_album(self, album):
         """Enrich a single album"""
@@ -261,12 +268,26 @@ class MetadataEnricher:
         if had_updates:
             await self.db_manager.update_album(album["id"], updated_album)
 
-    async def _process_tracks(self, batch_size=500):
+    async def _process_tracks(self) -> int:
         """Process non-enriched tracks"""
-        tracks = await self.db_manager.get_non_enriched_tracks(batch_size)
-
-        for track in tracks:
+        processed_tracks = set()
+        last_track_id = None
+        while True:
+            tracks = await self.db_manager.get_non_enriched_tracks(limit=1)
+            if not tracks:
+                logger.info("No more tracks to process")
+                return len(processed_tracks)
+            track = tracks[0]
+            if track["id"] == last_track_id:
+                logger.warning("No new tracks to process, breaking")
+                return len(processed_tracks)
+            if track["id"] in processed_tracks:
+                logger.info(f"Already processed track {track['id']}, skipping")
+                continue
             await self._enrich_track(track)
+            processed_tracks.add(track["id"])
+            last_track_id = track["id"]
+            logger.info(f"Processed track {track['title']}")
 
     async def _enrich_track(self, track):
         """Enrich a single track"""
@@ -329,7 +350,7 @@ class MetadataEnricher:
             and updated_track.get("enriched") != EnrichmentStatus.ENRICHED
             and track["id"] not in entities_for_enrichment["tracks"]
         ):
-            logger.debug(
+            logger.info(
                 f"Track {track['id']} failed enrichment - missing required fields"
             )
             updated_track["enriched"] = EnrichmentStatus.FAILED
@@ -338,7 +359,7 @@ class MetadataEnricher:
         # Only update the database once at the end if we had any updates
         if had_updates:
             logger.info(
-                f"Updating track {track['name']} with new metadata: {updated_track.keys()}"
+                f"Updating track {track['title']} with new metadata: {updated_track.keys()}"
             )
             await self.db_manager.update_track(track["id"], updated_track)
 
@@ -368,17 +389,9 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     enricher_instance = MetadataEnricher(config, db_manager)
     enricher_tasks = set()
 
-    def run_enricher_task(coro):
-        """Run the enricher task"""
-        task = asyncio.create_task(coro)
-        enricher_tasks.add(task)
-        task.add_done_callback(enricher_tasks.discard)
-        return task
-
     logger.info("Starting initial enrichment process")
-    run_enricher_task(enricher_instance.start()).add_done_callback(
-        lambda task: logger.info("Initial enrichment process completed")
-    )
+    await enricher_instance.start()
+    logger.info("Initial enrichment completed")
 
     # Process queue commands
     while True:
@@ -392,14 +405,7 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                     break
                 elif command == "enrich":
                     logger.info("Manual enrichment triggered")
-                    run_enricher_task(enricher_instance.start())
-                elif isinstance(command, dict) and "changed_items" in command:
-                    # This is a notification from the indexer
-                    run_enricher_task(
-                        enricher_instance.process_changed_items(
-                            command["changed_items"]
-                        )
-                    )
+                    await enricher_instance.start()
 
                 _enricher_queue.task_done()
             except asyncio.TimeoutError:
