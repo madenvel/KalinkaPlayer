@@ -130,18 +130,9 @@ class FileIndexer:
                 f"Scan completed with changes: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            await trigger_enricher_update(
-                {
-                    "changed_items": {
-                        "artists": list(changed_items["artists"]),
-                        "albums": list(changed_items["albums"]),
-                        "tracks": list(changed_items["tracks"]),
-                    }
-                }
-            )
+            await trigger_enricher_update("enrich")
         else:
             logger.info("Scan completed with no changes")
-            await trigger_enricher_update("scan_complete")
 
     async def handle_incremental_changes(self, changes: Set[Tuple[Change, str]]):
         """Process file changes detected by watchfiles"""
@@ -245,18 +236,9 @@ class FileIndexer:
                 f"File changes detected: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            await trigger_enricher_update(
-                {
-                    "changed_items": {
-                        "artists": list(changed_items["artists"]),
-                        "albums": list(changed_items["albums"]),
-                        "tracks": list(changed_items["tracks"]),
-                    }
-                }
-            )
+            await trigger_enricher_update("enrich")
         elif cleanup_results["tracks"] > 0:
             logger.info(f"Cleanup removed {cleanup_results['tracks']} tracks")
-            await trigger_enricher_update("scan_complete")
 
     async def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
         """Recursively scan a folder for music files"""

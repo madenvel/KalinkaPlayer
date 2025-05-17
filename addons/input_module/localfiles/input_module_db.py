@@ -16,12 +16,107 @@ class LocalFilesInputModuleDb:
     def __init__(self, config):
         self.db_path = config["db_path"]
         self.artwork_path = config["artwork_path"]
+        self.db_state = None
 
     def _get_connection(self):
         """Get a database connection with row factory"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _is_database_functional(self) -> Dict[str, Any]:
+        """
+        Check if the database exists and is properly structured.
+
+        Returns:
+            A dictionary with status information:
+            {
+                'exists': bool - Whether the database file exists
+                'can_connect': bool - Whether we can connect to the database
+                'has_tables': bool - Whether essential tables exist
+                'functional': bool - Whether the database is fully functional
+                'missing_tables': List[str] - List of essential tables that are missing (if any)
+                'error': str - Error message (if any)
+            }
+        """
+        result = {
+            "exists": False,
+            "can_connect": False,
+            "has_tables": False,
+            "functional": False,
+            "missing_tables": [],
+            "error": None,
+        }
+
+        # Check if database file exists
+        if not os.path.isfile(self.db_path):
+            result["error"] = f"Database file not found: {self.db_path}"
+            return result
+
+        result["exists"] = True
+
+        # Check database connection
+        try:
+            conn = self._get_connection()
+            result["can_connect"] = True
+        except sqlite3.Error as e:
+            result["error"] = f"Cannot connect to database: {str(e)}"
+            return result
+
+        # Check essential tables
+        try:
+            cursor = conn.cursor()
+
+            # List of essential tables that should be present
+            essential_tables = [
+                "tracks",
+                "albums",
+                "artists",
+                "playlists",
+                "playlist_tracks",
+            ]
+
+            # Get list of tables in the database
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row["name"] for row in cursor.fetchall()}
+
+            # Check if all essential tables exist
+            for table in essential_tables:
+                if table not in existing_tables:
+                    result["missing_tables"].append(table)
+
+            if not result["missing_tables"]:
+                result["has_tables"] = True
+            else:
+                result["error"] = (
+                    f"Missing tables: {', '.join(result['missing_tables'])}"
+                )
+        except sqlite3.Error as e:
+            result["error"] = f"Error checking tables: {str(e)}"
+            return result
+        finally:
+            conn.close()
+
+        # Database is functional if it exists, can connect, and has all essential tables
+        result["functional"] = (
+            result["exists"] and result["can_connect"] and result["has_tables"]
+        )
+
+        return result
+
+    def is_good(self) -> bool:
+        """
+        Check if the database is functional.
+        Returns True if the database is functional, False otherwise.
+        """
+        if not os.path.isfile(self.db_path):
+            self.db_state = None
+            return False
+
+        if not self.db_state or not self.db_state.get("functional", False):
+            self.db_state = self._is_database_functional()
+
+        return self.db_state.get("functional", False)
 
     def get_track_by_id(self, track_id: str) -> Optional[Dict]:
         """Get track information by ID"""
