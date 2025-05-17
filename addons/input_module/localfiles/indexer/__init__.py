@@ -8,4 +8,4 @@ from .indexer import (
 )
 
 # Export database class
-from .indexer_db_async import AsyncIndexerDb
+from .indexer_db import AsyncIndexerDb
