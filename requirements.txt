@@ -13,3 +13,5 @@ pillow
 musicbrainzngs
 requests
 watchfiles
+aiosqlite
+python-magic
