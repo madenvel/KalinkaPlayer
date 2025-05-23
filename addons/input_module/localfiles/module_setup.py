@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # Socket paths for IPC
 INDEXER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
 ENRICHER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
+_enricher_proc = None
+_indexer_proc = None
 
 
 def is_process_running(socket_path):
@@ -59,10 +61,10 @@ def spawn_process(script_path, config_json):
     def log_reader(pipe, level, prefix):
         """Reads from pipe and logs each line with the specified level and prefix."""
         process_name = os.path.basename(script_path).split(".")[0]
-        for line in iter(pipe.readline, b""):
-            line_str = line.decode("utf-8", errors="replace").strip()
+        for line in iter(pipe.readline, ""):
+            line_str = line.strip()
             if line_str:
-                logger.log(level, f"[{process_name}] {prefix}: {line_str}")
+                print(line_str)
         pipe.close()
 
     try:
@@ -72,12 +74,11 @@ def spawn_process(script_path, config_json):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,  # Detach the process from parent
-            bufsize=1,  # Line buffered
-            universal_newlines=False,  # We'll decode manually
+            text=True,  # Use text mode for proper line buffering
+            bufsize=1,  # Line buffered (works with text mode)
         )
 
         # Start separate threads to read stdout and stderr
-        import threading
 
         stdout_thread = threading.Thread(
             target=log_reader, args=(process.stdout, logging.INFO, "OUT"), daemon=True
@@ -101,6 +102,8 @@ def setup(
     event_emitter: EventEmitter,
     event_listener: EventListener,
 ):
+    global _enricher_proc, _indexer_proc
+
     logger.info("Setting up localfiles input module")
     # Create specialized databases for each component
     input_module_db = LocalFilesInputModuleDb(config)
@@ -109,26 +112,44 @@ def setup(
     inputmodule = LocalFilesInputModule(config, input_module_db, event_emitter)
 
     # # Convert config to JSON for passing to child processes
-    # config_json = json.dumps(config.flatten_config())
+    config_json = json.dumps(config.flatten_config())
 
-    # # Check if indexer is running, if not start it
-    # if not is_process_running(INDEXER_SOCKET_PATH):
-    #     logger.info("Indexer not running, starting indexer process")
-    #     spawn_process("indexer/indexer.py", config_json)
-    # else:
-    #     logger.info("Indexer already running")
+    # Check if indexer is running, if not start it
+    if not is_process_running(INDEXER_SOCKET_PATH):
+        logger.info("Indexer not running, starting indexer process")
+        _indexer_proc = spawn_process("indexer/indexer.py", config_json)
+    else:
+        logger.info("Indexer already running")
 
-    # # Check if enricher is running, if not start it
-    # if not is_process_running(ENRICHER_SOCKET_PATH):
-    #     logger.info("Enricher not running, starting enricher process")
-    #     spawn_process("enricher/enricher.py", config_json)
-    # else:
-    #     logger.info("Enricher already running")
+    # Check if enricher is running, if not start it
+    if not is_process_running(ENRICHER_SOCKET_PATH):
+        logger.info("Enricher not running, starting enricher process")
+        _enricher_proc = spawn_process("enricher/enricher.py", config_json)
+    else:
+        logger.info("Enricher already running")
 
     return inputmodule
 
 
+def shutdown_process(proc):
+    """Shutdown a process by sending a shutdown command over its socket."""
+
+    if proc is not None:
+        proc.terminate()
+        proc.wait(timeout=5)
+        if proc.poll() is None:
+            logger.warning(f"{proc.pid} process did not terminate, killing it")
+            # If the process did not terminate, kill it
+            try:
+                proc.kill()
+            except OSError as e:
+                logger.error(f"Error killing process {proc.pid}: {e}")
+        else:
+            logger.info(f"{proc.pid} process terminated gracefully")
+
+
 def shutdown():
-    # We don't need to stop the indexer and enricher here
-    # They're independent processes and will be terminated by the OS
-    pass
+    global _enricher_proc, _indexer_proc
+
+    shutdown_process(_indexer_proc)
+    shutdown_process(_enricher_proc)

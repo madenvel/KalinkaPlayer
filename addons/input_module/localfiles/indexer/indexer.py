@@ -11,8 +11,9 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 from PIL import Image
 import io
-import magic
+import mimetypes
 from watchfiles import awatch, Change
+import sys
 
 from id_generator import (
     generate_artist_id,
@@ -38,6 +39,7 @@ _indexer_task: Optional[asyncio.Task] = None
 _indexer_queue: asyncio.Queue = asyncio.Queue()
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
+_shutdown_event = asyncio.Event()
 
 
 async def trigger_enricher_update(data):
@@ -358,17 +360,21 @@ class FileIndexer:
     def _extract_metadata(self, file_path: str) -> Optional[Dict]:
         """Extract metadata from a music file"""
         try:
-            mime = magic.Magic(mime=True)
-            magic_mime = mime.from_file(file_path)
+            mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+            if mime_type == "audio/x-flac":
+                mime_type = "audio/flac"
+
             metadata = {
-                "format": magic_mime,
+                "format": mime_type,
             }
-            if "audio/mpeg" in magic_mime:
+            if "audio/mpeg" in mime_type:
                 return self._extract_mp3_metadata(file_path, metadata)
-            elif "audio/flac" in magic_mime:
+            elif "audio/flac" in mime_type:
                 return self._extract_flac_metadata(file_path, metadata)
             else:
-                logger.warning(f"Unsupported file format: {file_path}")
+                logger.warning(
+                    f"Unsupported file format: {file_path}, format: {mime_type}"
+                )
                 return None
         except Exception as e:
             logger.exception(f"Error extracting metadata from {file_path}: {str(e)}")
@@ -488,19 +494,19 @@ class FileIndexer:
                 img = img.convert("RGB")
 
             thumbnail = img.copy()
-            thumbnail.thumbnail((50, 50), Image.LANCZOS)
+            thumbnail.thumbnail((50, 50), Image.Resampling.LANCZOS)
             thumbnail.save(
                 os.path.join(dir_path, f"{entity_id}_thumbnail.jpg"), "JPEG", quality=90
             )
 
             small = img.copy()
-            small.thumbnail((230, 230), Image.LANCZOS)
+            small.thumbnail((230, 230), Image.Resampling.LANCZOS)
             small.save(
                 os.path.join(dir_path, f"{entity_id}_small.jpg"), "JPEG", quality=90
             )
 
             large = img.copy()
-            large.thumbnail((600, 600), Image.LANCZOS)
+            large.thumbnail((600, 600), Image.Resampling.LANCZOS)
             large.save(
                 os.path.join(dir_path, f"{entity_id}_large.jpg"), "JPEG", quality=90
             )
@@ -545,6 +551,8 @@ class FileIndexer:
 
 async def _indexer_worker(config, db_manager: AsyncIndexerDb):
     """Background worker task for the indexer"""
+    global _shutdown_event
+
     indexer_instance = FileIndexer(config, db_manager)
     await indexer_instance.start()
 
@@ -562,6 +570,7 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
                     last_run = time.time()
                 elif command == "stop":
                     logger.info("Stopping indexer worker")
+                    _shutdown_event.set()
                     break
                 elif isinstance(command, dict) and "incremental_changes" in command:
                     logger.info("File watcher detected changes, processing...")
@@ -708,6 +717,8 @@ async def handle_client(reader, writer):
 
 def ensure_single_instance():
     """Try to connect to the existing socket to see if it's already running."""
+    import sys
+
     if os.path.exists(SOCKET_PATH):
         try:
             # Try to connect to see if the socket is active
@@ -740,7 +751,7 @@ async def start_server():
 
 async def main(config_data: Dict[str, Any]):
     """Runs the main application logic asynchronously."""
-    global _indexer_task, _file_watcher_task
+    global _indexer_task, _file_watcher_task, _shutdown_event
 
     ensure_single_instance()
 
@@ -752,21 +763,19 @@ async def main(config_data: Dict[str, Any]):
         logger.exception(f"Fatal: Error initializing database: {str(e)}")
         sys.exit(1)
 
-    shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
     import signal
-    import sys
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown_event.set)
+        loop.add_signal_handler(sig, _shutdown_event.set)
 
     _indexer_task = start_indexer(config_data, db_manager)
     _file_watcher_task = start_file_watcher(config_data)
     _server = await start_server()
 
     try:
-        await shutdown_event.wait()
+        await _shutdown_event.wait()
     except asyncio.CancelledError:
         logger.info("Server cancelled, shutting down...")
     except Exception as e:
@@ -799,7 +808,6 @@ async def main(config_data: Dict[str, Any]):
 
 if __name__ == "__main__":
     import argparse
-    import sys
     import json
 
     logging.basicConfig(
