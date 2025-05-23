@@ -14,4 +14,4 @@ musicbrainzngs
 requests
 watchfiles
 aiosqlite
-python-magic
+mimetype

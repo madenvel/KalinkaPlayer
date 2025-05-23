@@ -42,6 +42,7 @@ SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
 _server = None
 _enricher_task: Optional[asyncio.Task] = None
 _enricher_queue: asyncio.Queue = asyncio.Queue()
+_shutdown_event = asyncio.Event()
 
 
 class EnrichmentStatus(enum.IntEnum):
@@ -358,9 +359,6 @@ class MetadataEnricher:
 
         # Only update the database once at the end if we had any updates
         if had_updates:
-            logger.info(
-                f"Updating track {track['title']} with new metadata: {updated_track.keys()}"
-            )
             await self.db_manager.update_track(track["id"], updated_track)
 
         # If we have entities that need further enrichment, add them to the enricher queue
@@ -402,6 +400,7 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
 
                 if command == "stop":
                     logger.info("Stopping enricher task")
+                    _shutdown_event.set()
                     break
                 elif command == "enrich":
                     logger.info("Manual enrichment triggered")
@@ -529,7 +528,7 @@ async def stop_enricher() -> bool:
 
 async def main(config_data: Dict[str, Any]):
     """Runs the main application logic asynchronously."""
-    global _enricher_task
+    global _enricher_task, _shutdown_event
 
     ensure_single_instance()
 
@@ -541,17 +540,16 @@ async def main(config_data: Dict[str, Any]):
         logger.exception(f"Fatal: Error initializing database: {str(e)}")
         sys.exit(1)
 
-    shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, shutdown_event.set)
+        loop.add_signal_handler(sig, _shutdown_event.set)
 
     _enricher_task = start_enricher(config_data, db_manager)
     _server = await start_server()
 
     try:
-        await shutdown_event.wait()
+        await _shutdown_event.wait()
     except asyncio.CancelledError:
         logger.info("Server cancelled, shutting down...")
     except Exception as e:
