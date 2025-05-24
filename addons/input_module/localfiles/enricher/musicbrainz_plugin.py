@@ -154,10 +154,7 @@ class MusicBrainzPlugin(EnricherPlugin):
                 f"(score={int(best_match.get('ext:score', 0))}, similarity={best_similarity:.2f})"
             )
 
-            # Reject match if similarity is too low despite high score
-            if best_similarity < self.string_similarity_threshold / 2:
-                logger.warning(f"Rejecting match due to extremely low similarity")
-                return None, 0, 0.0
+            return None, 0, 0.0
 
         if best_match and self.debug_matching:
             logger.debug(
