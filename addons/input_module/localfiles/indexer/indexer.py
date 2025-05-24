@@ -5,6 +5,7 @@ import socket
 import tempfile
 import time
 import asyncio
+import json
 from typing import Dict, Optional, Set, Any, Tuple
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
@@ -53,8 +54,6 @@ async def trigger_enricher_update(data):
 
         # Handle dictionary by converting to JSON string
         if isinstance(data, dict):
-            import json
-
             message = json.dumps(data) + "\n"
         else:
             # Handle string data
@@ -239,8 +238,6 @@ class FileIndexer:
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
             await trigger_enricher_update("enrich")
-        elif cleanup_results["tracks"] > 0:
-            logger.info(f"Cleanup removed {cleanup_results['tracks']} tracks")
 
     async def scan_folder(self, folder: str, changed_items: Dict[str, Set[str]]):
         """Recursively scan a folder for music files"""
@@ -325,11 +322,11 @@ class FileIndexer:
             if "genre" in metadata:
                 album_data["genre"] = metadata["genre"]
             if "album_art" in metadata:
-                cover_art_filename = f"{album_id}.jpg"
+                image_url_filename = f"{album_id}.jpg"
                 await asyncio.to_thread(
                     self._save_images, metadata["album_art"], album_id, "album"
                 )
-                album_data["cover_art"] = cover_art_filename
+                album_data["image_url"] = image_url_filename
             await self.db_manager.insert_album(album_data)
             changes["albums"] = album_id
 
@@ -341,6 +338,7 @@ class FileIndexer:
             "artist_id": artist_id,
             "duration": metadata.get("duration", 0),
             "track_number": metadata.get("track_number"),
+            "disc_number": metadata.get("disc_number"),
             "file_path": file_path,
             "format": metadata.get("format", "unknown"),
             "file_size": file_size,
@@ -400,6 +398,14 @@ class FileIndexer:
                     metadata["track_number"] = int(track_str)
                 except ValueError:
                     pass
+            if "TPOS" in id3:
+                disc_str = str(id3["TPOS"])
+                if "/" in disc_str:
+                    disc_str = disc_str.split("/")[0]
+                try:
+                    metadata["disc_number"] = int(disc_str)
+                except ValueError:
+                    pass
             if "TDRC" in id3:
                 try:
                     metadata["year"] = int(str(id3["TDRC"]).split("-")[0])
@@ -448,6 +454,14 @@ class FileIndexer:
                     track_str = track_str.split("/")[0]
                 try:
                     metadata["track_number"] = int(track_str)
+                except ValueError:
+                    pass
+            if "discnumber" in flac:
+                disc_str = flac["discnumber"][0]
+                if "/" in disc_str:
+                    disc_str = disc_str.split("/")[0]
+                try:
+                    metadata["disc_number"] = int(disc_str)
                 except ValueError:
                     pass
             if "date" in flac:
@@ -577,6 +591,7 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
                     await indexer_instance.handle_incremental_changes(
                         command["incremental_changes"]
                     )
+                    last_run = time.time()
                 _indexer_queue.task_done()
             except asyncio.TimeoutError:
                 pass
@@ -695,7 +710,7 @@ async def stop_file_watcher() -> bool:
 def start_file_watcher(config) -> Optional[asyncio.Task]:
     """Start the file watcher process in a background task if enabled"""
     global _file_watcher_task, _file_watcher_stop_event
-    if not config.get("use_file_watcher", False):
+    if not config.get("file_watch_enabled", False):
         logger.info("File watcher is disabled in config.")
         return None
 
@@ -823,14 +838,9 @@ if __name__ == "__main__":
 
     logger.info("Loading configuration from command line JSON")
     try:
-        loaded_config = json.loads(args.config)
-        if (
-            "input_modules" in loaded_config
-            and "localfiles" in loaded_config["input_modules"]
-        ):
-            app_config = loaded_config["input_modules"]["localfiles"]
-        else:
-            app_config = loaded_config
+        app_config = json.loads(args.config)
+        logger.info("Configuration loaded successfully.")
+        logger.info(f"Configuration: {json.dumps(app_config, indent=2)}")
     except json.JSONDecodeError as e:
         logger.exception(f"Error parsing JSON configuration: {str(e)}")
         sys.exit(1)

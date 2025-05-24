@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 def create_playlist_cover_collage(
     album_ids: List[str], artwork_path: str, playlist_id: str
-) -> bool:
+) -> Optional[str]:
     """
     Create a playlist cover image by making a collage of album images.
 
@@ -24,7 +24,7 @@ def create_playlist_cover_collage(
     # If there are no album IDs, return False
     if not album_ids:
         logger.warning("No album IDs provided for playlist cover collage")
-        return False
+        return None
 
     # Create the playlist directory if it doesn't exist
     playlist_dir = os.path.join(artwork_path, "playlist")
@@ -46,7 +46,7 @@ def create_playlist_cover_collage(
     # If we don't have any valid images, return False
     if not image_paths:
         logger.warning("No valid album images found for playlist cover collage")
-        return False
+        return None
 
     # If we only have one image after all, just copy it
     if len(image_paths) == 1:
@@ -89,22 +89,22 @@ def create_playlist_cover_collage(
         collage.save(large_path, "JPEG", quality=90)
 
         # Save small image (300x300)
-        small_img = collage.resize((300, 300), Image.LANCZOS)
+        small_img = collage.resize((300, 300), Image.Resampling.LANCZOS)
         small_img.save(small_path, "JPEG", quality=85)
 
         # Save thumbnail (150x150)
-        thumb_img = collage.resize((150, 150), Image.LANCZOS)
+        thumb_img = collage.resize((150, 150), Image.Resampling.LANCZOS)
         thumb_img.save(thumbnail_path, "JPEG", quality=85)
 
-        return True
+        return playlist_id
     except Exception as e:
         logger.error(f"Error creating playlist cover collage: {str(e)}")
-        return False
+        return None
 
 
 def _copy_single_album_image(
     album_id: str, artwork_path: str, playlist_id: str
-) -> bool:
+) -> Optional[str]:
     """
     Copy a single album image to use as playlist cover.
 
@@ -133,7 +133,7 @@ def _copy_single_album_image(
         # Check if source images exist
         if not os.path.exists(source_large):
             logger.warning(f"Source album image not found: {source_large}")
-            return False
+            return None
 
         # Copy images
         large_img = Image.open(source_large)
@@ -144,7 +144,7 @@ def _copy_single_album_image(
             small_img.save(dest_small, "JPEG", quality=85)
         else:
             # Create small image from large
-            small_img = large_img.resize((300, 300), Image.LANCZOS)
+            small_img = large_img.resize((300, 300), Image.Resampling.LANCZOS)
             small_img.save(dest_small, "JPEG", quality=85)
 
         if os.path.exists(source_thumbnail):
@@ -152,10 +152,10 @@ def _copy_single_album_image(
             thumb_img.save(dest_thumbnail, "JPEG", quality=85)
         else:
             # Create thumbnail from large
-            thumb_img = large_img.resize((150, 150), Image.LANCZOS)
+            thumb_img = large_img.resize((150, 150), Image.Resampling.LANCZOS)
             thumb_img.save(dest_thumbnail, "JPEG", quality=85)
 
-        return True
+        return playlist_id
     except Exception as e:
         logger.error(f"Error copying album image for playlist: {str(e)}")
-        return False
+        return None

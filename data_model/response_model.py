@@ -32,7 +32,7 @@ class PlayerState(BaseModel):
     message: Optional[str] = None
     audio_info: Optional[AudioInfo] = None
     mime_type: Optional[str] = None
-    timestamp: PositiveInt = None
+    timestamp: PositiveInt = 0
 
 
 class FavoriteAddedEvent(BaseModel):

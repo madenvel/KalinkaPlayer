@@ -85,7 +85,7 @@ def mime_to_format(mime: str) -> AudioFormat:
     return AudioFormat.MPEG
 
 
-def to_state_name(state: AudioGraphNodeState) -> str:
+def to_state_name(state: AudioGraphNodeState) -> Optional[str]:
     if state == AudioGraphNodeState.ERROR:
         return "ERROR"
     elif state == AudioGraphNodeState.STOPPED or state == AudioGraphNodeState.FINISHED:
@@ -243,7 +243,11 @@ class PlayQueue(AsyncExecutor):
         self.track_list.extend(tracks)
         self.event_emitter.dispatch(
             EventType.TracksAdded,
-            [self.get_track_info(i) for i in range(index, len(self.track_list))],
+            [
+                track_info.model_dump(exclude_none=True)
+                for i in range(index, len(self.track_list))
+                if ((track_info := self.get_track_info(i)) is not None)
+            ],
         )
 
         if index == 0:
@@ -286,16 +290,17 @@ class PlayQueue(AsyncExecutor):
             "limit": limit,
             "total": len(self.track_list),
             "items": [
-                self.get_track_info(i)
+                track_info.model_dump(exclude_none=True)
                 for i in range(offset, min(offset + limit, len(self.track_list)))
+                if ((track_info := self.get_track_info(i)) is not None)
             ],
         }
 
-    def get_track_info(self, index: int):
+    def get_track_info(self, index: int) -> Optional[Track]:
         if index not in range(0, len(self.track_list)):
             return None
         track_info: TrackInfo = self.track_list[index]
-        return track_info.metadata.model_dump(exclude_unset=True)
+        return track_info.metadata
 
     def get_state(self) -> PlayerState:
         stream_state = self.track_player.get_state()
@@ -315,17 +320,13 @@ class PlayQueue(AsyncExecutor):
         )
 
     @enqueue
-    def replay(self) -> PlayerState:
+    def replay(self):
         stream_state = self.track_player.get_state()
         self.event_emitter.dispatch(
             EventType.StateReplay,
             PlayerState(
                 state=to_state_name(stream_state.state),
-                current_track=(
-                    self.get_track_info(self.current_track_id)
-                    if self.current_track_id in range(0, len(self.track_list))
-                    else None
-                ),
+                current_track=self.get_track_info(self.current_track_id),
                 index=self.current_track_id,
                 position=self._estimated_progress(stream_state),
                 message=stream_state.message,
