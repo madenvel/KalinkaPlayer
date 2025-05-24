@@ -120,7 +120,7 @@ class DeezerPlugin(EnricherPlugin):
             )
             return None
 
-    def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
+    def _save_images(self, image_data: bytes, entity_id: str, entity_type: str) -> bool:
         """Save artwork images in different sizes"""
         try:
             img = Image.open(io.BytesIO(image_data))
@@ -232,39 +232,37 @@ class DeezerPlugin(EnricherPlugin):
                 )
                 return None
 
+            updates = {}
+
             # Save the image in different sizes
             image_data = image_response.content
             if self._save_images(image_data, album["id"], "album"):
                 # Update album data
-                updates = {
-                    "image_url": album["id"],
-                }
-
-                # Add genre if available from Deezer
-                if "genre_id" in deezer_album and deezer_album.get("genre_id"):
-                    # Get detailed genre info
-                    try:
-                        genre_response = await self.async_client.get(
-                            f"https://api.deezer.com/genre/{deezer_album['genre_id']}"
-                        )
-                        if genre_response.status_code == 200:
-                            genre_data = genre_response.json()
-                            if "name" in genre_data:
-                                updates["genre"] = genre_data["name"]
-                                logger.debug(
-                                    f"Added genre from Deezer for album {album['title']}: {genre_data['name']}"
-                                )
-                    except Exception as genre_error:
-                        logger.warning(
-                            f"Error fetching genre for album {album['title']}: {str(genre_error)}"
-                        )
-
+                updates["image_url"] = album["id"]
                 logger.info(
                     f"Added cover image from Deezer for album: {album['title']} by {artist_name}"
                 )
-                return {"updates": updates}
-            else:
-                return None
+
+            # Add genre if available from Deezer
+            if "genre_id" in deezer_album and deezer_album.get("genre_id"):
+                # Get detailed genre info
+                try:
+                    genre_response = await self.async_client.get(
+                        f"https://api.deezer.com/genre/{deezer_album['genre_id']}"
+                    )
+                    if genre_response.status_code == 200:
+                        genre_data = genre_response.json()
+                        if "name" in genre_data:
+                            updates["genre"] = genre_data["name"]
+                            logger.debug(
+                                f"Added genre from Deezer for album {album['title']}: {genre_data['name']}"
+                            )
+                except Exception as genre_error:
+                    logger.warning(
+                        f"Error fetching genre for album {album['title']}: {str(genre_error)}"
+                    )
+
+            return {"updates": updates}
 
         except Exception as e:
             logger.error(

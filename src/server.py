@@ -22,6 +22,7 @@ from src.config import Config
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    sd = None
     try:
         sd = ServiceDiscovery(app.state.config)
         await sd.register_service()
@@ -33,7 +34,8 @@ async def lifespan(app: FastAPI):
 
     finally:
         logger.info("Shutting down...")
-        await sd.unregister_service()
+        if sd is not None:
+            await sd.unregister_service()
         shutdown()
         app.state.event_listener.terminate()
         state_keeper.save_state(app.state.playqueue, app.state.inputmodule)
@@ -145,15 +147,9 @@ def create_app(config: Config):
             exclude_unset=True
         )
 
-    @app.get("/browse/catalog")
-    def browse_catalog(offset: int = 0, limit: int = 10):
-        return inputmodule.browse_catalog("", offset, limit).model_dump(
-            exclude_unset=True
-        )
-
     @app.get("/browse/catalog/{endpoint:path}")
     def browse_catalog(
-        endpoint: str,
+        endpoint: str = "",
         offset: int = 0,
         limit: int = 10,
         genre_ids: List[int] = Query([]),
@@ -174,15 +170,20 @@ def create_app(config: Config):
     async def stream(request: Request):
         async def process_events():
             event_stream = EventStream(event_listener)
-            playqueue.replay()
-            while True:
-                if await request.is_disconnected():
-                    break
-                event = await run_in_threadpool(event_stream.get_event)
-                if event is not None:
-                    yield json.dumps(event) + "\n"
-
-            event_stream.close()
+            try:
+                playqueue.replay()
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    event = await run_in_threadpool(event_stream.get_event)
+                    if event is not None:
+                        logger.info(f"Event: {event}")
+                        yield json.dumps(event) + "\n"
+            except Exception as e:
+                logger.error(f"Error processing events: {e}")
+                yield json.dumps({"error": str(e)}) + "\n"
+            finally:
+                event_stream.close()
 
         return StreamingResponse(process_events(), media_type="text/event-stream")
 
@@ -191,12 +192,14 @@ def create_app(config: Config):
         return playqueue.get_state()
 
     @app.get("/queue/mode")
-    async def mode() -> PlaybackMode:
+    async def mode():
         return playqueue.get_playback_mode()
 
     @app.put("/queue/mode")
     async def set_mode(
-        shuffle: bool = None, repeat_single: bool = None, repeat_all: bool = None
+        shuffle: Optional[bool] = None,
+        repeat_single: Optional[bool] = None,
+        repeat_all: Optional[bool] = None,
     ):
         playqueue.set_playback_mode(shuffle, repeat_single, repeat_all)
         return {"message": "Ok"}

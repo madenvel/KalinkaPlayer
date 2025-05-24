@@ -403,7 +403,7 @@ class LocalFilesInputModuleDb:
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
                 WHERE t.album_id = ?
-                ORDER BY t.track_number, t.title
+                ORDER BY COALESCE(t.disc_number, 1), t.track_number, t.title
                 LIMIT ? OFFSET ?
             """,
                 (album_id, limit, offset),
@@ -644,7 +644,7 @@ class LocalFilesInputModuleDb:
 
             # Build the SET clause with only provided fields
             fields = ["last_updated = ?"]
-            values = [current_time]
+            values: List[Any] = [current_time]
 
             if name is not None:
                 fields.append("name = ?")
@@ -744,6 +744,42 @@ class LocalFilesInputModuleDb:
             logger.error(f"Error adding tracks to playlist: {str(e)}")
             conn.rollback()
             raise
+        finally:
+            conn.close()
+
+    def update_playlist_image(self, playlist_id: str, image_url: str) -> bool:
+        """
+        Update the image path for a playlist.
+
+        Args:
+            playlist_id: ID of the playlist
+            image_url: Path to the playlist image
+
+        Returns:
+            True if the update was successful, False otherwise
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            current_time = int(time.time())
+
+            cursor.execute(
+                """
+                UPDATE playlists SET
+                image_url = ?,
+                last_updated = ?
+                WHERE id = ?
+                """,
+                (image_url, current_time, playlist_id),
+            )
+
+            updated = cursor.rowcount > 0
+            conn.commit()
+            return updated
+        except Exception as e:
+            logger.error(f"Error updating playlist image: {str(e)}")
+            conn.rollback()
+            return False
         finally:
             conn.close()
 

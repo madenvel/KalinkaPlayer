@@ -25,7 +25,7 @@ musicbrainz_logger.setLevel(logging.WARNING)
 # Required fields for each entity type
 # These define what metadata fields are required for an entity to be considered fully enriched
 ARTIST_REQUIRED_FIELDS = ["name", "mbid", "image_url"]
-ALBUM_REQUIRED_FIELDS = ["title", "artist_id", "mbid", "cover_art", "year", "genre"]
+ALBUM_REQUIRED_FIELDS = ["title", "artist_id", "mbid", "image_url", "year", "genre"]
 TRACK_REQUIRED_FIELDS = [
     "title",
     "artist_id",
@@ -621,16 +621,9 @@ if __name__ == "__main__":
 
     logger.info("Loading configuration from command line JSON")
     try:
-        loaded_config = json.loads(args.config)
-        if (
-            "input_modules" in loaded_config
-            and "localfiles" in loaded_config["input_modules"]
-        ):
-            app_config = loaded_config["input_modules"]["localfiles"]
-            logger.info(f"Loaded config: {app_config}")
-        else:
-            app_config = loaded_config
-            logger.info("Loaded direct config")
+        app_config = json.loads(args.config)
+        logger.info("Configuration loaded successfully.")
+        logger.info(f"Configuration: {json.dumps(app_config, indent=2)}")
     except json.JSONDecodeError as e:
         logger.exception(f"Error parsing JSON configuration: {str(e)}")
         sys.exit(1)

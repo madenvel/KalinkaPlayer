@@ -187,21 +187,21 @@ class WikidataPlugin(EnricherPlugin):
 
             # Save thumbnail (50x50)
             thumbnail = img.copy()
-            thumbnail.thumbnail((50, 50), Image.LANCZOS)
+            thumbnail.thumbnail((50, 50), Image.Resampling.LANCZOS)
             thumbnail.save(
                 os.path.join(dir_path, f"{entity_id}_thumbnail.jpg"), "JPEG", quality=90
             )
 
             # Save small (230x230)
             small = img.copy()
-            small.thumbnail((230, 230), Image.LANCZOS)
+            small.thumbnail((230, 230), Image.Resampling.LANCZOS)
             small.save(
                 os.path.join(dir_path, f"{entity_id}_small.jpg"), "JPEG", quality=90
             )
 
             # Save large (600x600 or original if smaller)
             large = img.copy()
-            large.thumbnail((600, 600), Image.LANCZOS)
+            large.thumbnail((600, 600), Image.Resampling.LANCZOS)
             large.save(
                 os.path.join(dir_path, f"{entity_id}_large.jpg"), "JPEG", quality=90
             )

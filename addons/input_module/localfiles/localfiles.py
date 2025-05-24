@@ -1,10 +1,10 @@
 import logging
 import os
 from pathlib import Path
-from typing import List, Dict, Optional, Callable
-import time
+from typing import List, Dict, Optional
 import mimetypes
 
+from fastapi import HTTPException
 from src.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
 from src.async_common import EventEmitter
 from data_model.datamodel import (
@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class LocalFilesInputModule(InputModule):
     """Local music files input module implementation"""
 
-    def __init__(self, config, db_manager, event_emitter: EventEmitter):
+    def __init__(
+        self, config, db_manager: LocalFilesInputModuleDb, event_emitter: EventEmitter
+    ):
         self.config = config
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
@@ -418,12 +420,12 @@ class LocalFilesInputModule(InputModule):
         """Get album details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         album = self.db_manager.get_album_by_id(id)
         if not album:
             logger.warning(f"Album not found: {id}")
-            return None
+            raise HTTPException(status_code=404, detail=f"Album not found: {id}")
 
         return self._create_album_browse_item(album)
 
@@ -431,12 +433,12 @@ class LocalFilesInputModule(InputModule):
         """Get artist details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         artist = self.db_manager.get_artist_by_id(id)
         if not artist:
             logger.warning(f"Artist not found: {id}")
-            return None
+            raise HTTPException(status_code=404, detail=f"Artist not found: {id}")
 
         return self._create_artist_browse_item(artist)
 
@@ -444,12 +446,12 @@ class LocalFilesInputModule(InputModule):
         """Get track details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         track = self.db_manager.get_track_by_id(id)
         if not track:
             logger.warning(f"Track not found: {id}")
-            return None
+            raise HTTPException(status_code=404, detail=f"Track not found: {id}")
 
         return self._create_track_browse_item(track)
 
@@ -457,12 +459,12 @@ class LocalFilesInputModule(InputModule):
         """Get playlist details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         playlist = self.db_manager.get_playlist_by_id(id)
         if not playlist:
             logger.warning(f"Playlist not found: {id}")
-            return None
+            raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         return self._create_playlist_browse_item(playlist)
 
@@ -484,7 +486,7 @@ class LocalFilesInputModule(InputModule):
         """Create playlist"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
         # Generate playlist ID using the name and system as creator
         playlist_id = generate_playlist_id(name, "localfiles_system")
         # Create the playlist record
@@ -494,6 +496,9 @@ class LocalFilesInputModule(InputModule):
 
         # Get the created playlist
         playlist = self.db_manager.get_playlist_by_id(playlist_id)
+        if not playlist:
+            logger.error(f"Failed to retrieve created playlist: {playlist_id}")
+            raise HTTPException(status_code=500, detail="Failed to create playlist")
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
@@ -504,10 +509,8 @@ class LocalFilesInputModule(InputModule):
             id=playlist_id,
             name=name,
             description=description,
-            count=0,
             track_count=playlist.get("track_count", 0),
-            duration=0,
-            last_updated=playlist["last_updated"],
+            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -517,10 +520,14 @@ class LocalFilesInputModule(InputModule):
         """Update playlist"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         self.db_manager.update_playlist(id, name, description)
         playlist = self.db_manager.get_playlist_by_id(id)
+
+        if not playlist:
+            logger.warning(f"Playlist not found: {id}")
+            raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
@@ -531,10 +538,8 @@ class LocalFilesInputModule(InputModule):
             id=playlist["id"],
             name=playlist["name"],
             description=playlist["description"],
-            count=playlist.get("track_count", 0),
             track_count=playlist.get("track_count", 0),
-            duration=playlist.get("duration", 0),
-            last_updated=playlist["last_updated"],
+            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -560,7 +565,8 @@ class LocalFilesInputModule(InputModule):
 
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+
         # Add tracks to the playlist
         tracks_added = self.db_manager.add_tracks_to_playlist(
             id, track_ids, allow_duplicates
@@ -568,10 +574,16 @@ class LocalFilesInputModule(InputModule):
 
         # Generate playlist cover image if tracks were added
         if tracks_added > 0:
-            self._generate_playlist_cover(id)
+            image_url = self._generate_playlist_cover(id)
+            if image_url:
+                self.db_manager.update_playlist_image(id, image_url)
 
         # Get updated playlist
         playlist = self.db_manager.get_playlist_by_id(id)
+
+        if not playlist:
+            logger.warning(f"Playlist not found: {id}")
+            raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
@@ -583,10 +595,9 @@ class LocalFilesInputModule(InputModule):
             id=playlist["id"],
             name=playlist["name"],
             description=playlist["description"],
-            count=playlist.get("track_count", 0),
             track_count=playlist.get("track_count", 0),
-            duration=playlist.get("duration", 0),
-            last_updated=playlist["last_updated"],
+            # duration=playlist.get("duration", 0),
+            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -597,7 +608,7 @@ class LocalFilesInputModule(InputModule):
 
         return playlist_obj
 
-    def _generate_playlist_cover(self, playlist_id: str) -> bool:
+    def _generate_playlist_cover(self, playlist_id: str) -> Optional[str]:
         """
         Generate a cover image for a playlist based on its tracks.
 
@@ -617,7 +628,7 @@ class LocalFilesInputModule(InputModule):
             logger.warning(
                 f"No tracks in playlist {playlist_id} to generate cover image"
             )
-            return False
+            return None
 
         # Create the cover image
         return create_playlist_cover_collage(album_ids, self.artwork_path, playlist_id)
@@ -629,10 +640,14 @@ class LocalFilesInputModule(InputModule):
 
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
-            return None
+            raise HTTPException(status_code=503, detail="Database service unavailable")
 
         self.db_manager.remove_tracks_from_playlist(id, playlist_track_ids)
         playlist = self.db_manager.get_playlist_by_id(id)
+
+        if not playlist:
+            logger.warning(f"Playlist not found: {id}")
+            raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
@@ -643,10 +658,9 @@ class LocalFilesInputModule(InputModule):
             id=playlist["id"],
             name=playlist["name"],
             description=playlist["description"],
-            count=playlist.get("track_count", 0),
             track_count=playlist.get("track_count", 0),
-            duration=playlist.get("duration", 0),
-            last_updated=playlist["last_updated"],
+            # duration=playlist.get("duration", 0),
+            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -762,10 +776,9 @@ class LocalFilesInputModule(InputModule):
             id=playlist["id"],
             name=playlist["name"],
             description=playlist["description"],
-            count=playlist.get("track_count", 0),
             track_count=playlist.get("track_count", 0),
-            duration=playlist.get("duration", 0),
-            last_updated=playlist["last_updated"],
+            # duration=playlist.get("duration", 0),
+            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -786,15 +799,22 @@ class LocalFilesInputModule(InputModule):
 
     def _get_album_image_urls(self, album_id: str) -> Optional[AlbumImage]:
         """Get image URLs for an album"""
+        # Get album data from database to check if image_url exists
+        album = self.db_manager.get_album_by_id(album_id)
+        if not album or not album.get("image_url"):
+            return None
+
+        # Use the image_url from database (without .jpg extension)
+        image_base = album["image_url"].replace(".jpg", "")
+
         # Define relative paths for album images including the /resource/ prefix
-        thumbnail = f"/resource/album/{album_id}_thumbnail.jpg"
-        small = f"/resource/album/{album_id}_small.jpg"
-        large = f"/resource/album/{album_id}_large.jpg"
+        thumbnail = f"/resource/album/{image_base}_thumbnail.jpg"
+        small = f"/resource/album/{image_base}_small.jpg"
+        large = f"/resource/album/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        # but without the /resource/ prefix
         thumbnail_path = os.path.join(
-            self.artwork_path, f"album/{album_id}_thumbnail.jpg"
+            self.artwork_path, f"album/{image_base}_thumbnail.jpg"
         )
 
         # Only return image URLs if the thumbnail file exists
@@ -805,15 +825,22 @@ class LocalFilesInputModule(InputModule):
 
     def _get_artist_image_urls(self, artist_id: str) -> Optional[ArtistImage]:
         """Get image URLs for an artist"""
+        # Get artist data from database to check if image_url exists
+        artist = self.db_manager.get_artist_by_id(artist_id)
+        if not artist or not artist.get("image_url"):
+            return None
+
+        # Use the image_url from database (without .jpg extension)
+        image_base = artist["image_url"].replace(".jpg", "")
+
         # Define relative paths for artist images including the /resource/ prefix
-        thumbnail = f"/resource/artist/{artist_id}_thumbnail.jpg"
-        small = f"/resource/artist/{artist_id}_small.jpg"
-        large = f"/resource/artist/{artist_id}_large.jpg"
+        thumbnail = f"/resource/artist/{image_base}_thumbnail.jpg"
+        small = f"/resource/artist/{image_base}_small.jpg"
+        large = f"/resource/artist/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        # but without the /resource/ prefix
         thumbnail_path = os.path.join(
-            self.artwork_path, f"artist/{artist_id}_thumbnail.jpg"
+            self.artwork_path, f"artist/{image_base}_thumbnail.jpg"
         )
 
         # Only return image URLs if the thumbnail file exists
@@ -824,15 +851,22 @@ class LocalFilesInputModule(InputModule):
 
     def _get_playlist_image_urls(self, playlist_id: str) -> Optional[PlaylistImage]:
         """Get image URLs for a playlist"""
+        # Get playlist data from database to check if image_url exists
+        playlist = self.db_manager.get_playlist_by_id(playlist_id)
+        if not playlist or not playlist.get("image_url"):
+            return None
+
+        # Use the image_url from database (without .jpg extension)
+        image_base = playlist["image_url"].replace(".jpg", "")
+
         # Define relative paths for playlist images including the /resource/ prefix
-        thumbnail = f"/resource/playlist/{playlist_id}_thumbnail.jpg"
-        small = f"/resource/playlist/{playlist_id}_small.jpg"
-        large = f"/resource/playlist/{playlist_id}_large.jpg"
+        thumbnail = f"/resource/playlist/{image_base}_thumbnail.jpg"
+        small = f"/resource/playlist/{image_base}_small.jpg"
+        large = f"/resource/playlist/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        # but without the /resource/ prefix
         thumbnail_path = os.path.join(
-            self.artwork_path, f"playlist/{playlist_id}_thumbnail.jpg"
+            self.artwork_path, f"playlist/{image_base}_thumbnail.jpg"
         )
 
         # Only return image URLs if the thumbnail file exists
@@ -844,4 +878,4 @@ class LocalFilesInputModule(InputModule):
     def get_resource_path(self, id: str) -> str:
         """Get full path to a resource"""
         # Assuming the ID is the file path
-        return (Path(self.artwork_path) / id).resolve()
+        return (Path(self.artwork_path) / id).resolve().as_posix()
