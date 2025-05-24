@@ -19,8 +19,8 @@ class QobuzAutoplay:
         self.qobuz_client = qobuz_client
         self.playqueue = playqueue
         self.track_browser = track_browser
-        self.remaining_tracks: list[TrackInfo] = []
-        self.suggested_tracks: set[int] = set()
+        self.remaining_tracks: list[str] = []
+        self.suggested_tracks: set[str] = set()
         self.amount_to_request = amount_to_request
         self.tracks = []
         self.can_request_new = True
@@ -59,14 +59,6 @@ class QobuzAutoplay:
         self.suggested_tracks.add(recommended_track)
 
         self.playqueue.add(self.track_browser.get_track_info([recommended_track]))
-
-    def _track_to_trackinfo(self, track) -> TrackInfo:
-        return TrackInfo(
-            metadata=metadata_from_track(track),
-            link_retriever=partial(
-                qobuz_link_retriever, self.qobuz_client, track["id"]
-            ),
-        )
 
     def _retrieve_new_recommendations(self):
         if not self.tracks:
