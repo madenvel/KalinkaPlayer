@@ -27,6 +27,8 @@ from indexer_db import AsyncIndexerDb
 # Configure logger for watchfiles.main only to WARNING level
 watchfiles_logger = logging.getLogger("watchfiles.main")
 watchfiles_logger.setLevel(logging.WARNING)
+aiosqlite_logger = logging.getLogger("aiosqlite")
+aiosqlite_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger("indexer")
 
@@ -131,9 +133,12 @@ class FileIndexer:
                 f"Scan completed with changes: Artists={len(changed_items['artists'])}, "
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
-            await trigger_enricher_update("enrich")
         else:
             logger.info("Scan completed with no changes")
+
+        # Trigger the enricher run regardless of changes
+        # as there might be old files pending enrichment
+        await trigger_enricher_update("enrich")
 
     async def handle_incremental_changes(self, changes: Set[Tuple[Change, str]]):
         """Process file changes detected by watchfiles"""
@@ -230,7 +235,7 @@ class FileIndexer:
                         f"Error processing deleted file {file_path}: {str(e)}"
                     )
 
-        cleanup_results = await self.cleanup_stale_tracks()
+        await self.cleanup_stale_tracks()
 
         if any(changed_items.values()):
             logger.info(
@@ -569,7 +574,6 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
 
     indexer_instance = FileIndexer(config, db_manager)
     await indexer_instance.start()
-
     interval_minutes = config.get("scan_interval_minutes", 5)
     logger.info(f"Scheduled file indexer to run every {interval_minutes} minutes")
     last_run = time.time()
@@ -834,7 +838,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "-c", "--config", help="JSON configuration string", required=True
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Set log level",
+    )
     args = parser.parse_args()
+
+    # Configure logging level
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
 
     logger.info("Loading configuration from command line JSON")
     try:

@@ -21,6 +21,8 @@ logger = logging.getLogger("enricher")
 # Set MusicBrainzNGS log level to warning to reduce verbosity
 musicbrainz_logger = logging.getLogger("musicbrainzngs")
 musicbrainz_logger.setLevel(logging.WARNING)
+aiosqlite_logger = logging.getLogger("aiosqlite")
+aiosqlite_logger.setLevel(logging.WARNING)
 
 # Required fields for each entity type
 # These define what metadata fields are required for an entity to be considered fully enriched
@@ -121,21 +123,13 @@ class MetadataEnricher:
         """Process non-enriched artists"""
 
         processed_artists = set()
-        last_artist_id = None
         while True:
             artists = await self.db_manager.get_non_enriched_artists(limit=1)
             if not artists:
                 logger.info("No more artists to process")
                 return len(processed_artists)
             artist = artists[0]
-            if artist["id"] == last_artist_id:
-                logger.warning("No new artists to process, breaking")
-                return len(processed_artists)
-            if artist["id"] in processed_artists:
-                logger.info("Already processed this artist, skipping")
-                continue
             await self._enrich_artist(artist)
-            last_artist_id = artist["id"]
             processed_artists.add(artist["id"])
             logger.info(f"Processed artist {artist['name']}")
 
@@ -160,8 +154,14 @@ class MetadataEnricher:
             if not plugin.can_enrich_artist():
                 continue
 
+            logger.info(
+                f"Enriching artist {artist['name'] if 'name' in artist else artist['id']} with {plugin.__class__.__name__}"
+            )
             result = await plugin.enrich_artist(updated_artist)
             if result and "updates" in result:
+                logger.info(
+                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
+                )
                 # Apply updates to our working copy
                 updated_artist.update(result["updates"])
                 # Track that we had updates
@@ -194,21 +194,13 @@ class MetadataEnricher:
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
         processed_albums = set()
-        last_album_id = None
         while True:
             albums = await self.db_manager.get_non_enriched_albums(limit=1)
             if not albums:
                 logger.info("No more albums to process")
                 return len(processed_albums)
             album = albums[0]
-            if album["id"] == last_album_id:
-                logger.warning("No new albums to process, breaking")
-                return len(processed_albums)
-            if album["id"] in processed_albums:
-                logger.info(f"Already processed album {album['id']}, skipping")
-                continue
             await self._enrich_album(album)
-            last_album_id = album["id"]
             processed_albums.add(album["id"])
             logger.info(f"Processed album {album['title']}")
 
@@ -233,13 +225,14 @@ class MetadataEnricher:
             if not plugin.can_enrich_album():
                 continue
 
-            logger.debug(
-                f"Enriching album {album['id']} with {plugin.__class__.__name__}"
+            logger.info(
+                f"Enriching album {album['name'] if 'name' in album else album['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_album(updated_album)
-            logger.debug(f"Result from {plugin.__class__.__name__}: {result}")
             if result and "updates" in result:
-                logger.debug(f"Updates found: {result['updates']}")
+                logger.info(
+                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
+                )
                 # Apply updates to our working copy
                 updated_album.update(result["updates"])
                 # Track that we had updates
@@ -272,22 +265,14 @@ class MetadataEnricher:
     async def _process_tracks(self) -> int:
         """Process non-enriched tracks"""
         processed_tracks = set()
-        last_track_id = None
         while True:
             tracks = await self.db_manager.get_non_enriched_tracks(limit=1)
             if not tracks:
                 logger.info("No more tracks to process")
                 return len(processed_tracks)
             track = tracks[0]
-            if track["id"] == last_track_id:
-                logger.warning("No new tracks to process, breaking")
-                return len(processed_tracks)
-            if track["id"] in processed_tracks:
-                logger.info(f"Already processed track {track['id']}, skipping")
-                continue
             await self._enrich_track(track)
             processed_tracks.add(track["id"])
-            last_track_id = track["id"]
             logger.info(f"Processed track {track['title']}")
 
     async def _enrich_track(self, track):
@@ -321,29 +306,34 @@ class MetadataEnricher:
                 )
                 break
 
+            logger.info(
+                f"Enriching track {track['title'] if 'title' in track else track['id']} with {plugin.__class__.__name__}"
+            )
             result = await plugin.enrich_track(updated_track)
-            if result:
-                if "updates" in result:
-                    # Apply updates to our working copy
-                    updated_track.update(result["updates"])
-                    # Track that we had updates
-                    had_updates = True
+            if result and "updates" in result:
+                logger.info(
+                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
+                )
+                # Apply updates to our working copy
+                updated_track.update(result["updates"])
+                # Track that we had updates
+                had_updates = True
 
-                    # Check if we're now fully enriched after this plugin
-                    is_fully_enriched = all(
-                        updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
-                    )
-                    if is_fully_enriched:
-                        logger.debug(f"Track {track['title']} now fully enriched")
-                        updated_track["enriched"] = EnrichmentStatus.ENRICHED
+                # Check if we're now fully enriched after this plugin
+                is_fully_enriched = all(
+                    updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
+                )
+                if is_fully_enriched:
+                    logger.debug(f"Track {track['title']} now fully enriched")
+                    updated_track["enriched"] = EnrichmentStatus.ENRICHED
 
-                # Check if plugin identified entities that need further enrichment
-                if "changed_items" in result:
-                    for entity_type in ["artists", "albums", "tracks"]:
-                        if entity_type in result["changed_items"]:
-                            entities_for_enrichment[entity_type].update(
-                                result["changed_items"][entity_type]
-                            )
+                # # Check if plugin identified entities that need further enrichment
+                # if "changed_items" in result:
+                #     for entity_type in ["artists", "albums", "tracks"]:
+                #         if entity_type in result["changed_items"]:
+                #             entities_for_enrichment[entity_type].update(
+                #                 result["changed_items"][entity_type]
+                # )
 
         # After all plugins, if still not fully enriched, mark as failed
         if (
@@ -362,23 +352,23 @@ class MetadataEnricher:
             await self.db_manager.update_track(track["id"], updated_track)
 
         # If we have entities that need further enrichment, add them to the enricher queue
-        if any(entities_for_enrichment.values()):
-            changed_items = {
-                "artists": list(entities_for_enrichment["artists"]),
-                "albums": list(entities_for_enrichment["albums"]),
-                "tracks": list(entities_for_enrichment["tracks"]),
-            }
+        # if any(entities_for_enrichment.values()):
+        #     changed_items = {
+        #         "artists": list(entities_for_enrichment["artists"]),
+        #         "albums": list(entities_for_enrichment["albums"]),
+        #         "tracks": list(entities_for_enrichment["tracks"]),
+        #     }
 
-            logger.info(
-                f"Queueing additional enrichment for entities from track {track['id']}: "
-                f"Artists={len(changed_items['artists'])}, "
-                f"Albums={len(changed_items['albums'])}, "
-                f"Tracks={len(changed_items['tracks'])}"
-            )
+        #     logger.info(
+        #         f"Queueing additional enrichment for entities from track {track['id']}: "
+        #         f"Artists={len(changed_items['artists'])}, "
+        #         f"Albums={len(changed_items['albums'])}, "
+        #         f"Tracks={len(changed_items['tracks'])}"
+        #     )
 
-            # Add to the enricher queue
-            global _enricher_queue
-            await _enricher_queue.put({"changed_items": changed_items})
+        #     # Add to the enricher queue
+        #     global _enricher_queue
+        #     await _enricher_queue.put({"changed_items": changed_items})
 
 
 async def _enricher_worker(config, db_manager: AsyncEnricherDb):
@@ -387,9 +377,9 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     enricher_instance = MetadataEnricher(config, db_manager)
     enricher_tasks = set()
 
-    logger.info("Starting initial enrichment process")
-    await enricher_instance.start()
-    logger.info("Initial enrichment completed")
+    # logger.info("Starting initial enrichment process")
+    # await enricher_instance.start()
+    # logger.info("Initial enrichment completed")
 
     # Process queue commands
     while True:

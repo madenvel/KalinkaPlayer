@@ -177,7 +177,6 @@ def create_app(config: Config):
                         break
                     event = await run_in_threadpool(event_stream.get_event)
                     if event is not None:
-                        logger.info(f"Event: {event}")
                         yield json.dumps(event) + "\n"
             except Exception as e:
                 logger.error(f"Error processing events: {e}")

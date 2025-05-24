@@ -60,7 +60,7 @@ def spawn_process(script_path, config_json):
     # Create log readers for the subprocess
     def log_reader(pipe, level, prefix):
         """Reads from pipe and logs each line with the specified level and prefix."""
-        process_name = os.path.basename(script_path).split(".")[0]
+        # process_name = os.path.basename(script_path).split(".")[0]
         for line in iter(pipe.readline, ""):
             line_str = line.strip()
             if line_str:
@@ -70,7 +70,14 @@ def spawn_process(script_path, config_json):
     try:
         # Use subprocess.Popen to spawn the process
         process = subprocess.Popen(
-            [sys.executable, str(script_full_path), "-c", config_json],
+            [
+                sys.executable,
+                str(script_full_path),
+                "-c",
+                config_json,
+                "--log-level",
+                logging.getLevelName(logger.getEffectiveLevel()),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,  # Detach the process from parent
