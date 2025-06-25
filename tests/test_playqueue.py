@@ -20,8 +20,6 @@ def url1():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-3.flac",
         format="FLAC",
-        sample_rate=1,
-        bit_depth=1,
     )
 
 
@@ -29,8 +27,6 @@ def url2():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-4.flac",
         format="FLAC",
-        sample_rate=1,
-        bit_depth=1,
     )
 
 
@@ -38,8 +34,6 @@ def url3():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-2.flac",
         format="FLAC",
-        sample_rate=1,
-        bit_depth=1,
     )
 
 
@@ -55,8 +49,20 @@ def event_emitter():
 
 
 @pytest.fixture
-def playqueue(event_emitter):
-    pq = PlayQueue(event_emitter)
+def config():
+    config = Mock()
+    config.get.return_value = None
+    config.get_bool.return_value = False
+    config.get_int.return_value = 0
+    config.get_str.return_value = ""
+    config.get_list.return_value = []
+    config.get_dict.return_value = {}
+    return config
+
+
+@pytest.fixture
+def playqueue(config, event_emitter):
+    pq = PlayQueue(config, event_emitter)
 
     yield pq
 
@@ -102,7 +108,8 @@ def test_add_remove_track(event_emitter, playqueue):
             PlayerState(state="STOPPED", index=0, position=0),
         ),
         call.dispatch(
-            EventType.TracksAdded, [track.metadata.model_dump(exclude_unset=True)]
+            EventType.TracksAdded,
+            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -110,7 +117,7 @@ def test_add_remove_track(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(EventType.TracksRemoved, [0]),
@@ -133,16 +140,14 @@ def test_play(event_emitter, playqueue):
             EventType.StateChanged,
             PlayerState(state="STOPPED", index=0, position=0),
         ),
-        call.dispatch(
-            EventType.TracksAdded, [track.metadata.model_dump(exclude_unset=True)]
-        ),
+        call.dispatch(EventType.TracksAdded, [track.metadata]),
         call.dispatch(
             EventType.StateChanged,
             PlayerState(
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
@@ -152,7 +157,7 @@ def test_play(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(
@@ -161,7 +166,7 @@ def test_play(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -191,8 +196,16 @@ def test_switch_track(event_emitter, playqueue):
         call.dispatch(
             EventType.TracksAdded,
             [
-                track1.metadata.model_dump(exclude_unset=True),
-                track2.metadata.model_dump(exclude_unset=True),
+                (
+                    track1.metadata.model_dump(exclude_unset=True)
+                    if track1.metadata
+                    else None
+                ),
+                (
+                    track2.metadata.model_dump(exclude_unset=True)
+                    if track2.metadata
+                    else None
+                ),
             ],
         ),
         call.dispatch(
@@ -201,7 +214,7 @@ def test_switch_track(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
             ),
         ),
         call.dispatch(
@@ -210,7 +223,7 @@ def test_switch_track(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
             ),
         ),
         call.dispatch(
@@ -219,7 +232,7 @@ def test_switch_track(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -232,7 +245,7 @@ def test_switch_track(event_emitter, playqueue):
                 state="BUFFERING",
                 index=1,
                 position=0,
-                current_track=track2.metadata.model_dump(exclude_unset=True),
+                current_track=track2.metadata,
             ),
         ),
         call.dispatch(
@@ -241,7 +254,7 @@ def test_switch_track(event_emitter, playqueue):
                 state="PLAYING",
                 index=1,
                 position=0,
-                current_track=track2.metadata.model_dump(exclude_unset=True),
+                current_track=track2.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=14814
                 ),
@@ -275,9 +288,21 @@ def test_play_next(event_emitter, playqueue):
         call.dispatch(
             EventType.TracksAdded,
             [
-                track1.metadata.model_dump(exclude_unset=True),
-                track2.metadata.model_dump(exclude_unset=True),
-                track3.metadata.model_dump(exclude_unset=True),
+                (
+                    track1.metadata.model_dump(exclude_unset=True)
+                    if track1.metadata
+                    else None
+                ),
+                (
+                    track2.metadata.model_dump(exclude_unset=True)
+                    if track2.metadata
+                    else None
+                ),
+                (
+                    track3.metadata.model_dump(exclude_unset=True)
+                    if track3.metadata
+                    else None
+                ),
             ],
         ),
         call.dispatch(
@@ -286,7 +311,7 @@ def test_play_next(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
             ),
         ),
         call.dispatch(
@@ -295,7 +320,7 @@ def test_play_next(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
             ),
         ),
         call.dispatch(
@@ -304,7 +329,7 @@ def test_play_next(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track1.metadata.model_dump(exclude_unset=True),
+                current_track=track1.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -317,7 +342,7 @@ def test_play_next(event_emitter, playqueue):
                 state="BUFFERING",
                 index=2,
                 position=0,
-                current_track=track3.metadata.model_dump(exclude_unset=True),
+                current_track=track3.metadata,
             ),
         ),
         call.dispatch(
@@ -326,7 +351,7 @@ def test_play_next(event_emitter, playqueue):
                 state="PLAYING",
                 index=2,
                 position=0,
-                current_track=track3.metadata.model_dump(exclude_unset=True),
+                current_track=track3.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=90632
                 ),
@@ -358,7 +383,8 @@ def test_play_pause_stop_play(event_emitter, playqueue):
             ),
         ),
         call.dispatch(
-            EventType.TracksAdded, [track.metadata.model_dump(exclude_unset=True)]
+            EventType.TracksAdded,
+            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -366,7 +392,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
@@ -376,7 +402,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(
@@ -385,7 +411,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -397,7 +423,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="PAUSED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -409,7 +435,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
@@ -419,7 +445,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(
@@ -428,7 +454,7 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -456,7 +482,8 @@ def test_seek(event_emitter, playqueue):
             ),
         ),
         call.dispatch(
-            EventType.TracksAdded, [track.metadata.model_dump(exclude_unset=True)]
+            EventType.TracksAdded,
+            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -464,7 +491,7 @@ def test_seek(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(EventType.RequestMoreTracks),
@@ -474,7 +501,7 @@ def test_seek(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(
@@ -483,7 +510,7 @@ def test_seek(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=3000,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
@@ -495,7 +522,7 @@ def test_seek(event_emitter, playqueue):
                 state="BUFFERING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
             ),
         ),
         call.dispatch(
@@ -504,7 +531,7 @@ def test_seek(event_emitter, playqueue):
                 state="PLAYING",
                 index=0,
                 position=0,
-                current_track=track.metadata.model_dump(exclude_unset=True),
+                current_track=track.metadata,
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),

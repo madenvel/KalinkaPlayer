@@ -504,7 +504,8 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name, pt.position
+                SELECT t.*, a.title as album_title, ar.name as artist_name, 
+                       pt.position, pt.playlist_track_id
                 FROM playlist_tracks pt
                 JOIN tracks t ON pt.track_id = t.id
                 JOIN albums a ON t.album_id = a.id
@@ -686,6 +687,8 @@ class LocalFilesInputModuleDb:
         if not track_ids:
             return 0
 
+        from .utils.id_generator import generate_playlist_track_id
+
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -725,14 +728,21 @@ class LocalFilesInputModuleDb:
 
             next_pos = cursor.fetchone()["next_pos"]
 
-            # Insert the tracks
+            # Insert the tracks with unique playlist_track_ids
             for i, track_id in enumerate(track_ids):
+                playlist_track_id = generate_playlist_track_id()
                 cursor.execute(
                     """
-                    INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO playlist_tracks (playlist_track_id, playlist_id, track_id, position, added_at)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (playlist_id, track_id, next_pos + i, current_time),
+                    (
+                        playlist_track_id,
+                        playlist_id,
+                        track_id,
+                        next_pos + i,
+                        current_time,
+                    ),
                 )
 
             # Update the playlist's track count and duration
@@ -784,33 +794,35 @@ class LocalFilesInputModuleDb:
             conn.close()
 
     def remove_tracks_from_playlist(
-        self, playlist_id: str, track_ids: List[str]
+        self, playlist_id: str, playlist_track_ids: List[str]
     ) -> int:
         """
-        Remove tracks from a playlist.
+        Remove tracks from a playlist using playlist track IDs.
 
         Args:
             playlist_id: ID of the playlist
-            track_ids: List of track IDs to remove
+            playlist_track_ids: List of playlist track IDs to remove
 
         Returns:
             Number of tracks removed
         """
-        if not track_ids:
+        if not playlist_track_ids:
             return 0
+
+        from .utils.id_generator import generate_playlist_track_id
 
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
 
-            # Delete the tracks
-            placeholders = ", ".join("?" for _ in track_ids)
+            # Delete the tracks by playlist_track_id
+            placeholders = ", ".join("?" for _ in playlist_track_ids)
             cursor.execute(
                 f"""
                 DELETE FROM playlist_tracks 
-                WHERE playlist_id = ? AND track_id IN ({placeholders})
+                WHERE playlist_id = ? AND playlist_track_id IN ({placeholders})
                 """,
-                [playlist_id] + track_ids,
+                [playlist_id] + playlist_track_ids,
             )
 
             removed_count = cursor.rowcount
@@ -819,14 +831,17 @@ class LocalFilesInputModuleDb:
                 # Reindex the remaining tracks to ensure positions are continuous
                 cursor.execute(
                     """
-                    SELECT track_id FROM playlist_tracks
+                    SELECT playlist_track_id, track_id FROM playlist_tracks
                     WHERE playlist_id = ?
                     ORDER BY position
                     """,
                     (playlist_id,),
                 )
 
-                remaining_tracks = [row["track_id"] for row in cursor.fetchall()]
+                remaining_tracks = [
+                    (row["playlist_track_id"], row["track_id"])
+                    for row in cursor.fetchall()
+                ]
 
                 # Delete all tracks
                 cursor.execute(
@@ -835,13 +850,21 @@ class LocalFilesInputModuleDb:
 
                 # Re-insert with new positions
                 current_time = int(time.time())
-                for position, track_id in enumerate(remaining_tracks):
+                for position, (playlist_track_id, track_id) in enumerate(
+                    remaining_tracks
+                ):
                     cursor.execute(
                         """
-                        INSERT INTO playlist_tracks (playlist_id, track_id, position, added_at)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO playlist_tracks (playlist_track_id, playlist_id, track_id, position, added_at)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                        (playlist_id, track_id, position, current_time),
+                        (
+                            playlist_track_id,
+                            playlist_id,
+                            track_id,
+                            position,
+                            current_time,
+                        ),
                     )
 
                 # Update the playlist's track count and duration

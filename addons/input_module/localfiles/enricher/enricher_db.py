@@ -366,6 +366,21 @@ class AsyncEnricherDb:
                     f"Filtered out non-existent columns for track {track_id}: {', '.join(filtered_out)}"
                 )
 
+    async def update_album_stats(self, album_id: str) -> None:
+        """Update album statistics (track count and duration)"""
+        async with self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                UPDATE albums SET
+                track_count = (SELECT COUNT(*) FROM tracks WHERE album_id = ?),
+                duration = (SELECT SUM(duration) FROM tracks WHERE album_id = ?)
+                WHERE id = ?
+            """,
+                (album_id, album_id, album_id),
+            )
+            await conn.commit()
+
     async def insert_artist(self, data: Dict[str, Any]) -> None:
         """Insert a new artist"""
         async with self._get_connection() as conn:

@@ -36,7 +36,7 @@ class MusicBrainzPlugin(EnricherPlugin):
 
         # String similarity threshold (0.0-1.0) - set lower to be more permissive
         self.string_similarity_threshold = config.get(
-            "enricher.plugins.musicbrainz.string_similarity", 0.5
+            "enricher.plugins.musicbrainz.string_similarity", 0.8
         )
 
         # Enable detailed logging of match results for debugging

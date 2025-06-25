@@ -14,6 +14,7 @@ from musicbrainz_plugin import MusicBrainzPlugin
 from acoustid_plugin import AcoustIdPlugin
 from wikidata_plugin import WikidataPlugin
 from deezer_plugin import DeezerPlugin
+from filesystem_fallback_plugin import FilesystemFallbackPlugin
 from enricher_db import AsyncEnricherDb
 
 logger = logging.getLogger("enricher")
@@ -65,19 +66,35 @@ class MetadataEnricher:
         self.lock = asyncio.Lock()
         self.plugins = []
 
+        logger.info("Initializing MetadataEnricher plugins...")
+
         # The order of plugins matters for the enrichment process
         # as the first one found a match will be used
         if config.get("enricher.plugins.acoustid.enabled", False):
+            logger.info("Loading AcoustIdPlugin")
             self.plugins.append(AcoustIdPlugin(config, self.db_manager))
 
+        # Filesystem fallback plugin - always enabled and runs last
+        # This provides basic metadata extraction from file paths when other plugins fail
+        if config.get("enricher.plugins.filesystem_fallback.enabled", True):
+            logger.info("Loading FilesystemFallbackPlugin")
+            self.plugins.append(FilesystemFallbackPlugin(config, self.db_manager))
+
         if config.get("enricher.plugins.musicbrainz.enabled", False):
+            logger.info("Loading MusicBrainzPlugin")
             self.plugins.append(MusicBrainzPlugin(config, self.db_manager))
 
         if config.get("enricher.plugins.wikidata.enabled", False):
+            logger.info("Loading WikidataPlugin")
             self.plugins.append(WikidataPlugin(config, self.db_manager))
 
         if config.get("enricher.plugins.deezer.enabled", False):
+            logger.info("Loading DeezerPlugin")
             self.plugins.append(DeezerPlugin(config, self.db_manager))
+
+        logger.info(
+            f"Loaded {len(self.plugins)} enrichment plugins: {[p.__class__.__name__ for p in self.plugins]}"
+        )
 
     async def start(self):
         """Start the enricher process for general enrichment"""
@@ -124,17 +141,23 @@ class MetadataEnricher:
 
         processed_artists = set()
         while True:
+            logger.debug("Querying database for non-enriched artists...")
             artists = await self.db_manager.get_non_enriched_artists(limit=1)
+            logger.debug(f"Found {len(artists)} non-enriched artists")
             if not artists:
                 logger.info("No more artists to process")
                 return len(processed_artists)
             artist = artists[0]
+            logger.debug(f"Processing artist: {artist}")
             await self._enrich_artist(artist)
             processed_artists.add(artist["id"])
             logger.info(f"Processed artist {artist['name']}")
 
     async def _enrich_artist(self, artist):
         """Enrich a single artist"""
+        logger.debug(
+            f"Starting enrichment for artist {artist.get('name', artist['id'])}"
+        )
         updated_artist = artist.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
@@ -150,6 +173,9 @@ class MetadataEnricher:
             )
             return
 
+        logger.debug(
+            f"Artist {artist.get('name', artist['id'])} missing fields - starting plugin enrichment"
+        )
         for plugin in self.plugins:
             if not plugin.can_enrich_artist():
                 continue
@@ -195,11 +221,14 @@ class MetadataEnricher:
         """Process non-enriched albums"""
         processed_albums = set()
         while True:
+            logger.debug("Querying database for non-enriched albums...")
             albums = await self.db_manager.get_non_enriched_albums(limit=1)
+            logger.debug(f"Found {len(albums)} non-enriched albums")
             if not albums:
                 logger.info("No more albums to process")
                 return len(processed_albums)
             album = albums[0]
+            logger.debug(f"Processing album: {album}")
             await self._enrich_album(album)
             processed_albums.add(album["id"])
             logger.info(f"Processed album {album['title']}")
@@ -266,11 +295,14 @@ class MetadataEnricher:
         """Process non-enriched tracks"""
         processed_tracks = set()
         while True:
+            logger.debug("Querying database for non-enriched tracks...")
             tracks = await self.db_manager.get_non_enriched_tracks(limit=1)
+            logger.debug(f"Found {len(tracks)} non-enriched tracks")
             if not tracks:
                 logger.info("No more tracks to process")
                 return len(processed_tracks)
             track = tracks[0]
+            logger.debug(f"Processing track: {track}")
             await self._enrich_track(track)
             processed_tracks.add(track["id"])
             logger.info(f"Processed track {track['title']}")
@@ -350,6 +382,8 @@ class MetadataEnricher:
         # Only update the database once at the end if we had any updates
         if had_updates:
             await self.db_manager.update_track(track["id"], updated_track)
+            if "album_id" in updated_track:
+                await self.db_manager.update_album_stats(updated_track["album_id"])
 
         # If we have entities that need further enrichment, add them to the enricher queue
         # if any(entities_for_enrichment.values()):
@@ -377,16 +411,12 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     enricher_instance = MetadataEnricher(config, db_manager)
     enricher_tasks = set()
 
-    # logger.info("Starting initial enrichment process")
-    # await enricher_instance.start()
-    # logger.info("Initial enrichment completed")
-
     # Process queue commands
     while True:
         try:
-            # Check for commands
+            # Check for commands with timeout
             try:
-                command = await _enricher_queue.get()
+                command = await asyncio.wait_for(_enricher_queue.get(), timeout=30.0)
 
                 if command == "stop":
                     logger.info("Stopping enricher task")
@@ -398,8 +428,11 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
 
                 _enricher_queue.task_done()
             except asyncio.TimeoutError:
-                # No command received, just continue
-                pass
+                # No command received in 30 seconds, run periodic enrichment check
+                logger.debug(
+                    "No commands received, checking for new items to enrich..."
+                )
+                await enricher_instance.start()
 
             # Small delay to avoid busy waiting
             await asyncio.sleep(0.1)

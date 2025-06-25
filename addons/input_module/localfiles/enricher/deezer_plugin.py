@@ -149,13 +149,43 @@ class DeezerPlugin(EnricherPlugin):
                 logger.debug(f"No Deezer results found for artist: {artist['name']}")
                 return None
 
-            # Get the first result - assuming best match comes first
-            deezer_artist = data["data"][0]
+            # Find the best matching artist using fuzzy matching
+            best_match = None
+            best_score = 0.0
+
+            for deezer_artist in data["data"]:
+                if not deezer_artist.get("name"):
+                    continue
+
+                # Calculate artist name match score
+                name_score = self._fuzzy_match_score(
+                    deezer_artist["name"], artist["name"]
+                )
+
+                logger.debug(
+                    f"Artist '{deezer_artist['name']}' - Name score: {name_score:.2f}"
+                )
+
+                if name_score > best_score and name_score > FUZZY_MATCH_THRESHOLD:
+                    best_score = name_score
+                    best_match = deezer_artist
+
+            # If no good match found
+            if not best_match:
+                logger.debug(
+                    f"No artist with score > {FUZZY_MATCH_THRESHOLD} found for: {artist['name']}"
+                )
+                return None
+
+            deezer_artist = best_match
+            logger.info(
+                f"Best artist match for '{artist['name']}': '{deezer_artist['name']}' (score: {best_score:.2f})"
+            )
 
             # Check if the artist has an image
             if "picture_xl" not in deezer_artist or not deezer_artist["picture_xl"]:
                 logger.debug(
-                    f"No image available for artist on Deezer: {artist['name']}"
+                    f"No image available for artist on Deezer: {deezer_artist['name']}"
                 )
                 return None
 

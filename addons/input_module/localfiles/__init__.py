@@ -1,1 +1,1 @@
-from addons.input_module.localfiles.localfiles import LocalFilesInputModule
+from .localfiles import LocalFilesInputModule
