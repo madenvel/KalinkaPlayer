@@ -116,14 +116,22 @@ class AsyncIndexerDb:
                 await cursor.execute(
                     """
                     CREATE TABLE IF NOT EXISTS playlist_tracks (
+                        playlist_track_id TEXT PRIMARY KEY,
                         playlist_id TEXT,
                         track_id TEXT,
                         position INTEGER NOT NULL,
                         added_at INTEGER NOT NULL,
-                        PRIMARY KEY (playlist_id, track_id),
                         FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE,
                         FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
                     )
+                """
+                )
+
+                # Create index for efficient lookups by playlist_id
+                await cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_id 
+                    ON playlist_tracks (playlist_id, position)
                 """
                 )
 
@@ -155,6 +163,7 @@ class AsyncIndexerDb:
                 )
 
                 await conn.commit()
+
                 logger.info("Database initialized successfully")
             except Exception as e:
                 logger.error(f"Error initializing database: {str(e)}")

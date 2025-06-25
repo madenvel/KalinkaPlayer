@@ -703,6 +703,10 @@ class LocalFilesInputModule(InputModule):
         if track.get("replaygain_peak") is not None:
             track_obj.replaygain_peak = track["replaygain_peak"]
 
+        # Add playlist track ID if available (for playlist contexts)
+        if track.get("playlist_track_id"):
+            track_obj.playlist_track_id = track["playlist_track_id"]
+
         return track_obj
 
     def _create_track_browse_item(self, track: Dict) -> BrowseItem:

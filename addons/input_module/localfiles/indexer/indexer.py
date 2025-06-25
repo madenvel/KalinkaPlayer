@@ -51,6 +51,8 @@ async def trigger_enricher_update(data):
         logger.warning("No data provided to trigger enricher update")
         return
 
+    logger.info(f"Triggering enricher update with data: {data}")
+
     try:
         reader, writer = await asyncio.open_unix_connection(ENRICHER_SOCKET_PATH)
 

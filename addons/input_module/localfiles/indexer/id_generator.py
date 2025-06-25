@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 
 
 def generate_artist_id(artist_name: str) -> str:

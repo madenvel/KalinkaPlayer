@@ -323,7 +323,6 @@ def create_app(config: Config):
     @app.get("/resource/{file_name:path}")
     async def get_resource(file_name: str):
         file_path = Path(inputmodule.get_resource_path(file_name)).resolve()
-        logger.info(f"File path: {file_path}")
         if not file_path or not file_path.is_file():
             raise HTTPException(status_code=404, detail="File not found")
 
