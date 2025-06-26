@@ -25,7 +25,8 @@ class QobuzReporter:
         self.last_report_time = 0
         self.current_track_id = None
         self._isRunning = True
-        threading.Thread(target=self._sender_worker, daemon=True).start()
+        self.sender_job = threading.Thread(target=self._sender_worker, daemon=True)
+        self.sender_job.start()
 
     def get_last_duration(self):
         report_time = time.monotonic_ns()
@@ -161,4 +162,4 @@ class QobuzReporter:
     def shutdown(self):
         self._isRunning = False
         self.mqueue.put(None)
-        self._sender_worker.join()
+        self.sender_job.join()
