@@ -9,11 +9,11 @@ from typing import Optional
 from data_model.response_model import AudioInfo, PlayerState, PlaybackMode
 from data_model.datamodel import Track
 
+from src.config_model import KalinkaConfig
 from src.event_loop import AsyncExecutor, enqueue
 from src.async_common import EventEmitter
 from src.inputmodule import TrackInfo
 from src.events import EventType
-from src.config import Config
 
 from native_player.native_player import (
     AudioPlayer,
@@ -98,11 +98,22 @@ def to_state_name(state: AudioGraphNodeState) -> Optional[str]:
         return "PAUSED"
 
 
+def flatten_dict(d, parent_key="", sep="."):
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        else:
+            items[new_key] = v
+    return items
+
+
 class PlayQueue(AsyncExecutor):
-    def __init__(self, config: Config, event_emitter: EventEmitter):
+    def __init__(self, config: KalinkaConfig, event_emitter: EventEmitter):
         super().__init__()
         self.event_emitter = event_emitter
-        self.config = py_dict_to_config(config.flatten_config())
+        self.config = py_dict_to_config(flatten_dict(config.model_dump()))
         self.track_player = AudioPlayer(self.config)
         self.current_track_id = 0
         self.current_format = None

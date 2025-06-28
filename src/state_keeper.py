@@ -14,20 +14,19 @@ def set_state_file(file_path: str):
     STATE_FILE = file_path
 
 
-def save_state(playqueue: PlayQueue, inputmodule: InputModule):
+def save_state(playqueue: PlayQueue):
     with open(STATE_FILE, "w") as f:
         json.dump(
             {
                 "current_track_id": playqueue.current_track_id,
                 "track_list": [track.id for track in playqueue.track_list],
-                "inputmodule": inputmodule.module_name(),
             },
             f,
         )
     logger.info("State saved")
 
 
-def restore_state(playqueue: PlayQueue, inputmodule: InputModule):
+def restore_state(playqueue: PlayQueue):
     try:
         with open(STATE_FILE, "r") as f:
             state = json.load(f)
@@ -40,7 +39,6 @@ def restore_state(playqueue: PlayQueue, inputmodule: InputModule):
             return
 
         playqueue.current_track_id = state["current_track_id"]
-        playqueue.add(inputmodule.get_track_info(state["track_list"]))
         logger.info("State restored")
     except FileNotFoundError:
         logger.info("No state file found")

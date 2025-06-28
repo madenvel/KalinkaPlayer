@@ -4,6 +4,8 @@ import logging
 from typing import List, Dict, Optional, Any, Tuple
 import time
 
+from .config_model import LocalFilesConfig
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
@@ -13,9 +15,9 @@ class LocalFilesInputModuleDb:
     Handles read-only operations for browsing and retrieving music.
     """
 
-    def __init__(self, config):
-        self.db_path = config["db_path"]
-        self.artwork_path = config["artwork_path"]
+    def __init__(self, config: LocalFilesConfig):
+        self.db_path = config.db_path
+        self.artwork_path = config.artwork_path
         self.db_state = None
 
     def _get_connection(self):

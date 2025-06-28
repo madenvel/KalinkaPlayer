@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from asyncio import CancelledError
+import json
 import logging
+import os
 import uvicorn
 
-from src import config_schema, state_keeper
-from src.config import Config
+from src import state_keeper
+from src.config_model import KalinkaConfig
 from src.netutils import get_ip_address
 
 import argparse
@@ -56,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--config",
         action="store",
-        default="kalinka_conf.yaml",
+        default="kalinka_conf.cfg",
         help="Config file location",
     )
     parser.add_argument(
@@ -87,18 +89,20 @@ if __name__ == "__main__":
     try:
 
         while True:
-            with open(args.config, "r") as f:
-                config = Config(
-                    config=f, schema=config_schema.schema, location=args.config
-                )
+            config = KalinkaConfig()
+            try:
+                with open(args.config, "r") as f:
+                    config = KalinkaConfig(**json.load(f))
+            except FileNotFoundError:
+                logger.error(f"Config file {args.config} not found.")
 
             if args.state:
                 state_keeper.set_state_file(args.state)
 
-            host = get_ip_address(config["server.interface"])
-            port = config["server.port"]
+            host = get_ip_address(config.server.interface)
+            port = config.server.port
             logger.info(f"Starting server on {host}:{port}")
-            app = create_app(config)
+            app = create_app(args.config, config)
             uvicorn_config = uvicorn.Config(
                 app,
                 host=host,

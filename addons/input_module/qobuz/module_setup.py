@@ -6,15 +6,17 @@ from addons.input_module.qobuz import (
     get_client,
 )
 
-from src.config import Config
 from src.playqueue import EventType, PlayQueue
 from src.inputmodule import InputModule
+from addons.input_module.qobuz.config_model import QobuzConfig
 
 autoplay = None
 reporter = None
 # Store subscriptions for cleanup
 autoplay_subscriptions = []
 reporter_subscriptions = []
+
+Config = QobuzConfig
 
 
 def setup_autoplay(
@@ -52,7 +54,7 @@ def setup_reporter(
 
 
 def setup(
-    config: Config,
+    config: QobuzConfig,
     playqueue: PlayQueue,
     event_emitter: EventEmitter,
     event_listener: EventListener,

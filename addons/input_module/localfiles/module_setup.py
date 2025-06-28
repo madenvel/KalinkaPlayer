@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import socket
@@ -7,13 +6,15 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from addons.input_module.localfiles.config_model import LocalFilesConfig
 from addons.input_module.localfiles.input_module_db import LocalFilesInputModuleDb
 from src.async_common import EventEmitter, EventListener
-from addons.input_module.localfiles import LocalFilesInputModule
-from src.config import Config
+from addons.input_module.localfiles.localfiles import LocalFilesInputModule
 from src.playqueue import PlayQueue
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+Config = LocalFilesConfig
 
 # Socket paths for IPC
 INDEXER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
@@ -103,8 +104,19 @@ def spawn_process(script_path, config_json):
         return None
 
 
+def flatten_dict(d, parent_key="", sep="."):
+    items = {}
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(flatten_dict(v, new_key, sep=sep))
+        else:
+            items[new_key] = v
+    return items
+
+
 def setup(
-    config: Config,
+    config: LocalFilesConfig,
     playqueue: PlayQueue,
     event_emitter: EventEmitter,
     event_listener: EventListener,
@@ -119,7 +131,7 @@ def setup(
     inputmodule = LocalFilesInputModule(config, input_module_db, event_emitter)
 
     # # Convert config to JSON for passing to child processes
-    config_json = json.dumps(config.flatten_config())
+    config_json = flatten_dict(config.model_dump())
 
     # Check if indexer is running, if not start it
     if not is_process_running(INDEXER_SOCKET_PATH):

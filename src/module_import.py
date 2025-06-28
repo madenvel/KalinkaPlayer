@@ -12,6 +12,9 @@ def import_module_by_path(module_path):
         raise FileNotFoundError(f"The file {file_path} does not exist")
 
     spec = importlib.util.spec_from_file_location(module_path, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load module {module_path} from {file_path}")
+
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_path] = module
     spec.loader.exec_module(module)

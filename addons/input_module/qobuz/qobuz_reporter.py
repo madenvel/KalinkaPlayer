@@ -3,8 +3,8 @@ from data_model.response_model import PlayerState
 import threading
 from queue import Queue
 import json
-
 import logging
+from typing import Mapping, Any, Optional
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -12,18 +12,12 @@ logger = logging.getLogger(__name__.split(".")[-1])
 REPORTS_PER_SEC_LIMIT = 3
 
 
-# Report events to Qobuz
-# streamingStart - reported when the track changes and the player starts playing only
-# streamingEnd - reported when player stops playing the track, pauses or seeks to a new position.
-#
-# The value of the duration is the number of seconds the track was played since the last report,
-# whether it was streamingStart or streamingEnd.
 class QobuzReporter:
     def __init__(self, qobuz_client):
         self.qobuz_client = qobuz_client
         self.mqueue = Queue()
         self.last_report_time = 0
-        self.current_track_id = None
+        self.current_track_id: Optional[str] = None
         self._isRunning = True
         self.sender_job = threading.Thread(target=self._sender_worker, daemon=True)
         self.sender_job.start()
@@ -34,17 +28,18 @@ class QobuzReporter:
         self.last_report_time = report_time
         return time_played
 
-    def on_state_changed(self, state: str):
-        state = PlayerState(**state)
+    def on_state_changed(self, state: Mapping[str, Any]):
+        player_state = PlayerState(**state)
         # playing and current track != previous track
         # => report streaming start for new track, report streaming end for previous track
         # if playing and current track == previous track
         # => likely search request, report streaming end
         # if stopped or paused, report streaming end for current track
 
-        if state.state == "PLAYING":
-            if state.current_track.id != self.current_track_id:
-                if self.current_track_id:
+        if player_state.state == "PLAYING":
+            track = player_state.current_track
+            if track is not None and track.id != self.current_track_id:
+                if self.current_track_id is not None:
                     self.mqueue.put(
                         {
                             "endpoint": "track/reportStreamingEnd",
@@ -53,18 +48,16 @@ class QobuzReporter:
                             ),
                         }
                     )
-                self.current_track_id = state.current_track.id
+                self.current_track_id = track.id
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingStart",
-                        "params": self._make_start_report_message(
-                            state.current_track.id
-                        ),
+                        "params": self._make_start_report_message(track.id),
                     }
                 )
                 self.get_last_duration()
-                self.current_track_id = state.current_track.id
-            else:
+                self.current_track_id = track.id
+            elif track is not None and self.current_track_id is not None:
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingEnd",
@@ -73,8 +66,8 @@ class QobuzReporter:
                         ),
                     }
                 )
-        elif state.state in ["STOPPED", "PAUSED", "ERROR"]:
-            if self.current_track_id:
+        elif player_state.state in ["STOPPED", "PAUSED", "ERROR"]:
+            if self.current_track_id is not None:
                 self.mqueue.put(
                     {
                         "endpoint": "track/reportStreamingEnd",
@@ -85,17 +78,23 @@ class QobuzReporter:
                 )
                 self.current_track_id = None
 
-    def _make_start_report_message(self, track_id: int):
+    def _make_start_report_message(self, track_id: str | int):
+        # Ensure track_id is int for the report
+        if isinstance(track_id, str):
+            try:
+                track_id_int = int(track_id)
+            except ValueError:
+                raise Exception(f"Track id '{track_id}' is not convertible to int")
+        else:
+            track_id_int = track_id
         if track_id not in self.qobuz_client.track_url_response_cache:
             raise Exception("Track not found in cache")
-
         track_cache = self.qobuz_client.track_url_response_cache[track_id]
-
         return {
             "user_id": self.qobuz_client.user_id,
             "credential_id": self.qobuz_client.credential_id,
             "date": int(time.time()),
-            "track_id": track_id,
+            "track_id": track_id_int,
             "format_id": track_cache["format_id"],
             "duration": 0,
             "online": True,
@@ -107,23 +106,28 @@ class QobuzReporter:
             "totalTrackDuration": track_cache["duration"],
         }
 
-    def _make_end_report_message(self, track_id: int, duration_s: int):
+    def _make_end_report_message(self, track_id: str | int, duration_s: int):
+        # Ensure track_id is int for the report
+        if isinstance(track_id, str):
+            try:
+                track_id_int = int(track_id)
+            except ValueError:
+                raise Exception(f"Track id '{track_id}' is not convertible to int")
+        else:
+            track_id_int = track_id
         if duration_s < 0:
-            logger.warn(
+            logger.warning(
                 "Negative for qobuz report end message, duration: %d", duration_s
             )
             duration_s = 0
-
         if track_id not in self.qobuz_client.track_url_response_cache:
             raise Exception("Track not found in cache")
-
         track_cache = self.qobuz_client.track_url_response_cache[track_id]
-
         return {
             "user_id": self.qobuz_client.user_id,
             "credential_id": self.qobuz_client.credential_id,
             "date": int(time.time()),
-            "track_id": track_id,
+            "track_id": track_id_int,
             "format_id": track_cache["format_id"],
             "duration": duration_s,
             "online": True,
@@ -148,14 +152,24 @@ class QobuzReporter:
 
                 self.mqueue.task_done()
 
-                if not response.is_success:
-                    logger.warn('Failed to send event to Qobuz: "%s"', response.text)
+                if not getattr(response, "is_success", False):
+                    logger.warning(
+                        'Failed to send event to Qobuz: "%s"',
+                        getattr(response, "text", ""),
+                    )
                 else:
                     logger.info(
-                        f"Sent event to Qobuz: {message['endpoint']}, message={message['params']}, status: {response.json()['status']}"
+                        "Sent event to Qobuz: %s, message=%s, status: %s",
+                        message["endpoint"],
+                        message["params"],
+                        (
+                            response.json().get("status")
+                            if hasattr(response, "json")
+                            else None
+                        ),
                     )
             except Exception as e:
-                logger.warn("Exception while sending event to Qobuz:", e)
+                logger.warning("Exception while sending event to Qobuz: %s", e)
 
             time.sleep(REPORTS_PER_SEC_LIMIT)
 

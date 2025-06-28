@@ -135,5 +135,5 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
-    def get_resource_path(self, id: str) -> str:
+    def get_resource_path(self, id: str) -> str | None:
         pass

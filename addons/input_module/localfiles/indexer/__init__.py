@@ -2,7 +2,6 @@
 from .indexer import (
     start_indexer,
     stop_indexer,
-    register_enricher_callback,
     start_file_watcher,
     stop_file_watcher,
 )

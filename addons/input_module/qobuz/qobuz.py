@@ -3,7 +3,7 @@ import hashlib
 import time
 from typing import List, Optional
 
-from src.config import Config
+from .config_model import QobuzConfig
 from .bundle import Bundle
 
 from functools import partial
@@ -49,6 +49,7 @@ import json
 import logging
 
 import httpx
+from addons.input_module.qobuz.config_model import QobuzAudioFormat
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -325,9 +326,9 @@ class QobuzClient:
         return {type_name: retval}
 
 
-def get_client(config: Config) -> QobuzClient:
-    email = config["email"]
-    password = config["password_hash"]
+def get_client(config: QobuzConfig) -> QobuzClient:
+    email = config.email
+    password = config.password_hash
     bundle = Bundle()
 
     app_id = bundle.get_app_id()
@@ -336,7 +337,7 @@ def get_client(config: Config) -> QobuzClient:
     return client
 
 
-def qobuz_link_retriever(qobuz_client, id, format_id) -> str:
+def qobuz_link_retriever(qobuz_client, id, format_id) -> TrackUrl:
     track = qobuz_client.get_track_url(id, fmt_id=format_id)
     track_url = TrackUrl(url=track["url"], format=track["mime_type"])
     return track_url
@@ -352,44 +353,53 @@ def append_str(s1: str, s2: str) -> str:
 def metadata_from_track(track, album_meta={}):
     album_info = track.get("album", album_meta)
     version = album_info.get("version", None)
-    return {
-        "id": str(track["id"]),
-        "title": append_str(track["title"], track.get("version", None)),
-        "performer": (
-            Artist(name=track["performer"]["name"], id=str(track["performer"]["id"]))
-            if "performer" in track
-            else Artist(
-                name=album_info["artist"].get("name", None),
-                id=str(album_info["artist"].get("id", None)),
-            )
-        ),
-        "duration": track["duration"],
-        "album": Album(
-            id=str(album_info["id"]),
-            title=append_str(album_info["title"], version),
-            image=album_info["image"],
-            label=Label(
-                id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
+    return Track(
+        **{
+            "id": str(track["id"]),
+            "title": append_str(track["title"], track.get("version", None)),
+            "performer": (
+                Artist(
+                    name=track["performer"]["name"], id=str(track["performer"]["id"])
+                )
+                if "performer" in track
+                else Artist(
+                    name=album_info["artist"].get("name", None),
+                    id=str(album_info["artist"].get("id", None)),
+                )
             ),
-            genre=Genre(
-                id=str(album_info["genre"]["id"]), name=album_info["genre"]["name"]
+            "duration": track["duration"],
+            "album": Album(
+                id=str(album_info["id"]),
+                title=append_str(album_info["title"], version),
+                image=album_info["image"],
+                label=Label(
+                    id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
+                ),
+                genre=Genre(
+                    id=str(album_info["genre"]["id"]), name=album_info["genre"]["name"]
+                ),
             ),
-        ),
-        "replaygain_peak": track.get("audio_info", {}).get(
-            "replaygain_track_peak", None
-        ),
-        "replaygain_gain": track.get("audio_info", {}).get(
-            "replaygain_track_gain", None
-        ),
-    }
+            "replaygain_peak": track.get("audio_info", {}).get(
+                "replaygain_track_peak", None
+            ),
+            "replaygain_gain": track.get("audio_info", {}).get(
+                "replaygain_track_gain", None
+            ),
+        }
+    )
 
 
 class QobuzInputModule(InputModule):
     def __init__(
-        self, config: Config, qobuz_client: QobuzClient, event_emitter: EventEmitter
+        self,
+        config: QobuzConfig,
+        qobuz_client: QobuzClient,
+        event_emitter: EventEmitter,
     ):
-        self.format_id = (5, 6, 7, 27)[config["format#values"].index(config["format"])]
-        logger.info(f"Selecting Format '{config['format']}', id = {self.format_id}")
+        self.format_id = (5, 6, 7, 27)[
+            list(QobuzAudioFormat).index(QobuzAudioFormat(config.format))
+        ]
+        logger.info(f"Selecting Format '{config.format}', id = {self.format_id}")
         self.qobuz_client = qobuz_client
         self.event_emitter = event_emitter
         self.last_update = LastUpdate()
@@ -400,7 +410,7 @@ class QobuzInputModule(InputModule):
 
     def search(
         self, type: SearchType, query: str, offset=0, limit=50
-    ) -> list[BrowseItem]:
+    ) -> BrowseItemList:
         return self._search_items(type, query, offset, limit)
 
     def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
@@ -655,6 +665,8 @@ class QobuzInputModule(InputModule):
                     return self._suggest_playlists_similar_to(ep[1], offset, limit)
                 elif ep[0] == "similar-artists":
                     return self._suggest_artists_similar_to(ep[1], offset, limit)
+
+        return EmptyList(offset, limit)
 
     def _get_new_releases(
         self, type: str, offset: int, limit: int, genre_ids: list[int]
@@ -1397,5 +1409,5 @@ class QobuzInputModule(InputModule):
             items=self._artists_to_browse_category(artists),
         )
 
-    def get_resource_path(self, id) -> str:
+    def get_resource_path(self, id) -> str | None:
         return None
