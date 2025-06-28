@@ -10,3 +10,4 @@ test
 bin/
 native_test
 kalinka-*
+*.cfg

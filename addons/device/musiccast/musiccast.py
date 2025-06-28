@@ -1,8 +1,7 @@
 import time
 import httpx
 import logging
-from data_model.response_model import PlayerState
-from src.config import Config
+from .config_model import MusicCastConfig
 from src.events import EventType
 
 from src.ext_device import SupportedFunction, Volume
@@ -51,16 +50,16 @@ def find_available_port(start_range=49152, end_range=65535):
 
 class Device:
     def __init__(
-        self, config: Config, playqueue: PlayQueue, event_emitter: EventEmitter
+        self, config: MusicCastConfig, playqueue: PlayQueue, event_emitter: EventEmitter
     ):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
 
-        self.connected_input = config["connected_input"]
-        self.device_addr = config["device_addr"]
-        self.device_port = config["device_port"]
-        self.volume_step_to_db = config.get("volume_step_to_db", 0.5)
-        self.auto_volume = config.get("auto_volume_correcton", True)
+        self.connected_input = config.connected_input
+        self.device_addr = config.device_addr
+        self.device_port = config.device_port
+        self.volume_step_to_db = config.volume_step_to_db
+        self.auto_volume = config.auto_volume_correction
         self.session = httpx.Client(timeout=5)
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
@@ -122,6 +121,7 @@ class Device:
 
     def _event_loop(self):
         while self.terminate is False:
+            udp_socket = None
             try:
                 udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -140,7 +140,8 @@ class Device:
 
             except Exception as e:
                 logger.error(f"Caught an exception, restarting: {e}")
-                udp_socket.close()
+                if udp_socket is not None:
+                    udp_socket.close()
                 time.sleep(10)
 
     def _handle_event(self, event_json):

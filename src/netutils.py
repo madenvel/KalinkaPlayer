@@ -13,6 +13,9 @@ def get_ip_address(interface: str) -> str:
         The IP address in quad-dotted notation of four decimal integers.
     """
 
+    if interface == "all":
+        return "0.0.0.0"
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     packed_iface = struct.pack("256s", interface.encode("utf_8"))
     packed_addr = fcntl.ioctl(sock.fileno(), 0x8915, packed_iface)[20:24]

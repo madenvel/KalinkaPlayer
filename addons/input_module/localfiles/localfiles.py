@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 import mimetypes
 
 from fastapi import HTTPException
+from .config_model import LocalFilesConfig
 from src.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
 from src.async_common import EventEmitter
 from data_model.datamodel import (
@@ -23,7 +24,7 @@ from data_model.datamodel import (
     PlaylistImage,
     Catalog,
 )
-from data_model.response_model import FavoriteIds, GenreList, LastUpdate
+from data_model.response_model import FavoriteIds, GenreList
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
 from .input_module_db import LocalFilesInputModuleDb
@@ -35,13 +36,15 @@ class LocalFilesInputModule(InputModule):
     """Local music files input module implementation"""
 
     def __init__(
-        self, config, db_manager: LocalFilesInputModuleDb, event_emitter: EventEmitter
+        self,
+        config: LocalFilesConfig,
+        db_manager: LocalFilesInputModuleDb,
+        event_emitter: EventEmitter,
     ):
-        self.config = config
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
         self.event_emitter = event_emitter
-        self.artwork_path = config["artwork_path"]
+        self.artwork_path = config.artwork_path
 
         # Ensure artwork directories exist
         os.makedirs(os.path.join(self.artwork_path, "album"), exist_ok=True)
@@ -879,7 +882,8 @@ class LocalFilesInputModule(InputModule):
 
         return None
 
-    def get_resource_path(self, id: str) -> str:
+    def get_resource_path(self, id: str) -> str | None:
         """Get full path to a resource"""
         # Assuming the ID is the file path
-        return (Path(self.artwork_path) / id).resolve().as_posix()
+        resource_path = (Path(self.artwork_path) / id).resolve().as_posix()
+        return resource_path if os.path.exists(resource_path) else None
