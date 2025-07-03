@@ -1,7 +1,6 @@
 from enum import Enum
 from pydantic import Field
 from src.base_config_model import ModuleConfig
-import yaml
 
 
 class QobuzAudioFormat(str, Enum):
@@ -17,7 +16,7 @@ class QobuzConfig(ModuleConfig):
     name: str = Field(default="qobuz", title="Qobuz", frozen=True)
     email: str = Field(default="my@email.com", title="Qobuz login")
     password_hash: str = Field(
-        default="mypassword",
+        default="",
         title="Qobuz password",
         json_schema_extra={"password": True},
     )
