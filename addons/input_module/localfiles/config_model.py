@@ -42,7 +42,7 @@ class EnricherConfig(BaseModel):
 
 
 class LocalFilesConfig(ModuleConfig):
-    name: str = Field(default="localfiles", title="Local", frozen=True)
+    name: str = Field(default="localfiles", title="Local", frozen=True, exclude=True)
     enabled: bool = Field(default=False, title="Module Enabled")
     music_folders: list[str] = Field(default=["~/Music"], title="Music Folders")
     db_path: str = Field(

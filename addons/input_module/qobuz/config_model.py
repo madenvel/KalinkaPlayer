@@ -13,7 +13,7 @@ class QobuzAudioFormat(str, Enum):
 class QobuzConfig(ModuleConfig):
     """Qobuz input module settings."""
 
-    name: str = Field(default="qobuz", title="Qobuz", frozen=True)
+    name: str = Field(default="qobuz", title="Qobuz", frozen=True, exclude=True)
     email: str = Field(default="my@email.com", title="Qobuz login")
     password_hash: str = Field(
         default="",

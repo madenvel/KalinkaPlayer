@@ -3,7 +3,7 @@ from src.base_config_model import ModuleConfig
 
 
 class MusicCastConfig(ModuleConfig):
-    name: str = Field(default="musiccast", title="MusicCast")
+    name: str = Field(default="musiccast", title="MusicCast", frozen=True, exclude=True)
     enabled: bool = Field(default=False, title="Module Enabled")
     device_addr: str = Field(
         "127.0.0.1",

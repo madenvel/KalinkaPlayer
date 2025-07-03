@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 import logging
 import os
@@ -16,6 +17,14 @@ from src.inputmodule import InputModule
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
+class ModuleHealthState(str, Enum):
+    """Enum to represent the health state of a module."""
+
+    READY = "ready"
+    ERROR = "error"
+    DISABLED = "disabled"
+
+
 class PreparedModule:
     """A class to hold prepared modules for shutdown."""
 
@@ -23,6 +32,7 @@ class PreparedModule:
         self.module = module
         self.config = config
         self.interface: ExternalOutputDevice | InputModule | None = None
+        self.health_state: ModuleHealthState = ModuleHealthState.DISABLED
 
     def setup(self, playqueue, event_emitter, event_listener):
         """Setup the module with the provided components."""
@@ -152,11 +162,24 @@ def scan_and_setup_addons(
 
     for name, module in scan_modules(addons_path):
         logger.info(f"Found module: {name}")
-        config = read_or_create_module_config(config_path, name, module)
-        prepared_module = PreparedModule(module, config)
-        prepared_module.setup(playqueue, event_emitter, event_listener)
+        prepared_module = None
+        try:
+            config = read_or_create_module_config(config_path, name, module)
+            prepared_module = PreparedModule(module, config)
+            if config.enabled:
+                prepared_module.setup(playqueue, event_emitter, event_listener)
+                prepared_module.health_state = ModuleHealthState.READY
+            else:
+                logger.info(f"Module {name} is disabled in configuration.")
+                prepared_module.health_state = ModuleHealthState.DISABLED
 
-        yield name, prepared_module
+        except Exception as e:
+            logger.error(f"Failed to setup module {name}: {e}")
+            if prepared_module is not None:
+                prepared_module.health_state = ModuleHealthState.ERROR
+
+        if prepared_module is not None:
+            yield name, prepared_module
 
 
 def scan_and_setup_input_modules(

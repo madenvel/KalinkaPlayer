@@ -278,11 +278,17 @@ def create_app(config_file, config: KalinkaConfig):
 
     @app.get("/device/list")
     async def device_supported_functions():
-        return device.supported_functions() if device else []
+        if device is None:
+            return {"message": "No device configured"}
+
+        return device.supported_functions()
 
     @app.get("/device/get_volume")
     def get_volume(device_id: str) -> Volume:
-        return device.get_volume() if device else Volume(current_volume=0, max_volume=0)
+        if device is None:
+            return Volume(current_volume=0, max_volume=0)
+
+        return device.get_volume()
 
     @app.put("/device/set_volume")
     def set_volume(device_id: str, volume: int):
@@ -414,7 +420,7 @@ def create_app(config_file, config: KalinkaConfig):
         app.state.server.should_exit = True
         return {"message": "Ok"}
 
-    @app.get("/input_modules/list")
+    @app.get("/source/list")
     def list_input_modules():
         return {
             "input_modules": [
@@ -423,6 +429,7 @@ def create_app(config_file, config: KalinkaConfig):
                     "title": module.config.__class__.model_fields["name"].title
                     or module.config.name,
                     "enabled": module.config.enabled,
+                    "state": module.health_state,
                 }
                 for module in modules.prepared_input_modules.values()
             ]
