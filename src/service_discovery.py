@@ -1,6 +1,6 @@
 import logging
 from src.config_model import KalinkaConfig
-from src.netutils import get_ip_address
+from src.netutils import get_ip_address, get_all_ip_addresses
 
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -16,10 +16,32 @@ desc = {"kalinka_api_version": "0.1", "server_version": "1.4.0"}
 def get_service_info(config: KalinkaConfig) -> ServiceInfo:
     server_cfg = config.server
 
+    # Handle "all" interface case by getting all available IP addresses
+    if server_cfg.interface == "all":
+        ip_addresses = get_all_ip_addresses()
+        # If no IP addresses found, fallback to getting IP of default interface
+        if not ip_addresses:
+            # Try to get default route interface IP
+            try:
+                # Create a socket to determine the default route
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                default_ip = s.getsockname()[0]
+                s.close()
+                ip_addresses = [default_ip]
+            except Exception:
+                # Ultimate fallback
+                ip_addresses = ["127.0.0.1"]
+        addresses = [socket.inet_aton(ip) for ip in ip_addresses]
+    else:
+        # Single interface case
+        ip_address = get_ip_address(server_cfg.interface)
+        addresses = [socket.inet_aton(ip_address)]
+
     return ServiceInfo(
         type_="_kalinkaplayer._tcp.local.",
         name=f"{server_cfg.service_name}._kalinkaplayer._tcp.local.",
-        addresses=[socket.inet_aton(get_ip_address(server_cfg.interface))],
+        addresses=addresses,
         port=server_cfg.port,
         properties=desc,
     )
