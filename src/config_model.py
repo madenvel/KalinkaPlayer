@@ -2,6 +2,16 @@
 
 from typing import Literal
 from pydantic import BaseModel, Field
+from enum import Enum
+
+
+class LogLevel(str, Enum):
+    """Enumeration for log levels."""
+
+    debug = "debug"
+    info = "info"
+    warning = "warning"
+    error = "error"
 
 
 class ServerConfig(BaseModel):
@@ -16,9 +26,7 @@ class ServerConfig(BaseModel):
         title="Port number to listen on",
     )
     service_name: str = Field(default="My Kalinka Service", title="Name of the service")
-    log_level: Literal["debug", "info", "warning", "error"] = Field(
-        default="info", title="Logging level"
-    )
+    log_level: LogLevel = Field(default=LogLevel.info, title="Logging level")
 
 
 class AlsaConfig(BaseModel):

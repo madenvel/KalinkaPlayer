@@ -7,7 +7,7 @@ class ModuleConfig(BaseModel):
 
     name: str = Field(
         default_factory=lambda: f"module_{uuid.uuid4().hex[:8]}",
-        title="Kalinka Module",
+        title="Kalinka Module Name",
         frozen=True,
     )
     enabled: bool = Field(default=True, title="Module enabled")
