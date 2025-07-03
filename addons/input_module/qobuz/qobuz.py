@@ -206,7 +206,6 @@ class QobuzClient:
             "intent": "stream",
         }
 
-        logger.info(f"Track URL request: {params}")
         for _ in range(3):
             try:
                 r = self.session.get(self.base + epoint, params=params)
