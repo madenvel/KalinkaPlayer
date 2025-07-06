@@ -94,7 +94,7 @@ if __name__ == "__main__":
                 with open(args.config, "r") as f:
                     config = KalinkaConfig(**json.load(f))
             except FileNotFoundError:
-                logger.error(f"Config file {args.config} not found.")
+                logger.warning(f"Config file {args.config} not found.")
 
             if args.state:
                 state_keeper.set_state_file(args.state)
