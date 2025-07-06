@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 import logging
 
+from src.base_config_model import ModuleConfig
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
@@ -53,12 +55,15 @@ def process_model(model: BaseModel) -> Dict[str, Any]:
     output = {}
 
     for field_name, field in model.__class__.model_fields.items():
+        if field_name == "name":
+            # Skip the 'name' field as it is handled separately in the config
+            continue
         processed_field = process_field(field_name, field)
         output[field_name] = processed_field
         if processed_field["type"] == "section":
             # Recursively process nested models
             nested_model = getattr(model, field_name)
-            output[field_name]["fields"] = process_model(nested_model)
+            processed_field["fields"] = process_model(nested_model)
 
         else:
             processed_field["value"] = getattr(model, field_name, None)
@@ -77,15 +82,48 @@ def process_model(model: BaseModel) -> Dict[str, Any]:
 
 def config_to_wire(
     base_config: BaseModel,
-    input_modules: dict[str, BaseModel],
-    devices: dict[str, BaseModel],
+    input_modules: dict[str, ModuleConfig],
+    devices: dict[str, ModuleConfig],
 ) -> Dict[str, Any]:
     """Convert the base configuration and input modules to a wire-compatible format."""
+
     config = {
-        "base_config": process_model(base_config),
-        "input_modules": {
-            name: process_model(module) for name, module in input_modules.items()
-        },
-        "devices": {name: process_model(device) for name, device in devices.items()},
+        "root": {
+            "type": "section",
+            "title": "Kalinka Player Configuration",
+            "readonly": False,
+            "fields": {
+                "base_config": {
+                    "type": "section",
+                    "title": "Main Configuration",
+                    "readonly": False,
+                    "fields": process_model(base_config),
+                },
+                "input_modules": {
+                    "type": "section",
+                    "title": "Input Modules",
+                    "fields": {
+                        module.name: {
+                            "type": "section",
+                            "title": module.__class__.model_fields["name"].title,
+                            "fields": process_model(module),
+                        }
+                        for module in input_modules.values()
+                    },
+                },
+                "devices": {
+                    "type": "section",
+                    "title": "Devices",
+                    "fields": {
+                        device.name: {
+                            "type": "section",
+                            "title": device.__class__.model_fields["name"].title,
+                            "fields": process_model(device),
+                        }
+                        for device in devices.values()
+                    },
+                },
+            },
+        }
     }
     return config
