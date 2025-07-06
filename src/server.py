@@ -420,8 +420,8 @@ def create_app(config_file, config: KalinkaConfig):
         app.state.server.should_exit = True
         return {"message": "Ok"}
 
-    @app.get("/source/list")
-    def list_input_modules():
+    @app.get("/server/modules")
+    def list_modules():
         return {
             "input_modules": [
                 {
@@ -432,7 +432,17 @@ def create_app(config_file, config: KalinkaConfig):
                     "state": module.health_state,
                 }
                 for module in modules.prepared_input_modules.values()
-            ]
+            ],
+            "devices": [
+                {
+                    "name": device.config.name,
+                    "title": device.config.__class__.model_fields["name"].title
+                    or device.config.name,
+                    "enabled": device.config.enabled,
+                    "state": device.health_state,
+                }
+                for device in modules.prepared_devices.values()
+            ],
         }
 
     @app.put("/server/config")
