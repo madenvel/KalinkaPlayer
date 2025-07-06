@@ -439,9 +439,13 @@ def create_app(config_file, config: KalinkaConfig):
     def set_config_fields(fields: Dict[str, Any]):
         for key, value in fields.items():
             config = None
+            logger.info(f"Setting config field {key} to {value}")
             attrs = key.split(".")
-            if not attrs:
+            if not attrs or attrs[0] != "root":
                 raise HTTPException(status_code=400, detail="Invalid config key")
+
+            attrs = attrs[1:]  # Skip the 'root' part
+
             if attrs[0] == "input_modules":
                 module_name = attrs[1]
                 if module_name in modules.prepared_input_modules:
@@ -472,7 +476,6 @@ def create_app(config_file, config: KalinkaConfig):
                     raise HTTPException(
                         status_code=400, detail=f"Invalid config field: {key}"
                     )
-            logger.info(f"Setting config field {config.__annotations__} to {value}")
             setattr(config, attrs[-1], value)
 
         return {"message": "Ok"}
