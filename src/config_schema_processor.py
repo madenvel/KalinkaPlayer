@@ -14,8 +14,6 @@ logger = logging.getLogger(__name__.split(".")[-1])
 def annotation_to_type(annotation: Any) -> str:
     """Convert a Pydantic annotation to a string representation."""
 
-    logger.info(f"Processing annotation: {annotation}")
-
     if issubclass(annotation, BaseModel):
         return "section"
 
