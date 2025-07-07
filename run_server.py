@@ -108,7 +108,7 @@ if __name__ == "__main__":
                 host=host,
                 port=port,
                 reload=False,
-                timeout_graceful_shutdown=5,
+                timeout_graceful_shutdown=15,
                 log_config=uvicorn_log_config,
             )
             server = uvicorn.Server(uvicorn_config)

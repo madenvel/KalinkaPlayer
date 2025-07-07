@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import mimetypes
 import os
 from pathlib import Path
@@ -241,6 +242,10 @@ def create_app(config_file, config: KalinkaConfig):
                     event = await run_in_threadpool(event_stream.get_event)
                     if event is not None:
                         yield json.dumps(event) + "\n"
+            except asyncio.CancelledError:
+                # Handle graceful shutdown - connection was cancelled
+                logger.info("Event stream cancelled during server shutdown")
+                return
             except Exception as e:
                 logger.error(f"Error processing events: {e}")
                 yield json.dumps({"error": str(e)}) + "\n"
