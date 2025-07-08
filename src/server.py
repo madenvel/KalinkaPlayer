@@ -435,6 +435,7 @@ def create_app(config_file, config: KalinkaConfig):
                     or module.config.name,
                     "enabled": module.config.enabled,
                     "state": module.health_state,
+                    "error_message": module.error_message,
                 }
                 for module in modules.prepared_input_modules.values()
             ],
@@ -445,6 +446,7 @@ def create_app(config_file, config: KalinkaConfig):
                     or device.config.name,
                     "enabled": device.config.enabled,
                     "state": device.health_state,
+                    "error_message": device.error_message,
                 }
                 for device in modules.prepared_devices.values()
             ],
