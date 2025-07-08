@@ -121,7 +121,9 @@ def scan_modules(
                             f"Incorrect module: setup, shutdown and Config must be defined in {item}/module_setup.py"
                         )
                 except Exception as e:
-                    logger.error(f"Failed to setup input module {item}: {e}")
+                    logger.error(
+                        f"Failed to setup input module {item}: {e}", exc_info=True
+                    )
                     continue
             else:
                 logger.debug(f"No module_setup.py found in {item}")

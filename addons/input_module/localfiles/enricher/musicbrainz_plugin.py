@@ -1,5 +1,4 @@
 import logging
-import time
 import musicbrainzngs
 import re
 from difflib import SequenceMatcher

@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
 import os
-import logging
-import socket
-import tempfile
+import sys
+import io
 import time
-import asyncio
 import json
-from typing import Dict, Optional, Set, Any, Tuple
+import logging
+import asyncio
+import mimetypes
+import multiprocessing
+from typing import Any, Dict, Optional, Set, Tuple
+
+from pathlib import Path
+
+from PIL import Image
+
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
-from PIL import Image
-import io
-import mimetypes
-from watchfiles import awatch, Change
-import sys
 
-from id_generator import (
+from watchfiles import awatch, Change
+
+from ..config_model import LocalFilesConfig
+from .id_generator import (
     generate_artist_id,
     generate_album_id,
     generate_track_id,
 )
-from indexer_db import AsyncIndexerDb
+from .indexer_db import AsyncIndexerDb
 
 
 # Configure logger for watchfiles.main only to WARNING level
@@ -32,17 +37,14 @@ aiosqlite_logger.setLevel(logging.WARNING)
 
 logger = logging.getLogger("indexer")
 
-SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
-ENRICHER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
-
 
 # Global variables to manage indexer state
-_server = None
 _indexer_task: Optional[asyncio.Task] = None
 _indexer_queue: asyncio.Queue = asyncio.Queue()
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
 _shutdown_event = asyncio.Event()
+_enricher_queue: Optional[multiprocessing.Queue] = None
 
 
 async def trigger_enricher_update(data):
@@ -53,35 +55,28 @@ async def trigger_enricher_update(data):
 
     logger.info(f"Triggering enricher update with data: {data}")
 
-    try:
-        reader, writer = await asyncio.open_unix_connection(ENRICHER_SOCKET_PATH)
+    # Handle dictionary by converting to JSON string
+    if isinstance(data, dict):
+        message = json.dumps(data) + "\n"
+    else:
+        # Handle string data
+        message = str(data) + "\n"
 
-        # Handle dictionary by converting to JSON string
-        if isinstance(data, dict):
-            message = json.dumps(data) + "\n"
-        else:
-            # Handle string data
-            message = str(data) + "\n"
-
-        writer.write(message.encode())
-        await writer.drain()
-
-        writer.close()
-        await writer.wait_closed()
-    except FileNotFoundError:
-        logger.warning(
-            f"Enricher socket not found at {ENRICHER_SOCKET_PATH}, skipping update"
-        )
+    if _enricher_queue is not None:
+        _enricher_queue.put(message)
+    else:
+        logger.warning("Enricher queue is not initialized; cannot send message.")
 
 
 class FileIndexer:
-    def __init__(self, config, db_manager: AsyncIndexerDb):
+    def __init__(self, config: LocalFilesConfig, db_manager: AsyncIndexerDb):
         self.config = config
         self.db_manager = db_manager
+        # Expand user (~) and resolve absolute paths for music folders
         self.music_folders = [
-            folder.strip() for folder in config["music_folders"].split(",")
+            str(Path(folder).expanduser().resolve()) for folder in config.music_folders
         ]
-        self.artwork_path = config["artwork_path"]
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         self.running = False
         self.lock = asyncio.Lock()
 
@@ -618,11 +613,13 @@ async def _indexer_worker(config, db_manager: AsyncIndexerDb):
             await asyncio.sleep(5)
 
 
-async def _file_watcher_worker(config):
+async def _file_watcher_worker(config: LocalFilesConfig):
     """Background worker task for real-time filesystem monitoring"""
     global _indexer_queue, _file_watcher_stop_event
 
-    music_folders = [folder.strip() for folder in config["music_folders"].split(",")]
+    music_folders = [
+        str(Path(folder).expanduser().resolve()) for folder in config.music_folders
+    ]
     logger.info(f"Starting file watcher for folders: {music_folders}")
 
     try:
@@ -640,17 +637,28 @@ async def _file_watcher_worker(config):
         logger.info("File watcher task exited")
 
 
-def start_indexer(config, db_manager: AsyncIndexerDb) -> Optional[asyncio.Task]:
+def start_indexer(
+    config: LocalFilesConfig, db_manager: AsyncIndexerDb
+) -> Optional[asyncio.Task]:
     """Start the indexer process in a background task"""
     global _indexer_task
     if _indexer_task and not _indexer_task.done():
         logger.warning("Indexer task already running, not starting another")
         return _indexer_task
 
-    os.makedirs(os.path.dirname(config["db_path"]), exist_ok=True)
-    os.makedirs(config["artwork_path"], exist_ok=True)
-    os.makedirs(os.path.join(config["artwork_path"], "album"), exist_ok=True)
-    os.makedirs(os.path.join(config["artwork_path"], "artist"), exist_ok=True)
+    artwork_path = Path(config.artwork_path).expanduser().resolve()
+    db_path = Path(config.db_path).expanduser().resolve()
+
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    os.makedirs(artwork_path, exist_ok=True)
+    os.makedirs(
+        os.path.join(artwork_path, "album"),
+        exist_ok=True,
+    )
+    os.makedirs(
+        os.path.join(artwork_path, "artist"),
+        exist_ok=True,
+    )
 
     _indexer_task = asyncio.create_task(_indexer_worker(config, db_manager))
     logger.info("Started file indexer background task")
@@ -713,10 +721,10 @@ async def stop_file_watcher() -> bool:
     return False
 
 
-def start_file_watcher(config) -> Optional[asyncio.Task]:
+def start_file_watcher(config: LocalFilesConfig) -> Optional[asyncio.Task]:
     """Start the file watcher process in a background task if enabled"""
     global _file_watcher_task, _file_watcher_stop_event
-    if not config.get("file_watch_enabled", False):
+    if config.file_watch_enabled == False:
         logger.info("File watcher is disabled in config.")
         return None
 
@@ -736,47 +744,11 @@ async def handle_client(reader, writer):
     await _indexer_queue.put(message)
 
 
-def ensure_single_instance():
-    """Try to connect to the existing socket to see if it's already running."""
-    import sys
-
-    if os.path.exists(SOCKET_PATH):
-        try:
-            # Try to connect to see if the socket is active
-            test_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            test_socket.connect(SOCKET_PATH)
-            test_socket.close()
-            print("Another instance is already running.")
-            sys.exit(1)
-        except (ConnectionRefusedError, FileNotFoundError):
-            print("Stale socket found. Cleaning up.")
-            os.remove(SOCKET_PATH)  # stale socket
-
-
-async def start_server():
-    """Start the server process"""
-    global _server
-
-    if _server and not _server.should_exit:
-        logger.warning("Server already running, not starting another")
-        return _server
-
-    if os.path.exists(SOCKET_PATH):
-        os.remove(SOCKET_PATH)
-
-    _server = await asyncio.start_unix_server(handle_client, path=SOCKET_PATH)
-    logger.info(f"Server started at {SOCKET_PATH}")
-
-    return _server
-
-
-async def main(config_data: Dict[str, Any]):
+async def async_main(config: LocalFilesConfig):
     """Runs the main application logic asynchronously."""
     global _indexer_task, _file_watcher_task, _shutdown_event
 
-    ensure_single_instance()
-
-    db_manager = AsyncIndexerDb(config_data)
+    db_manager = AsyncIndexerDb(config)
     try:
         await db_manager.init_db()
         logger.info("Database initialized successfully.")
@@ -791,9 +763,8 @@ async def main(config_data: Dict[str, Any]):
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown_event.set)
 
-    _indexer_task = start_indexer(config_data, db_manager)
-    _file_watcher_task = start_file_watcher(config_data)
-    _server = await start_server()
+    _indexer_task = start_indexer(config, db_manager)
+    _file_watcher_task = start_file_watcher(config)
 
     try:
         await _shutdown_event.wait()
@@ -817,58 +788,21 @@ async def main(config_data: Dict[str, Any]):
 
         logger.info("All background tasks processed for shutdown.")
 
-        if _server:
-            _server.close()
-            await _server.wait_closed()
 
-        if os.path.exists(SOCKET_PATH):
-            os.remove(SOCKET_PATH)
+def main(config: LocalFilesConfig, enricher_queue, logger_queue):
+    """Main entry point for the indexer daemon."""
 
-        logger.info("Server shutdown complete.")
-
-
-if __name__ == "__main__":
-    import argparse
-    import json
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    parser = argparse.ArgumentParser(description="Async Music file indexer daemon")
-    parser.add_argument(
-        "-c", "--config", help="JSON configuration string", required=True
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO",
-        help="Set log level",
-    )
-    args = parser.parse_args()
-
-    # Configure logging level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    logger.info("Loading configuration from command line JSON")
+    global _enricher_queue
+    _enricher_queue = enricher_queue
     try:
-        app_config = json.loads(args.config)
-        logger.info("Configuration loaded successfully.")
-        logger.info(f"Configuration: {json.dumps(app_config, indent=2)}")
-    except json.JSONDecodeError as e:
-        logger.exception(f"Error parsing JSON configuration: {str(e)}")
-        sys.exit(1)
-    except KeyError as e:
-        logger.error(
-            f"Configuration missing expected keys (e.g., input_modules.localfiles): {str(e)}"
-        )
-        sys.exit(1)
+        import logging.handlers
 
-    try:
-        asyncio.run(main(app_config))
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+        root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
+        asyncio.run(async_main(config))
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
     except Exception as e:

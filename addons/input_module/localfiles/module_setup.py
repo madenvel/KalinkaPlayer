@@ -1,12 +1,12 @@
 import logging
+import logging.handlers
+import multiprocessing
 import os
+import signal
 import socket
-import tempfile
-import subprocess
-import sys
-import threading
-from pathlib import Path
 from addons.input_module.localfiles.config_model import LocalFilesConfig
+from addons.input_module.localfiles.enricher import enricher
+from addons.input_module.localfiles.indexer import indexer
 from addons.input_module.localfiles.input_module_db import LocalFilesInputModuleDb
 from src.async_common import EventEmitter, EventListener
 from addons.input_module.localfiles.localfiles import LocalFilesInputModule
@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 Config = LocalFilesConfig
 
-# Socket paths for IPC
-INDEXER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-indexer.sock")
-ENRICHER_SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
 _enricher_proc = None
 _indexer_proc = None
+_enricher_queue = multiprocessing.Queue()
+_logging_queue = multiprocessing.Queue()
+_log_listener = None
 
 
 def is_process_running(socket_path):
@@ -45,83 +45,13 @@ def is_process_running(socket_path):
         return False
 
 
-def spawn_process(script_path, config_json):
-    """Spawn a process with the given script and config."""
-    # Get the directory of the current script
-    base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    script_full_path = base_dir / script_path
-
-    # Ensure the script exists
-    if not script_full_path.exists():
-        logger.error(f"Script not found: {script_full_path}")
-        return None
-
-    logger.info(f"Spawning process: {script_full_path}")
-
-    # Create log readers for the subprocess
-    def log_reader(pipe, level, prefix):
-        """Reads from pipe and logs each line with the specified level and prefix."""
-        # process_name = os.path.basename(script_path).split(".")[0]
-        for line in iter(pipe.readline, ""):
-            line_str = line.strip()
-            if line_str:
-                print(line_str)
-        pipe.close()
-
-    try:
-        # Use subprocess.Popen to spawn the process
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                str(script_full_path),
-                "-c",
-                config_json,
-                "--log-level",
-                logging.getLevelName(logger.getEffectiveLevel()),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,  # Detach the process from parent
-            text=True,  # Use text mode for proper line buffering
-            bufsize=1,  # Line buffered (works with text mode)
-        )
-
-        # Start separate threads to read stdout and stderr
-
-        stdout_thread = threading.Thread(
-            target=log_reader, args=(process.stdout, logging.INFO, "OUT"), daemon=True
-        )
-        stderr_thread = threading.Thread(
-            target=log_reader, args=(process.stderr, logging.ERROR, "ERR"), daemon=True
-        )
-
-        stdout_thread.start()
-        stderr_thread.start()
-
-        return process
-    except Exception as e:
-        logger.error(f"Failed to spawn process {script_path}: {str(e)}", exc_info=True)
-        raise
-
-
-def flatten_dict(d, parent_key="", sep="."):
-    items = {}
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.update(flatten_dict(v, new_key, sep=sep))
-        else:
-            items[new_key] = v
-    return items
-
-
 def setup(
     config: LocalFilesConfig,
     playqueue: PlayQueue,
     event_emitter: EventEmitter,
     event_listener: EventListener,
 ):
-    global _enricher_proc, _indexer_proc
+    global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue
 
     logger.info("Setting up localfiles input module")
     # Create specialized databases for each component
@@ -130,22 +60,35 @@ def setup(
     # The LocalFilesInputModule will use its own specialized DB
     inputmodule = LocalFilesInputModule(config, input_module_db, event_emitter)
 
-    # # Convert config to JSON for passing to child processes
-    config_json = flatten_dict(config.model_dump())
-
-    # Check if indexer is running, if not start it
-    if not is_process_running(INDEXER_SOCKET_PATH):
-        logger.info("Indexer not running, starting indexer process")
-        _indexer_proc = spawn_process("indexer/indexer.py", config_json)
+    handler = logging.StreamHandler()
+    handler.setLevel(logger.level)
+    # Use the same formatter as the parent process root logger
+    root_logger = logging.getLogger()
+    if root_logger.handlers and root_logger.handlers[0].formatter:
+        handler.setFormatter(root_logger.handlers[0].formatter)
     else:
-        logger.info("Indexer already running")
+        # Fallback to a reasonable default format if no formatter is found
+        formatter = logging.Formatter(
+            "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        handler.setFormatter(formatter)
+    listener = logging.handlers.QueueListener(_logging_queue, handler)
+    listener.start()
 
-    # Check if enricher is running, if not start it
-    if not is_process_running(ENRICHER_SOCKET_PATH):
-        logger.info("Enricher not running, starting enricher process")
-        _enricher_proc = spawn_process("enricher/enricher.py", config_json)
-    else:
-        logger.info("Enricher already running")
+    _indexer_proc = multiprocessing.Process(
+        target=indexer.main,
+        args=(config, _enricher_queue, _logging_queue),
+    )
+
+    _indexer_proc.start()
+
+    if config.enricher.enabled:
+        _enricher_proc = multiprocessing.Process(
+            target=enricher.main,
+            args=(config, _enricher_queue, _logging_queue),
+        )
+        _enricher_proc.start()
 
     return inputmodule
 
@@ -153,22 +96,31 @@ def setup(
 def shutdown_process(proc):
     """Shutdown a process by sending a shutdown command over its socket."""
 
-    if proc is not None:
-        proc.terminate()
-        proc.wait(timeout=5)
-        if proc.poll() is None:
-            logger.warning(f"{proc.pid} process did not terminate, killing it")
-            # If the process did not terminate, kill it
-            try:
-                proc.kill()
-            except OSError as e:
-                logger.error(f"Error killing process {proc.pid}: {e}")
+    if proc is None or not proc.is_alive():
+        logger.warning("Process is not running or already shut down.")
+        return
+
+    # Send shutdown command over the process's socket
+    try:
+        proc.send_signal(signal.SIGTERM)
+        sleeping_time = 5
+        proc.join(timeout=sleeping_time)
+        if proc.is_alive():
+            logger.warning(
+                f"Process {proc.pid} did not shut down gracefully, killing it."
+            )
+            proc.kill()
         else:
-            logger.info(f"{proc.pid} process terminated gracefully")
+            logger.info(f"Process {proc.pid} shut down successfully.")
+    except Exception as e:
+        logger.error(f"Error shutting down process {proc.pid}: {e}")
 
 
 def shutdown():
-    global _enricher_proc, _indexer_proc
+    global _enricher_proc, _indexer_proc, _log_listener
 
     shutdown_process(_indexer_proc)
     shutdown_process(_enricher_proc)
+
+    if _log_listener is not None:
+        _log_listener.stop()
