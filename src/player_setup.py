@@ -33,6 +33,7 @@ class PreparedModule:
         self.config = config
         self.interface: ExternalOutputDevice | InputModule | None = None
         self.health_state: ModuleHealthState = ModuleHealthState.DISABLED
+        self.error_message: str | None = None
 
     def setup(self, playqueue, event_emitter, event_listener):
         """Setup the module with the provided components."""
@@ -177,6 +178,7 @@ def scan_and_setup_addons(
             logger.error(f"Failed to setup module {name}: {e}")
             if prepared_module is not None:
                 prepared_module.health_state = ModuleHealthState.ERROR
+                prepared_module.error_message = str(e)
 
         if prepared_module is not None:
             yield name, prepared_module

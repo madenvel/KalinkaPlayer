@@ -4,7 +4,7 @@ from typing import List
 
 
 class MusicBrainzConfig(BaseModel):
-    enabled: bool = Field(default=False, title="Enable MusicBrainz")
+    enabled: bool = Field(default=True, title="Enable MusicBrainz")
     match_threshold: int = Field(
         default=80, title="Match Threshold (0-100)", ge=0, le=100
     )
@@ -20,18 +20,20 @@ class AcoustIDConfig(BaseModel):
 
 
 class WikidataConfig(BaseModel):
-    enabled: bool = Field(default=False, title="Enable Wikidata")
+    enabled: bool = Field(default=True, title="Enable Wikidata")
 
 
 class DeezerConfig(BaseModel):
-    enabled: bool = Field(default=False, title="Enable Deezer")
+    enabled: bool = Field(default=True, title="Enable Deezer")
 
 
 class PluginsConfig(BaseModel):
-    musicbrainz: MusicBrainzConfig = Field(default_factory=MusicBrainzConfig)
-    acoustid: AcoustIDConfig = Field(default_factory=AcoustIDConfig)
-    wikidata: WikidataConfig = Field(default_factory=WikidataConfig)
-    deezer: DeezerConfig = Field(default_factory=DeezerConfig)
+    musicbrainz: MusicBrainzConfig = Field(
+        default_factory=MusicBrainzConfig, title="MusicBrainz"
+    )
+    acoustid: AcoustIDConfig = Field(default_factory=AcoustIDConfig, title="AcoustID")
+    wikidata: WikidataConfig = Field(default_factory=WikidataConfig, title="Wikidata")
+    deezer: DeezerConfig = Field(default_factory=DeezerConfig, title="Deezer")
 
 
 class EnricherConfig(BaseModel):

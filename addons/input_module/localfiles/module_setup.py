@@ -100,8 +100,8 @@ def spawn_process(script_path, config_json):
 
         return process
     except Exception as e:
-        logger.error(f"Failed to spawn process {script_path}: {str(e)}")
-        return None
+        logger.error(f"Failed to spawn process {script_path}: {str(e)}", exc_info=True)
+        raise
 
 
 def flatten_dict(d, parent_key="", sep="."):
