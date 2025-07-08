@@ -10,12 +10,12 @@ import sys
 import tempfile
 from typing import Dict, Optional, Any
 
-from musicbrainz_plugin import MusicBrainzPlugin
-from acoustid_plugin import AcoustIdPlugin
-from wikidata_plugin import WikidataPlugin
-from deezer_plugin import DeezerPlugin
-from filesystem_fallback_plugin import FilesystemFallbackPlugin
-from enricher_db import AsyncEnricherDb
+from .musicbrainz_plugin import MusicBrainzPlugin
+from .acoustid_plugin import AcoustIdPlugin
+from .wikidata_plugin import WikidataPlugin
+from .deezer_plugin import DeezerPlugin
+from .filesystem_fallback_plugin import FilesystemFallbackPlugin
+from .enricher_db import AsyncEnricherDb
 
 logger = logging.getLogger("enricher")
 
