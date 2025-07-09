@@ -4,6 +4,8 @@ import re
 from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
+from ..config_model import LocalFilesConfig
+
 try:
     from .enricher_plugin import EnricherPlugin
 except ImportError:
@@ -15,38 +17,23 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
-    def __init__(self, config, db_manager):
+    def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
 
         # Threshold configurations - can be overridden in config
-        default_threshold = config.get(
-            "enricher.plugins.musicbrainz.match_threshold", 90
-        )
-        self.artist_threshold = config.get(
-            "enricher.plugins.musicbrainz.artist_threshold", default_threshold
-        )
-        self.album_threshold = config.get(
-            "enricher.plugins.musicbrainz.album_threshold", default_threshold
-        )
-        self.track_threshold = config.get(
-            "enricher.plugins.musicbrainz.track_threshold", default_threshold
-        )
+        self.artist_threshold = config.enricher.plugins.musicbrainz.artist_threshold
+        self.album_threshold = config.enricher.plugins.musicbrainz.album_threshold
+        self.track_threshold = config.enricher.plugins.musicbrainz.track_threshold
 
         # String similarity threshold (0.0-1.0) - set lower to be more permissive
-        self.string_similarity_threshold = config.get(
-            "enricher.plugins.musicbrainz.string_similarity", 0.8
+        self.string_similarity_threshold = (
+            config.enricher.plugins.musicbrainz.string_similarity
         )
 
         # Enable detailed logging of match results for debugging
-        self.debug_matching = config.get(
-            "enricher.plugins.musicbrainz.debug_matching", False
-        )
-
-        self.user_agent = config.get(
-            "enricher.plugins.musicbrainz.user_agent",
-            "KalinkaEnricher/1.0 (https://github.com/madenvel/kalinka-file-indexer)",
-        )
+        self.debug_matching = config.enricher.plugins.musicbrainz.debug_matching
+        self.user_agent = config.enricher.plugins.user_agent
 
         # Set up MusicBrainz API
         musicbrainzngs.set_useragent(

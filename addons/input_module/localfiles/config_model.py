@@ -5,13 +5,19 @@ from typing import List
 
 class MusicBrainzConfig(BaseModel):
     enabled: bool = Field(default=True, title="Enable MusicBrainz")
-    match_threshold: int = Field(
-        default=80, title="Match Threshold (0-100)", ge=0, le=100
+    artist_threshold: int = Field(
+        default=90, title="Artist Match Threshold", ge=0, le=100
     )
-    user_agent: str = Field(
-        default="Kalinka/1.0 (https://github.com/madenvel/KalinkaPlayer)",
-        title="User Agent",
+    album_threshold: int = Field(
+        default=90, title="Album Match Threshold", ge=0, le=100
     )
+    track_threshold: int = Field(
+        default=90, title="Track Match Threshold", ge=0, le=100
+    )
+    string_similarity: float = Field(
+        default=0.8, title="String Match Similarity Threshold", ge=0, le=1
+    )
+    debug_matching: bool = Field(default=False, title="Enable detailed matching logs")
 
 
 class AcoustIDConfig(BaseModel):
@@ -34,6 +40,14 @@ class PluginsConfig(BaseModel):
     acoustid: AcoustIDConfig = Field(default_factory=AcoustIDConfig, title="AcoustID")
     wikidata: WikidataConfig = Field(default_factory=WikidataConfig, title="Wikidata")
     deezer: DeezerConfig = Field(default_factory=DeezerConfig, title="Deezer")
+    filesystem_fallback_enabled: bool = Field(
+        default=True, title="Use file name and path for enrichment"
+    )
+
+    user_agent: str = Field(
+        default="Kalinka/1.0 (https://github.com/madenvel/KalinkaPlayer)",
+        title="User Agent",
+    )
 
 
 class EnricherConfig(BaseModel):

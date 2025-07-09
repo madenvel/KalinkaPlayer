@@ -1,11 +1,14 @@
 import logging
 import os
+from pathlib import Path
 import httpx
 import io
 import difflib
 import re
 from PIL import Image
 from typing import Dict, Optional
+
+from ..config_model import LocalFilesConfig
 
 try:
     from .enricher_plugin import EnricherPlugin
@@ -29,16 +32,13 @@ class DeezerPlugin(EnricherPlugin):
     distributed software without proper licensing from Deezer.
     """
 
-    def __init__(self, config, db_manager):
+    def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
-        self.artwork_path = config["artwork_path"]
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
         # Set a proper User-Agent
-        user_agent = config.get(
-            "enricher.plugins.deezer.user_agent",
-            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer)",
-        )
+        user_agent = config.enricher.plugins.user_agent
         # Common headers
         self.headers = {"User-Agent": user_agent}
 

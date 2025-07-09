@@ -14,6 +14,8 @@ import subprocess
 import requests
 from typing import Dict, Optional, List, Tuple
 
+from ..config_model import LocalFilesConfig
+
 try:
     from .enricher_plugin import EnricherPlugin
     from .id_generator import generate_artist_id, generate_album_id
@@ -28,10 +30,10 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
 
-    def __init__(self, config, db_manager):
+    def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
-        self.api_key = config.get("enricher.plugins.acoustid.api_key", "")
+        self.api_key = config.enricher.plugins.acoustid.api_key
 
         if not self.api_key:
             logger.warning("AcoustID API key not configured. Plugin will be disabled.")

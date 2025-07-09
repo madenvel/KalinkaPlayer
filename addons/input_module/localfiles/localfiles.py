@@ -1,4 +1,5 @@
 import logging
+
 import os
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -44,12 +45,12 @@ class LocalFilesInputModule(InputModule):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
         self.event_emitter = event_emitter
-        self.artwork_path = config.artwork_path
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
         # Ensure artwork directories exist
-        os.makedirs(os.path.join(self.artwork_path, "album"), exist_ok=True)
-        os.makedirs(os.path.join(self.artwork_path, "artist"), exist_ok=True)
-        os.makedirs(os.path.join(self.artwork_path, "playlist"), exist_ok=True)
+        os.makedirs(self.artwork_path / "album", exist_ok=True)
+        os.makedirs(self.artwork_path / "artist", exist_ok=True)
+        os.makedirs(self.artwork_path / "playlist", exist_ok=True)
 
         # Initialize mime types for serving files
         mimetypes.init()
@@ -820,12 +821,10 @@ class LocalFilesInputModule(InputModule):
         large = f"/resource/album/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        thumbnail_path = os.path.join(
-            self.artwork_path, f"album/{image_base}_thumbnail.jpg"
-        )
+        thumbnail_path = self.artwork_path / f"album/{image_base}_thumbnail.jpg"
 
         # Only return image URLs if the thumbnail file exists
-        if os.path.exists(thumbnail_path):
+        if thumbnail_path.exists():
             return AlbumImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
@@ -846,12 +845,10 @@ class LocalFilesInputModule(InputModule):
         large = f"/resource/artist/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        thumbnail_path = os.path.join(
-            self.artwork_path, f"artist/{image_base}_thumbnail.jpg"
-        )
+        thumbnail_path = self.artwork_path / f"artist/{image_base}_thumbnail.jpg"
 
         # Only return image URLs if the thumbnail file exists
-        if os.path.exists(thumbnail_path):
+        if thumbnail_path.exists():
             return ArtistImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
@@ -872,12 +869,10 @@ class LocalFilesInputModule(InputModule):
         large = f"/resource/playlist/{image_base}_large.jpg"
 
         # Check if the image files exist using absolute path for the check
-        thumbnail_path = os.path.join(
-            self.artwork_path, f"playlist/{image_base}_thumbnail.jpg"
-        )
+        thumbnail_path = self.artwork_path / f"playlist/{image_base}_thumbnail.jpg"
 
         # Only return image URLs if the thumbnail file exists
-        if os.path.exists(thumbnail_path):
+        if thumbnail_path.exists():
             return PlaylistImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
@@ -885,5 +880,5 @@ class LocalFilesInputModule(InputModule):
     def get_resource_path(self, id: str) -> str | None:
         """Get full path to a resource"""
         # Assuming the ID is the file path
-        resource_path = (Path(self.artwork_path) / id).resolve().as_posix()
-        return resource_path if os.path.exists(resource_path) else None
+        resource_path = (Path(self.artwork_path) / id).resolve()
+        return resource_path.as_posix() if resource_path.exists() else None

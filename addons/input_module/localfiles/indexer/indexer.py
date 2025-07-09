@@ -44,7 +44,7 @@ _indexer_queue: asyncio.Queue = asyncio.Queue()
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
 _shutdown_event = asyncio.Event()
-_enricher_queue: Optional[multiprocessing.Queue] = None
+_enricher_queue: multiprocessing.Queue = multiprocessing.Queue()
 
 
 async def trigger_enricher_update(data):
@@ -55,17 +55,10 @@ async def trigger_enricher_update(data):
 
     logger.info(f"Triggering enricher update with data: {data}")
 
-    # Handle dictionary by converting to JSON string
-    if isinstance(data, dict):
-        message = json.dumps(data) + "\n"
-    else:
-        # Handle string data
-        message = str(data) + "\n"
-
-    if _enricher_queue is not None:
-        _enricher_queue.put(message)
-    else:
-        logger.warning("Enricher queue is not initialized; cannot send message.")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, lambda: _enricher_queue.put(data, block=True, timeout=30.0)
+    )
 
 
 class FileIndexer:

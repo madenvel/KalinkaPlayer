@@ -1,10 +1,13 @@
 import logging
 import os
+from pathlib import Path
 import httpx
 import io
 import musicbrainzngs
 from PIL import Image
 from typing import Dict, Optional
+
+from ..config_model import LocalFilesConfig
 
 try:
     from .enricher_plugin import EnricherPlugin
@@ -18,16 +21,13 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class WikidataPlugin(EnricherPlugin):
     """Wikidata enrichment plugin for artist images"""
 
-    def __init__(self, config, db_manager):
+    def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
-        self.artwork_path = config["artwork_path"]
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
         # Set a proper User-Agent to avoid 403 errors from Wikimedia
-        user_agent = config.get(
-            "enricher.plugins.wikidata.user_agent",
-            "RpiPlayer/1.0 (https://github.com/madenvel/KalinkaPlayer)",
-        )
+        user_agent = config.enricher.plugins.user_agent
 
         self.async_client = httpx.AsyncClient(headers={"User-Agent": user_agent})
 

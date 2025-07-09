@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 def create_playlist_cover_collage(
-    album_ids: List[str], artwork_path: str, playlist_id: str
+    album_ids: List[str], artwork_path: Path, playlist_id: str
 ) -> Optional[str]:
     """
     Create a playlist cover image by making a collage of album images.
@@ -103,7 +103,7 @@ def create_playlist_cover_collage(
 
 
 def _copy_single_album_image(
-    album_id: str, artwork_path: str, playlist_id: str
+    album_id: str, artwork_path: Path, playlist_id: str
 ) -> Optional[str]:
     """
     Copy a single album image to use as playlist cover.
@@ -118,20 +118,20 @@ def _copy_single_album_image(
     """
     try:
         # Create the playlist directory if it doesn't exist
-        playlist_dir = os.path.join(artwork_path, "playlist")
-        os.makedirs(playlist_dir, exist_ok=True)
+        playlist_dir = artwork_path / "playlist"
+        playlist_dir.mkdir(parents=True, exist_ok=True)
 
         # Define paths
-        source_large = os.path.join(artwork_path, f"album/{album_id}_large.jpg")
-        source_small = os.path.join(artwork_path, f"album/{album_id}_small.jpg")
-        source_thumbnail = os.path.join(artwork_path, f"album/{album_id}_thumbnail.jpg")
+        source_large = artwork_path / f"album/{album_id}_large.jpg"
+        source_small = artwork_path / f"album/{album_id}_small.jpg"
+        source_thumbnail = artwork_path / f"album/{album_id}_thumbnail.jpg"
 
-        dest_large = os.path.join(playlist_dir, f"{playlist_id}_large.jpg")
-        dest_small = os.path.join(playlist_dir, f"{playlist_id}_small.jpg")
-        dest_thumbnail = os.path.join(playlist_dir, f"{playlist_id}_thumbnail.jpg")
+        dest_large = playlist_dir / f"{playlist_id}_large.jpg"
+        dest_small = playlist_dir / f"{playlist_id}_small.jpg"
+        dest_thumbnail = playlist_dir / f"{playlist_id}_thumbnail.jpg"
 
         # Check if source images exist
-        if not os.path.exists(source_large):
+        if not source_large.exists():
             logger.warning(f"Source album image not found: {source_large}")
             return None
 

@@ -3,6 +3,8 @@ import os
 import re
 from typing import Dict, Optional
 
+from ..config_model import LocalFilesConfig
+
 try:
     from enricher_plugin import EnricherPlugin
 except ImportError:
@@ -40,7 +42,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     This plugin does NOT set the "enriched" flag to allow other plugins to re-check the data.
     """
 
-    def __init__(self, config, db_manager):
+    def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
 

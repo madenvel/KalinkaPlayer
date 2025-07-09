@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-import os
-import argparse
+import multiprocessing
 import asyncio
 import enum
-import json
 import logging
-import socket
+import queue
+import signal
 import sys
-import tempfile
-from typing import Dict, Optional, Any
+from typing import Optional
+
+from ..config_model import LocalFilesConfig
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -38,13 +38,9 @@ TRACK_REQUIRED_FIELDS = [
     "track_number",
 ]
 
-# Socket path for IPC
-SOCKET_PATH = os.path.join(tempfile.gettempdir(), "kalinka-enricher.sock")
-
 # Global variables to manage enricher state
-_server = None
 _enricher_task: Optional[asyncio.Task] = None
-_enricher_queue: asyncio.Queue = asyncio.Queue()
+_enricher_queue: multiprocessing.Queue = multiprocessing.Queue()
 _shutdown_event = asyncio.Event()
 
 
@@ -59,7 +55,7 @@ class EnrichmentStatus(enum.IntEnum):
 class MetadataEnricher:
     """Main enricher class that processes database entries using async"""
 
-    def __init__(self, config, db_manager: AsyncEnricherDb):
+    def __init__(self, config: LocalFilesConfig, db_manager: AsyncEnricherDb):
         self.config = config
         self.db_manager = db_manager
         self.running = False
@@ -70,25 +66,25 @@ class MetadataEnricher:
 
         # The order of plugins matters for the enrichment process
         # as the first one found a match will be used
-        if config.get("enricher.plugins.acoustid.enabled", False):
+        if config.enricher.plugins.acoustid.enabled:
             logger.info("Loading AcoustIdPlugin")
             self.plugins.append(AcoustIdPlugin(config, self.db_manager))
 
         # Filesystem fallback plugin - always enabled and runs last
         # This provides basic metadata extraction from file paths when other plugins fail
-        if config.get("enricher.plugins.filesystem_fallback.enabled", True):
+        if config.enricher.plugins.filesystem_fallback_enabled:
             logger.info("Loading FilesystemFallbackPlugin")
             self.plugins.append(FilesystemFallbackPlugin(config, self.db_manager))
 
-        if config.get("enricher.plugins.musicbrainz.enabled", False):
+        if config.enricher.plugins.musicbrainz.enabled:
             logger.info("Loading MusicBrainzPlugin")
             self.plugins.append(MusicBrainzPlugin(config, self.db_manager))
 
-        if config.get("enricher.plugins.wikidata.enabled", False):
+        if config.enricher.plugins.wikidata.enabled:
             logger.info("Loading WikidataPlugin")
             self.plugins.append(WikidataPlugin(config, self.db_manager))
 
-        if config.get("enricher.plugins.deezer.enabled", False):
+        if config.enricher.plugins.deezer.enabled:
             logger.info("Loading DeezerPlugin")
             self.plugins.append(DeezerPlugin(config, self.db_manager))
 
@@ -105,6 +101,7 @@ class MetadataEnricher:
             self.running = True
 
         try:
+            logger.info("Starting enrichment process")
             await self.run_enrichment()
             logger.info("Enricher process completed")
         except Exception as e:
@@ -416,7 +413,13 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
         try:
             # Check for commands with timeout
             try:
-                command = await asyncio.wait_for(_enricher_queue.get(), timeout=30.0)
+                # Use run_in_executor to call the blocking get() in a non-blocking way
+                loop = asyncio.get_running_loop()
+                command = await loop.run_in_executor(
+                    None, lambda: _enricher_queue.get(block=True, timeout=30.0)
+                )
+
+                logger.info("Received command from queue: %s", command)
 
                 if command == "stop":
                     logger.info("Stopping enricher task")
@@ -426,13 +429,13 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                     logger.info("Manual enrichment triggered")
                     await enricher_instance.start()
 
-                _enricher_queue.task_done()
-            except asyncio.TimeoutError:
+            except queue.Empty:
                 # No command received in 30 seconds, run periodic enrichment check
                 logger.debug(
                     "No commands received, checking for new items to enrich..."
                 )
-                await enricher_instance.start()
+                continue
+                # await enricher_instance.start()
 
             # Small delay to avoid busy waiting
             await asyncio.sleep(0.1)
@@ -451,54 +454,6 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                 await task
             except asyncio.CancelledError:
                 pass
-
-
-async def handle_client(reader, writer):
-    """Handle Unix socket client connection"""
-    data = await reader.readline()
-    message = data.decode().strip()
-
-    try:
-        # Try to parse as JSON
-        command = json.loads(message)
-        await _enricher_queue.put(command)
-    except json.JSONDecodeError:
-        # Simple string command
-        await _enricher_queue.put(message)
-
-    writer.close()
-    await writer.wait_closed()
-
-
-def ensure_single_instance():
-    """Try to connect to the existing socket to see if it's already running."""
-    if os.path.exists(SOCKET_PATH):
-        try:
-            # Try to connect to see if the socket is active
-            test_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            test_socket.connect(SOCKET_PATH)
-            test_socket.close()
-            print("Another instance is already running.")
-            sys.exit(1)
-        except (ConnectionRefusedError, FileNotFoundError):
-            print("Stale socket found. Cleaning up.")
-            os.remove(SOCKET_PATH)  # stale socket
-
-
-async def start_server():
-    """Start the Unix socket server process"""
-    global _server
-
-    if _server and not _server.is_serving():
-        logger.warning("Server already running, not starting another")
-        return _server
-
-    if os.path.exists(SOCKET_PATH):
-        os.remove(SOCKET_PATH)
-
-    _server = await asyncio.start_unix_server(handle_client, path=SOCKET_PATH)
-    logger.info(f"Server started at {SOCKET_PATH}")
-    return _server
 
 
 def start_enricher(config, db_manager: AsyncEnricherDb) -> Optional[asyncio.Task]:
@@ -528,7 +483,8 @@ async def stop_enricher() -> bool:
     if _enricher_task and not _enricher_task.done():
         logger.info("Sending stop command to enricher task")
         try:
-            await _enricher_queue.put("stop")
+            _enricher_queue.put("stop")
+
             await asyncio.wait_for(_enricher_task, timeout=10.0)
             return True
         except asyncio.TimeoutError:
@@ -549,13 +505,11 @@ async def stop_enricher() -> bool:
     return False
 
 
-async def main(config_data: Dict[str, Any]):
+async def async_main(config: LocalFilesConfig):
     """Runs the main application logic asynchronously."""
     global _enricher_task, _shutdown_event
 
-    ensure_single_instance()
-
-    db_manager = AsyncEnricherDb(config_data)
+    db_manager = AsyncEnricherDb(config)
     try:
         await db_manager.init_db()
         logger.info("Database initialized successfully.")
@@ -568,8 +522,7 @@ async def main(config_data: Dict[str, Any]):
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _shutdown_event.set)
 
-    _enricher_task = start_enricher(config_data, db_manager)
-    _server = await start_server()
+    _enricher_task = start_enricher(config, db_manager)
 
     try:
         await _shutdown_event.wait()
@@ -587,78 +540,29 @@ async def main(config_data: Dict[str, Any]):
 
         logger.info("All background tasks processed for shutdown.")
 
-        if _server:
-            _server.close()
-            await _server.wait_closed()
 
-        if os.path.exists(SOCKET_PATH):
-            os.remove(SOCKET_PATH)
+def main(
+    config: LocalFilesConfig,
+    enricher_queue: multiprocessing.Queue,
+    logger_queue: multiprocessing.Queue,
+):
+    """Main entry point for the indexer daemon."""
 
-        logger.info("Server shutdown complete.")
+    global _enricher_queue
 
-
-if __name__ == "__main__":
-    import signal
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    parser = argparse.ArgumentParser(description="Async Metadata enricher daemon")
-    parser.add_argument(
-        "-c", "--config", help="JSON configuration string", required=True
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO",
-        help="Set log level",
-    )
-    parser.add_argument(
-        "--show-default-config",
-        action="store_true",
-        help="Print default configuration template and exit",
-    )
-    args = parser.parse_args()
-
-    # Configure logging level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    # Show default config if requested
-    if args.show_default_config:
-        default_config = {
-            "enricher.plugins.acoustid.enabled": True,
-            "enricher.plugins.acoustid.api_key": "YOUR_ACOUSTID_API_KEY",
-            "enricher.plugins.musicbrainz.enabled": True,
-            "enricher.plugins.musicbrainz.app_name": "YourAppName",
-            "enricher.plugins.musicbrainz.app_version": "1.0",
-            "enricher.plugins.musicbrainz.contact_info": "your@email.com",
-            "enricher.plugins.wikidata.enabled": True,
-            "enricher.plugins.deezer.enabled": True,
-            "db_path": "/path/to/your/database.sqlite",
-        }
-        print(json.dumps(default_config, indent=2))
-        sys.exit(0)
-
-    logger.info("Loading configuration from command line JSON")
+    _enricher_queue = enricher_queue
     try:
-        app_config = json.loads(args.config)
-        logger.info("Configuration loaded successfully.")
-        logger.info(f"Configuration: {json.dumps(app_config, indent=2)}")
-    except json.JSONDecodeError as e:
-        logger.exception(f"Error parsing JSON configuration: {str(e)}")
-        sys.exit(1)
-    except KeyError as e:
-        logger.exception(f"Configuration missing expected keys: {str(e)}")
-        sys.exit(1)
+        import logging.handlers
 
-    try:
-        asyncio.run(main(app_config))
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+        root.addHandler(logging.handlers.QueueHandler(logger_queue))
+
+        asyncio.run(async_main(config))
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received. Exiting.")
+        logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
     except Exception as e:
-        logger.critical(f"Unhandled exception: {e}", exc_info=True)
+        logger.critical(f"Unhandled exception in asyncio.run: {e}", exc_info=True)
     finally:
-        logger.info("Enricher daemon finished.")
+        logger.info("Indexer daemon finished.")
