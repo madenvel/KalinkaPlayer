@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import os
+from pathlib import Path
 import aiosqlite
 import logging
 import time
 from typing import List, Dict, Optional, Any, Tuple
+
+from ..config_model import LocalFilesConfig
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -14,9 +17,9 @@ class AsyncEnricherDb:
     Handles operations required for enrichment of music metadata.
     """
 
-    def __init__(self, config):
-        self.db_path = config["db_path"]
-        self.artwork_path = config["artwork_path"]
+    def __init__(self, config: LocalFilesConfig):
+        self.db_path = Path(config.db_path).expanduser().resolve()
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
         # Ensure directories exist
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)

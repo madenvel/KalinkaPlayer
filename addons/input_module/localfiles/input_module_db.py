@@ -3,6 +3,7 @@ import sqlite3
 import logging
 from typing import List, Dict, Optional, Any, Tuple
 import time
+from pathlib import Path
 
 from .config_model import LocalFilesConfig
 
@@ -16,8 +17,8 @@ class LocalFilesInputModuleDb:
     """
 
     def __init__(self, config: LocalFilesConfig):
-        self.db_path = config.db_path
-        self.artwork_path = config.artwork_path
+        self.db_path = Path(config.db_path).expanduser().resolve()
+        self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         self.db_state = None
 
     def _get_connection(self):
