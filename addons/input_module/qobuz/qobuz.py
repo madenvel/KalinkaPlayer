@@ -84,17 +84,19 @@ class RetryTransport(httpx.HTTPTransport):
         self.read_retries = read_retries
         self.backoff_factor = 0.5
 
-    def handle_request(self, request):
+    def handle_request(self, request) -> httpx.Response:
         read_retries = 0
+        last_exception = None
         while read_retries < self.read_retries:
             try:
                 response = super().handle_request(request)
                 if response.status_code >= 500 and response.status_code < 600:
                     read_retries += 1
                     time.sleep(self.backoff_factor * read_retries)
-                    print(
+                    logger.warning(
                         f"Retry {read_retries} due to status code={response.status_code}"
                     )
+                    continue
                 return response
             except (
                 httpx.ProtocolError,
@@ -106,9 +108,14 @@ class RetryTransport(httpx.HTTPTransport):
                 httpx.ConnectError,
                 httpx.ReadError,
             ) as exc:
+                last_exception = exc
                 read_retries += 1
                 time.sleep(self.backoff_factor * read_retries)
-                print(f"Retry {read_retries} due to {exc}")
+                logger.warning(f"Retry {read_retries} due to {exc}")
+        # If all retries failed, raise the last exception
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("handle_request failed without exception")
 
 
 # The code below is partially based on the code from
@@ -206,12 +213,16 @@ class QobuzClient:
             "intent": "stream",
         }
 
+        r = None
         for _ in range(3):
             try:
                 r = self.session.get(self.base + epoint, params=params)
                 break
             except ConnectionError as e:
                 logger.error(f"Connection error, retrying {_}: {e}")
+
+        if r is None:
+            raise ConnectionError("Failed to get a response after retries.")
 
         if r.status_code == 400:
             raise InvalidAppSecretError(f"Invalid app secret: {r.json()}.")
@@ -498,13 +509,10 @@ class QobuzInputModule(InputModule):
 
         result = self._format_list_response(rjson, offset, limit)
         filtered_items = [
-            result.items[i]
-            for i in range(len(result.items))
-            if (result.items[i].name and filter.lower() in result.items[i].name.lower())
-            or (
-                result.items[i].subname
-                and filter.lower() in result.items[i].subname.lower()
-            )
+            item
+            for item in result.items
+            if (item.name and filter.lower() in item.name.lower())
+            or (item.subname and filter.lower() in item.subname.lower())
         ]
 
         filtered_result = BrowseItemList(
@@ -693,7 +701,7 @@ class QobuzInputModule(InputModule):
         )
 
     def _get_qobuz_playlists(
-        self, offset: int, limit: int, genre_ids: list[int], tags: str = None
+        self, offset: int, limit: int, genre_ids: list[int], tags: str | None = None
     ):
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/playlist/getFeatured",
@@ -739,8 +747,6 @@ class QobuzInputModule(InputModule):
             offset=offset,
             limit=limit,
             total=len(tags),
-            can_browse=True,
-            can_add=False,
             items=[
                 BrowseItem(
                     id=tags[i]["slug"],
@@ -955,24 +961,30 @@ class QobuzInputModule(InputModule):
                     ),
                 ),
                 extra_sections=[
-                    BrowseItem(
-                        id="artists_albums_" + str(album["id"]),
-                        name="More from this artist",
-                        url="/artist/" + str(artist.id),
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id="artists_albums_" + str(album["id"]),
-                            title="More from this artist",
-                            can_genre_filter=False,
-                            preview_config=Preview(
-                                type=PreviewType.IMAGE_TEXT,
-                                items_count=10,
-                                rows_count=1,
-                                aspect_ratio=1.0,
-                                card_size=CardSize.SMALL,
-                            ),
-                        ),
+                    *(
+                        [
+                            BrowseItem(
+                                id="artists_albums_" + str(album["id"]),
+                                name="More from this artist",
+                                url="/artist/" + str(artist.id),
+                                can_browse=True,
+                                can_add=False,
+                                catalog=Catalog(
+                                    id="artists_albums_" + str(album["id"]),
+                                    title="More from this artist",
+                                    can_genre_filter=False,
+                                    preview_config=Preview(
+                                        type=PreviewType.IMAGE_TEXT,
+                                        items_count=10,
+                                        rows_count=1,
+                                        aspect_ratio=1.0,
+                                        card_size=CardSize.SMALL,
+                                    ),
+                                ),
+                            )
+                        ]
+                        if artist
+                        else []
                     ),
                     BrowseItem(
                         id="album_suggestions_" + str(album["id"]),
@@ -1152,20 +1164,17 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + endpoint, params=params
         )
 
-        if response.is_success != True:
-            return {"message": response.text}
+        response.raise_for_status()
 
         rjson = response.json()
 
         if "status" not in rjson or rjson["status"] != "success":
-            return {"message": response.text}
+            raise Exception(f"Failed to add to favorite: {response.text}")
 
         self.event_emitter.dispatch(
             EventType.FavoriteAdded,
             FavoriteAddedEvent(id=id, type=type.value).model_dump(),
         )
-
-        return {"message": "Ok"}
 
     def remove_from_favorite(self, type: SearchType, id: str):
         if type == SearchType.playlist:
@@ -1179,27 +1188,23 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + endpoint, params=params
         )
 
-        if response.is_success != True:
-            return {"message": response.text}
+        response.raise_for_status()
 
         rjson = response.json()
 
         if "status" not in rjson or rjson["status"] != "success":
-            return {"message": response.text}
+            raise Exception(f"Failed to remove from favorite: {response.text}")
 
         self.event_emitter.dispatch(
             EventType.FavoriteRemoved,
             FavoriteRemovedEvent(id=id, type=type.value).model_dump(),
         )
 
-        return {"message": "Ok"}
-
     def list_genre(self, offset: int, limit: int) -> GenreList:
         endpoint = "genre/list"
         response = self.qobuz_client.session.get(self.qobuz_client.base + endpoint)
 
-        if response.is_success != True:
-            return {"message": response.text}
+        response.raise_for_status()
 
         rjson = response.json()
 
@@ -1221,9 +1226,6 @@ class QobuzInputModule(InputModule):
 
         response.raise_for_status()
 
-        if response.is_success != True:
-            return None
-
         rjson = response.json()
 
         return self._albums_to_browse_category([rjson])[0]
@@ -1240,9 +1242,6 @@ class QobuzInputModule(InputModule):
 
         response.raise_for_status()
 
-        if response.is_success != True:
-            return None
-
         rjson = response.json()
 
         return self._playlists_to_browse_category([rjson])[0]
@@ -1256,9 +1255,6 @@ class QobuzInputModule(InputModule):
         )
 
         response.raise_for_status()
-
-        if response.is_success != True:
-            return None
 
         rjson = response.json()
 

@@ -319,11 +319,13 @@ def create_app(config_file, config: KalinkaConfig):
 
     @app.put("/favorite/add/{type}/{id}")
     def add_favorite(type: SearchType, id: str, source: str = SourceType):
-        return input_module(source).add_to_favorite(type, id)
+        input_module(source).add_to_favorite(type, id)
+        return {"message": "Ok"}
 
     @app.delete("/favorite/remove/{type}/{id}")
     def remove_favorite(type: SearchType, id: str, source: str = SourceType):
-        return input_module(source).remove_from_favorite(type, id)
+        input_module(source).remove_from_favorite(type, id)
+        return {"message": "Ok"}
 
     @app.get("/favorite/ids")
     def get_favorite_ids(source: str = SourceType) -> FavoriteIds:

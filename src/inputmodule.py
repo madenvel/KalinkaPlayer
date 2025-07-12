@@ -85,7 +85,7 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
-    def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
+    def list_genre(self, offset: int, limit: int) -> GenreList:
         pass
 
     @abstractmethod
@@ -124,7 +124,7 @@ class InputModule(ABC):
 
     @abstractmethod
     def playlist_add_tracks(
-        self, id: str, track_ids: List[str], allow_duplicates: bool = False
+        self, id: str, track_ids: List[str], allow_duplicates: bool
     ) -> Playlist:
         pass
 
