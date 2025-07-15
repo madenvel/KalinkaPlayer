@@ -173,6 +173,8 @@ class LocalFilesInputModule(InputModule):
                 entity_id.id, offset=offset, limit=limit, genre_ids=genre_ids
             )
 
+        return EmptyList(offset, limit)
+
     def browse_catalog(
         self,
         endpoint: str,
