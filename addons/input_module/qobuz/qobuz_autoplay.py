@@ -1,6 +1,7 @@
 from functools import partial
 import logging
 
+from data_model.datamodel import Track
 from src.playqueue import PlayQueue
 from .qobuz import QobuzClient, qobuz_link_retriever, metadata_from_track
 from src.inputmodule import InputModule, TrackInfo
@@ -22,29 +23,33 @@ class QobuzAutoplay:
         self.remaining_tracks: list[str] = []
         self.suggested_tracks: set[str] = set()
         self.amount_to_request = amount_to_request
-        self.tracks = []
+        self.tracks: list[Track] = []
         self.can_request_new = True
 
-    def _track_meta_to_autoplay(self, track):
+    def _track_meta_to_autoplay(self, track: Track):
         return {
-            "artist_id": int(track["performer"]["id"]),
-            "genre_id": int(track["album"]["genre"]["id"]),
-            "label_id": int(track["album"]["label"]["id"]),
-            "track_id": int(track["id"]),
+            "artist_id": int(track.performer.id.id) if track.performer else None,
+            "genre_id": int(track.album.genre.id.id) if track.album.genre else None,
+            "label_id": int(track.album.label.id.id) if track.album.label else None,
+            "track_id": int(track.id.id) if track.id else None,
         }
 
     def add_tracks(self, tracks):
-        self.tracks.extend(tracks)
+        # Add all tracks but only count those that are from Qobuz
+        self.tracks.extend([Track(**track) for track in tracks])
         self.can_request_new = True
 
     def remove_tracks(self, tracks: list[int]):
         for track in tracks:
             del self.tracks[track]
 
-        if not self.tracks:
+        if not self._has_any_qobuz_tracks():
             self.can_request_new = True
             self.suggested_tracks.clear()
             self.remaining_tracks.clear()
+
+    def _has_any_qobuz_tracks(self):
+        return any(track.id.source == "qobuz" for track in self.tracks)
 
     def add_recommendation(self):
         if not self.remaining_tracks:
@@ -52,7 +57,7 @@ class QobuzAutoplay:
                 self._retrieve_new_recommendations()
 
         if not self.remaining_tracks:
-            print("No tracks to recommend")
+            logger.info("No tracks to recommend")
             return
 
         recommended_track = self.remaining_tracks.pop(0)
@@ -61,26 +66,28 @@ class QobuzAutoplay:
         self.playqueue.add(self.track_browser.get_track_info([recommended_track]))
 
     def _retrieve_new_recommendations(self):
-        if not self.tracks:
+        tracks = [track for track in self.tracks if track.id.source == "qobuz"]
+        if not tracks:
+            logger.debug("No Qobuz tracks available for recommendation")
             return
 
         five_tracks_to_analyse = []
 
-        for i in range(len(self.tracks) - 1, -1, -1):
+        for i in range(len(tracks) - 1, -1, -1):
             if len(five_tracks_to_analyse) == 5:
                 break
 
-            if self.tracks[i]["id"] not in self.suggested_tracks:
-                five_tracks_to_analyse.append(self.tracks[i])
+            if tracks[i].id.id not in self.suggested_tracks:
+                five_tracks_to_analyse.append(tracks[i])
 
         tracks_to_analyze = [
             self._track_meta_to_autoplay(track) for track in five_tracks_to_analyse
         ]
 
-        tta_ids = [track["id"] for track in five_tracks_to_analyse]
+        tta_ids = [track.id.id for track in five_tracks_to_analyse]
 
         listened_tracks = [
-            int(track["id"]) for track in self.tracks if track["id"] not in tta_ids
+            int(track.id.id) for track in tracks if track.id.id not in tta_ids
         ]
         params = {
             "limit": self.amount_to_request,

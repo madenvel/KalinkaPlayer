@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, model_serializer, field_validator
+from pydantic import BaseModel, model_serializer, field_validator, model_validator
 from enum import Enum
 
 
@@ -18,6 +18,14 @@ class EntityId(BaseModel):
     id: str
     type: EntityType
     source: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_entity_id_model(cls, values):
+        # Handle the case where we receive a string instead of a dict
+        if isinstance(values, str):
+            return cls.from_string(values).__dict__
+        return values
 
     @field_validator("id", "type", "source", mode="before")
     @classmethod
@@ -38,20 +46,6 @@ class EntityId(BaseModel):
                     return source
         return v
 
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate_entity_id
-
-    @classmethod
-    def validate_entity_id(cls, v):
-        if isinstance(v, cls):
-            return v
-        if isinstance(v, str):
-            return cls.from_string(v)
-        if isinstance(v, dict):
-            return cls(**v)
-        raise ValueError(f"Cannot convert {type(v)} to EntityId")
-
     @property
     def to_string(self) -> str:
         return f"kalinka:{self.source}:{self.type.value}:{self.id}"
@@ -64,6 +58,16 @@ class EntityId(BaseModel):
             raise ValueError(f"Invalid full_id format: {full_id}")
         _, source, type_str, id_ = parts
         return cls(id=id_, type=EntityType(type_str), source=source)
+
+    def __hash__(self):
+        return hash(self.to_string)
+
+    def __eq__(self, other):
+        if isinstance(other, EntityId):
+            return self.to_string == other.to_string
+        elif isinstance(other, str):
+            return self.to_string == other
+        return False
 
     @model_serializer
     def ser_model(self) -> str:
