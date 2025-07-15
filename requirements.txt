@@ -16,3 +16,4 @@ watchfiles
 aiosqlite
 mimetype
 netifaces
+rapidfuzz

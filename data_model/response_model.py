@@ -63,6 +63,13 @@ class GenreList(BaseModel):
     items: List[Genre]
 
 
+class TrackList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[Track]
+
+
 class LastUpdate(BaseModel):
     favorite_tracks_ts: int = 0
     favorite_albums_ts: int = 0

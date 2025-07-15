@@ -6,7 +6,7 @@ from threading import Timer, Thread
 from collections import OrderedDict
 from typing import Optional
 
-from data_model.response_model import AudioInfo, PlayerState, PlaybackMode
+from data_model.response_model import AudioInfo, PlayerState, PlaybackMode, TrackList
 from data_model.datamodel import Track
 
 from src.config_model import KalinkaConfig
@@ -287,25 +287,25 @@ class PlayQueue(AsyncExecutor):
         if prev_track_id != self.current_track_id or prev_track_id in tracks:
             self._notify_track_change()
 
-    def list(self, offset: int, limit: int):
+    def list(self, offset: int, limit: int) -> TrackList:
         if offset not in range(0, len(self.track_list)):
-            return {
-                "offset": offset,
-                "limit": limit,
-                "total": len(self.track_list),
-                "items": [],
-            }
+            return TrackList(
+                offset=offset,
+                limit=limit,
+                total=len(self.track_list),
+                items=[],
+            )
 
-        return {
-            "offset": offset,
-            "limit": limit,
-            "total": len(self.track_list),
-            "items": [
-                track_info.model_dump(exclude_none=True)
+        return TrackList(
+            offset=offset,
+            limit=limit,
+            total=len(self.track_list),
+            items=[
+                track_info
                 for i in range(offset, min(offset + limit, len(self.track_list)))
                 if ((track_info := self.get_track_info(i)) is not None)
             ],
-        }
+        )
 
     def get_track_info(self, index: int) -> Optional[Track]:
         if index not in range(0, len(self.track_list)):
@@ -344,7 +344,7 @@ class PlayQueue(AsyncExecutor):
                 audio_info=to_audio_info(stream_state.stream_info),
                 mime_type=self.current_format,
             ).model_dump(exclude_none=True),
-            self.list(0, len(self.track_list)),
+            self.list(0, len(self.track_list)).model_dump(exclude_none=True),
             PlaybackMode(
                 shuffle=self.shuffle,
                 repeat_single=self.repeat_single,

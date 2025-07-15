@@ -9,6 +9,7 @@ from typing import Generator
 from src.async_common import EventEmitter, EventListener
 from queue import Queue
 
+from src.base_config_model import ModuleConfig
 from src.config_model import KalinkaConfig
 from src.ext_device import ExternalOutputDevice
 from src.playqueue import PlayQueue
@@ -28,7 +29,7 @@ class ModuleHealthState(str, Enum):
 class PreparedModule:
     """A class to hold prepared modules for shutdown."""
 
-    def __init__(self, module: types.ModuleType, config):
+    def __init__(self, module: types.ModuleType, config: ModuleConfig):
         self.module = module
         self.config = config
         self.interface: ExternalOutputDevice | InputModule | None = None
