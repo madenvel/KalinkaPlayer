@@ -45,7 +45,14 @@ async def lifespan(app: FastAPI):
     try:
         sd = ServiceDiscovery(app.state.config)
         await sd.register_service()
-        state_keeper.restore_state(app.state.playqueue)
+        state_keeper.restore_state(
+            app.state.playqueue,
+            {
+                key: module.interface
+                for key, module in modules.prepared_input_modules.items()
+                if isinstance(module.interface, InputModule)
+            },
+        )
         yield
 
     except Exception as e:

@@ -4,7 +4,8 @@ import threading
 from queue import Queue
 import json
 import logging
-from typing import Mapping, Any, Optional
+from typing import Mapping, Any, Optional, Union
+from data_model.datamodel import EntityId
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -29,6 +30,13 @@ class QobuzReporter:
         return time_played
 
     def on_state_changed(self, state: Mapping[str, Any]):
+        """
+        Handle player state changes for Qobuz reporting.
+
+        This method only processes tracks from the 'qobuz' source and ignores all others.
+        It properly handles transitions between Qobuz and non-Qobuz tracks by ending
+        Qobuz tracking when switching to a different source.
+        """
         player_state = PlayerState(**state)
         # playing and current track != previous track
         # => report streaming start for new track, report streaming end for previous track
@@ -38,7 +46,48 @@ class QobuzReporter:
 
         if player_state.state == "PLAYING":
             track = player_state.current_track
-            if track is not None and track.id != self.current_track_id:
+
+            if track is not None and track.id.source == "qobuz":
+                # This is a Qobuz track - extract the raw track ID for Qobuz reporting
+                logger.info("Processing Qobuz track for report: %s", track.id)
+                current_qobuz_track_id = track.id.id
+
+                if current_qobuz_track_id != self.current_track_id:
+                    # Track change detected
+                    if self.current_track_id is not None:
+                        # Report end of previous Qobuz track
+                        self.mqueue.put(
+                            {
+                                "endpoint": "track/reportStreamingEnd",
+                                "params": self._make_end_report_message(
+                                    self.current_track_id, self.get_last_duration()
+                                ),
+                            }
+                        )
+                    # Start reporting for new Qobuz track
+                    self.current_track_id = current_qobuz_track_id
+                    self.mqueue.put(
+                        {
+                            "endpoint": "track/reportStreamingStart",
+                            "params": self._make_start_report_message(
+                                current_qobuz_track_id
+                            ),
+                        }
+                    )
+                    self.get_last_duration()
+                elif self.current_track_id is not None:
+                    # Same Qobuz track playing - report streaming end (likely search/seek)
+                    self.mqueue.put(
+                        {
+                            "endpoint": "track/reportStreamingEnd",
+                            "params": self._make_end_report_message(
+                                self.current_track_id, self.get_last_duration()
+                            ),
+                        }
+                    )
+            else:
+                # Track is not from Qobuz (different source or no track)
+                # If we were previously tracking a Qobuz track, report its end
                 if self.current_track_id is not None:
                     self.mqueue.put(
                         {
@@ -48,25 +97,9 @@ class QobuzReporter:
                             ),
                         }
                     )
-                self.current_track_id = track.id
-                self.mqueue.put(
-                    {
-                        "endpoint": "track/reportStreamingStart",
-                        "params": self._make_start_report_message(track.id),
-                    }
-                )
-                self.get_last_duration()
-                self.current_track_id = track.id
-            elif track is not None and self.current_track_id is not None:
-                self.mqueue.put(
-                    {
-                        "endpoint": "track/reportStreamingEnd",
-                        "params": self._make_end_report_message(
-                            self.current_track_id, self.get_last_duration()
-                        ),
-                    }
-                )
+                    self.current_track_id = None
         elif player_state.state in ["STOPPED", "PAUSED", "ERROR"]:
+            # Player stopped/paused/error - report end of any currently tracked Qobuz track
             if self.current_track_id is not None:
                 self.mqueue.put(
                     {

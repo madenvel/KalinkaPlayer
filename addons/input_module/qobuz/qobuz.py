@@ -265,7 +265,6 @@ class QobuzClient:
 
         r.raise_for_status()
         self.track_url_response_cache[str(track_id)] = r.json()
-        logger.warning(f"Track URL: {r.json()}")
         return r.json()
 
     def get_track_meta(self, track_id):
@@ -401,7 +400,7 @@ def metadata_from_track(track, album_meta={}):
     version = album_info.get("version", None)
     return Track(
         **{
-            "id": str(track["id"]),
+            "id": track_id(str(track["id"])),
             "title": append_str(track["title"], track.get("version", None)),
             "performer": (
                 Artist(
