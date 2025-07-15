@@ -9,6 +9,7 @@ import logging
 from functools import wraps
 import time
 from uuid import UUID, uuid4
+from typing import Any
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -28,7 +29,6 @@ def timeit(func):
 
 
 class AsyncLoop(ABC):
-    queue = None
 
     def __init__(self, queue):
         super().__init__()
@@ -90,8 +90,9 @@ class RequestProxy:
 
 
 class RequestExecutor:
-    def __init__(self, queue: Queue, obj: any):
+    def __init__(self, queue: Queue, obj: Any):
         self.queue = queue
+        self.obj = obj
         self.obj = obj
 
     def run(self):
@@ -148,7 +149,7 @@ class EventListener(AsyncLoop):
                 callback = subscriber["cb"]
                 callback(*e["args"], **e["kwargs"])
             except Exception as ex:
-                logger.warn(
+                logger.warning(
                     f"Exception caught while processing event {event}, exception: {ex}"
                 )
 
