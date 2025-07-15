@@ -4,21 +4,29 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import List, Optional, Union
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
+from data_model.datamodel import (
+    BrowseItem,
+    BrowseItemList,
+    Catalog,
+    EntityId,
+    EntityType,
+)
 from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
 from src import state_keeper
 from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
 from src.ext_device import ExternalOutputDevice, Volume
+from src.multisearch import multisearch
 from src.player_setup import setup, shutdown, modules
 from src.rest_event_proxy import EventStream
 
 import logging
 import json
 
-from src.inputmodule import InputModule, SearchType
+from src.inputmodule import InputModule, SearchType, TrackInfo
 from src.service_discovery import ServiceDiscovery
 from typing import Dict, Any
 
@@ -59,6 +67,17 @@ logger = logging.getLogger(__name__.split(".")[-1])
 SourceType = Query(..., description="Name of the input module")
 
 
+def parse_entity_id(id: str) -> EntityId:
+    """Dependency to parse entity ID from string."""
+    try:
+        return EntityId.from_string(id)
+    except (ValueError, Exception) as e:
+        logger.error(f"Failed to parse entity ID '{id}': {str(e)}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid entity ID format: {str(e)}"
+        )
+
+
 def input_module(name: str) -> InputModule:
     """Get the currently active input module."""
     if not modules.prepared_input_modules:
@@ -74,6 +93,44 @@ def input_module(name: str) -> InputModule:
     raise HTTPException(
         status_code=500,
         detail="Input module interface is not initialized or of wrong type",
+    )
+
+
+def input_module_from_id(entity_id: str | EntityId) -> InputModule:
+    """Get the input module based on the entity ID."""
+    if isinstance(entity_id, str):
+        entityId = EntityId.from_string(entity_id)
+    else:
+        entityId = entity_id
+
+    source = entityId.source
+    if source not in modules.prepared_input_modules:
+        raise HTTPException(
+            status_code=404, detail=f"Input module '{source}' not found"
+        )
+
+    interface = modules.prepared_input_modules[source].interface
+    if isinstance(interface, InputModule):
+        return interface
+
+    raise HTTPException(
+        status_code=500,
+        detail="Input module interface is not initialized or of wrong type",
+    )
+
+
+def default_input_module() -> InputModule:
+    """Get the default input module."""
+    if not modules.prepared_input_modules:
+        raise HTTPException(status_code=500, detail="No input modules available")
+
+    default_module = next(iter(modules.prepared_input_modules.values()))
+    if isinstance(default_module.interface, InputModule):
+        return default_module.interface
+
+    raise HTTPException(
+        status_code=500,
+        detail="Default input module interface is not initialized or of wrong type",
     )
 
 
@@ -97,50 +154,25 @@ def create_app(config_file, config: KalinkaConfig):
     def read_queue_list(offset: int = 0, limit: int = 10):
         return playqueue.list(offset=offset, limit=limit)
 
-    @app.post("/queue/add/tracks")
-    def add_tracks_to_queue(
-        items: list[str],
-        source: str = Query(..., description="Name of the input module"),
-    ):
-        playqueue.add(input_module(source).get_track_info(items))
-        return {"message": "Ok"}
+    @app.post("/queue/add/items")
+    def add_entity_to_queue(ids: list[str]):
+        items: list[TrackInfo] = []
+        for entity_id in ids:
+            entity_id_obj = EntityId.from_string(entity_id)
+            module = input_module_from_id(entity_id)
+            if entity_id_obj.type != EntityType.TRACK:
+                browse_list = module.browse(entity_id_obj, offset=0, limit=5000)
+                track_ids = [
+                    item.id.id
+                    for item in browse_list.items
+                    if item.id.type == EntityType.TRACK
+                ]
+                items.extend(module.get_track_info(track_ids))
+            else:
+                items.extend(module.get_track_info([entity_id_obj.id]))
 
-    @app.post("/queue/add/track/{entity_id}")
-    def add_track_to_queue(entity_id: str, source: str = SourceType):
-        playqueue.add(input_module(source).get_track_info([entity_id]))
-        return {"message": "Ok"}
-
-    @app.post("/queue/add/album/{entity_id}")
-    def add_album_to_queue(entity_id: str, source: str = SourceType):
-        tracks = [
-            track.id
-            for track in input_module(source).browse_album(entity_id, limit=500).items
-        ]
-        playqueue.add(input_module(source).get_track_info(tracks))
-        return {"message": "Ok"}
-
-    @app.post("/queue/add/playlist/{entity_id}")
-    def add_playlist_to_queue(entity_id: str, source: str = SourceType):
-        tracks = [
-            track.id
-            for track in input_module(source)
-            .browse_playlist(entity_id, limit=5000)
-            .items
-        ]
-        playqueue.add(input_module(source).get_track_info(tracks))
-        return {"message": "Ok"}
-
-    @app.post("/queue/add/catalog/{entity_id}")
-    def add_catalog_entry_to_queue(entity_id: str, source: str = SourceType):
-        tracks = [
-            track.id
-            for track in input_module(source)
-            .browse_catalog(entity_id, limit=5000)
-            .items
-            if track.can_add is True
-        ]
-        playqueue.add(input_module(source).get_track_info(tracks))
-        return {"message": "Ok"}
+        playqueue.add(items)
+        return {"message": "Items added to queue", "count": len(items)}
 
     @app.put("/queue/play")
     async def queue_play(index: Union[int, None] = None):
@@ -153,82 +185,116 @@ def create_app(config_file, config: KalinkaConfig):
         return {"message": "Ok"}
 
     @app.put("/queue/next")
-    async def read_queue_next():
+    async def queue_next():
         playqueue.next()
         return {"message": "Ok"}
 
     @app.put("/queue/prev")
-    async def read_queue_prev():
+    async def queue_prev():
         playqueue.prev()
         return {"message": "Ok"}
 
     @app.put("/queue/stop")
-    async def read_queue_stop():
+    async def queue_stop():
         playqueue.stop()
         return {"message": "Ok"}
 
     @app.put("/queue/current_track/seek")
-    async def read_queue_seek(position_ms: int):
+    async def queue_seek(position_ms: int):
         value = playqueue.seek(position_ms).get()
         return {"message": "Ok", "position_ms": value}
 
-    @app.get("/browse/album/{entity_id}")
-    def browse_album(
-        entity_id: str, source: str = SourceType, offset: int = 0, limit: int = 10
-    ):
-        return (
-            input_module(source)
-            .browse_album(entity_id, offset, limit)
-            .model_dump(exclude_unset=True)
+    @app.get("/browse")
+    def browse_root(offset: int = 0, limit: int = 10):
+        """Browse the root catalog."""
+
+        result = BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=len(modules.prepared_input_modules),
+            items=[],
         )
 
-    @app.get("/browse/playlist/{entity_id}")
-    def browse_playlist(
-        entity_id: str, source: str = SourceType, offset: int = 0, limit: int = 10
-    ):
-        return (
-            input_module(source)
-            .browse_playlist(entity_id, offset, limit)
-            .model_dump(exclude_unset=True)
-        )
+        for module_name, module in modules.prepared_input_modules.items():
+            if isinstance(module.interface, InputModule):
+                entity_id = EntityId(
+                    id="root", type=EntityType.CATALOG, source=module_name
+                )
+                result.items.append(
+                    BrowseItem(
+                        id=entity_id,
+                        name=module.config.name.title() or module_name,
+                        url=f"/browse/{entity_id.to_string}",
+                        can_browse=True,
+                        can_add=False,
+                        catalog=Catalog(
+                            id=entity_id,
+                            title=module.config.name.title() or module_name,
+                            image=None,  # Placeholder for catalog image
+                            can_genre_filter=False,
+                            description="Kalinka Input Module",
+                        ),
+                    )
+                )
 
-    @app.get("/browse/artist/{entity_id}")
-    def browse_artist(
-        entity_id: str, source: str = SourceType, offset: int = 0, limit: int = 10
-    ):
-        return (
-            input_module(source)
-            .browse_artist(entity_id, offset, limit)
-            .model_dump(exclude_unset=True)
-        )
+        return result.model_dump(exclude_unset=True)
 
-    @app.get("/browse/catalog/{endpoint:path}")
-    def browse_catalog(
-        source: str = SourceType,
-        endpoint: str = "",
+    @app.get("/browse/{id}")
+    def browse_entity(
+        id: str,
         offset: int = 0,
         limit: int = 10,
-        genre_ids: List[int] = Query([]),
+        genre_ids: List[str] = Query([]),
     ):
-        return (
-            input_module(source)
-            .browse_catalog(endpoint, offset, limit, genre_ids)
-            .model_dump(exclude_unset=True)
-        )
+        """Browse an entity by its ID."""
+        entity_id = parse_entity_id(id)
+
+        try:
+            genre_ids_obj = []
+            for genre_id_str in genre_ids:
+                genre_id_obj = parse_entity_id(genre_id_str)
+                if genre_id_obj.type != EntityType.GENRE:
+                    raise ValueError(
+                        f"Invalid genre_id type: {genre_id_obj.type}, expected GENRE"
+                    )
+                genre_ids_obj.append(genre_id_obj)
+
+            input_module = input_module_from_id(entity_id)
+            result = input_module.browse(
+                entity_id, offset=offset, limit=limit, genre_ids=genre_ids_obj
+            )
+            return result.model_dump(exclude_unset=True)
+        except HTTPException:
+            # Re-raise HTTP exceptions as-is
+            raise
+        except Exception as e:
+            logger.error(f"Error browsing entity {id}: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Internal server error: {str(e)}"
+            )
 
     @app.get("/search/{search_type}/{query}")
     async def search(
         search_type: SearchType,
         query: str,
-        source: str = SourceType,
         offset: int = 0,
         limit: int = 10,
+        source: Optional[str] = None,
     ):
-        return (
-            input_module(source)
-            .search(search_type, query, offset, limit)
-            .model_dump(exclude_unset=True)
-        )
+        """Search for items across input modules."""
+        sources_split = source.split(",") if source else None
+        input_modules: list[InputModule] = [
+            module.interface
+            for module in modules.prepared_input_modules.values()
+            if isinstance(module.interface, InputModule)
+        ]
+
+        if sources_split:
+            input_modules = list(
+                filter(lambda m: m.module_name() in sources_split, input_modules)
+            )
+
+        return await multisearch(input_modules, search_type, query, offset, limit)
 
     @app.get("/queue/events")
     async def stream(request: Request):
@@ -307,58 +373,58 @@ def create_app(config_file, config: KalinkaConfig):
     def list_favorite(
         type: SearchType,
         filter: str,
-        source: str = SourceType,
         offset: int = 0,
         limit: int = 10,
     ):
+        # TODO: return all sources
         return (
-            input_module(source)
+            default_input_module()
             .list_favorite(type, filter, offset, limit)
             .model_dump(exclude_unset=True)
         )
 
     @app.put("/favorite/add/{type}/{id}")
-    def add_favorite(type: SearchType, id: str, source: str = SourceType):
-        input_module(source).add_to_favorite(type, id)
+    def add_favorite(type: SearchType, id: str):
+        input_module_from_id(id).add_to_favorite(type, id)
         return {"message": "Ok"}
 
     @app.delete("/favorite/remove/{type}/{id}")
-    def remove_favorite(type: SearchType, id: str, source: str = SourceType):
-        input_module(source).remove_from_favorite(type, id)
+    def remove_favorite(type: SearchType, id: str):
+        input_module_from_id(id).remove_from_favorite(type, id)
         return {"message": "Ok"}
 
     @app.get("/favorite/ids")
-    def get_favorite_ids(source: str = SourceType) -> FavoriteIds:
-        return input_module(source).get_favorite_ids()
+    def get_favorite_ids() -> FavoriteIds:
+        # TODO: return all sources
+        return default_input_module().get_favorite_ids()
 
     @app.get("/genre/list")
-    def list_genre(
-        source: str = SourceType, offset: int = 0, limit: int = 25
-    ) -> GenreList:
-        return input_module(source).list_genre(offset=offset, limit=limit)
+    def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
+        # TODO: return all sources
+        return default_input_module().list_genre(offset=offset, limit=limit)
 
-    @app.get("/get/album/{entity_id}")
-    def album_get(entity_id: str, source: str = SourceType):
-        return input_module(source).album_get(entity_id).model_dump(exclude_unset=True)
+    @app.get("/get/{entity_id}")
+    def entity_get(entity_id: str):
+        try:
+            entity_id_obj = EntityId.from_string(entity_id)
 
-    @app.get("/get/artist/{entity_id}")
-    def artist_get(entity_id: str, source: str = SourceType):
-        return input_module(source).artist_get(entity_id).model_dump(exclude_unset=True)
+            return (
+                input_module_from_id(entity_id)
+                .get(entity_id_obj)
+                .model_dump(exclude_unset=True)
+            )
 
-    @app.get("/get/track/{entity_id}")
-    def track_get(entity_id: str, source: str = SourceType):
-        return input_module(source).track_get(entity_id).model_dump(exclude_unset=True)
-
-    @app.get("/get/playlist/{entity_id}")
-    def playlist_get(entity_id: str, source: str = SourceType):
-        return (
-            input_module(source).playlist_get(entity_id).model_dump(exclude_unset=True)
-        )
+        except (ValueError, Exception) as e:
+            logger.error(f"Failed to parse entity ID '{entity_id}': {str(e)}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid entity ID format: {str(e)}"
+            )
 
     @app.post("/playlist/create")
-    def playlist_create(name: str, description: str, source: str = SourceType):
+    def playlist_create(name: str, description: str):
+        # TODO support source detection / source parameter
         return (
-            input_module(source)
+            default_input_module()
             .playlist_create(name, description)
             .model_dump(exclude_unset=True)
         )
@@ -368,46 +434,41 @@ def create_app(config_file, config: KalinkaConfig):
         playlist_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
-        source: str = SourceType,
     ):
         return (
-            input_module(source)
+            input_module_from_id(playlist_id)
             .playlist_update(playlist_id, name, description)
             .model_dump(exclude_unset=True)
         )
 
     @app.delete("/playlist/delete")
-    def playlist_delete(playlist_id: str, source: str = SourceType):
-        input_module(source).playlist_delete(playlist_id)
+    def playlist_delete(playlist_id: str):
+        input_module_from_id(playlist_id).playlist_delete(playlist_id)
         return {"message": "Ok"}
 
     @app.post("/playlist/add_tracks")
     def playlist_add_tracks(
-        playlist_id: str,
-        track_ids: List[str],
-        allow_duplicates: bool = True,
-        source: str = SourceType,
+        playlist_id: str, track_ids: List[str], allow_duplicates: bool = True
     ):
         return (
-            input_module(source)
+            input_module_from_id(playlist_id)
             .playlist_add_tracks(playlist_id, track_ids, allow_duplicates)
             .model_dump(exclude_unset=True)
         )
 
     @app.get("/playlist/list")
-    def playlist_user_list(offset: int = 0, limit: int = 25, source: str = SourceType):
+    def playlist_user_list(offset: int = 0, limit: int = 25):
+        # TODO: return all sources, support source filter
         return (
-            input_module(source)
+            default_input_module()
             .playlist_user_list(offset, limit)
             .model_dump(exclude_unset=True)
         )
 
     @app.delete("/playlist/remove_tracks")
-    def playlist_remove_tracks(
-        playlist_id: str, playlist_track_ids: List[str], source: str = SourceType
-    ):
+    def playlist_remove_tracks(playlist_id: str, playlist_track_ids: List[str]):
         return (
-            input_module(source)
+            input_module_from_id(playlist_id)
             .playlist_remove_tracks(playlist_id, playlist_track_ids)
             .model_dump(exclude_unset=True)
         )
@@ -500,8 +561,16 @@ def create_app(config_file, config: KalinkaConfig):
         return {"message": "Ok"}
 
     @app.get("/resource/{file_name:path}")
-    async def get_resource(file_name: str, source: str = SourceType):
-        file_path = input_module(source).get_resource_path(file_name)
+    async def get_resource(file_name: str):
+        file_path = None
+        for module in modules.prepared_input_modules.keys():
+            file_path = input_module(module).get_resource_path(file_name)
+            if file_path:
+                resolved_path = Path(file_path).resolve()
+                if resolved_path.is_file():
+                    mime_type, _ = mimetypes.guess_type(str(file_path))
+                    return FileResponse(resolved_path, media_type=mime_type)
+
         if not file_path:
             raise HTTPException(status_code=404, detail="File not found")
 

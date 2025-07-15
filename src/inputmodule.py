@@ -3,8 +3,14 @@ from pydantic import BaseModel, PositiveInt
 from enum import Enum
 from typing import Callable, List, Optional
 
-from data_model.datamodel import BrowseItem, Playlist, Track, BrowseItemList
-from data_model.response_model import FavoriteIds, GenreList, LastUpdate
+from data_model.datamodel import (
+    BrowseItem,
+    EntityId,
+    Playlist,
+    Track,
+    BrowseItemList,
+)
+from data_model.response_model import FavoriteIds, GenreList
 
 
 class TrackUrl(BaseModel):
@@ -13,7 +19,7 @@ class TrackUrl(BaseModel):
 
 
 class TrackInfo(BaseModel):
-    id: str
+    id: EntityId
     link_retriever: Callable[[], TrackUrl]
     metadata: Optional[Track]
 
@@ -37,28 +43,12 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
-    def browse_catalog(
+    def browse(
         self,
-        endpoint: str,
-        offset: int = 0,
-        limit: int = 50,
-        genre_ids: List[int] = [],
-    ) -> BrowseItemList:
-        pass
-
-    @abstractmethod
-    def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
-        pass
-
-    @abstractmethod
-    def browse_playlist(
-        self, id: str, offset: int = 0, limit: int = 50
-    ) -> BrowseItemList:
-        pass
-
-    @abstractmethod
-    def browse_artist(
-        self, id: str, offset: int = 0, limit: int = 50
+        entity_id: EntityId,
+        offset: PositiveInt = 0,
+        limit: PositiveInt = 50,
+        genre_ids: List[EntityId] = [],
     ) -> BrowseItemList:
         pass
 
@@ -89,19 +79,7 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
-    def album_get(self, id: str) -> BrowseItem:
-        pass
-
-    @abstractmethod
-    def playlist_get(self, id: str) -> BrowseItem:
-        pass
-
-    @abstractmethod
-    def artist_get(self, id: str) -> BrowseItem:
-        pass
-
-    @abstractmethod
-    def track_get(self, id: str) -> BrowseItem:
+    def get(self, entity_id: EntityId) -> BrowseItem:
         pass
 
     @abstractmethod

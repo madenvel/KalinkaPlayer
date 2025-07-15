@@ -1,6 +1,73 @@
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, model_serializer, field_validator
 from enum import Enum
+
+
+class EntityType(str, Enum):
+    CATALOG = "catalog"
+    ALBUM = "album"
+    ARTIST = "artist"
+    PLAYLIST = "playlist"
+    TRACK = "track"
+    LABEL = "label"
+    GENRE = "genre"
+    USER = "user"
+
+
+class EntityId(BaseModel):
+    id: str
+    type: EntityType
+    source: str
+
+    @field_validator("id", "type", "source", mode="before")
+    @classmethod
+    def validate_from_string(cls, v, info):
+        # If we receive a string for any field and it looks like a full entity ID,
+        # parse the entire string and return the appropriate field value
+        if isinstance(v, str) and v.startswith("kalinka:") and ":" in v:
+            # This is a full entity ID string, parse it
+            parts = v.split(":")
+            if len(parts) == 4 and parts[0] == "kalinka":
+                _, source, type_str, id_ = parts
+                # Return the value for the specific field being validated
+                if info.field_name == "id":
+                    return id_
+                elif info.field_name == "type":
+                    return EntityType(type_str)
+                elif info.field_name == "source":
+                    return source
+        return v
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate_entity_id
+
+    @classmethod
+    def validate_entity_id(cls, v):
+        if isinstance(v, cls):
+            return v
+        if isinstance(v, str):
+            return cls.from_string(v)
+        if isinstance(v, dict):
+            return cls(**v)
+        raise ValueError(f"Cannot convert {type(v)} to EntityId")
+
+    @property
+    def to_string(self) -> str:
+        return f"kalinka:{self.source}:{self.type.value}:{self.id}"
+
+    @classmethod
+    def from_string(cls, full_id: str) -> "EntityId":
+        # Expected format: kalinka:{source}:{type}:{id}
+        parts = full_id.split(":")
+        if len(parts) != 4 or parts[0] != "kalinka":
+            raise ValueError(f"Invalid full_id format: {full_id}")
+        _, source, type_str, id_ = parts
+        return cls(id=id_, type=EntityType(type_str), source=source)
+
+    @model_serializer
+    def ser_model(self) -> str:
+        return self.to_string
 
 
 class PreviewType(str, Enum):
@@ -40,24 +107,24 @@ class PlaylistImage(BaseModel):
 
 
 class Artist(BaseModel):
-    id: str
+    id: EntityId
     name: str
     image: Optional[ArtistImage] = None
     album_count: Optional[int] = None
 
 
 class Label(BaseModel):
-    id: str
+    id: EntityId
     name: str
 
 
 class Genre(BaseModel):
-    id: str
+    id: EntityId
     name: str
 
 
 class Album(BaseModel):
-    id: str
+    id: EntityId
     title: str
     duration: Optional[int] = None
     track_count: Optional[int] = None
@@ -68,7 +135,7 @@ class Album(BaseModel):
 
 
 class Track(BaseModel):
-    id: str
+    id: EntityId
     title: str
     # Duration in seconds
     duration: int
@@ -81,11 +148,11 @@ class Track(BaseModel):
 
 class Owner(BaseModel):
     name: str
-    id: str
+    id: EntityId
 
 
 class Playlist(BaseModel):
-    id: str
+    id: EntityId
     name: str
     owner: Owner
     image: Optional[PlaylistImage] = None
@@ -104,7 +171,7 @@ class Preview(BaseModel):
 
 
 class Catalog(BaseModel):
-    id: str
+    id: EntityId
     title: str
     image: Optional[CatalogImage] = None
     can_genre_filter: bool = False
@@ -113,7 +180,7 @@ class Catalog(BaseModel):
 
 
 class BrowseItem(BaseModel):
-    id: str
+    id: EntityId
     name: str
     url: str
     can_browse: bool = False

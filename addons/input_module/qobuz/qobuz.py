@@ -1,12 +1,14 @@
 import copy
+from functools import partial
 import hashlib
 import time
 from typing import List, Optional
 
+from pydantic import PositiveInt
+
 from .config_model import QobuzConfig
 from .bundle import Bundle
 
-from functools import partial
 from data_model.response_model import (
     FavoriteAddedEvent,
     FavoriteRemovedEvent,
@@ -35,6 +37,7 @@ from data_model.datamodel import (
     Catalog,
     CatalogImage,
     EmptyList,
+    EntityType,
     Genre,
     Label,
     Owner,
@@ -43,6 +46,7 @@ from data_model.datamodel import (
     Preview,
     PreviewType,
     Track,
+    EntityId,
 )
 
 import json
@@ -120,6 +124,38 @@ class RetryTransport(httpx.HTTPTransport):
 
 # The code below is partially based on the code from
 # qobuz-dl by vitiko98, fc7
+
+
+def artist_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.ARTIST, source="qobuz")
+
+
+def album_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.ALBUM, source="qobuz")
+
+
+def track_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.TRACK, source="qobuz")
+
+
+def playlist_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.PLAYLIST, source="qobuz")
+
+
+def label_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.LABEL, source="qobuz")
+
+
+def genre_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.GENRE, source="qobuz")
+
+
+def user_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.USER, source="qobuz")
+
+
+def catalog_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.CATALOG, source="qobuz")
 
 
 class QobuzClient:
@@ -369,24 +405,27 @@ def metadata_from_track(track, album_meta={}):
             "title": append_str(track["title"], track.get("version", None)),
             "performer": (
                 Artist(
-                    name=track["performer"]["name"], id=str(track["performer"]["id"])
+                    name=track["performer"]["name"],
+                    id=artist_id(str(track["performer"]["id"])),
                 )
                 if "performer" in track
                 else Artist(
                     name=album_info["artist"].get("name", None),
-                    id=str(album_info["artist"].get("id", None)),
+                    id=artist_id(str(album_info["artist"].get("id", None))),
                 )
             ),
             "duration": track["duration"],
             "album": Album(
-                id=str(album_info["id"]),
+                id=album_id(str(album_info["id"])),
                 title=append_str(album_info["title"], version),
                 image=album_info["image"],
                 label=Label(
-                    id=str(album_info["label"]["id"]), name=album_info["label"]["name"]
+                    id=label_id(str(album_info["label"]["id"])),
+                    name=album_info["label"]["name"],
                 ),
                 genre=Genre(
-                    id=str(album_info["genre"]["id"]), name=album_info["genre"]["name"]
+                    id=genre_id(str(album_info["genre"]["id"])),
+                    name=album_info["genre"]["name"],
                 ),
             ),
             "replaygain_peak": track.get("audio_info", {}).get(
@@ -423,7 +462,29 @@ class QobuzInputModule(InputModule):
     ) -> BrowseItemList:
         return self._search_items(type, query, offset, limit)
 
-    def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
+    def browse(
+        self,
+        entity_id: EntityId,
+        offset: PositiveInt = 0,
+        limit: PositiveInt = 50,
+        genre_ids: List[EntityId] = [],
+    ) -> BrowseItemList:
+        if entity_id.type == EntityType.ALBUM:
+            return self._browse_album(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.PLAYLIST:
+            return self._browse_playlist(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.ARTIST:
+            return self._browse_artist(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.CATALOG:
+            return self._browse_catalog(
+                entity_id.id, offset=offset, limit=limit, genre_ids=genre_ids
+            )
+        else:
+            return EmptyList(offset, limit)
+
+    def _browse_album(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "album/get",
             params={"album_id": id, "offset": offset, "limit": limit},
@@ -447,7 +508,7 @@ class QobuzInputModule(InputModule):
             ),
         )
 
-    def browse_playlist(
+    def _browse_playlist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
@@ -474,7 +535,7 @@ class QobuzInputModule(InputModule):
             ),
         )
 
-    def browse_artist(
+    def _browse_artist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
@@ -524,27 +585,27 @@ class QobuzInputModule(InputModule):
 
         return filtered_result
 
-    def browse_catalog(
+    def _browse_catalog(
         self,
         endpoint: str,
         offset: int = 0,
         limit: int = 50,
-        genre_ids: List[int] = [],
+        genre_ids: List[EntityId] = [],
     ) -> BrowseItemList:
-        if endpoint == "":
+        if endpoint == "" or endpoint == "root":
             return BrowseItemList(
                 offset=offset,
                 limit=limit,
                 total=6,
                 items=[
                     BrowseItem(
-                        id="new-releases",
+                        id=catalog_id("new-releases"),
                         name="New Releases",
                         url="/catalog/new-releases",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="new-releases",
+                            id=catalog_id("new-releases"),
                             title="New Releases",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -556,13 +617,13 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="qobuz-playlists",
+                        id=catalog_id("qobuz-playlists"),
                         name="Qobuz Playlists",
                         url="/catalog/qobuz-playlists",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="qobuz-playlists",
+                            id=catalog_id("qobuz-playlists"),
                             title="Qobuz Playlists",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -574,13 +635,13 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="playlist-by-category",
+                        id=catalog_id("playlist-by-category"),
                         name="Playlist By Category",
                         url="/catalog/playlists-by-category",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="playlists-by-category",
+                            id=catalog_id("playlists-by-category"),
                             title="Playlist By Category",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -592,13 +653,13 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="myweeklyq",
+                        id=catalog_id("myweeklyq"),
                         name="My Weekly Q",
                         url="/catalog/myweeklyq",
                         can_browse=True,
                         can_add=True,
                         catalog=Catalog(
-                            id="myweeklyq",
+                            id=catalog_id("myweeklyq"),
                             title="My Weekly Q",
                             description="Every Friday, a selection of discoveries curated especially for you.",
                             can_genre_filter=False,
@@ -610,13 +671,13 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="press-awards",
+                        id=catalog_id("press-awards"),
                         name="Press Awards",
                         url="/catalog/press-awards",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="press-awards",
+                            id=catalog_id("press-awards"),
                             title="Press Awards",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -629,13 +690,13 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                     BrowseItem(
-                        id="most-streamed",
+                        id=catalog_id("most-streamed"),
                         name="Most Streamed",
                         url="/catalog/most-streamed",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="most-streamed",
+                            id=catalog_id("most-streamed"),
                             title="Top Releases",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -676,7 +737,7 @@ class QobuzInputModule(InputModule):
         return EmptyList(offset, limit)
 
     def _get_new_releases(
-        self, type: str, offset: int, limit: int, genre_ids: list[int]
+        self, type: str, offset: int, limit: int, genre_ids: list[EntityId]
     ) -> BrowseItemList:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/album/getFeatured",
@@ -684,7 +745,7 @@ class QobuzInputModule(InputModule):
                 "type": type,
                 "offset": offset,
                 "limit": limit,
-                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
+                "genre_ids": ",".join([str(genre_id.id) for genre_id in genre_ids]),
             },
         )
 
@@ -701,7 +762,11 @@ class QobuzInputModule(InputModule):
         )
 
     def _get_qobuz_playlists(
-        self, offset: int, limit: int, genre_ids: list[int], tags: str | None = None
+        self,
+        offset: int,
+        limit: int,
+        genre_ids: list[EntityId],
+        tags: str | None = None,
     ):
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/playlist/getFeatured",
@@ -709,7 +774,7 @@ class QobuzInputModule(InputModule):
                 "type": "editor-picks",
                 "offset": offset,
                 "limit": limit,
-                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
+                "genre_ids": ",".join([str(genre_id.id) for genre_id in genre_ids]),
                 "tags": tags,
             },
         )
@@ -728,13 +793,15 @@ class QobuzInputModule(InputModule):
             ),
         )
 
-    def _get_playists_by_category(self, offset: int, limit: int, genre_ids: List[int]):
+    def _get_playists_by_category(
+        self, offset: int, limit: int, genre_ids: List[EntityId]
+    ):
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "/playlist/getTags",
             params={
                 "offset": offset,
                 "limit": limit,
-                "genre_ids": ",".join([str(genre_id) for genre_id in genre_ids]),
+                "genre_ids": ",".join([str(genre_id.id) for genre_id in genre_ids]),
             },
         )
 
@@ -782,7 +849,7 @@ class QobuzInputModule(InputModule):
 
     def _track_to_track_info(self, track):
         track_info = TrackInfo(
-            id=str(track["id"]),
+            id=track_id(str(track["id"])),
             link_retriever=partial(
                 qobuz_link_retriever, self.qobuz_client, track["id"], self.format_id
             ),
@@ -794,12 +861,12 @@ class QobuzInputModule(InputModule):
     def _tracks_to_browse_categories(self, tracks, album_meta={}):
         result = []
         for track in tracks:
-            track_id = str(track["id"])
+            tid = str(track["id"])
             album = track.get("album", album_meta)
             album_version = album.get("version", None)
             result.append(
                 BrowseItem(
-                    id=track_id,
+                    id=track_id(tid),
                     name=append_str(track["title"], track.get("version", None)),
                     subname=(
                         track["performer"]["name"]
@@ -810,23 +877,23 @@ class QobuzInputModule(InputModule):
                     can_add=True,
                     url="/track/" + str(track["id"]),
                     track=Track(
-                        id=track_id,
+                        id=track_id(tid),
                         title=append_str(track["title"], track.get("version", None)),
                         duration=track["duration"],
                         performer=(
                             Artist(
-                                id=str(track["performer"]["id"]),
+                                id=artist_id(str(track["performer"]["id"])),
                                 name=track["performer"]["name"],
                             )
                             if "performer" in track
                             else None
                         ),
                         album=Album(
-                            id=str(album["id"]),
+                            id=album_id(str(album["id"])),
                             title=append_str(album["title"], album_version),
                             artist=Artist(
                                 name=album["artist"]["name"],
-                                id=str(album["artist"]["id"]),
+                                id=artist_id(str(album["artist"]["id"])),
                             ),
                             image=AlbumImage(**album["image"]),
                         ),
@@ -885,14 +952,14 @@ class QobuzInputModule(InputModule):
     def _artists_to_browse_category(self, artists):
         return [
             BrowseItem(
-                id=str(artist["id"]),
+                id=artist_id(str(artist["id"])),
                 name=artist["name"],
                 subname=None,
                 url="/artist/" + str(artist["id"]),
                 can_browse=True,
                 can_add=False,
                 artist=Artist(
-                    id=str(artist["id"]),
+                    id=artist_id(str(artist["id"])),
                     name=artist["name"],
                     image=(
                         ArtistImage(
@@ -907,13 +974,13 @@ class QobuzInputModule(InputModule):
                 ),
                 extra_sections=[
                     BrowseItem(
-                        id="similar_artists_" + str(artist["id"]),
+                        id=catalog_id("similar_artists_" + str(artist["id"])),
                         name="Similar artists",
                         url="/catalog/similar-artists/" + str(artist["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="similar_artists_" + str(artist["id"]),
+                            id=catalog_id("similar_artists_" + str(artist["id"])),
                             title="Similar artists",
                             can_genre_filter=False,
                             preview_config=Preview(
@@ -933,7 +1000,7 @@ class QobuzInputModule(InputModule):
     def _albums_to_browse_category(self, albums):
         return [
             BrowseItem(
-                id=str(album["id"]),
+                id=album_id(str(album["id"])),
                 name=append_str(album["title"], album.get("version", None)),
                 subname=(
                     (artist := self._extract_artist_from_album(album)) and artist.name
@@ -942,7 +1009,7 @@ class QobuzInputModule(InputModule):
                 can_browse=True,
                 can_add=True,
                 album=Album(
-                    id=str(album["id"]),
+                    id=album_id(str(album["id"])),
                     title=append_str(album["title"], album.get("version", None)),
                     artist=artist,
                     image=(
@@ -957,20 +1024,21 @@ class QobuzInputModule(InputModule):
                     duration=album["duration"],
                     track_count=album.get("track_count", album.get("tracks_count", 0)),
                     genre=Genre(
-                        id=str(album["genre"]["id"]), name=album["genre"]["name"]
+                        id=genre_id(str(album["genre"]["id"])),
+                        name=album["genre"]["name"],
                     ),
                 ),
                 extra_sections=[
                     *(
                         [
                             BrowseItem(
-                                id="artists_albums_" + str(album["id"]),
+                                id=catalog_id("artists_albums_" + str(album["id"])),
                                 name="More from this artist",
                                 url="/artist/" + str(artist.id),
                                 can_browse=True,
                                 can_add=False,
                                 catalog=Catalog(
-                                    id="artists_albums_" + str(album["id"]),
+                                    id=catalog_id("artists_albums_" + str(album["id"])),
                                     title="More from this artist",
                                     can_genre_filter=False,
                                     preview_config=Preview(
@@ -987,13 +1055,13 @@ class QobuzInputModule(InputModule):
                         else []
                     ),
                     BrowseItem(
-                        id="album_suggestions_" + str(album["id"]),
+                        id=catalog_id("album_suggestions_" + str(album["id"])),
                         name="You may also like",
                         url="/catalog/album-suggestions/" + str(album["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="album_suggestions_" + str(album["id"]),
+                            id=catalog_id("album_suggestions_" + str(album["id"])),
                             title="You may also like",
                             can_genre_filter=False,
                             preview_config=Preview(
@@ -1013,17 +1081,17 @@ class QobuzInputModule(InputModule):
     def _extract_artist_from_album(self, album) -> Optional[Artist]:
         if "artist" in album:
             return Artist(
-                id=str(album["artist"]["id"]),
+                id=artist_id(str(album["artist"]["id"])),
                 name=album["artist"]["name"],
             )
         elif "performer" in album:
             return Artist(
-                id=str(album["performer"]["id"]),
+                id=artist_id(str(album["performer"]["id"])),
                 name=album["performer"]["name"],
             )
         elif "artists" in album:
             return Artist(
-                id=str(album["artists"][0]["id"]),
+                id=artist_id(str(album["artists"][0]["id"])),
                 name=album["artists"][0]["name"],
             )
         else:
@@ -1032,7 +1100,7 @@ class QobuzInputModule(InputModule):
     def _playlists_to_browse_category(self, playlists):
         return [
             BrowseItem(
-                id=str(playlist["id"]),
+                id=playlist_id(str(playlist["id"])),
                 name=playlist["name"],
                 subname=playlist["owner"]["name"],
                 url="/playlist/" + str(playlist["id"]),
@@ -1041,13 +1109,15 @@ class QobuzInputModule(InputModule):
                 playlist=self._qobuz_playlist_to_playlist(playlist),
                 extra_sections=[
                     BrowseItem(
-                        id="playlist_suggestions_" + str(playlist["id"]),
+                        id=catalog_id("playlist_suggestions_" + str(playlist["id"])),
                         name="Similar playlists",
                         url="/catalog/playlist-suggestions/" + str(playlist["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id="playlist_suggestions_" + str(playlist["id"]),
+                            id=catalog_id(
+                                "playlist_suggestions_" + str(playlist["id"])
+                            ),
                             title="Similar playlists",
                             can_genre_filter=False,
                             preview_config=Preview(
@@ -1072,11 +1142,11 @@ class QobuzInputModule(InputModule):
         image_rectangle_mini = playlist.get("image_rectangle_mini", images)
 
         return Playlist(
-            id=str(playlist["id"]),
+            id=playlist_id(str(playlist["id"])),
             name=playlist["name"],
             owner=Owner(
                 name=playlist["owner"]["name"],
-                id=str(playlist["owner"]["id"]),
+                id=user_id(str(playlist["owner"]["id"])),
             ),
             image=PlaylistImage(
                 small=images150[0] if images150 else None,
@@ -1213,12 +1283,27 @@ class QobuzInputModule(InputModule):
             limit=limit,
             total=rjson["genres"]["total"],
             items=[
-                Genre(id=str(genre["id"]), name=genre["name"])
+                Genre(
+                    id=genre_id(str(genre["id"])),
+                    name=genre["name"],
+                )
                 for genre in rjson["genres"]["items"]
             ],
         )
 
-    def album_get(self, id: str) -> BrowseItem:
+    def get(self, entity_id: EntityId) -> BrowseItem:
+        if entity_id.type == EntityType.ALBUM:
+            return self._album_get(entity_id.id)
+        elif entity_id.type == EntityType.PLAYLIST:
+            return self._playlist_get(entity_id.id)
+        elif entity_id.type == EntityType.ARTIST:
+            return self._artist_get(entity_id.id)
+        elif entity_id.type == EntityType.TRACK:
+            return self._track_get(entity_id.id)
+        else:
+            raise ValueError(f"Unsupported EntityId type: {entity_id.type.name}")
+
+    def _album_get(self, id: str) -> BrowseItem:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "album/get",
             params={"album_id": id, "offset": 0, "limit": 0},
@@ -1230,7 +1315,7 @@ class QobuzInputModule(InputModule):
 
         return self._albums_to_browse_category([rjson])[0]
 
-    def playlist_get(self, id: str) -> BrowseItem:
+    def _playlist_get(self, id: str) -> BrowseItem:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "playlist/get",
             params={
@@ -1246,7 +1331,7 @@ class QobuzInputModule(InputModule):
 
         return self._playlists_to_browse_category([rjson])[0]
 
-    def artist_get(self, id: str) -> BrowseItem:
+    def _artist_get(self, id: str) -> BrowseItem:
         response = self.qobuz_client.session.get(
             self.qobuz_client.base + "artist/get",
             params={
@@ -1260,19 +1345,19 @@ class QobuzInputModule(InputModule):
 
         return self._artists_to_browse_category([rjson])[0]
 
-    def track_get(self, id: str) -> BrowseItem:
+    def _track_get(self, id: str) -> BrowseItem:
         rjson = self.qobuz_client.get_track_meta(id)
         return self._tracks_to_browse_categories([rjson])[0]
 
     def _to_playlist_response(self, obj):
         return Playlist(
-            id=str(obj["id"]),
+            id=playlist_id(str(obj["id"])),
             name=obj["name"],
             description=obj["description"],
             track_count=obj["tracks_count"],
             owner=Owner(
                 name=obj["owner"]["name"],
-                id=str(obj["owner"]["id"]),
+                id=user_id(str(obj["owner"]["id"])),
             ),
         )
 

@@ -12,6 +12,8 @@ from src.async_common import EventEmitter
 from data_model.datamodel import (
     BrowseItem,
     BrowseItemList,
+    EntityId,
+    EntityType,
     Track,
     Album,
     AlbumImage,
@@ -31,6 +33,38 @@ from .utils.image_utils import create_playlist_cover_collage
 from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def artist_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.ARTIST, source="localfiles")
+
+
+def album_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.ALBUM, source="localfiles")
+
+
+def track_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.TRACK, source="localfiles")
+
+
+def playlist_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.PLAYLIST, source="localfiles")
+
+
+def label_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.LABEL, source="localfiles")
+
+
+def genre_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.GENRE, source="localfiles")
+
+
+def user_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.USER, source="localfiles")
+
+
+def catalog_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.CATALOG, source="localfiles")
 
 
 class LocalFilesInputModule(InputModule):
@@ -116,11 +150,38 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
+    def browse(
+        self,
+        entity_id: EntityId,
+        offset: int = 0,
+        limit: int = 50,
+        genre_ids: List[EntityId] = [],
+    ) -> BrowseItemList:
+        """Browse items based on the entity ID"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(offset, limit)
+
+        if entity_id.type == EntityType.ALBUM:
+            return self._browse_album(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.ARTIST:
+            return self._browse_artist(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.PLAYLIST:
+            return self._browse_playlist(entity_id.id, offset, limit)
+        elif entity_id.type == EntityType.CATALOG:
+            return self.browse_catalog(
+                entity_id.id, offset=offset, limit=limit, genre_ids=genre_ids
+            )
+
     def browse_catalog(
-        self, endpoint: str, offset: int = 0, limit: int = 50, genre_ids: List[int] = []
+        self,
+        endpoint: str,
+        offset: int = 0,
+        limit: int = 50,
+        genre_ids: List[EntityId] = [],
     ) -> BrowseItemList:
         """Browse the catalog endpoints"""
-        if endpoint == "":
+        if endpoint == "" or endpoint == "root":
             return self._browse_root()
         elif endpoint == "recent":
             return self._browse_recently_added(offset, limit)
@@ -158,7 +219,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             catalog = Catalog(
-                id="recent",
+                id=catalog_id("recent"),
                 title="Recently Added",
                 can_genre_filter=False,
                 description="Recently added tracks",
@@ -166,7 +227,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             recent_section = BrowseItem(
-                id="recent",
+                id=catalog_id("recent"),
                 name="Recently Added",
                 url="/catalog/recent",
                 can_browse=True,
@@ -187,7 +248,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             catalog = Catalog(
-                id="albums",
+                id=catalog_id("albums"),
                 title="My Albums",
                 can_genre_filter=False,
                 description="Browse your album collection",
@@ -195,7 +256,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             album_section = BrowseItem(
-                id="albums",
+                id=catalog_id("albums"),
                 name="My Albums",
                 url="/catalog/albums",
                 can_browse=True,
@@ -216,7 +277,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             catalog = Catalog(
-                id="artists",
+                id=catalog_id("artists"),
                 title="My Artists",
                 can_genre_filter=False,
                 description="Browse your artist collection",
@@ -224,7 +285,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             artist_section = BrowseItem(
-                id="artists",
+                id=catalog_id("artists"),
                 name="My Artists",
                 url="/catalog/artists",
                 can_browse=True,
@@ -245,7 +306,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             catalog = Catalog(
-                id="playlists",
+                id=catalog_id("playlists"),
                 title="My Playlists",
                 can_genre_filter=False,
                 description="Browse your playlists",
@@ -253,7 +314,7 @@ class LocalFilesInputModule(InputModule):
             )
 
             playlist_section = BrowseItem(
-                id="playlists",
+                id=catalog_id("playlists"),
                 name="My Playlists",
                 url="/catalog/playlists",
                 can_browse=True,
@@ -306,7 +367,9 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def browse_album(self, id: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
+    def _browse_album(
+        self, id: str, offset: int = 0, limit: int = 50
+    ) -> BrowseItemList:
         """Browse tracks in an album"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -320,7 +383,7 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def browse_artist(
+    def _browse_artist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """Browse albums by an artist"""
@@ -336,7 +399,7 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def browse_playlist(
+    def _browse_playlist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """Browse tracks in a playlist"""
@@ -365,9 +428,9 @@ class LocalFilesInputModule(InputModule):
 
         # Maintain the same order as track_ids
         result = []
-        for track_id in track_ids:
-            if track_id in track_dict:
-                track = track_dict[track_id]
+        for track_id_str in track_ids:
+            if track_id_str in track_dict:
+                track = track_dict[track_id_str]
                 track_metadata = self._create_track_metadata(track)
 
                 # Create a link retriever function for this track
@@ -379,7 +442,7 @@ class LocalFilesInputModule(InputModule):
 
                 result.append(
                     TrackInfo(
-                        id=track["id"],
+                        id=track_id(track["id"]),
                         link_retriever=create_link_retriever(
                             track["file_path"], track["format"]
                         ),
@@ -420,7 +483,25 @@ class LocalFilesInputModule(InputModule):
         """List genres (not implemented yet)"""
         return GenreList(total=0, offset=offset, limit=limit, items=[])
 
-    def album_get(self, id: str) -> BrowseItem:
+    def get(self, entity_id: EntityId) -> BrowseItem:
+        """Get details for a specific entity by ID"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            raise HTTPException(status_code=503, detail="Database service unavailable")
+
+        if entity_id.type == EntityType.ALBUM:
+            return self._album_get(entity_id.id)
+        elif entity_id.type == EntityType.ARTIST:
+            return self._artist_get(entity_id.id)
+        elif entity_id.type == EntityType.TRACK:
+            return self._track_get(entity_id.id)
+        elif entity_id.type == EntityType.PLAYLIST:
+            return self._playlist_get(entity_id.id)
+        else:
+            logger.warning(f"Unsupported entity type: {entity_id.type}")
+            raise HTTPException(status_code=404, detail="Entity not found")
+
+    def _album_get(self, id: str) -> BrowseItem:
         """Get album details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -433,7 +514,7 @@ class LocalFilesInputModule(InputModule):
 
         return self._create_album_browse_item(album)
 
-    def artist_get(self, id: str) -> BrowseItem:
+    def _artist_get(self, id: str) -> BrowseItem:
         """Get artist details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -446,7 +527,7 @@ class LocalFilesInputModule(InputModule):
 
         return self._create_artist_browse_item(artist)
 
-    def track_get(self, id: str) -> BrowseItem:
+    def _track_get(self, id: str) -> BrowseItem:
         """Get track details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -459,7 +540,7 @@ class LocalFilesInputModule(InputModule):
 
         return self._create_track_browse_item(track)
 
-    def playlist_get(self, id: str) -> BrowseItem:
+    def _playlist_get(self, id: str) -> BrowseItem:
         """Get playlist details"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -492,25 +573,25 @@ class LocalFilesInputModule(InputModule):
             logger.warning("Database is not initialized or corrupted")
             raise HTTPException(status_code=503, detail="Database service unavailable")
         # Generate playlist ID using the name and system as creator
-        playlist_id = generate_playlist_id(name, "localfiles_system")
+        playlist_id_str = generate_playlist_id(name, "localfiles_system")
         # Create the playlist record
         self.db_manager.create_playlist(
-            playlist_id, name, description, "localfiles_system"
+            playlist_id_str, name, description, "localfiles_system"
         )
 
         # Get the created playlist
-        playlist = self.db_manager.get_playlist_by_id(playlist_id)
+        playlist = self.db_manager.get_playlist_by_id(playlist_id_str)
         if not playlist:
-            logger.error(f"Failed to retrieve created playlist: {playlist_id}")
+            logger.error(f"Failed to retrieve created playlist: {playlist_id_str}")
             raise HTTPException(status_code=500, detail="Failed to create playlist")
 
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
 
-        owner = Owner(name="Local System", id="localfiles_system")
+        owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
         return Playlist(
-            id=playlist_id,
+            id=playlist_id(playlist_id_str),
             name=name,
             description=description,
             track_count=playlist.get("track_count", 0),
@@ -536,10 +617,10 @@ class LocalFilesInputModule(InputModule):
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
 
-        owner = Owner(name="Local System", id="localfiles_system")
+        owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
         playlist_obj = Playlist(
-            id=playlist["id"],
+            id=playlist_id(playlist["id"]),
             name=playlist["name"],
             description=playlist["description"],
             track_count=playlist.get("track_count", 0),
@@ -592,11 +673,11 @@ class LocalFilesInputModule(InputModule):
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
 
-        owner = Owner(name="Local System", id="localfiles_system")
+        owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
         # Create Playlist object
         playlist_obj = Playlist(
-            id=playlist["id"],
+            id=playlist_id(playlist["id"]),
             name=playlist["name"],
             description=playlist["description"],
             track_count=playlist.get("track_count", 0),
@@ -656,10 +737,10 @@ class LocalFilesInputModule(InputModule):
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
 
-        owner = Owner(name="Local System", id="localfiles_system")
+        owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
         playlist_obj = Playlist(
-            id=playlist["id"],
+            id=playlist_id(playlist["id"]),
             name=playlist["name"],
             description=playlist["description"],
             track_count=playlist.get("track_count", 0),
@@ -679,9 +760,9 @@ class LocalFilesInputModule(InputModule):
         """Create a Track object from database data"""
         # Create album object
         album = Album(
-            id=track["album_id"],
+            id=album_id(track["album_id"]),
             title=track["album_title"],
-            artist=Artist(id=track["artist_id"], name=track["artist_name"]),
+            artist=Artist(id=artist_id(track["artist_id"]), name=track["artist_name"]),
         )
 
         # Add album image if available
@@ -691,14 +772,16 @@ class LocalFilesInputModule(InputModule):
 
         # Create Track object
         track_obj = Track(
-            id=track["id"],
+            id=track_id(track["id"]),
             title=track["title"],
             duration=track["duration"],
             album=album,
         )
 
         # Add performer if available
-        track_obj.performer = Artist(id=track["artist_id"], name=track["artist_name"])
+        track_obj.performer = Artist(
+            id=artist_id(track["artist_id"]), name=track["artist_name"]
+        )
 
         # Add ReplayGain info if available
         if track.get("replaygain_gain") is not None:
@@ -718,7 +801,7 @@ class LocalFilesInputModule(InputModule):
         track_metadata = self._create_track_metadata(track)
 
         return BrowseItem(
-            id=track["id"],
+            id=track_id(track["id"]),
             name=track["title"],
             url=f"/track/{track['id']}",
             can_browse=False,
@@ -731,11 +814,11 @@ class LocalFilesInputModule(InputModule):
         """Create a BrowseItem for an album"""
         # Create album object
         album_obj = Album(
-            id=album["id"],
+            id=album_id(album["id"]),
             title=album["title"],
             duration=album.get("duration", 0),
             track_count=album.get("track_count", 0),
-            artist=Artist(id=album["artist_id"], name=album["artist_name"]),
+            artist=Artist(id=artist_id(album["artist_id"]), name=album["artist_name"]),
         )
 
         # Add image if available
@@ -744,7 +827,7 @@ class LocalFilesInputModule(InputModule):
             album_obj.image = cover_path
 
         return BrowseItem(
-            id=album["id"],
+            id=album_id(album["id"]),
             name=album["title"],
             url=f"/album/{album['id']}",
             can_browse=True,
@@ -756,7 +839,7 @@ class LocalFilesInputModule(InputModule):
     def _create_artist_browse_item(self, artist: Dict) -> BrowseItem:
         """Create a BrowseItem for an artist"""
         # Create artist object
-        artist_obj = Artist(id=artist["id"], name=artist["name"])
+        artist_obj = Artist(id=artist_id(artist["id"]), name=artist["name"])
 
         # Add image if available
         image_path = self._get_artist_image_urls(artist["id"])
@@ -764,7 +847,7 @@ class LocalFilesInputModule(InputModule):
             artist_obj.image = image_path
 
         return BrowseItem(
-            id=artist["id"],
+            id=artist_id(artist["id"]),
             name=artist["name"],
             url=f"/artist/{artist['id']}",
             can_browse=True,
@@ -777,11 +860,11 @@ class LocalFilesInputModule(InputModule):
         # Create the Owner object required by the Playlist model
         from data_model.datamodel import Owner
 
-        owner = Owner(name="Local System", id="localfiles_system")
+        owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
         # Create playlist object
         playlist_obj = Playlist(
-            id=playlist["id"],
+            id=playlist_id(playlist["id"]),
             name=playlist["name"],
             description=playlist["description"],
             track_count=playlist.get("track_count", 0),
@@ -796,7 +879,7 @@ class LocalFilesInputModule(InputModule):
             playlist_obj.image = image_path
 
         return BrowseItem(
-            id=playlist["id"],
+            id=playlist_id(playlist["id"]),
             name=playlist["name"],
             url=f"/playlist/{playlist['id']}",
             can_browse=True,
