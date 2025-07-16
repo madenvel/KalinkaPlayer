@@ -3,16 +3,28 @@ import pytest
 from unittest.mock import Mock, call
 
 from data_model.response_model import AudioInfo, PlayerState
+from src.config_model import KalinkaConfig
 from src.events import EventType
 from src.inputmodule import TrackInfo, Track, TrackUrl
-from data_model.datamodel import Album
+from data_model.datamodel import Album, EntityId, EntityType
 from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
 
 
+def to_track_id(id: str):
+    return EntityId(
+        id=id,
+        type=EntityType.TRACK,
+        source="test_source",
+    )
+
+
 def create_track(id: str):
     return Track(
-        id=id, title="track" + id, duration=10, album=Album(id="1", title="album1")
+        id=to_track_id(id),
+        title="track" + id,
+        duration=10,
+        album=Album(id=to_track_id("1"), title="album1"),
     )
 
 
@@ -50,13 +62,7 @@ def event_emitter():
 
 @pytest.fixture
 def config():
-    config = Mock()
-    config.get.return_value = None
-    config.get_bool.return_value = False
-    config.get_int.return_value = 0
-    config.get_str.return_value = ""
-    config.get_list.return_value = []
-    config.get_dict.return_value = {}
+    config = KalinkaConfig()
     return config
 
 
@@ -73,7 +79,18 @@ def playqueue(config, event_emitter):
 
 def assert_call_args(actual_args, expected_args, position):
     for actual, expected in zip(actual_args, expected_args):
-        if isinstance(expected, PlayerState):
+        if isinstance(expected, dict) and "state" in expected:
+            # This is a serialized PlayerState, reconstruct and compare
+            actual_state = PlayerState(**actual)
+            expected_state = PlayerState(**expected)
+            # ignore timestamp and position for PlayerState comparisons
+            actual_state.timestamp = expected_state.timestamp
+            if "position" in actual and "position" in expected:
+                actual_state.position = expected_state.position
+            assert (
+                actual_state == expected_state
+            ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
+        elif isinstance(expected, PlayerState):
             actual_clone = PlayerState(**actual)
             # ignore timestamp
             actual_clone.timestamp = expected.timestamp
@@ -98,7 +115,9 @@ def assert_has_calls(event_emitter, expected_calls):
 
 
 def test_add_remove_track(event_emitter, playqueue):
-    track = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
+    track = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
     playqueue.add([track])
     playqueue.remove([0])
     time.sleep(1)
@@ -131,16 +150,23 @@ def test_add_remove_track(event_emitter, playqueue):
 
 
 def test_play(event_emitter, playqueue):
-    track = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
+    track = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
     playqueue.add([track])
     playqueue.play()
     time.sleep(4)
     expected_calls = [
         call.dispatch(
             EventType.StateChanged,
-            PlayerState(state="STOPPED", index=0, position=0),
+            PlayerState(state="STOPPED", index=0, position=0, timestamp=1).model_dump(
+                exclude_none=True
+            ),
         ),
-        call.dispatch(EventType.TracksAdded, [track.metadata]),
+        call.dispatch(
+            EventType.TracksAdded,
+            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
+        ),
         call.dispatch(
             EventType.StateChanged,
             PlayerState(
@@ -148,7 +174,8 @@ def test_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -158,7 +185,9 @@ def test_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -170,15 +199,21 @@ def test_play(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
 
 
 def test_switch_track(event_emitter, playqueue):
-    track1 = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
-    track2 = TrackInfo(id="2", metadata=create_track("2"), link_retriever=url2)
+    track1 = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
+    track2 = TrackInfo(
+        id=to_track_id("2"), metadata=create_track("2"), link_retriever=url2
+    )
     playqueue.add([track1, track2])
     playqueue.play(0)
     time.sleep(4)
@@ -191,18 +226,19 @@ def test_switch_track(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.TracksAdded,
             [
                 (
-                    track1.metadata.model_dump(exclude_unset=True)
+                    track1.metadata.model_dump(exclude_none=True)
                     if track1.metadata
                     else None
                 ),
                 (
-                    track2.metadata.model_dump(exclude_unset=True)
+                    track2.metadata.model_dump(exclude_none=True)
                     if track2.metadata
                     else None
                 ),
@@ -215,7 +251,8 @@ def test_switch_track(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track1.metadata,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -224,7 +261,9 @@ def test_switch_track(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track1.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -236,7 +275,9 @@ def test_switch_track(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -246,7 +287,9 @@ def test_switch_track(event_emitter, playqueue):
                 index=1,
                 position=0,
                 current_track=track2.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -258,17 +301,24 @@ def test_switch_track(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=14814
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
 
 
-# call play, then play_next and then play(1) after a second
 def test_play_next(event_emitter, playqueue):
-    track1 = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
-    track2 = TrackInfo(id="2", metadata=create_track("2"), link_retriever=url2)
-    track3 = TrackInfo(id="3", metadata=create_track("3"), link_retriever=url3)
+    track1 = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
+    track2 = TrackInfo(
+        id=to_track_id("2"), metadata=create_track("2"), link_retriever=url2
+    )
+    track3 = TrackInfo(
+        id=to_track_id("3"), metadata=create_track("3"), link_retriever=url3
+    )
     playqueue.add([track1, track2, track3])
     playqueue.play(0)
     time.sleep(4)
@@ -283,23 +333,24 @@ def test_play_next(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.TracksAdded,
             [
                 (
-                    track1.metadata.model_dump(exclude_unset=True)
+                    track1.metadata.model_dump(exclude_none=True)
                     if track1.metadata
                     else None
                 ),
                 (
-                    track2.metadata.model_dump(exclude_unset=True)
+                    track2.metadata.model_dump(exclude_none=True)
                     if track2.metadata
                     else None
                 ),
                 (
-                    track3.metadata.model_dump(exclude_unset=True)
+                    track3.metadata.model_dump(exclude_none=True)
                     if track3.metadata
                     else None
                 ),
@@ -312,7 +363,8 @@ def test_play_next(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track1.metadata,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -321,7 +373,9 @@ def test_play_next(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track1.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -333,7 +387,9 @@ def test_play_next(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -343,7 +399,9 @@ def test_play_next(event_emitter, playqueue):
                 index=2,
                 position=0,
                 current_track=track3.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -355,14 +413,18 @@ def test_play_next(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=90632
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
 
 
 def test_play_pause_stop_play(event_emitter, playqueue):
-    track = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
+    track = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
     time.sleep(1)
     playqueue.add([track])
     playqueue.play()
@@ -380,11 +442,12 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
+            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -393,7 +456,8 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -403,7 +467,9 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -415,7 +481,9 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -427,7 +495,9 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -436,7 +506,9 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -446,7 +518,9 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -458,14 +532,18 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
 
 
 def test_seek(event_emitter, playqueue):
-    track = TrackInfo(id="1", metadata=create_track("1"), link_retriever=url1)
+    track = TrackInfo(
+        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+    )
     time.sleep(1)
     playqueue.add([track])
     playqueue.play()
@@ -479,11 +557,12 @@ def test_seek(event_emitter, playqueue):
                 state="STOPPED",
                 index=0,
                 position=0,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
+            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -492,7 +571,8 @@ def test_seek(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(EventType.RequestMoreTracks),
         call.dispatch(
@@ -502,7 +582,9 @@ def test_seek(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -514,7 +596,9 @@ def test_seek(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -523,7 +607,9 @@ def test_seek(event_emitter, playqueue):
                 index=0,
                 position=0,
                 current_track=track.metadata,
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
         call.dispatch(
             EventType.StateChanged,
@@ -535,7 +621,9 @@ def test_seek(event_emitter, playqueue):
                 audio_info=AudioInfo(
                     sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
                 ),
-            ),
+                mime_type="FLAC",
+                timestamp=1,
+            ).model_dump(exclude_none=True),
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
