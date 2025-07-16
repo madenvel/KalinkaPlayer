@@ -9,7 +9,6 @@ import logging
 from functools import wraps
 import time
 from uuid import UUID, uuid4
-from typing import Any
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -70,45 +69,6 @@ def unpickle(obj, data):
     return None
 
 
-class RequestProxy:
-    def __init__(self, queue: Queue, cls, process: Process):
-        self._init_functions(cls)
-        self.queue = queue
-        self.process = process
-
-    def terminate(self):
-        self.queue.put("terminate")
-        self.process.join()
-
-    def _init_functions(self, cls):
-        attrs = [a for a in dir(cls) if not a.startswith("_") and a != "terminate"]
-        for attr in attrs:
-            setattr(self, attr, partial(self._default_func, attr))
-
-    def _default_func(self, name, *args, **kwargs):
-        self.queue.put(pickle(name, *args, **kwargs))
-
-
-class RequestExecutor:
-    def __init__(self, queue: Queue, obj: Any):
-        self.queue = queue
-        self.obj = obj
-        self.obj = obj
-
-    def run(self):
-        while True:
-            data = self.queue.get(block=True)
-            if data == "terminate":
-                break
-
-            op = unpickle(self.obj, data)
-
-            if op is not None:
-                op()
-            else:
-                logger.warn(f"Failed to unpickle, data={data}")
-
-
 class Subscription:
     uuid: UUID
     event_name: str
@@ -160,22 +120,3 @@ class EventEmitter:
 
     def dispatch(self, event_name, *args, **kwargs):
         self.queue.put({"event_name": event_name, "args": args, "kwargs": kwargs})
-
-
-def run_on_process(cls):
-    def process(request_queue, event_queue, cls):
-        obj = cls(EventEmitter(event_queue))
-        executor = RequestExecutor(request_queue, obj)
-        executor.run()
-        obj.terminate()
-
-    request_queue = Queue()
-    event_queue = Queue()
-    p = Process(
-        target=process,
-        name=cls.__name__,
-        args=(request_queue, event_queue, cls),
-    )
-    p.start()
-
-    return [RequestProxy(request_queue, cls, p), EventListener(event_queue)]
