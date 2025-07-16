@@ -4,7 +4,7 @@ import mimetypes
 import os
 from pathlib import Path
 from typing import List, Optional, Union
-from fastapi import FastAPI, HTTPException, Query, Request, Depends
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from data_model.datamodel import (
@@ -19,6 +19,7 @@ from src import state_keeper
 from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
 from src.ext_device import ExternalOutputDevice, Volume
+from src.favorite import combined_favorite_list
 from src.multisearch import multisearch
 from src.player_setup import setup, shutdown, modules
 from src.rest_event_proxy import EventStream
@@ -377,17 +378,33 @@ def create_app(config_file, config: KalinkaConfig):
         return {"message": "Ok"}
 
     @app.get("/favorite/list/{type}")
-    def list_favorite(
+    async def list_favorite(
         type: SearchType,
         filter: str,
+        source: Optional[str] = None,
         offset: int = 0,
         limit: int = 10,
     ):
-        # TODO: return all sources
-        return (
-            default_input_module()
-            .list_favorite(type, filter, offset, limit)
-            .model_dump(exclude_unset=True)
+        """List favorites of a specific type."""
+        input_modules: list[InputModule] = []
+
+        if source:
+            input_modules.append(input_module(source))
+        else:
+            input_modules.extend(
+                [
+                    module.interface
+                    for module in modules.prepared_input_modules.values()
+                    if isinstance(module.interface, InputModule)
+                ]
+            )
+
+        return await combined_favorite_list(
+            modules=input_modules,
+            type=type,
+            filter=filter,
+            offset=offset,
+            limit=limit,
         )
 
     @app.put("/favorite/add/{type}/{id}")
