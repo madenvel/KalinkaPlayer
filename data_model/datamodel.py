@@ -195,6 +195,10 @@ class BrowseItem(BaseModel):
     playlist: Optional[Playlist] = None
     catalog: Optional[Catalog] = None
     track: Optional[Track] = None
+
+    # Used for merging multiple items into a single view
+    timestamp: Optional[int] = None
+
     # Used for additional catalog sections to display alongside the current item
     # Examples: "Similar albums", "From the same artist", "Recommended" etc.
     # Not to be used for preview content in the root catalog

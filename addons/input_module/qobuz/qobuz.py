@@ -863,43 +863,46 @@ class QobuzInputModule(InputModule):
             tid = str(track["id"])
             album = track.get("album", album_meta)
             album_version = album.get("version", None)
-            result.append(
-                BrowseItem(
+
+            browse_item = BrowseItem(
+                id=track_id(tid),
+                name=append_str(track["title"], track.get("version", None)),
+                subname=(
+                    track["performer"]["name"]
+                    if "performer" in track
+                    else album.get("artist", {"name": None})["name"]
+                ),
+                can_browse=False,
+                can_add=True,
+                url="/track/" + str(track["id"]),
+                track=Track(
                     id=track_id(tid),
-                    name=append_str(track["title"], track.get("version", None)),
-                    subname=(
-                        track["performer"]["name"]
+                    title=append_str(track["title"], track.get("version", None)),
+                    duration=track["duration"],
+                    performer=(
+                        Artist(
+                            id=artist_id(str(track["performer"]["id"])),
+                            name=track["performer"]["name"],
+                        )
                         if "performer" in track
-                        else album.get("artist", {"name": None})["name"]
+                        else None
                     ),
-                    can_browse=False,
-                    can_add=True,
-                    url="/track/" + str(track["id"]),
-                    track=Track(
-                        id=track_id(tid),
-                        title=append_str(track["title"], track.get("version", None)),
-                        duration=track["duration"],
-                        performer=(
-                            Artist(
-                                id=artist_id(str(track["performer"]["id"])),
-                                name=track["performer"]["name"],
-                            )
-                            if "performer" in track
-                            else None
+                    album=Album(
+                        id=album_id(str(album["id"])),
+                        title=append_str(album["title"], album_version),
+                        artist=Artist(
+                            name=album["artist"]["name"],
+                            id=artist_id(str(album["artist"]["id"])),
                         ),
-                        album=Album(
-                            id=album_id(str(album["id"])),
-                            title=append_str(album["title"], album_version),
-                            artist=Artist(
-                                name=album["artist"]["name"],
-                                id=artist_id(str(album["artist"]["id"])),
-                            ),
-                            image=AlbumImage(**album["image"]),
-                        ),
-                        playlist_track_id=str(track.get("playlist_track_id", None)),
+                        image=AlbumImage(**album["image"]),
                     ),
-                )
+                    playlist_track_id=str(track.get("playlist_track_id", None)),
+                ),
             )
+            if "favorited_at" in track:
+                browse_item.timestamp = track["favorited_at"]
+
+            result.append(browse_item)
         return result
 
     def _search_items(self, item_type, query, offset, limit):
@@ -957,6 +960,7 @@ class QobuzInputModule(InputModule):
                 url="/artist/" + str(artist["id"]),
                 can_browse=True,
                 can_add=False,
+                timestamp=artist.get("favorited_at", None),
                 artist=Artist(
                     id=artist_id(str(artist["id"])),
                     name=artist["name"],
@@ -1007,6 +1011,7 @@ class QobuzInputModule(InputModule):
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
+                timestamp=album.get("favorited_at", None),
                 album=Album(
                     id=album_id(str(album["id"])),
                     title=append_str(album["title"], album.get("version", None)),
