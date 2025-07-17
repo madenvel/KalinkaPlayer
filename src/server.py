@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import asyncio
+from functools import partial
 import mimetypes
 import os
 from pathlib import Path
@@ -19,8 +20,7 @@ from src import state_keeper
 from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
 from src.ext_device import ExternalOutputDevice, Volume
-from src.favorite import combined_favorite_list
-from src.multisearch import multisearch
+from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
 from src.player_setup import setup, shutdown, modules
 from src.rest_event_proxy import EventStream
 
@@ -140,6 +140,29 @@ def default_input_module() -> InputModule:
         status_code=500,
         detail="Default input module interface is not initialized or of wrong type",
     )
+
+
+def extract_modules(sources: Optional[str]) -> List[InputModule]:
+    """Extract input modules based on the provided sources."""
+    if not sources:
+        return [
+            module.interface
+            for module in modules.prepared_input_modules.values()
+            if isinstance(module.interface, InputModule)
+        ]
+
+    sources_split = sources.split(",")
+    input_modules: list[InputModule] = []
+    for source in sources_split:
+        if source in modules.prepared_input_modules:
+            interface = modules.prepared_input_modules[source].interface
+            if isinstance(interface, InputModule):
+                input_modules.append(interface)
+
+    if not input_modules:
+        raise HTTPException(status_code=404, detail="No matching input modules found")
+
+    return input_modules
 
 
 def create_app(config_file, config: KalinkaConfig):
@@ -287,22 +310,17 @@ def create_app(config_file, config: KalinkaConfig):
         query: str,
         offset: int = 0,
         limit: int = 10,
-        source: Optional[str] = None,
+        sources: Optional[str] = None,
     ):
         """Search for items across input modules."""
-        sources_split = source.split(",") if source else None
-        input_modules: list[InputModule] = [
-            module.interface
-            for module in modules.prepared_input_modules.values()
-            if isinstance(module.interface, InputModule)
-        ]
+        input_modules: List[InputModule] = extract_modules(sources)
 
-        if sources_split:
-            input_modules = list(
-                filter(lambda m: m.module_name() in sources_split, input_modules)
-            )
-
-        return await multisearch(input_modules, search_type, query, offset, limit)
+        return await k_way_merge_browse_items(
+            [partial(module.search, search_type, query) for module in input_modules],
+            compared_value=lambda item: item.timestamp,
+            offset=offset,
+            limit=limit,
+        )
 
     @app.get("/queue/events")
     async def stream(request: Request):
@@ -381,28 +399,16 @@ def create_app(config_file, config: KalinkaConfig):
     async def list_favorite(
         type: SearchType,
         filter: str,
-        source: Optional[str] = None,
+        sources: Optional[str] = None,
         offset: int = 0,
         limit: int = 10,
     ):
         """List favorites of a specific type."""
-        input_modules: list[InputModule] = []
+        input_modules: list[InputModule] = extract_modules(sources)
 
-        if source:
-            input_modules.append(input_module(source))
-        else:
-            input_modules.extend(
-                [
-                    module.interface
-                    for module in modules.prepared_input_modules.values()
-                    if isinstance(module.interface, InputModule)
-                ]
-            )
-
-        return await combined_favorite_list(
-            modules=input_modules,
-            type=type,
-            filter=filter,
+        return await k_way_merge_browse_items(
+            [partial(module.list_favorite, type, filter) for module in input_modules],
+            compared_value=lambda item: item.timestamp,
             offset=offset,
             limit=limit,
         )
@@ -418,14 +424,22 @@ def create_app(config_file, config: KalinkaConfig):
         return {"message": "Ok"}
 
     @app.get("/favorite/ids")
-    def get_favorite_ids() -> FavoriteIds:
-        # TODO: return all sources
-        return default_input_module().get_favorite_ids()
+    async def get_favorite_ids(sources: Optional[str] = None) -> FavoriteIds:
+        input_modules: list[InputModule] = extract_modules(sources)
+
+        return await get_favorite_ids_merged(modules=input_modules)
 
     @app.get("/genre/list")
-    def list_genre(offset: int = 0, limit: int = 25) -> GenreList:
-        # TODO: return all sources
-        return default_input_module().list_genre(offset=offset, limit=limit)
+    async def list_genre(
+        sources: Optional[str] = None, offset: int = 0, limit: int = 25
+    ) -> GenreList:
+        genre_list = GenreList(offset=offset, limit=limit, total=0, items=[])
+        for module in modules.prepared_input_modules.values():
+            if isinstance(module.interface, InputModule):
+                result = module.interface.list_genre(offset=offset, limit=limit)
+                genre_list.items.extend(result.items)
+                genre_list.total += result.total
+        return genre_list
 
     @app.get("/get/{entity_id}")
     def entity_get(entity_id: str):
@@ -445,10 +459,9 @@ def create_app(config_file, config: KalinkaConfig):
             )
 
     @app.post("/playlist/create")
-    def playlist_create(name: str, description: str):
-        # TODO support source detection / source parameter
+    def playlist_create(name: str, description: str, source: str = "localfiles"):
         return (
-            default_input_module()
+            input_module(source)
             .playlist_create(name, description)
             .model_dump(exclude_unset=True)
         )
@@ -481,12 +494,16 @@ def create_app(config_file, config: KalinkaConfig):
         )
 
     @app.get("/playlist/list")
-    def playlist_user_list(offset: int = 0, limit: int = 25):
-        # TODO: return all sources, support source filter
-        return (
-            default_input_module()
-            .playlist_user_list(offset, limit)
-            .model_dump(exclude_unset=True)
+    async def playlist_user_list(
+        sources: Optional[str] = None, offset: int = 0, limit: int = 25
+    ):
+        modules: list[InputModule] = extract_modules(sources)
+
+        return await k_way_merge_browse_items(
+            [module.playlist_user_list for module in modules],
+            compared_value=lambda item: item.timestamp,
+            offset=offset,
+            limit=limit,
         )
 
     @app.delete("/playlist/remove_tracks")
