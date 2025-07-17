@@ -1,5 +1,11 @@
 from typing import Optional, List
-from pydantic import BaseModel, model_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    NonNegativeInt,
+    model_serializer,
+    field_validator,
+    model_validator,
+)
 from enum import Enum
 
 
@@ -197,7 +203,7 @@ class BrowseItem(BaseModel):
     track: Optional[Track] = None
 
     # Used for merging multiple items into a single view
-    timestamp: Optional[int] = None
+    timestamp: NonNegativeInt = 0
 
     # Used for additional catalog sections to display alongside the current item
     # Examples: "Similar albums", "From the same artist", "Recommended" etc.
