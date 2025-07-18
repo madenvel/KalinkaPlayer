@@ -185,7 +185,7 @@ def create_app(config_file, config: KalinkaConfig):
     def read_queue_list(offset: int = 0, limit: int = 10):
         return playqueue.list(offset=offset, limit=limit)
 
-    @app.post("/queue/add/items")
+    @app.post("/queue/add")
     def add_entity_to_queue(ids: list[str]):
         items: list[TrackInfo] = []
         for entity_id in ids:

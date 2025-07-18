@@ -636,11 +636,11 @@ class QobuzInputModule(InputModule):
                     BrowseItem(
                         id=catalog_id("playlist-by-category"),
                         name="Playlist By Category",
-                        url="/catalog/playlists-by-category",
+                        url="/catalog/playlist-by-category",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id=catalog_id("playlists-by-category"),
+                            id=catalog_id("playlist-by-category"),
                             title="Playlist By Category",
                             can_genre_filter=True,
                             preview_config=Preview(
@@ -715,16 +715,16 @@ class QobuzInputModule(InputModule):
             return self._get_qobuz_playlists(offset, limit, genre_ids)
         elif endpoint == "myweeklyq":
             return self._get_curated_tracks(offset, limit)
-        elif endpoint == "playlists-by-category":
+        elif endpoint == "playlist-by-category":
             return self._get_playists_by_category(offset, limit, genre_ids)
         elif endpoint == "press-awards":
             return self._get_new_releases("press-awards", offset, limit, genre_ids)
         elif endpoint == "most-streamed":
             return self._get_new_releases("most-streamed", offset, limit, genre_ids)
         else:
-            ep = endpoint.split("/")
+            ep = endpoint.split("_")
             if len(ep) > 1:
-                if ep[0] == "playlists-by-category":
+                if ep[0] == "playlist-by-category":
                     return self._get_qobuz_playlists(offset, limit, genre_ids, ep[1])
                 elif ep[0] == "album-suggestions":
                     return self._suggest_albums_similar_to(ep[1], offset, limit)
@@ -815,13 +815,13 @@ class QobuzInputModule(InputModule):
             total=len(tags),
             items=[
                 BrowseItem(
-                    id=tags[i]["slug"],
+                    id=catalog_id("playlist-by-category_" + tags[i]["slug"]),
                     name=json.loads(tags[i]["name_json"])["en"],
-                    url="/catalog/playlists-by-category/" + tags[i]["slug"],
+                    url="/catalog/playlist-by-category/" + tags[i]["slug"],
                     can_browse=True,
                     can_add=False,
                     catalog=Catalog(
-                        id=tags[i]["slug"],
+                        id=catalog_id("playlist-by-category_" + tags[i]["slug"]),
                         title=json.loads(tags[i]["name_json"])["en"],
                         can_genre_filter=True,
                         preview_config=Preview(
@@ -960,7 +960,7 @@ class QobuzInputModule(InputModule):
                 url="/artist/" + str(artist["id"]),
                 can_browse=True,
                 can_add=False,
-                timestamp=artist.get("favorited_at", None),
+                timestamp=artist.get("favorited_at", 0),
                 artist=Artist(
                     id=artist_id(str(artist["id"])),
                     name=artist["name"],
@@ -977,13 +977,13 @@ class QobuzInputModule(InputModule):
                 ),
                 extra_sections=[
                     BrowseItem(
-                        id=catalog_id("similar_artists_" + str(artist["id"])),
+                        id=catalog_id("similar-artists_" + str(artist["id"])),
                         name="Similar artists",
                         url="/catalog/similar-artists/" + str(artist["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id=catalog_id("similar_artists_" + str(artist["id"])),
+                            id=catalog_id("similar-artists_" + str(artist["id"])),
                             title="Similar artists",
                             can_genre_filter=False,
                             preview_config=Preview(
@@ -1011,7 +1011,7 @@ class QobuzInputModule(InputModule):
                 url="/album/" + album["id"],
                 can_browse=True,
                 can_add=True,
-                timestamp=album.get("favorited_at", None),
+                timestamp=album.get("favorited_at", 0),
                 album=Album(
                     id=album_id(str(album["id"])),
                     title=append_str(album["title"], album.get("version", None)),
@@ -1036,13 +1036,13 @@ class QobuzInputModule(InputModule):
                     *(
                         [
                             BrowseItem(
-                                id=catalog_id("artists_albums_" + str(album["id"])),
+                                id=catalog_id("artists-albums_" + str(album["id"])),
                                 name="More from this artist",
                                 url="/artist/" + str(artist.id),
                                 can_browse=True,
                                 can_add=False,
                                 catalog=Catalog(
-                                    id=catalog_id("artists_albums_" + str(album["id"])),
+                                    id=catalog_id("artists-albums_" + str(album["id"])),
                                     title="More from this artist",
                                     can_genre_filter=False,
                                     preview_config=Preview(
@@ -1059,13 +1059,13 @@ class QobuzInputModule(InputModule):
                         else []
                     ),
                     BrowseItem(
-                        id=catalog_id("album_suggestions_" + str(album["id"])),
+                        id=catalog_id("album-suggestions_" + str(album["id"])),
                         name="You may also like",
                         url="/catalog/album-suggestions/" + str(album["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
-                            id=catalog_id("album_suggestions_" + str(album["id"])),
+                            id=catalog_id("album-suggestions_" + str(album["id"])),
                             title="You may also like",
                             can_genre_filter=False,
                             preview_config=Preview(
@@ -1113,14 +1113,14 @@ class QobuzInputModule(InputModule):
                 playlist=self._qobuz_playlist_to_playlist(playlist),
                 extra_sections=[
                     BrowseItem(
-                        id=catalog_id("playlist_suggestions_" + str(playlist["id"])),
+                        id=catalog_id("playlist-suggestions_" + str(playlist["id"])),
                         name="Similar playlists",
                         url="/catalog/playlist-suggestions/" + str(playlist["id"]),
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
                             id=catalog_id(
-                                "playlist_suggestions_" + str(playlist["id"])
+                                "playlist-suggestions_" + str(playlist["id"])
                             ),
                             title="Similar playlists",
                             can_genre_filter=False,
