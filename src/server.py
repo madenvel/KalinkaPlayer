@@ -21,6 +21,7 @@ from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
 from src.ext_device import ExternalOutputDevice, Volume
 from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
+from src.multisearch import multisearch
 from src.player_setup import setup, shutdown, modules
 from src.rest_event_proxy import EventStream
 
@@ -315,9 +316,10 @@ def create_app(config_file, config: KalinkaConfig):
         """Search for items across input modules."""
         input_modules: List[InputModule] = extract_modules(sources)
 
-        return await k_way_merge_browse_items(
-            [partial(module.search, search_type, query) for module in input_modules],
-            compared_value=lambda item: item.timestamp,
+        return await multisearch(
+            modules=input_modules,
+            search_type=search_type,
+            query=query,
             offset=offset,
             limit=limit,
         )
