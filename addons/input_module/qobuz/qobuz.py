@@ -592,122 +592,123 @@ class QobuzInputModule(InputModule):
         genre_ids: List[EntityId] = [],
     ) -> BrowseItemList:
         if endpoint == "" or endpoint == "root":
+            all_items = [
+                BrowseItem(
+                    id=catalog_id("new-releases"),
+                    name="New Releases",
+                    url="/catalog/new-releases",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("new-releases"),
+                        title="New Releases",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            items_count=20,
+                            rows_count=2,
+                            aspect_ratio=1.0,
+                        ),
+                    ),
+                ),
+                BrowseItem(
+                    id=catalog_id("qobuz-playlists"),
+                    name="Qobuz Playlists",
+                    url="/catalog/qobuz-playlists",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("qobuz-playlists"),
+                        title="Qobuz Playlists",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            rows_count=2,
+                            items_count=20,
+                            aspect_ratio=0.475,
+                        ),
+                    ),
+                ),
+                BrowseItem(
+                    id=catalog_id("playlist-by-category"),
+                    name="Playlist By Category",
+                    url="/catalog/playlist-by-category",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("playlist-by-category"),
+                        title="Playlist By Category",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.TEXT_ONLY,
+                            items_count=20,
+                            rows_count=2,
+                            aspect_ratio=0.475,
+                        ),
+                    ),
+                ),
+                BrowseItem(
+                    id=catalog_id("myweeklyq"),
+                    name="My Weekly Q",
+                    url="/catalog/myweeklyq",
+                    can_browse=True,
+                    can_add=True,
+                    catalog=Catalog(
+                        id=catalog_id("myweeklyq"),
+                        title="My Weekly Q",
+                        description="Every Friday, a selection of discoveries curated especially for you.",
+                        can_genre_filter=False,
+                        image=CatalogImage(
+                            small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
+                            large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
+                        ),
+                        preview_config=Preview(type=PreviewType.NONE),
+                    ),
+                ),
+                BrowseItem(
+                    id=catalog_id("press-awards"),
+                    name="Press Awards",
+                    url="/catalog/press-awards",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("press-awards"),
+                        title="Press Awards",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            items_count=14,
+                            rows_count=1,
+                            aspect_ratio=1.0,
+                            card_size=CardSize.LARGE,
+                        ),
+                    ),
+                ),
+                BrowseItem(
+                    id=catalog_id("most-streamed"),
+                    name="Most Streamed",
+                    url="/catalog/most-streamed",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("most-streamed"),
+                        title="Top Releases",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            rows_count=2,
+                            aspect_ratio=1.0,
+                            items_count=20,
+                            card_size=CardSize.SMALL,
+                        ),
+                    ),
+                ),
+            ]
             return BrowseItemList(
                 offset=offset,
                 limit=limit,
-                total=6,
-                items=[
-                    BrowseItem(
-                        id=catalog_id("new-releases"),
-                        name="New Releases",
-                        url="/catalog/new-releases",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=catalog_id("new-releases"),
-                            title="New Releases",
-                            can_genre_filter=True,
-                            preview_config=Preview(
-                                type=PreviewType.IMAGE_TEXT,
-                                items_count=20,
-                                rows_count=2,
-                                aspect_ratio=1.0,
-                            ),
-                        ),
-                    ),
-                    BrowseItem(
-                        id=catalog_id("qobuz-playlists"),
-                        name="Qobuz Playlists",
-                        url="/catalog/qobuz-playlists",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=catalog_id("qobuz-playlists"),
-                            title="Qobuz Playlists",
-                            can_genre_filter=True,
-                            preview_config=Preview(
-                                type=PreviewType.IMAGE_TEXT,
-                                rows_count=2,
-                                items_count=20,
-                                aspect_ratio=0.475,
-                            ),
-                        ),
-                    ),
-                    BrowseItem(
-                        id=catalog_id("playlist-by-category"),
-                        name="Playlist By Category",
-                        url="/catalog/playlist-by-category",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=catalog_id("playlist-by-category"),
-                            title="Playlist By Category",
-                            can_genre_filter=True,
-                            preview_config=Preview(
-                                type=PreviewType.TEXT_ONLY,
-                                items_count=20,
-                                rows_count=2,
-                                aspect_ratio=0.475,
-                            ),
-                        ),
-                    ),
-                    BrowseItem(
-                        id=catalog_id("myweeklyq"),
-                        name="My Weekly Q",
-                        url="/catalog/myweeklyq",
-                        can_browse=True,
-                        can_add=True,
-                        catalog=Catalog(
-                            id=catalog_id("myweeklyq"),
-                            title="My Weekly Q",
-                            description="Every Friday, a selection of discoveries curated especially for you.",
-                            can_genre_filter=False,
-                            image=CatalogImage(
-                                small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
-                                large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
-                            ),
-                            preview_config=Preview(type=PreviewType.NONE),
-                        ),
-                    ),
-                    BrowseItem(
-                        id=catalog_id("press-awards"),
-                        name="Press Awards",
-                        url="/catalog/press-awards",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=catalog_id("press-awards"),
-                            title="Press Awards",
-                            can_genre_filter=True,
-                            preview_config=Preview(
-                                type=PreviewType.IMAGE_TEXT,
-                                items_count=14,
-                                rows_count=1,
-                                aspect_ratio=1.0,
-                                card_size=CardSize.LARGE,
-                            ),
-                        ),
-                    ),
-                    BrowseItem(
-                        id=catalog_id("most-streamed"),
-                        name="Most Streamed",
-                        url="/catalog/most-streamed",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=catalog_id("most-streamed"),
-                            title="Top Releases",
-                            can_genre_filter=True,
-                            preview_config=Preview(
-                                type=PreviewType.IMAGE_TEXT,
-                                rows_count=2,
-                                aspect_ratio=1.0,
-                                items_count=20,
-                                card_size=CardSize.SMALL,
-                            ),
-                        ),
-                    ),
-                ],
+                total=len(all_items),
+                items=all_items[offset : offset + limit],
             )
         elif endpoint == "new-releases":
             return self._get_new_releases("new-releases-full", offset, limit, genre_ids)
@@ -830,8 +831,8 @@ class QobuzInputModule(InputModule):
                         ),
                     ),
                 )
-                for i in range(offset, min(len(tags), limit))
-            ],
+                for i in range(len(tags))
+            ][offset : offset + limit],
         )
 
     def get_track_info(self, track_ids: list[str]) -> list[TrackInfo]:
