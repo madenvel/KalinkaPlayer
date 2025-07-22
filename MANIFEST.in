@@ -2,14 +2,7 @@
 include README.md
 include LICENSE
 include requirements.txt
-include *.json
 include *.sh
-
-# Include configuration examples (but not actual config files)
-include *.cfg.example
-include *.yaml.example
-include *.yml.example
-include CONFIGURATION.md
 
 # Include scripts
 recursive-include scripts *
