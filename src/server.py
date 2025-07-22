@@ -30,6 +30,7 @@ import json
 
 from src.inputmodule import InputModule, SearchType, TrackInfo
 from src.service_discovery import ServiceDiscovery
+from src.version import get_version, get_api_version
 from typing import Dict, Any
 
 
@@ -525,6 +526,15 @@ def create_app(config_file, config: KalinkaConfig):
             },
             devices={name: d.config for name, d in modules.prepared_devices.items()},
         )
+
+    @app.get("/server/version")
+    def get_version_info():
+        """Get version information for the server."""
+        return {
+            "server_version": get_version(),
+            "api_version": get_api_version(),
+            "name": "kalinka-player"
+        }
 
     @app.put("/server/restart")
     def restart_server():
