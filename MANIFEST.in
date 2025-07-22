@@ -1,0 +1,42 @@
+# Include important documentation and configuration files
+include README.md
+include LICENSE
+include requirements.txt
+include *.json
+include *.sh
+
+# Include configuration examples (but not actual config files)
+include *.cfg.example
+include *.yaml.example
+include *.yml.example
+include CONFIGURATION.md
+
+# Include scripts
+recursive-include scripts *
+
+# Include DEBIAN packaging files (for reference)
+recursive-include DEBIAN *
+
+# Include native player binaries and source
+recursive-include native_player *.so *.h *.cpp *.py Makefile
+recursive-exclude native_player *.o
+recursive-exclude native_player __pycache__
+recursive-exclude native_player build
+
+# Include addon modules
+recursive-include addons *.py
+
+# Include test files for development
+recursive-include tests *.py
+recursive-include test_files *
+
+# Include documentation
+recursive-include docs *
+
+# Exclude compiled Python files and cache directories
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude .git*
+global-exclude .pytest_cache
+global-exclude .mypy_cache

@@ -6,8 +6,9 @@ VENV_DIR=/opt/kalinka/venv
 SCRIPT_DIR=/usr/bin
 STARTUP_SCRIPT=/etc/systemd/system/kalinka.service
 USER=kalusr
+INSTALL_DIR=/opt/kalinka
 
-echo Create a system user
+echo "Creating system user"
 adduser --system --no-create-home --group $USER
 usermod -aG audio $USER
 mkhomedir_helper $USER
@@ -17,12 +18,30 @@ USER_HOME=$(sudo -u "$USER" sh -c 'echo $HOME')
 mkdir -p $USER_HOME/.local/share/kalinka
 chown $USER:$USER -R $USER_HOME/.local/share/kalinka
 
-echo Creating and activating virtual environment
+echo "Creating and activating virtual environment"
 python3 -m venv $VENV_DIR
 
-# Install necessary Python packages in the virtual environment
+# Activate virtual environment and install the package
 source $VENV_DIR/bin/activate
-pip install httpx[http2] pydantic fastapi uvicorn zeroconf pyyaml pybind11
+
+# Check if we have a wheel to install (preferred method)
+if [ -d "$INSTALL_DIR/wheels" ] && [ -n "$(ls $INSTALL_DIR/wheels/*.whl 2>/dev/null)" ]; then
+    echo "Installing from wheel package..."
+    # Install the wheel and its dependencies
+    pip install --upgrade pip
+    pip install $INSTALL_DIR/wheels/*.whl
+else
+    echo "Installing from source (fallback)..."
+    # Fallback to source installation for backward compatibility
+    cd $INSTALL_DIR
+    if [ -f "pyproject.toml" ]; then
+        pip install -e .
+    else
+        echo "Error: Neither wheel nor source installation files found"
+        exit 1
+    fi
+fi
+
 deactivate
 
 chown -R $USER:$USER /opt/kalinka/*
@@ -32,4 +51,4 @@ systemctl daemon-reload
 systemctl enable kalinka.service
 systemctl restart kalinka.service
 
-echo "Installation complete. The script will run at startup."
+echo "Installation complete. The Kalinka Player service is now running."

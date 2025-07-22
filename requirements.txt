@@ -1,19 +1,24 @@
-pydantic
-fastapi
-uvicorn
-zeroconf
-setuptools
-pyyaml
-pybind11
-pytest
-httpx[http2]
-schedule
-mutagen
-pillow
-musicbrainzngs
-requests
-watchfiles
-aiosqlite
-mimetype
-netifaces
-rapidfuzz
+# Production dependencies for Kalinka Player
+# These should match the dependencies in pyproject.toml
+
+pydantic>=2.0.0
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+zeroconf>=0.47.0
+pyyaml>=6.0
+pybind11>=2.10.0
+httpx[http2]>=0.24.0
+schedule>=1.2.0
+mutagen>=1.46.0
+pillow>=9.0.0
+musicbrainzngs>=0.7.1
+requests>=2.28.0
+watchfiles>=0.18.0
+aiosqlite>=0.17.0
+netifaces>=0.11.0
+rapidfuzz>=2.0.0
+
+# Build dependencies
+setuptools>=61.0
+setuptools-scm[toml]>=6.2
+wheel>=0.37.0

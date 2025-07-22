@@ -1,13 +1,79 @@
-__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+env/
+.env
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+*.lib
+*.dll
+*.dylib
+native_player/build/
+native_player/*.so
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
 kalinka_conf.yaml
 kalinka_state.json
-*.so
-*.o
-build/
-.venv/
-.vscode/
 test
 bin/
 native_test
-kalinka-*
+
+# Debian packaging artifacts
+kalinka-player-*
+*.deb
+
+# Configuration files (may contain sensitive information)
 *.cfg
+*.yaml
+*.yml
+config/
+configs/
+# Note: Use *.example extensions for safe template configs
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Log files
+*.log
+logs/
+
+# Virtual environments
+venv/
+ENV/
+env/

@@ -1,6 +1,7 @@
 import logging
 from src.config_model import KalinkaConfig
 from src.netutils import get_ip_address, get_all_ip_addresses
+from src.version import get_version, get_api_version
 
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -10,11 +11,15 @@ import socket
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-desc = {"kalinka_api_version": "0.1", "server_version": "1.4.0"}
-
 
 def get_service_info(config: KalinkaConfig) -> ServiceInfo:
     server_cfg = config.server
+
+    # Get dynamic version and API version
+    desc = {
+        "kalinka_api_version": get_api_version(),
+        "server_version": get_version()
+    }
 
     # Handle "all" interface case by getting all available IP addresses
     if server_cfg.interface == "all":

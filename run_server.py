@@ -75,7 +75,8 @@ def parse_args():
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the Kalinka server."""
     args = parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.debug is True else logging.INFO,
@@ -127,3 +128,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error starting server: {e}")
         raise
+
+
+if __name__ == "__main__":
+    main()

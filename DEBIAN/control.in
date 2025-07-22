@@ -9,6 +9,8 @@ Version: @VERSION@
 Architecture: @ARCH@
 Depends: python3 (>= PYTHON_VERSION),
     python3-venv,
+    python3-pip,
+    python3-setuptools,
     libcurlpp0,
     libcurl4,
     libflac++10,
