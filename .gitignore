@@ -25,6 +25,7 @@ coverage.xml
 .mypy_cache
 .pytest_cache
 .hypothesis
+_version.py
 
 # C/C++ build artifacts
 *.o
