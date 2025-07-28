@@ -14,6 +14,7 @@ from data_model.datamodel import (
     BrowseItemList,
     EntityId,
     EntityType,
+    PreviewContentType,
     Track,
     Album,
     AlbumImage,
@@ -215,6 +216,7 @@ class LocalFilesInputModule(InputModule):
         if recent_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
+                content_type=PreviewContentType.TRACK,
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -244,6 +246,7 @@ class LocalFilesInputModule(InputModule):
         if albums_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
+                content_type=PreviewContentType.ALBUM,
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -273,6 +276,7 @@ class LocalFilesInputModule(InputModule):
         if artists_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
+                content_type=PreviewContentType.ARTIST,
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -302,6 +306,7 @@ class LocalFilesInputModule(InputModule):
         if playlists_total > 0:
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
+                content_type=PreviewContentType.PLAYLIST,
                 items_count=10,
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -473,11 +478,11 @@ class LocalFilesInputModule(InputModule):
         """Get favorite IDs (not supported)"""
         return FavoriteIds(tracks=[], albums=[], artists=[], playlists=[])
 
-    def add_to_favorite(self, type: SearchType, id: str):
+    def add_to_favorite(self, id: str):
         """Add to favorites (not supported)"""
         logger.warning("Favorites are not supported in local files input module")
 
-    def remove_from_favorite(self, type: SearchType, id: str):
+    def remove_from_favorite(self, id: str):
         """Remove from favorites (not supported)"""
         logger.warning("Favorites are not supported in local files input module")
 

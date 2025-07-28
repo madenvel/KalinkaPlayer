@@ -21,7 +21,7 @@ from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
 from src.ext_device import ExternalOutputDevice, Volume
 from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
-from src.multisearch import multisearch
+from src.multisearch import calculate_fuzzy_score
 from src.player_setup import setup, shutdown, modules
 from src.rest_event_proxy import EventStream
 
@@ -51,9 +51,10 @@ async def lifespan(app: FastAPI):
         state_keeper.restore_state(
             app.state.playqueue,
             {
-                key: module.interface
-                for key, module in modules.prepared_input_modules.items()
-                if isinstance(module.interface, InputModule)
+                name: module.interface
+                for name, module in modules.prepared_input_modules.items()
+                if name in modules.enabled_devices
+                and isinstance(module.interface, InputModule)
             },
         )
         yield
@@ -119,6 +120,11 @@ def input_module_from_id(entity_id: str | EntityId) -> InputModule:
             status_code=404, detail=f"Input module '{source}' not found"
         )
 
+    if source not in modules.enabled_input_modules:
+        raise HTTPException(
+            status_code=404, detail=f"Input module '{source}' is disabled"
+        )
+
     interface = modules.prepared_input_modules[source].interface
     if isinstance(interface, InputModule):
         return interface
@@ -134,7 +140,10 @@ def default_input_module() -> InputModule:
     if not modules.prepared_input_modules:
         raise HTTPException(status_code=500, detail="No input modules available")
 
-    default_module = next(iter(modules.prepared_input_modules.values()))
+    default_module = modules.prepared_input_modules[
+        next(iter(modules.enabled_input_modules))
+    ]
+
     if isinstance(default_module.interface, InputModule):
         return default_module.interface
 
@@ -149,8 +158,9 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
     if not sources:
         return [
             module.interface
-            for module in modules.prepared_input_modules.values()
-            if isinstance(module.interface, InputModule)
+            for module_name, module in modules.prepared_input_modules.items()
+            if module_name in modules.enabled_input_modules
+            and isinstance(module.interface, InputModule)
         ]
 
     sources_split = sources.split(",")
@@ -244,11 +254,12 @@ def create_app(config_file, config: KalinkaConfig):
         result = BrowseItemList(
             offset=offset,
             limit=limit,
-            total=len(modules.prepared_input_modules),
+            total=len(modules.enabled_input_modules),
             items=[],
         )
 
-        for module_name, module in modules.prepared_input_modules.items():
+        for module_name in modules.enabled_input_modules:
+            module = modules.prepared_input_modules[module_name]
             if isinstance(module.interface, InputModule):
                 entity_id = EntityId(
                     id="root", type=EntityType.CATALOG, source=module_name
@@ -317,10 +328,9 @@ def create_app(config_file, config: KalinkaConfig):
         """Search for items across input modules."""
         input_modules: List[InputModule] = extract_modules(sources)
 
-        return await multisearch(
-            modules=input_modules,
-            search_type=search_type,
-            query=query,
+        return await k_way_merge_browse_items(
+            [partial(module.search, search_type, query) for module in input_modules],
+            compared_value=lambda item: calculate_fuzzy_score(item.name, query),
             offset=offset,
             limit=limit,
         )
@@ -401,7 +411,7 @@ def create_app(config_file, config: KalinkaConfig):
     @app.get("/favorite/list/{type}")
     async def list_favorite(
         type: SearchType,
-        filter: str,
+        filter: str = "",
         sources: Optional[str] = None,
         offset: int = 0,
         limit: int = 10,
@@ -417,13 +427,13 @@ def create_app(config_file, config: KalinkaConfig):
         )
 
     @app.put("/favorite/add/{type}/{id}")
-    def add_favorite(type: SearchType, id: str):
-        input_module_from_id(id).add_to_favorite(type, id)
+    def add_favorite(id: str):
+        input_module_from_id(id).add_to_favorite(id)
         return {"message": "Ok"}
 
     @app.delete("/favorite/remove/{type}/{id}")
-    def remove_favorite(type: SearchType, id: str):
-        input_module_from_id(id).remove_from_favorite(type, id)
+    def remove_favorite(id: str):
+        input_module_from_id(id).remove_from_favorite(id)
         return {"message": "Ok"}
 
     @app.get("/favorite/ids")
@@ -437,7 +447,8 @@ def create_app(config_file, config: KalinkaConfig):
         sources: Optional[str] = None, offset: int = 0, limit: int = 25
     ) -> GenreList:
         genre_list = GenreList(offset=offset, limit=limit, total=0, items=[])
-        for module in modules.prepared_input_modules.values():
+        for module_name in modules.enabled_input_modules:
+            module = modules.prepared_input_modules[module_name]
             if isinstance(module.interface, InputModule):
                 result = module.interface.list_genre(offset=offset, limit=limit)
                 genre_list.items.extend(result.items)
@@ -533,7 +544,7 @@ def create_app(config_file, config: KalinkaConfig):
         return {
             "server_version": get_version(),
             "api_version": get_api_version(),
-            "name": "kalinka-player"
+            "name": "kalinka-player",
         }
 
     @app.put("/server/restart")
@@ -616,8 +627,8 @@ def create_app(config_file, config: KalinkaConfig):
     @app.get("/resource/{file_name:path}")
     async def get_resource(file_name: str):
         file_path = None
-        for module in modules.prepared_input_modules.keys():
-            file_path = input_module(module).get_resource_path(file_name)
+        for module_name in modules.enabled_input_modules:
+            file_path = input_module(module_name).get_resource_path(file_name)
             if file_path:
                 resolved_path = Path(file_path).resolve()
                 if resolved_path.is_file():
