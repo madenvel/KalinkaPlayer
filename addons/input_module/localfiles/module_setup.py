@@ -97,7 +97,7 @@ def shutdown_process(proc):
     """Shutdown a process by sending a shutdown command over its socket."""
 
     if proc is None or not proc.is_alive():
-        logger.warning("Process is not running or already shut down.")
+        logger.warning(f"Process is not running or already shut down.")
         return
 
     # Send shutdown command over the process's socket

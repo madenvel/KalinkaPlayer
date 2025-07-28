@@ -44,6 +44,7 @@ from data_model.datamodel import (
     Playlist,
     PlaylistImage,
     Preview,
+    PreviewContentType,
     PreviewType,
     Track,
     EntityId,
@@ -605,6 +606,7 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.IMAGE_TEXT,
+                            content_type=PreviewContentType.ALBUM,
                             items_count=20,
                             rows_count=2,
                             aspect_ratio=1.0,
@@ -623,9 +625,10 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.IMAGE_TEXT,
+                            content_type=PreviewContentType.PLAYLIST,
                             rows_count=2,
                             items_count=20,
-                            aspect_ratio=0.475,
+                            aspect_ratio=1 / 0.475,
                         ),
                     ),
                 ),
@@ -641,9 +644,10 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.TEXT_ONLY,
+                            content_type=PreviewContentType.CATALOG,
                             items_count=20,
                             rows_count=2,
-                            aspect_ratio=0.475,
+                            aspect_ratio=1 / 0.475,
                         ),
                     ),
                 ),
@@ -677,6 +681,7 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.IMAGE_TEXT,
+                            content_type=PreviewContentType.ALBUM,
                             items_count=14,
                             rows_count=1,
                             aspect_ratio=1.0,
@@ -696,6 +701,7 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.IMAGE_TEXT,
+                            content_type=PreviewContentType.ALBUM,
                             rows_count=2,
                             aspect_ratio=1.0,
                             items_count=20,
@@ -827,7 +833,7 @@ class QobuzInputModule(InputModule):
                         can_genre_filter=True,
                         preview_config=Preview(
                             type=PreviewType.IMAGE_TEXT,
-                            aspect_ratio=0.475,
+                            aspect_ratio=1 / 0.475,
                         ),
                     ),
                 )
@@ -989,6 +995,7 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=False,
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
+                                content_type=PreviewContentType.ARTIST,
                                 items_count=5,
                                 rows_count=1,
                                 aspect_ratio=1.0,
@@ -1048,6 +1055,7 @@ class QobuzInputModule(InputModule):
                                     can_genre_filter=False,
                                     preview_config=Preview(
                                         type=PreviewType.IMAGE_TEXT,
+                                        content_type=PreviewContentType.ALBUM,
                                         items_count=10,
                                         rows_count=1,
                                         aspect_ratio=1.0,
@@ -1071,6 +1079,7 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=False,
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
+                                content_type=PreviewContentType.ALBUM,
                                 items_count=5,
                                 rows_count=1,
                                 aspect_ratio=1.0,
@@ -1127,9 +1136,10 @@ class QobuzInputModule(InputModule):
                             can_genre_filter=False,
                             preview_config=Preview(
                                 type=PreviewType.IMAGE_TEXT,
+                                content_type=PreviewContentType.PLAYLIST,
                                 items_count=9,
                                 rows_count=1,
-                                aspect_ratio=0.475,
+                                aspect_ratio=1 / 0.475,
                                 card_size=CardSize.LARGE,
                             ),
                         ),
@@ -1216,24 +1226,28 @@ class QobuzInputModule(InputModule):
         rjson = response.json()
 
         return FavoriteIds(
-            albums=rjson["albums"],
-            artists=[str(id) for id in rjson["artists"]],
-            tracks=[str(id) for id in rjson["tracks"]],
+            albums=[album_id(str(id)) for id in rjson["albums"]],
+            artists=[artist_id(str(id)) for id in rjson["artists"]],
+            tracks=[track_id(str(id)) for id in rjson["tracks"]],
             playlists=self._get_favorite_playlist_ids(),
         )
 
-    def _get_favorite_playlist_ids(self) -> list[str]:
+    def _get_favorite_playlist_ids(self) -> list[EntityId]:
         rjson = self.qobuz_client.get_user_playlists(limit=500)
 
-        return [str(playlist["id"]) for playlist in rjson["playlists"]["items"]]
+        return [
+            playlist_id(str(playlist["id"])) for playlist in rjson["playlists"]["items"]
+        ]
 
-    def add_to_favorite(self, type: SearchType, id: str):
+    def add_to_favorite(self, id: str):
+        entity_id = EntityId.from_string(id)
+
         if type == SearchType.playlist:
             endpoint = "playlist/subscribe"
-            params = {"playlist_id": id}
+            params = {"playlist_id": entity_id.id}
         else:
             endpoint = "favorite/create"
-            params = {type.value + "_ids": id}
+            params = {entity_id.type.value + "_ids": entity_id.id}
 
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + endpoint, params=params
@@ -1243,21 +1257,25 @@ class QobuzInputModule(InputModule):
 
         rjson = response.json()
 
+        logger.info(f"Add to favorite response: {rjson}")
+
         if "status" not in rjson or rjson["status"] != "success":
             raise Exception(f"Failed to add to favorite: {response.text}")
 
         self.event_emitter.dispatch(
             EventType.FavoriteAdded,
-            FavoriteAddedEvent(id=id, type=type.value).model_dump(),
+            FavoriteAddedEvent(id=entity_id).model_dump(),
         )
 
-    def remove_from_favorite(self, type: SearchType, id: str):
-        if type == SearchType.playlist:
+    def remove_from_favorite(self, id: str):
+        entity_id = EntityId.from_string(id)
+
+        if entity_id.type == SearchType.playlist:
             endpoint = "playlist/unsubscribe"
-            params = {"playlist_id": id}
+            params = {"playlist_id": entity_id.id}
         else:
             endpoint = "favorite/delete"
-            params = {type.value + "_ids": id}
+            params = {entity_id.type.value + "_ids": entity_id.id}
 
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + endpoint, params=params
@@ -1272,7 +1290,7 @@ class QobuzInputModule(InputModule):
 
         self.event_emitter.dispatch(
             EventType.FavoriteRemoved,
-            FavoriteRemovedEvent(id=id, type=type.value).model_dump(),
+            FavoriteRemovedEvent(id=entity_id).model_dump(),
         )
 
     def list_genre(self, offset: int, limit: int) -> GenreList:

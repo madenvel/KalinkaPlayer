@@ -80,6 +80,24 @@ class PreparedModuleCollection:
     def __init__(self):
         self.prepared_input_modules: dict[str, PreparedModule] = {}
         self.prepared_devices: dict[str, PreparedModule] = {}
+        self.enabled_input_modules: set[str] = set()
+        self.enabled_devices: set[str] = set()
+
+    def update_enabled_input_modules(self):
+        """Update the set of enabled input module names."""
+        self.enabled_input_modules = {
+            name
+            for name, module in self.prepared_input_modules.items()
+            if module.config.enabled
+        }
+
+    def update_enabled_devices(self):
+        """Update the set of enabled device names."""
+        self.enabled_devices = {
+            name
+            for name, module in self.prepared_devices.items()
+            if module.config.enabled
+        }
 
 
 modules = PreparedModuleCollection()
@@ -201,6 +219,7 @@ def scan_and_setup_input_modules(
     )
 
     modules.prepared_input_modules = {name: module for name, module in gen}
+    modules.update_enabled_input_modules()
 
 
 def scan_and_setup_devices(config_path: str, playqueue, event_emitter, event_listener):
@@ -212,6 +231,7 @@ def scan_and_setup_devices(config_path: str, playqueue, event_emitter, event_lis
     )
 
     modules.prepared_devices = {name: module for name, module in gen}
+    modules.update_enabled_devices()
 
 
 def setup(config_path: str, config: KalinkaConfig) -> tuple[PlayQueue, EventListener]:

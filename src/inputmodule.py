@@ -67,11 +67,11 @@ class InputModule(ABC):
         pass
 
     @abstractmethod
-    def add_to_favorite(self, type: SearchType, id: str):
+    def add_to_favorite(self, id: str):
         pass
 
     @abstractmethod
-    def remove_from_favorite(self, type: SearchType, id: str):
+    def remove_from_favorite(self, id: str):
         pass
 
     @abstractmethod

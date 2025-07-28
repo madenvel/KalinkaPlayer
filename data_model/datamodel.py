@@ -87,6 +87,14 @@ class PreviewType(str, Enum):
     NONE = "none"
 
 
+class PreviewContentType(str, Enum):
+    ALBUM = "album"
+    ARTIST = "artist"
+    PLAYLIST = "playlist"
+    TRACK = "track"
+    CATALOG = "catalog"
+
+
 class CardSize(str, Enum):
     SMALL = "small"
     LARGE = "large"
@@ -175,6 +183,7 @@ class Preview(BaseModel):
     # This is a UI configuration value, not the actual count of items available.
     items_count: Optional[int] = None
     type: PreviewType
+    content_type: Optional[PreviewContentType] = None
     rows_count: Optional[int] = None
     aspect_ratio: Optional[float] = None
     card_size: Optional[CardSize] = None
