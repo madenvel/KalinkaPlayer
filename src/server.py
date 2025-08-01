@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
             {
                 name: module.interface
                 for name, module in modules.prepared_input_modules.items()
-                if name in modules.enabled_devices
+                if name in modules.enabled_input_modules
                 and isinstance(module.interface, InputModule)
             },
         )
@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
         shutdown(os.path.dirname(app.state.config_file))
         app.state.event_listener.terminate()
         state_keeper.save_state(app.state.playqueue)
+        app.state.config.restart = False
         save_config(app.state.config_file, app.state.config)
         app.state.playqueue.terminate()
 

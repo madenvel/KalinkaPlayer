@@ -108,3 +108,4 @@ class KalinkaConfig(BaseModel):
     fixups: FixupsConfig = Field(
         default_factory=FixupsConfig, title="Hacks to work around hardware issues"
     )
+    restart: bool = Field(default=False, title="Restart the server")
