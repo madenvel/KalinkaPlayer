@@ -184,7 +184,7 @@ class LocalFilesInputModule(InputModule):
         genre_ids: List[EntityId] = [],
     ) -> BrowseItemList:
         """Browse the catalog endpoints"""
-        if endpoint == "" or endpoint == "root":
+        if endpoint == "root":
             return self._browse_root()
         elif endpoint == "recent":
             return self._browse_recently_added(offset, limit)
