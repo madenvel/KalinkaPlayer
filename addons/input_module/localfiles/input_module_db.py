@@ -1,4 +1,5 @@
 import os
+import shutil
 import sqlite3
 import logging
 from typing import List, Dict, Optional, Any, Tuple
@@ -19,7 +20,41 @@ class LocalFilesInputModuleDb:
     def __init__(self, config: LocalFilesConfig):
         self.db_path = Path(config.db_path).expanduser().resolve()
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
+        if config.rescan_on_startup:
+            logger.warning(
+                "Rescan on startup is enabled. This will purge the database and rescan all files."
+            )
+            self._purge_database()
+            logger.warning("Cleaning up cached artwork.")
+            self._purge_artwork()
+            logger.info(
+                "Database purged and artwork cache cleared. The database will be rebuilt."
+            )
+            config.rescan_on_startup = False
+
         self.db_state = None
+
+    def _purge_database(self):
+        """Purge the database by removing the file and reinitializing it."""
+        if self.db_path.exists():
+            try:
+                self.db_path.unlink()
+                logger.info(f"Database purged: {self.db_path}")
+            except OSError as e:
+                logger.error(f"Failed to purge database: {e}")
+        else:
+            logger.info("No existing database to purge.")
+
+    def _purge_artwork(self):
+        """Purge the artwork directory by removing all files and folders."""
+        if self.artwork_path.exists() and self.artwork_path.is_dir():
+            try:
+                shutil.rmtree(self.artwork_path)
+                logger.info(f"Artwork directory purged: {self.artwork_path}")
+            except OSError as e:
+                logger.error(f"Failed to purge artwork directory: {e}")
+        else:
+            logger.info("No existing artwork directory to purge.")
 
     def _get_connection(self):
         """Get a database connection with row factory"""
