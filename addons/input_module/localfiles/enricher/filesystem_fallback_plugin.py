@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
@@ -32,6 +33,10 @@ class FilesystemFallbackPlugin(EnricherPlugin):
 
     Filename artist-track splitting supports various dash variants: -, –, —, with or without spaces.
 
+    **Important**: This plugin only analyzes folder structure within the configured music
+    directories. It will not use folder names outside of the music directories to avoid
+    incorrect metadata extraction from system paths.
+
     Enrichment behavior:
     - Artist enrichment: Updates artist name only if current name is "unknown"
     - Album enrichment: Updates album title only if current title is "unknown"
@@ -45,6 +50,11 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
+
+        # Expand user (~) and resolve absolute paths for music folders
+        self.music_folders = [
+            str(Path(folder).expanduser().resolve()) for folder in config.music_folders
+        ]
 
         # Track number regex patterns
         self.track_number_patterns = [
@@ -247,11 +257,42 @@ class FilesystemFallbackPlugin(EnricherPlugin):
 
         return album_id
 
+    def _find_containing_music_folder(self, file_path: str) -> Optional[str]:
+        """
+        Find which configured music folder contains the given file path.
+
+        Args:
+            file_path: Full path to the audio file
+
+        Returns:
+            The music folder path that contains the file, or None if not found
+        """
+        if not file_path:
+            return None
+
+        # Normalize the file path
+        normalized_file_path = str(Path(file_path).resolve())
+
+        # Check each music folder to see if it contains the file
+        for music_folder in self.music_folders:
+            try:
+                # Check if the file path starts with the music folder path
+                if (
+                    normalized_file_path.startswith(music_folder + os.sep)
+                    or normalized_file_path == music_folder
+                ):
+                    return music_folder
+            except Exception as e:
+                logger.debug(f"Error checking music folder {music_folder}: {e}")
+                continue
+
+        return None
+
     def _extract_metadata_from_path(self, file_path: str) -> Dict[str, Optional[str]]:
         """
-        Extract metadata from file path structure.
+        Extract metadata from file path structure within the configured music folders.
 
-        Expected structure: .../Artist/Album/track.ext or .../Album/track.ext
+        Expected structure: MusicFolder/Artist/Album/track.ext or MusicFolder/Album/track.ext
 
         Args:
             file_path: Full path to the audio file
@@ -262,11 +303,30 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         if not file_path:
             return {}
 
-        # Normalize path and split into parts
-        path_parts = os.path.normpath(file_path).split(os.sep)
+        # Find which music folder contains this file
+        containing_music_folder = self._find_containing_music_folder(file_path)
+        if not containing_music_folder:
+            logger.debug(
+                f"File path not within any configured music folder: {file_path}"
+            )
+            return {}
 
-        if len(path_parts) < 2:
-            logger.debug(f"File path too short to extract metadata: {file_path}")
+        # Get the relative path from the music folder
+        try:
+            relative_path = os.path.relpath(file_path, containing_music_folder)
+        except Exception as e:
+            logger.debug(
+                f"Could not get relative path for {file_path} from {containing_music_folder}: {e}"
+            )
+            return {}
+
+        # Split the relative path into parts
+        path_parts = relative_path.split(os.sep)
+
+        if len(path_parts) < 1:
+            logger.debug(
+                f"Relative path too short to extract metadata: {relative_path}"
+            )
             return {}
 
         # Get filename without extension
@@ -277,29 +337,37 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             self._extract_track_number_and_title(filename)
         )
 
-        # Get album folder (second to last part of path)
-        album_folder = path_parts[-2]
-        album_title, artist_from_folder = self._parse_album_folder(album_folder)
+        # Handle album and artist based on path depth within music folder
+        album_title = None
+        artist_name = artist_from_filename  # Prioritize artist from filename
 
-        # Prioritize artist from filename over folder structure
-        artist_name = artist_from_filename
-        if not artist_name:
-            # Fall back to artist from album folder
-            artist_name = artist_from_folder
+        if len(path_parts) >= 2:
+            # At least one folder level: treat second-to-last as album folder
+            album_folder = path_parts[-2]
+            album_title, artist_from_folder = self._parse_album_folder(album_folder)
+
+            # If no artist from filename, use artist from album folder
+            if not artist_name:
+                artist_name = artist_from_folder
+
+            # If still no artist and we have another folder level, use it as artist
             if not artist_name and len(path_parts) >= 3:
-                # Use the third-to-last path component as artist
                 artist_name = path_parts[-3]
 
         metadata = {
             "title": title if title else filename,
-            "album": album_title,
             "track_number": track_number,
         }
+
+        if album_title:
+            metadata["album"] = album_title
 
         if artist_name:
             metadata["artist"] = artist_name
 
-        logger.debug(f"Extracted metadata from {file_path}: {metadata}")
+        logger.debug(
+            f"Extracted metadata from {file_path} (relative: {relative_path}): {metadata}"
+        )
         return metadata
 
     async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
