@@ -70,3 +70,6 @@ class LocalFilesConfig(ModuleConfig):
     enricher: EnricherConfig = Field(
         default_factory=EnricherConfig, title="Enricher Settings"
     )
+    rescan_on_startup: bool = Field(
+        default=False, title="Purge database and rescan after restart"
+    )
