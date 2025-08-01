@@ -201,7 +201,7 @@ class Catalog(BaseModel):
 class BrowseItem(BaseModel):
     id: EntityId
     name: str
-    url: str
+    url: Optional[str] = None
     can_browse: bool = False
     can_add: bool = False
     subname: Optional[str] = None
