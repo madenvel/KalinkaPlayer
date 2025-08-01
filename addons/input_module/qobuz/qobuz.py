@@ -595,6 +595,25 @@ class QobuzInputModule(InputModule):
         if endpoint == "" or endpoint == "root":
             all_items = [
                 BrowseItem(
+                    id=catalog_id("recent-releases"),
+                    name="Recent Releases",
+                    url="/catalog/recent-releases",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id("recent-releases"),
+                        title="Recent Releases",
+                        can_genre_filter=True,
+                        preview_config=Preview(
+                            type=PreviewType.CAROUSEL,
+                            content_type=PreviewContentType.ALBUM,
+                            items_count=5,
+                            rows_count=1,
+                            aspect_ratio=1.0,
+                        ),
+                    ),
+                ),
+                BrowseItem(
                     id=catalog_id("new-releases"),
                     name="New Releases",
                     url="/catalog/new-releases",
@@ -716,6 +735,12 @@ class QobuzInputModule(InputModule):
                 total=len(all_items),
                 items=all_items[offset : offset + limit],
             )
+        elif endpoint == "recent-releases":
+            res = self._get_new_releases(
+                "new-releases-full", offset, max(0, min(5 - offset, limit)), genre_ids
+            )
+            res.total = min(res.total, 5)
+            return res
         elif endpoint == "new-releases":
             return self._get_new_releases("new-releases-full", offset, limit, genre_ids)
         elif endpoint == "qobuz-playlists":
