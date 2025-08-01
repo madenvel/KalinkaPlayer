@@ -54,7 +54,7 @@ def setup(
     global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue
 
     logger.info("Setting up localfiles input module")
-    # Create specialized databases for each component
+
     input_module_db = LocalFilesInputModuleDb(config)
 
     # The LocalFilesInputModule will use its own specialized DB
