@@ -81,9 +81,15 @@ class EntityId(BaseModel):
 
 
 class PreviewType(str, Enum):
+    # Displays a card with an image and title / subtitle underneath
     IMAGE_TEXT = "image"
+    # Displays a text-only card with title inside the card
     TEXT_ONLY = "text"
+    # Displays a carousel of items (first 5 items)
+    # This is used for the root catalog and should not be used for other sections
     CAROUSEL = "carousel"
+    # Displays a list of tiles with image and title / subtitle to the right
+    TILE = "tile"
     NONE = "none"
 
 
@@ -217,7 +223,7 @@ class BrowseItem(BaseModel):
     # Used for additional catalog sections to display alongside the current item
     # Examples: "Similar albums", "From the same artist", "Recommended" etc.
     # Not to be used for preview content in the root catalog
-    extra_sections: Optional[List["BrowseItem"]] = None
+    sections: Optional[List["BrowseItem"]] = None
 
 
 class BrowseItemList(BaseModel):
