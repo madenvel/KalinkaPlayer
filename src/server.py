@@ -259,7 +259,7 @@ def create_app(config_file, config: KalinkaConfig):
             items=[],
         )
 
-        for module_name in modules.enabled_input_modules:
+        for module_name in sorted(modules.enabled_input_modules):
             module = modules.prepared_input_modules[module_name]
             if isinstance(module.interface, InputModule):
                 entity_id = EntityId(
