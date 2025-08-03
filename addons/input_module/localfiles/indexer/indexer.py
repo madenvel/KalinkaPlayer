@@ -558,76 +558,91 @@ class FileIndexer:
         }
 
 
-async def _indexer_worker(config, db_manager: AsyncIndexerDb):
+async def _indexer_worker(config: LocalFilesConfig, db_manager: AsyncIndexerDb):
     """Background worker task for the indexer"""
-    global _shutdown_event
+    global _shutdown_event, _indexer_queue
 
-    indexer_instance = FileIndexer(config, db_manager)
-    await indexer_instance.start()
-    interval_minutes = config.get("scan_interval_minutes", 5)
-    logger.info(f"Scheduled file indexer to run every {interval_minutes} minutes")
-    last_run = time.time()
+    try:
+        indexer_instance = FileIndexer(config, db_manager)
+        await indexer_instance.start()
+        logger.info("Indexer worker started")
+        interval_minutes = config.scan_interval_minutes
+        logger.info(f"Scheduled file indexer to run every {interval_minutes} minutes")
+        last_run = time.time()
 
-    while True:
-        try:
+        while True:
             try:
-                command = await _indexer_queue.get()
-                if command == "scan":
-                    logger.info("Manual indexer scan triggered")
+                try:
+                    command = await asyncio.wait_for(_indexer_queue.get(), timeout=30.0)
+                    logger.info(f"Received command: {command}")
+                    if command == "scan":
+                        logger.info("Manual indexer scan triggered")
+                        await indexer_instance.start()
+                        last_run = time.time()
+                    elif command == "stop":
+                        logger.info("Stopping indexer worker")
+                        _shutdown_event.set()
+                        break
+                    elif isinstance(command, dict) and "incremental_changes" in command:
+                        logger.info("File watcher detected changes, processing...")
+                        await indexer_instance.handle_incremental_changes(
+                            command["incremental_changes"]
+                        )
+                        last_run = time.time()
+                    _indexer_queue.task_done()
+                except asyncio.TimeoutError:
+                    # This is expected - allows periodic checking for scheduled scans
+                    pass
+
+                if time.time() - last_run > interval_minutes * 60:
+                    logger.info(
+                        f"Scheduled indexer scan triggered (interval: {interval_minutes} mins)"
+                    )
                     await indexer_instance.start()
                     last_run = time.time()
-                elif command == "stop":
-                    logger.info("Stopping indexer worker")
-                    _shutdown_event.set()
-                    break
-                elif isinstance(command, dict) and "incremental_changes" in command:
-                    logger.info("File watcher detected changes, processing...")
-                    await indexer_instance.handle_incremental_changes(
-                        command["incremental_changes"]
-                    )
-                    last_run = time.time()
-                _indexer_queue.task_done()
-            except asyncio.TimeoutError:
-                pass
 
-            if time.time() - last_run > interval_minutes * 60:
-                logger.info(
-                    f"Scheduled indexer scan triggered (interval: {interval_minutes} mins)"
-                )
-                await indexer_instance.start()
-                last_run = time.time()
-
-            await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            logger.info("Indexer worker cancelled.")
-            break
-        except Exception as e:
-            logger.exception(f"Error in indexer worker: {str(e)}")
-            await asyncio.sleep(5)
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                logger.info("Indexer worker cancelled.")
+                break
+            except Exception as e:
+                logger.exception(f"Error in indexer worker inner loop: {str(e)}")
+                await asyncio.sleep(5)
+    except Exception as e:
+        logger.exception(f"Fatal error in indexer worker: {str(e)}")
+        # Re-raise to ensure the task failure is visible
+        raise
 
 
 async def _file_watcher_worker(config: LocalFilesConfig):
     """Background worker task for real-time filesystem monitoring"""
     global _indexer_queue, _file_watcher_stop_event
 
-    music_folders = [
-        str(Path(folder).expanduser().resolve()) for folder in config.music_folders
-    ]
-    logger.info(f"Starting file watcher for folders: {music_folders}")
-
     try:
-        async for changes in awatch(
-            *music_folders, watch_filter=None, stop_event=_file_watcher_stop_event
-        ):
-            if changes:
-                logger.debug(f"File watcher detected {len(changes)} changes.")
-                await _indexer_queue.put({"incremental_changes": changes})
-    except asyncio.CancelledError:
-        logger.info("File watcher worker cancelled.")
+        music_folders = [
+            str(Path(folder).expanduser().resolve()) for folder in config.music_folders
+        ]
+        logger.info(f"Starting file watcher for folders: {music_folders}")
+
+        try:
+            async for changes in awatch(
+                *music_folders, watch_filter=None, stop_event=_file_watcher_stop_event
+            ):
+                if changes:
+                    logger.info(f"File watcher detected {len(changes)} changes.")
+                    await _indexer_queue.put({"incremental_changes": changes})
+                    logger.info("Changes added to indexer queue for processing.")
+        except asyncio.CancelledError:
+            logger.info("File watcher worker cancelled.")
+        except Exception as e:
+            logger.exception(f"Error in file watcher awatch loop: {str(e)}")
+            raise
+        finally:
+            logger.info("File watcher task exited")
     except Exception as e:
-        logger.exception(f"Error in file watcher: {str(e)}")
-    finally:
-        logger.info("File watcher task exited")
+        logger.exception(f"Fatal error in file watcher worker: {str(e)}")
+        # Re-raise to ensure the task failure is visible
+        raise
 
 
 def start_indexer(
@@ -654,6 +669,17 @@ def start_indexer(
     )
 
     _indexer_task = asyncio.create_task(_indexer_worker(config, db_manager))
+
+    # Add done callback to log any unhandled exceptions
+    def _on_indexer_task_done(task):
+        if task.cancelled():
+            logger.info("Indexer task was cancelled")
+        elif task.exception():
+            logger.exception(f"Indexer task failed with exception: {task.exception()}")
+        else:
+            logger.info("Indexer task completed normally")
+
+    _indexer_task.add_done_callback(_on_indexer_task_done)
     logger.info("Started file indexer background task")
     return _indexer_task
 
@@ -727,14 +753,21 @@ def start_file_watcher(config: LocalFilesConfig) -> Optional[asyncio.Task]:
 
     _file_watcher_stop_event.clear()
     _file_watcher_task = asyncio.create_task(_file_watcher_worker(config))
+
+    # Add done callback to log any unhandled exceptions
+    def _on_file_watcher_task_done(task):
+        if task.cancelled():
+            logger.info("File watcher task was cancelled")
+        elif task.exception():
+            logger.exception(
+                f"File watcher task failed with exception: {task.exception()}"
+            )
+        else:
+            logger.info("File watcher task completed normally")
+
+    _file_watcher_task.add_done_callback(_on_file_watcher_task_done)
     logger.info("Started file watcher background task")
     return _file_watcher_task
-
-
-async def handle_client(reader, writer):
-    data = await reader.readline()
-    message = data.decode().strip()
-    await _indexer_queue.put(message)
 
 
 async def async_main(config: LocalFilesConfig):
