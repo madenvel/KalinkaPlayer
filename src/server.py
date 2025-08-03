@@ -325,7 +325,7 @@ def create_app(config_file, config: KalinkaConfig):
         offset: int = 0,
         limit: int = 10,
         sources: Optional[str] = None,
-    ):
+    ) -> BrowseItemList:
         """Search for items across input modules."""
         input_modules: List[InputModule] = extract_modules(sources)
 
