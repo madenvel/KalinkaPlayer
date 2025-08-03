@@ -195,8 +195,12 @@ class LocalFilesInputModule(InputModule):
         elif endpoint == "playlists":
             return self._browse_playlists(offset, limit)
         else:
-            logger.warning(f"Unknown catalog endpoint: {endpoint}")
-            return EmptyList(offset, limit)
+            ep = endpoint.split("-")
+            if len(ep) == 2 and ep[0] == "tracks":
+                return self._browse_artist_tracks(ep[1], offset, limit)
+            else:
+                logger.warning(f"Unknown catalog endpoint: {endpoint}")
+                return EmptyList(offset, limit)
 
     def _browse_root(self) -> BrowseItemList:
         """Return the root catalog with main sections"""
@@ -233,7 +237,6 @@ class LocalFilesInputModule(InputModule):
             recent_section = BrowseItem(
                 id=catalog_id("recent"),
                 name="Recently Added",
-                url="/catalog/recent",
                 can_browse=True,
                 can_add=False,
                 catalog=catalog,
@@ -263,7 +266,6 @@ class LocalFilesInputModule(InputModule):
             album_section = BrowseItem(
                 id=catalog_id("albums"),
                 name="My Albums",
-                url="/catalog/albums",
                 can_browse=True,
                 can_add=False,
                 catalog=catalog,
@@ -293,7 +295,6 @@ class LocalFilesInputModule(InputModule):
             artist_section = BrowseItem(
                 id=catalog_id("artists"),
                 name="My Artists",
-                url="/catalog/artists",
                 can_browse=True,
                 can_add=False,
                 catalog=catalog,
@@ -323,7 +324,6 @@ class LocalFilesInputModule(InputModule):
             playlist_section = BrowseItem(
                 id=catalog_id("playlists"),
                 name="My Playlists",
-                url="/catalog/playlists",
                 can_browse=True,
                 can_add=False,
                 catalog=catalog,
@@ -361,6 +361,24 @@ class LocalFilesInputModule(InputModule):
         items = []
         for artist in artists:
             items.append(self._create_artist_browse_item(artist))
+
+        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
+
+    def _browse_artist_tracks(
+        self, artist_id: str, offset: int, limit: int
+    ) -> BrowseItemList:
+        """Browse tracks by an artist"""
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return EmptyList(0, 0)
+
+        tracks, total = self.db_manager.get_artist_recent_tracks(
+            artist_id, offset, limit
+        )
+
+        items = []
+        for track in tracks:
+            items.append(self._create_track_browse_item(track))
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
@@ -810,7 +828,6 @@ class LocalFilesInputModule(InputModule):
         return BrowseItem(
             id=track_id(track["id"]),
             name=track["title"],
-            url=f"/track/{track['id']}",
             can_browse=False,
             can_add=True,
             subname=track["artist_name"],
@@ -836,11 +853,30 @@ class LocalFilesInputModule(InputModule):
         return BrowseItem(
             id=album_id(album["id"]),
             name=album["title"],
-            url=f"/album/{album['id']}",
             can_browse=True,
             can_add=True,
             subname=album["artist_name"],
             album=album_obj,
+            sections=[
+                BrowseItem(
+                    id=album_id(album["id"]),
+                    name="Tracks",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id(f"album_{album['id']}"),
+                        title=album["title"],
+                        can_genre_filter=False,
+                        preview_config=Preview(
+                            type=PreviewType.TILE,
+                            content_type=PreviewContentType.TRACK,
+                            items_count=15,
+                            rows_count=1,
+                            card_size=CardSize.SMALL,
+                        ),
+                    ),
+                )
+            ],
         )
 
     def _create_artist_browse_item(self, artist: Dict) -> BrowseItem:
@@ -856,10 +892,47 @@ class LocalFilesInputModule(InputModule):
         return BrowseItem(
             id=artist_id(artist["id"]),
             name=artist["name"],
-            url=f"/artist/{artist['id']}",
             can_browse=True,
             can_add=False,
             artist=artist_obj,
+            sections=[
+                BrowseItem(
+                    id=catalog_id(f"tracks-{artist['id']}"),
+                    name="Recent Tracks",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=catalog_id(f"tracks-{artist['id']}"),
+                        title=artist["name"],
+                        can_genre_filter=False,
+                        preview_config=Preview(
+                            type=PreviewType.TILE,
+                            content_type=PreviewContentType.TRACK,
+                            items_count=15,
+                            rows_count=1,
+                            card_size=CardSize.SMALL,
+                        ),
+                    ),
+                ),
+                BrowseItem(
+                    id=artist_id(artist["id"]),
+                    name="Albums",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=artist_id(artist["id"]),
+                        title=artist["name"],
+                        can_genre_filter=False,
+                        preview_config=Preview(
+                            type=PreviewType.IMAGE_TEXT,
+                            content_type=PreviewContentType.ALBUM,
+                            items_count=10,
+                            rows_count=1,
+                            card_size=CardSize.SMALL,
+                        ),
+                    ),
+                ),
+            ],
         )
 
     def _create_playlist_browse_item(self, playlist: Dict) -> BrowseItem:
@@ -888,11 +961,30 @@ class LocalFilesInputModule(InputModule):
         return BrowseItem(
             id=playlist_id(playlist["id"]),
             name=playlist["name"],
-            url=f"/playlist/{playlist['id']}",
             can_browse=True,
             can_add=True,
             subname=f"{playlist.get('track_count', 0)} tracks",
             playlist=playlist_obj,
+            sections=[
+                BrowseItem(
+                    id=playlist_id(playlist["id"]),
+                    name="Tracks",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
+                        id=playlist_id(playlist["id"]),
+                        title=playlist["name"],
+                        can_genre_filter=False,
+                        preview_config=Preview(
+                            type=PreviewType.TILE,
+                            content_type=PreviewContentType.TRACK,
+                            items_count=15,
+                            rows_count=1,
+                            card_size=CardSize.SMALL,
+                        ),
+                    ),
+                )
+            ],
         )
 
     def _get_album_image_urls(self, album_id: str) -> Optional[AlbumImage]:

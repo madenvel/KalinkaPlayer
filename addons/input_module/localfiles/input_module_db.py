@@ -482,6 +482,41 @@ class LocalFilesInputModuleDb:
         finally:
             conn.close()
 
+    def get_artist_recent_tracks(
+        self, artist_id: str, offset: int = 0, limit: int = 50
+    ) -> Tuple[List[Dict], int]:
+        """Get top tracks for an artist"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            # Get total count
+            cursor.execute(
+                """
+                SELECT COUNT(*) as count FROM tracks WHERE artist_id = ?
+                """,
+                (artist_id,),
+            )
+            total = cursor.fetchone()["count"]
+
+            # Get results
+            cursor.execute(
+                """
+                SELECT t.*, a.title as album_title, ar.name as artist_name
+                FROM tracks t
+                JOIN albums a ON t.album_id = a.id
+                JOIN artists ar ON t.artist_id = ar.id
+                WHERE t.artist_id = ?
+                ORDER BY t.last_updated DESC
+                LIMIT ? OFFSET ?
+                """,
+                (artist_id, limit, offset),
+            )
+
+            return [dict(row) for row in cursor.fetchall()], total
+        finally:
+            conn.close()
+
     # Playlist related methods
     def get_playlist_by_id(self, playlist_id: str) -> Optional[Dict]:
         """Get playlist information by ID"""
