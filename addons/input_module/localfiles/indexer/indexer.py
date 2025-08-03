@@ -574,7 +574,7 @@ async def _indexer_worker(config: LocalFilesConfig, db_manager: AsyncIndexerDb):
             try:
                 try:
                     command = await asyncio.wait_for(_indexer_queue.get(), timeout=30.0)
-                    logger.info(f"Received command: {command}")
+                    logger.debug(f"Received command: {command}")
                     if command == "scan":
                         logger.info("Manual indexer scan triggered")
                         await indexer_instance.start()
