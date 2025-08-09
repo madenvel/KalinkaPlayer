@@ -695,7 +695,6 @@ class QobuzInputModule(InputModule):
                                 preview_config=Preview(
                                     type=PreviewType.TILE,
                                     content_type=PreviewContentType.TRACK,
-                                    items_count=15,
                                     rows_count=1,
                                     aspect_ratio=1.0,
                                     card_size=CardSize.SMALL,
@@ -1126,7 +1125,7 @@ class QobuzInputModule(InputModule):
                             title="Tracks",
                             can_genre_filter=False,
                             preview_config=Preview(
-                                type=PreviewType.TILE,
+                                type=PreviewType.TILE_NUMBERED,
                                 content_type=PreviewContentType.TRACK,
                                 items_count=10,
                                 rows_count=1,
@@ -1249,7 +1248,7 @@ class QobuzInputModule(InputModule):
                                 items_count=9,
                                 rows_count=1,
                                 aspect_ratio=1 / 0.475,
-                                card_size=CardSize.LARGE,
+                                card_size=CardSize.SMALL,
                             ),
                         ),
                     ),

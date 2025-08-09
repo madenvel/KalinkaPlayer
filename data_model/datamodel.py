@@ -90,6 +90,9 @@ class PreviewType(str, Enum):
     CAROUSEL = "carousel"
     # Displays a list of tiles with image and title / subtitle to the right
     TILE = "tile"
+    # Displays a list of tiles with order number and title / subtitle to the right
+    TILE_NUMBERED = "tile_numbered"
+    # No preview content, used for sections with an image or text only
     NONE = "none"
 
 
