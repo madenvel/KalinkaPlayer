@@ -1,21 +1,39 @@
 # What is it?
-This project provides a backend to stream music on systems running Linux (including Raspberry Pi 4+) and  REST API to control the playqueue and playback, as well as an ability to discover new content.
+KalinkaPlayer is a lightweight backend service for music playback on Linux systems (including Raspberry Pi 4+) exposing a REST API for control, library discovery and queue management.
 
-At this point, it only supports [Qobuz](https://www.qobuz.com) as a streaming platform, and you must have a valid subscription.
+The current focus and most advanced functionality is LOCAL FILE PLAYBACK. A flexible indexing & enrichment pipeline builds and maintains a rich local music library. Track / album / artist metadata can be augmented using external services (AcoustID fingerprinting, MusicBrainz, Wikidata and others) with a fallback strategy to keep the library usable even when some lookups fail.
 
-The target audience for this are DIY HiFi enthusiasts familiar with linux and command line.
+An experimental integration with [Qobuz](https://www.qobuz.com) exists and can be enabled, allowing you to mix local tracks and Qobuz items inside the same play queue. Qobuz support is intentionally minimal compared to local file handling and may change.
+
+The target audience: DIY HiFi enthusiasts comfortable with Linux and the command line who want a controllable, efficient audio backend.
+
+> Disclaimer: Qobuz functionality is EXPERIMENTAL, not officially endorsed or supported by Qobuz, and may be removed at any time. This project is not affiliated with or sponsored by Qobuz.
 
 # Features
-- Supports Qobuz as a streaming platform, including:
-  - Search, new content discovery (New releases, Qobuz playlists, playlists by category, etc.)
-  - Add / remove favorites
-  - Autoplay
-  - Weekly Q playlist
-- Supports OGG/FLAC playback, up to 192Khz / 24bit (FLAC limitation), bit perfect playback*
-- Gapless playback for the songs of the same audio format
-- Supports MusicCast device volume control and automatic turn on / off
-- Works on Raspberry Pi (used on RPi 4 with Raspberry OS bullseye), low CPU & memory usage. The main part is written in C++.
-- Kalinka Music App is a player control application that runs on multiple platforms.
+Core (Local Library):
+- Local files playback (primary, most advanced path)
+  - Indexing of directory trees into an internal database
+  - Metadata enrichment via AcoustID (fingerprints) -> MusicBrainz -> Wikidata (+ pluggable enrichers)
+  - Fallback / defensive enrichment: partial metadata retained even when external services fail
+  - Artwork & basic entity relationship modeling (artists, albums, tracks)
+- Full FLAC & MP3 (and OGG) playback up to 192 kHz / 24‑bit (FLAC limit) with bit‑perfect path where ALSA config permits*
+- Gapless playback (same-format consecutive tracks)
+- Mixed-source queue: seamlessly queue local tracks together with experimental Qobuz items
+
+Experimental (Qobuz):
+- Search & limited discovery (new releases, playlists by category)
+- Add / remove favorites
+- Autoplay / Weekly mix style playlist
+
+Other:
+- MusicCast device volume control and automatic power on/off
+- Low CPU & memory footprint; performance‑critical audio engine in C++ with direct ALSA access
+- Runs well on Raspberry Pi 4 (Raspberry Pi OS bullseye tested)
+- Kalinka Music App (separate project) provides multi‑platform control UI
+
+Maintenance / Utilities:
+- Database purge & restart options (recent additions) for recovery / rebuilding index
+- Structured logging with adjustable verbosity
 
 # Installation
 ## Debian-package
@@ -65,3 +83,4 @@ If you were running the server on Raspberry Pi, you can logout now.
 # Notes
 * Audio engine uses ALSA directly and relies on its configuration. If automatic resampling is set up, it will likely affect the app but it should still work.
 * I run this on Raspberry Pi 4 with HiFiBerry Digi2 card configured as recommended in their manual. This software would likely work with any card that works with ALSA but there might be issues.
+* Qobuz integration is experimental and may break or be removed without notice.
