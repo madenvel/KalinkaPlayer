@@ -427,12 +427,12 @@ def create_app(config_file, config: KalinkaConfig):
             limit=limit,
         )
 
-    @app.put("/favorite/add/{type}/{id}")
+    @app.put("/favorite/add/{id}")
     def add_favorite(id: str):
         input_module_from_id(id).add_to_favorite(id)
         return {"message": "Ok"}
 
-    @app.delete("/favorite/remove/{type}/{id}")
+    @app.delete("/favorite/remove/{id}")
     def remove_favorite(id: str):
         input_module_from_id(id).remove_from_favorite(id)
         return {"message": "Ok"}

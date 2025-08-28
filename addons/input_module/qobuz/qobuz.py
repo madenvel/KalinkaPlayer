@@ -1350,7 +1350,7 @@ class QobuzInputModule(InputModule):
     def add_to_favorite(self, id: str):
         entity_id = EntityId.from_string(id)
 
-        if type == SearchType.playlist:
+        if entity_id.type == EntityType.PLAYLIST:
             endpoint = "playlist/subscribe"
             params = {"playlist_id": entity_id.id}
         else:
@@ -1378,7 +1378,7 @@ class QobuzInputModule(InputModule):
     def remove_from_favorite(self, id: str):
         entity_id = EntityId.from_string(id)
 
-        if entity_id.type == SearchType.playlist:
+        if entity_id.type == EntityType.PLAYLIST:
             endpoint = "playlist/unsubscribe"
             params = {"playlist_id": entity_id.id}
         else:
