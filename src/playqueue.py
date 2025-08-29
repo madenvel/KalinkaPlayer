@@ -167,6 +167,8 @@ class PlayQueue(AsyncExecutor):
         position_diff = 0
         if new_state.state == AudioGraphNodeState.STREAMING:
             position_diff = int((state_update_ts - new_state.timestamp) / 1_000_000)
+        if new_state.state == AudioGraphNodeState.FINISHED:
+            new_state.position = 0
 
         self.event_emitter.dispatch(
             EventType.StateChanged,
