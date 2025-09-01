@@ -311,9 +311,9 @@ bool AlsaAudioEmitter::handleInputNodeStateChange() {
     auto newStreamInfo = inputNodeState.streamInfo;
     if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
         !newStreamInfo.has_value() ||
-        newStreamInfo.value().format != currentStreamAudioFormat) {
-      spdlog::info(
-          "Source changed - not streaming or different format, draining");
+        newStreamInfo.value().format != currentStreamAudioFormat || paused) {
+      spdlog::info("Source changed - not streaming, different format or paused "
+                   "- draining");
       drainPcm();
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
       return false;
