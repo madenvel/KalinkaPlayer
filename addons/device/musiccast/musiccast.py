@@ -4,7 +4,7 @@ import logging
 from .config_model import MusicCastConfig
 from src.events import EventType
 
-from src.ext_device import SupportedFunction, Volume
+from src.ext_device import SupportedFunction, DeviceVolume
 from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
 
@@ -65,7 +65,7 @@ class Device:
             f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
         )
         status = self._get_status()
-        self.volume = Volume(
+        self.volume = DeviceVolume(
             max_volume=status["max_volume"],
             current_volume=status["volume"],
             volume_gain=0,
@@ -239,7 +239,7 @@ class Device:
 
         return response.json()
 
-    def get_volume(self) -> Volume:
+    def get_volume(self) -> DeviceVolume:
         return self.volume
 
     def set_volume(self, volume: int) -> None:

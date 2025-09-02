@@ -68,7 +68,7 @@ def to_audio_info(stream_info: StreamInfo):
 
 def mime_to_format(mime: str) -> AudioFormat:
     """Convert MIME type to AudioFormat enum value used by the native player"""
-    logger.info(f"Detected mime type: {mime}")
+    logger.debug(f"Detected mime type: {mime}")
 
     # Handle standard MIME types
     if mime:

@@ -19,7 +19,7 @@ from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, Play
 from src import state_keeper
 from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire
-from src.ext_device import ExternalOutputDevice, Volume
+from src.ext_device import ExternalOutputDevice, DeviceVolume
 from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
 from src.multisearch import calculate_fuzzy_score
 from src.player_setup import setup, shutdown, modules
@@ -395,14 +395,14 @@ def create_app(config_file, config: KalinkaConfig):
         return device.supported_functions()
 
     @app.get("/device/get_volume")
-    def get_volume(device_id: str) -> Volume:
+    def get_volume() -> DeviceVolume:
         if device is None:
-            return Volume(current_volume=0, max_volume=0)
+            return DeviceVolume(supported=False)
 
         return device.get_volume()
 
     @app.put("/device/set_volume")
-    def set_volume(device_id: str, volume: int):
+    def set_volume(volume: int):
         if device is None:
             return {"message": "No device configured"}
 

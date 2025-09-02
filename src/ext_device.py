@@ -11,15 +11,16 @@ class SupportedFunction(Enum):
     POWER_OFF = "power_off"
 
 
-class Volume(BaseModel):
-    max_volume: int
-    current_volume: int
+class DeviceVolume(BaseModel):
+    max_volume: int = 0
+    current_volume: int = 0
     volume_gain: int = 0
+    supported: bool = True
 
 
 class ExternalOutputDevice(ABC):
     @abstractmethod
-    def get_volume(self) -> Volume:
+    def get_volume(self) -> DeviceVolume:
         pass
 
     @abstractmethod
