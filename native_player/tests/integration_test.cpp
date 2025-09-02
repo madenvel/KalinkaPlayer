@@ -11,6 +11,7 @@
 #include "Config.h"
 #include "TestHelpers.h"
 #include <Mp3StreamDecoder.h>
+#include <thread>
 
 class IntegrationTest : public ::testing::Test {
 protected:
@@ -317,4 +318,49 @@ TEST_F(IntegrationTest, test_play_mp3_file) {
   EXPECT_EQ(
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED).state,
       AudioGraphNodeState::FINISHED);
+}
+
+TEST_F(IntegrationTest, test_next_track_after_pause) {
+  const auto totalDuration = 1000;
+  auto outputNode1 = std::make_shared<SineWaveNode>(440, totalDuration);
+  auto outputNode2 = std::make_shared<SineWaveNode>(880, totalDuration);
+  auto switcher = std::make_shared<AudioStreamSwitcher>();
+  StateMonitor monitor(alsaAudioEmitter.get());
+  switcher->connectTo(outputNode1);
+  switcher->connectTo(outputNode2);
+  alsaAudioEmitter->connectTo(switcher);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+  alsaAudioEmitter->pause(true);
+  EXPECT_EQ(waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::PAUSED,
+                          std::chrono::milliseconds(1000))
+                .state,
+            AudioGraphNodeState::PAUSED);
+
+  switcher->disconnect(outputNode1);
+  EXPECT_EQ(waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED,
+                          std::chrono::seconds(3))
+                .state,
+            AudioGraphNodeState::FINISHED);
+
+  AudioGraphNodeState states[] = {
+      AudioGraphNodeState::STOPPED,   AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::PAUSED,    AudioGraphNodeState::SOURCE_CHANGED,
+      AudioGraphNodeState::PREPARING, AudioGraphNodeState::STREAMING,
+      AudioGraphNodeState::FINISHED};
+
+  const auto statesCount = sizeof(states) / sizeof(AudioGraphNodeState);
+
+  int i = 0;
+  for (; i < statesCount && monitor.hasData(); ++i) {
+    auto state = monitor.waitState();
+    EXPECT_EQ(state.state, states[i]) << "i=" << i;
+  }
+
+  EXPECT_EQ(i, statesCount);
 }
