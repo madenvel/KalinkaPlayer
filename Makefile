@@ -31,7 +31,6 @@ $(TARGET_DIR):
 	cp LICENSE $(TARGET_DIR)/opt/kalinka/
 	cp scripts/kalinka.service $(TARGET_DIR)/etc/systemd/system/
 	find $(TARGET_DIR)/opt/kalinka/ -name '__pycache__' -type d -exec rm -r {} +
-	cp kalinka_conf.cfg $(TARGET_DIR)/opt/kalinka/kalinka_conf.cfg
 
 # New wheel-based build target
 $(TARGET_DIR)-wheel:
@@ -51,7 +50,6 @@ $(TARGET_DIR)-wheel:
 	cp $(WHEEL_PATH) $(TARGET_DIR)/opt/kalinka/wheels/
 	cp kalinka_server.sh $(TARGET_DIR)/usr/bin/
 	cp scripts/kalinka.service $(TARGET_DIR)/etc/systemd/system/
-	cp kalinka_conf.cfg $(TARGET_DIR)/opt/kalinka/kalinka_conf.cfg
 	# Copy requirements for offline installation
 	cp requirements.txt $(TARGET_DIR)/opt/kalinka/
 	cp README.md $(TARGET_DIR)/opt/kalinka/
