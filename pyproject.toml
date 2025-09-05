@@ -73,15 +73,18 @@ Documentation = "https://github.com/madenvel/KalinkaPlayer/blob/main/README.md"
 kalinka-server = "run_server:main"
 
 [tool.setuptools]
-include-package-data = true
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*", "data_model*", "addons*"]
+include = ["src*", "data_model*", "addons*", "native_player"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.so"]
+native_player = ["*.so"]
+
+[tool.setuptools.exclude-package-data]
+native_player = ["*", "build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py"]
 
 [tool.setuptools_scm]
 write_to = "src/_version.py"
@@ -104,7 +107,6 @@ extend-exclude = '''
   | \.venv
   | build
   | dist
-  | native_player
 )/
 '''
 

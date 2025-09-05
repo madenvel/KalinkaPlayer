@@ -2,6 +2,7 @@
 include README.md
 include LICENSE
 include requirements.txt
+include requirements-dev.txt
 include *.sh
 
 # Include scripts
@@ -11,8 +12,9 @@ recursive-include scripts *
 recursive-include DEBIAN *
 
 # Include native player binaries and source
-recursive-include native_player *.so *.h *.cpp *.py Makefile
+recursive-include native_player *.h *.cpp *.py Makefile
 recursive-exclude native_player *.o
+recursive-exclude native_player *.so
 recursive-exclude native_player __pycache__
 recursive-exclude native_player build
 
