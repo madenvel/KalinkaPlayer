@@ -74,6 +74,7 @@ kalinka-server = "run_server:main"
 
 [tool.setuptools]
 include-package-data = false
+py-modules = ["run_server"]
 
 [tool.setuptools.packages.find]
 where = ["."]
