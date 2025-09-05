@@ -85,7 +85,7 @@ exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 native_player = ["*.so"]
 
 [tool.setuptools.exclude-package-data]
-native_player = ["*", "build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py"]
+native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py"]
 
 [tool.setuptools_scm]
 write_to = "src/_version.py"
