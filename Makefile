@@ -8,15 +8,16 @@ all: $(TARGET)
 
 # Wheel-based build (default)
 build-deb:
-	@if [ -z "$(WHEEL_PATH)" ] || [ ! -f "$(WHEEL_PATH)" ]; then \
-		echo "No wheel found, attempting to build one..."; \
-		if command -v python3 > /dev/null && [ -f setup.py ]; then \
-			python3 -m pip install --upgrade build >/dev/null 2>&1 || true; \
-			python3 -m build || python3 setup.py bdist_wheel; \
-		else \
-			echo "Error: Python build tools not found."; \
-			exit 1; \
-		fi; \
+	@echo "Building native player first..."
+	cd native_player && make && cd ..
+	@echo "Building wheel with native player included..."
+	@if command -v python3 > /dev/null && [ -f setup.py ]; then \
+		python3 -m pip install --upgrade build >/dev/null 2>&1 || true; \
+		rm -rf dist/*.whl; \
+		python3 -m build --wheel || python3 setup.py bdist_wheel; \
+	else \
+		echo "Error: Python build tools not found."; \
+		exit 1; \
 	fi
 	@WHEEL_PATH=$$(ls dist/*.whl 2>/dev/null | head -1); \
 	if [ -z "$$WHEEL_PATH" ] || [ ! -f "$$WHEEL_PATH" ]; then \
@@ -35,7 +36,6 @@ build-deb:
 	rm "$$TARGET_DIR/DEBIAN/control.in"; \
 	mkdir -p "$$TARGET_DIR/usr/bin"; \
 	mkdir -p "$$TARGET_DIR/opt/kalinka/wheels"; \
-	mkdir -p "$$TARGET_DIR/opt/kalinka/native_player"; \
 	mkdir -p "$$TARGET_DIR/etc/systemd/system/"; \
 	cp "$$WHEEL_PATH" "$$TARGET_DIR/opt/kalinka/wheels/"; \
 	cp kalinka_server.sh "$$TARGET_DIR/usr/bin/"; \
@@ -43,14 +43,6 @@ build-deb:
 	cp requirements.txt "$$TARGET_DIR/opt/kalinka/"; \
 	cp README.md "$$TARGET_DIR/opt/kalinka/"; \
 	cp LICENSE "$$TARGET_DIR/opt/kalinka/"; \
-	cd native_player && make && cd ..; \
-	NATIVE_LIB=$$(find native_player -name "native_player*.so" | head -1); \
-	if [ -f "$$NATIVE_LIB" ]; then \
-		cp "$$NATIVE_LIB" "$$TARGET_DIR/opt/kalinka/native_player/"; \
-	else \
-		echo "Error: Native player library not found"; \
-		exit 1; \
-	fi; \
 	dpkg-deb --root-owner-group --build "$$TARGET_DIR"; \
 	mv "$$TARGET_DIR.deb" "$$TARGET_FILE"; \
 	rm -rf "$$TARGET_DIR"; \
