@@ -37,6 +37,8 @@ from typing import Dict, Any
 def save_config(config_file: str, config: KalinkaConfig):
     """Save the configuration to a file."""
     config_data = config.model_dump()
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(config_file), exist_ok=True)
     with open(config_file, "w") as f:
         json.dump(config_data, f, indent=2)
     logger.info(f"Configuration saved to {config_file}")
