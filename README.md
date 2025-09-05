@@ -36,49 +36,100 @@ Maintenance / Utilities:
 - Structured logging with adjustable verbosity
 
 # Installation
-## Debian-package
+## Debian Package
 A deb package for arm64 (Raspbian) is provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section.
 
-A debian package can be built by running `make` in the root directory. Note, that there's no cross-compilation,
-the package is built for the platform it is being built for.
+### Building the Debian Package
+You can build a Debian package for your platform by following these steps:
 
-Make sure you update the config file `/opt/kalinka/kalinka_conf.yaml` after you install the package (see below).
-
-The service can be restarted with `sudo systemctl restart kalinka.service`, to check the status of the service
-and the last log lines use `systemctl status kalinka.service`.
-
-To check the full log: `journalctl -u kalinka.service`.
-
-# Running from sources
-## Prepare environment
-1. Clone the repository, `git clone https://github.com/madenvel/KalinkaPlayer.git`
-2. Install pre-requisites
+#### Prerequisites
+Install the required system dependencies:
+```bash
+sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
 ```
+
+#### Build Process
+1. Clone the repository:
+```bash
+git clone https://github.com/madenvel/KalinkaPlayer.git
+cd KalinkaPlayer
+```
+
+2. Set up Python virtual environment:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+3. Build the Debian package:
+```bash
+make build-deb
+```
+*Or simply use `make` (which calls `build-deb` by default)*
+
+This will:
+- Build the native C++ audio engine first
+- Create a Python wheel that includes the native player library
+- Package everything into a Debian package with version matching the wheel
+
+The resulting package will be named `kalinka-player-<version>.<architecture>.deb` where the version matches the one from the Python wheel (e.g., `kalinka-player-1.4.1.dev96+g641eb978a.d20250905.amd64.deb`).
+
+#### Cleaning Build Artifacts
+To clean up build artifacts:
+```bash
+make clean
+```
+This removes compiled objects, shared libraries, and generated Debian packages.
+
+#### Installation
+Install the generated package:
+```bash
+sudo dpkg -i kalinka-player-*.deb
+sudo apt-get install -f  # Install any missing dependencies
+```
+
+**Note**: The package is built for the platform it's being built on (no cross-compilation).
+
+#### Service Management
+- Restart: `sudo systemctl restart kalinka.service`
+- Check status: `systemctl status kalinka.service`
+- View logs: `journalctl -u kalinka.service`
+
+# Running from Sources
+## Development Setup
+For development or running directly from sources without creating a package:
+
+## Prepare Environment
+1. Clone the repository: `git clone https://github.com/madenvel/KalinkaPlayer.git`
+2. Install pre-requisites:
+```bash
 sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
 ```
 3. Create python virtual environment:
-```
+```bash
 cd KalinkaPlayer
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 4. Build the native player:
-```
+```bash
 cd native_player
 make
 cd ../
 ```
-5. Create a config file based on the [example](https://github.com/madenvel/KalinkaPlayer/blob/main/kalinka_conf_example.yaml)
-6. Run the server
-```
+**Note**: When building the Debian package with `make build-deb`, this step is automatically handled.
+
+5. Run the server:
+```bash
 nohup ./run_server.py &
 ```
 The log will be saved to `nohup.out`.
 If you were running the server on Raspberry Pi, you can logout now.
 
-7. Download and install the app (see KalinkaApp project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
-9. Enjoy!
+6. Download and install the app (see KalinkaApp project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
+7. Enjoy!
 
 # Notes
 * Audio engine uses ALSA directly and relies on its configuration. If automatic resampling is set up, it will likely affect the app but it should still work.
