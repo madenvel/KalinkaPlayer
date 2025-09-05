@@ -1,5 +1,6 @@
 """Configuration utilities for converting between dict and Pydantic models."""
 
+import os
 from typing import Dict, Any
 import yaml
 from .config_model import KalinkaConfig
@@ -20,6 +21,8 @@ def load_config_from_yaml(yaml_path: str) -> KalinkaConfig:
 def save_config_to_yaml(config: KalinkaConfig, yaml_path: str) -> None:
     """Save a Pydantic configuration model to a YAML file."""
     config_dict = config.model_dump(exclude_unset=True)
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(yaml_path), exist_ok=True)
     with open(yaml_path, "w") as f:
         yaml.dump(config_dict, f, default_flow_style=False, indent=2)
 

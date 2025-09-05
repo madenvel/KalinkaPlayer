@@ -169,6 +169,8 @@ def read_or_create_module_config(
     if config_data is None:
         logger.info(f"Creating default config for {module_name} at {config_file}")
         default_config = module.Config()
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(config_file), exist_ok=True)
         with open(config_file, "w") as f:
             json.dump(default_config.model_dump(), f)
         return default_config
@@ -269,7 +271,10 @@ def shutdown_modules(modules: dict[str, PreparedModule], config_path: str):
         logger.info(f"Shutting down module: {module_name}")
         if hasattr(prepared_module.module, "shutdown"):
             prepared_module.module.shutdown()
-        with open(os.path.join(config_path, f"{module_name}_config.cfg"), "w") as f:
+        config_file_path = os.path.join(config_path, f"{module_name}_config.cfg")
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(config_file_path), exist_ok=True)
+        with open(config_file_path, "w") as f:
             json.dump(
                 prepared_module.config.model_dump(exclude_unset=True), f, indent=2
             )

@@ -94,8 +94,10 @@ def main():
             try:
                 with open(args.config, "r") as f:
                     config = KalinkaConfig(**json.load(f))
-            except FileNotFoundError:
-                logger.warning(f"Config file {args.config} not found.")
+            except Exception as e:
+                logger.warning(
+                    f"Config file {args.config} not found or corrupted. Using default configuration."
+                )
 
             if args.state:
                 state_keeper.set_state_file(args.state)

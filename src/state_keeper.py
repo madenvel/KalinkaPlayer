@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 from data_model.datamodel import EntityId
 from src.inputmodule import InputModule, TrackInfo
@@ -16,6 +17,8 @@ def set_state_file(file_path: str):
 
 
 def save_state(playqueue: PlayQueue):
+    # Ensure the directory exists
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(
             {
@@ -60,4 +63,7 @@ def restore_state(playqueue: PlayQueue, modules: dict[str, InputModule]):
         return {}
     except json.JSONDecodeError:
         logger.error("Failed to decode state file")
+        return {}
+    except Exception as e:
+        logger.error(f"Failed to restore state: {e}")
         return {}
