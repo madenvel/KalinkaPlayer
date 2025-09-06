@@ -20,7 +20,9 @@ class AsyncIndexerDb:
         self.artwork_path = os.path.expanduser(config.artwork_path)
 
         # Ensure directories exist
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:  # Only create directory if path is not empty
+            os.makedirs(db_dir, exist_ok=True)
         os.makedirs(self.artwork_path, exist_ok=True)
         os.makedirs(os.path.join(self.artwork_path, "album"), exist_ok=True)
         os.makedirs(os.path.join(self.artwork_path, "artist"), exist_ok=True)

@@ -38,7 +38,9 @@ def save_config(config_file: str, config: KalinkaConfig):
     """Save the configuration to a file."""
     config_data = config.model_dump()
     # Ensure the directory exists
-    os.makedirs(os.path.dirname(config_file), exist_ok=True)
+    config_dir = os.path.dirname(config_file)
+    if config_dir:  # Only create directory if path is not empty
+        os.makedirs(config_dir, exist_ok=True)
     with open(config_file, "w") as f:
         json.dump(config_data, f, indent=2)
     logger.info(f"Configuration saved to {config_file}")

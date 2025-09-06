@@ -657,7 +657,9 @@ def start_indexer(
     artwork_path = Path(config.artwork_path).expanduser().resolve()
     db_path = Path(config.db_path).expanduser().resolve()
 
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db_dir = os.path.dirname(db_path)
+    if db_dir:  # Only create directory if path is not empty
+        os.makedirs(db_dir, exist_ok=True)
     os.makedirs(artwork_path, exist_ok=True)
     os.makedirs(
         os.path.join(artwork_path, "album"),

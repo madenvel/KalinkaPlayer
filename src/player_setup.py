@@ -170,7 +170,9 @@ def read_or_create_module_config(
         logger.info(f"Creating default config for {module_name} at {config_file}")
         default_config = module.Config()
         # Ensure the directory exists
-        os.makedirs(os.path.dirname(config_file), exist_ok=True)
+        config_dir = os.path.dirname(config_file)
+        if config_dir:  # Only create directory if path is not empty
+            os.makedirs(config_dir, exist_ok=True)
         with open(config_file, "w") as f:
             json.dump(default_config.model_dump(), f)
         return default_config
