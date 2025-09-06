@@ -1,6 +1,5 @@
 import logging
 from src.config_model import KalinkaConfig
-from src.netutils import get_ip_address, get_all_ip_addresses
 from src.version import get_version, get_api_version
 
 from zeroconf import IPVersion, ServiceInfo
@@ -45,8 +44,8 @@ def get_interface_ip_mappings() -> dict[str, str]:
 
 def get_service_info(
     config: KalinkaConfig,
-    interface_name: str | None = None,
-    ip_address: str | None = None,
+    interface_name: str,
+    ip_address: str,
 ) -> ServiceInfo:
     """
     Create ServiceInfo for a specific interface or for all interfaces.
@@ -59,7 +58,6 @@ def get_service_info(
     Returns:
         ServiceInfo object configured for the specified interface/IP
     """
-    server_cfg = config.server
 
     # Get dynamic version and API version
     desc = {"kalinka_api_version": get_api_version(), "server_version": get_version()}
@@ -70,44 +68,14 @@ def get_service_info(
             f"[Zeroconf] Creating service info for interface {interface_name}: {ip_address}"
         )
         addresses = [socket.inet_aton(ip_address)]
-    elif server_cfg.interface == "all":
-        # Legacy behavior: single service with multiple IP addresses
-        ip_addresses = get_all_ip_addresses()
-        # If no IP addresses found, fallback to getting IP of default interface
-        if not ip_addresses:
-            # Try to get default route interface IP
-            try:
-                # Create a socket to determine the default route
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                default_ip = s.getsockname()[0]
-                s.close()
-                ip_addresses = [default_ip]
-            except Exception:
-                # Ultimate fallback
-                ip_addresses = ["127.0.0.1"]
 
-        # Log the IP addresses being advertised and their order
-        logger.info(f"[Zeroconf] Advertising service on IP addresses: {ip_addresses}")
-        logger.info(f"[Zeroconf] Primary (first) IP address: {ip_addresses[0]}")
-
-        addresses = [socket.inet_aton(ip) for ip in ip_addresses]
-    else:
-        # Single interface case
-        ip_addr = get_ip_address(server_cfg.interface)
-        logger.info(
-            f"[Zeroconf] Advertising service on interface {server_cfg.interface}: {ip_addr}"
-        )
-        addresses = [socket.inet_aton(ip_addr)]
-
-    # Use the same service name for all interfaces since they're bound to specific interfaces
-    service_name = server_cfg.service_name
+    service_name = f"{config.server.service_name} ({interface_name})"
 
     return ServiceInfo(
         type_="_kalinkaplayer._tcp.local.",
         name=f"{service_name}._kalinkaplayer._tcp.local.",
         addresses=addresses,
-        port=server_cfg.port,
+        port=config.server.port,
         properties=desc,
     )
 
@@ -115,32 +83,48 @@ def get_service_info(
 class ServiceDiscovery:
     def __init__(self, config: KalinkaConfig):
         self.config = config
-        self.services = (
-            []
-        )  # List of (zeroconf_instance, service_info, interface_name) tuples
+        self.services = []
+
+        self.interface_ips = get_interface_ip_mappings()
+        configured_interface = config.server.interface
+
+        if not self.interface_ips:
+            logger.warning("[Zeroconf] No network interfaces found, skip")
+            return
 
         # Determine which services to create
-        if config.server.interface == "all":
+        if (
+            configured_interface == "all"
+            or configured_interface not in self.interface_ips
+        ):
             # Create separate service instances for each interface
-            interface_ips = get_interface_ip_mappings()
 
-            if not interface_ips:
+            if (
+                configured_interface not in self.interface_ips
+                and configured_interface != "all"
+            ):
                 logger.warning(
-                    "[Zeroconf] No network interfaces found, falling back to single service"
+                    f"[Zeroconf] Configured interface '{configured_interface}' not found, falling back to all interfaces"
                 )
-                # Fallback to single service
-                self.services.append((None, get_service_info(config), None))
-            else:
-                logger.info(
-                    f"[Zeroconf] Creating service instances for {len(interface_ips)} interfaces"
-                )
-                for interface_name, ip_address in interface_ips.items():
-                    service_info = get_service_info(config, interface_name, ip_address)
-                    self.services.append((None, service_info, interface_name))
+
+            logger.info(
+                f"[Zeroconf] Creating service instances for {len(self.interface_ips)} interfaces"
+            )
+            for interface_name, ip_address in self.interface_ips.items():
+                service_info = get_service_info(config, interface_name, ip_address)
+                self.services.append((None, service_info, interface_name))
         else:
             # Single interface case
             self.services.append(
-                (None, get_service_info(config), config.server.interface)
+                (
+                    None,
+                    get_service_info(
+                        config,
+                        configured_interface,
+                        self.interface_ips[configured_interface],
+                    ),
+                    configured_interface,
+                )
             )
 
     async def register_service(self):
@@ -151,28 +135,13 @@ class ServiceDiscovery:
 
         for i, (_, service_info, interface_name) in enumerate(self.services):
             try:
-                # Create AsyncZeroconf instance bound to specific interface
-                if interface_name and interface_name != "all":
-                    # Get the IP address for this interface to create the interface list
-                    interface_ips = get_interface_ip_mappings()
-                    if interface_name in interface_ips:
-                        ip_address = interface_ips[interface_name]
-                        # Convert IP address to interface specification for zeroconf
-                        interfaces = [ip_address]
-                        logger.info(
-                            f"[Zeroconf] Binding service to interface {interface_name} ({ip_address})"
-                        )
-                        zci = AsyncZeroconf(
-                            ip_version=IPVersion.V4Only, interfaces=interfaces
-                        )
-                    else:
-                        logger.warning(
-                            f"[Zeroconf] Interface {interface_name} not found, using default"
-                        )
-                        zci = AsyncZeroconf(ip_version=IPVersion.V4Only)
-                else:
-                    # No specific interface or "all" - use default behavior
-                    zci = AsyncZeroconf(ip_version=IPVersion.V4Only)
+                ip_address = self.interface_ips[interface_name]
+                # Convert IP address to interface specification for zeroconf
+                interfaces = [ip_address]
+                logger.info(
+                    f"[Zeroconf] Binding service to interface {interface_name} ({ip_address})"
+                )
+                zci = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=interfaces)
 
                 await zci.async_register_service(service_info)
                 # Update the zeroconf instance in our list
