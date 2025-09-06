@@ -4,7 +4,7 @@ import logging
 from .config_model import MusicCastConfig
 from src.events import EventType
 
-from src.ext_device import SupportedFunction, DeviceVolume
+from src.ext_device import ExternalOutputDevice, SupportedFunction, DeviceVolume
 from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
 
@@ -48,7 +48,7 @@ def find_available_port(start_range=49152, end_range=65535):
     return None
 
 
-class Device:
+class Device(ExternalOutputDevice):
     def __init__(
         self, config: MusicCastConfig, playqueue: PlayQueue, event_emitter: EventEmitter
     ):
