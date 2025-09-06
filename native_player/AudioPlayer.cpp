@@ -41,11 +41,11 @@ struct StreamNodes {
     if (url.substr(0, 7) == "file://") {
       // Use FileInputNode for local files
       std::string filePath = url.substr(7);
-      spdlog::info("Creating FileInputNode for local file: {}", filePath);
+      spdlog::debug("Creating FileInputNode for local file: {}", filePath);
       nodeChain.emplace_back(std::make_shared<FileInputNode>(filePath));
     } else {
       // Use AudioGraphHttpStream for network streams
-      spdlog::info("Creating AudioGraphHttpStream for URL: {}", url);
+      spdlog::debug("Creating AudioGraphHttpStream for URL: {}", url);
       nodeChain.emplace_back(std::make_shared<AudioGraphHttpStream>(
           url, value_or(config, "input.http.buffer_size", HTTP_BUFFER_SIZE),
           value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
