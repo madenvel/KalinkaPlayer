@@ -273,7 +273,9 @@ def shutdown_modules(modules: dict[str, PreparedModule], config_path: str):
             prepared_module.module.shutdown()
         config_file_path = os.path.join(config_path, f"{module_name}_config.cfg")
         # Ensure the directory exists
-        os.makedirs(os.path.dirname(config_file_path), exist_ok=True)
+        config_dir = os.path.dirname(config_file_path)
+        if config_dir:  # Only create directory if path is not empty
+            os.makedirs(config_dir, exist_ok=True)
         with open(config_file_path, "w") as f:
             json.dump(
                 prepared_module.config.model_dump(exclude_unset=True), f, indent=2
