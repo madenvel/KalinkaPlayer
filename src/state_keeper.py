@@ -18,7 +18,9 @@ def set_state_file(file_path: str):
 
 def save_state(playqueue: PlayQueue):
     # Ensure the directory exists
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    state_dir = os.path.dirname(STATE_FILE)
+    if state_dir:  # Only create directory if path is not empty
+        os.makedirs(state_dir, exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(
             {
