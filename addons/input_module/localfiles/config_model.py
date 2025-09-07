@@ -62,9 +62,9 @@ class LocalFilesConfig(ModuleConfig):
     enabled: bool = Field(default=False, title="Module Enabled")
     music_folders: list[str] = Field(default=["~/Music"], title="Music Folders")
     db_path: str = Field(
-        default="/var/lib/kalinka/localfiles.db", title="Database Path"
+        default="~/.local/share/kalinka/localfiles.db", title="Database Path"
     )
-    artwork_path: str = Field(default="/var/lib/kalinka/artwork", title="Artwork Path")
+    artwork_path: str = Field(default="~/.cache/kalinka/artwork", title="Artwork Path")
     scan_interval_minutes: int = Field(default=5, title="Scan Interval (min)")
     file_watch_enabled: bool = Field(default=True, title="Enable File Watching")
     enricher: EnricherConfig = Field(
