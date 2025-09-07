@@ -272,7 +272,11 @@ def shutdown_modules(modules: dict[str, PreparedModule], config_path: str):
     for module_name, prepared_module in modules.items():
         logger.info(f"Shutting down module: {module_name}")
         if hasattr(prepared_module.module, "shutdown"):
-            prepared_module.module.shutdown()
+            try:
+                prepared_module.module.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down module {module_name}: {e}")
+
         config_file_path = os.path.join(config_path, f"{module_name}_config.cfg")
         # Ensure the directory exists
         config_dir = os.path.dirname(config_file_path)
@@ -282,6 +286,7 @@ def shutdown_modules(modules: dict[str, PreparedModule], config_path: str):
             json.dump(
                 prepared_module.config.model_dump(exclude_unset=True), f, indent=2
             )
+            logger.info(f"Saved config for module {module_name} to {config_file_path}")
 
 
 def shutdown(config_path: str):
