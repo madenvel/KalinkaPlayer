@@ -1,9 +1,7 @@
 import logging
 import logging.handlers
 import multiprocessing
-import os
 import signal
-import socket
 from addons.input_module.localfiles.config_model import LocalFilesConfig
 from addons.input_module.localfiles.enricher import enricher
 from addons.input_module.localfiles.indexer import indexer
@@ -23,35 +21,13 @@ _logging_queue = multiprocessing.Queue()
 _log_listener = None
 
 
-def is_process_running(socket_path):
-    """Check if a process is running by attempting to connect to its socket."""
-    if not os.path.exists(socket_path):
-        return False
-
-    try:
-        # Try to connect to the socket
-        test_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        test_socket.settimeout(1.0)  # Set a timeout to avoid blocking indefinitely
-        test_socket.connect(socket_path)
-        test_socket.close()
-        return True
-    except (ConnectionRefusedError, FileNotFoundError, socket.timeout):
-        # If the socket file exists but connection fails, it's a stale socket
-        if os.path.exists(socket_path):
-            try:
-                os.remove(socket_path)
-            except OSError:
-                pass
-        return False
-
-
 def setup(
     config: LocalFilesConfig,
     playqueue: PlayQueue,
     event_emitter: EventEmitter,
     event_listener: EventListener,
 ):
-    global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue
+    global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue, _shutdown_event
 
     logger.info("Setting up localfiles input module")
 
@@ -94,7 +70,7 @@ def setup(
 
 
 def shutdown_process(proc):
-    """Shutdown a process by sending a shutdown command over its socket."""
+    """Shutdown a process by sending a termination signal"""
 
     if proc is None or not proc.is_alive():
         logger.warning(f"Process is not running or already shut down.")
@@ -102,14 +78,15 @@ def shutdown_process(proc):
 
     # Send shutdown command over the process's socket
     try:
-        proc.send_signal(signal.SIGTERM)
         sleeping_time = 5
+        proc.terminate()
         proc.join(timeout=sleeping_time)
         if proc.is_alive():
             logger.warning(
                 f"Process {proc.pid} did not shut down gracefully, killing it."
             )
             proc.kill()
+            proc.join(timeout=sleeping_time)
         else:
             logger.info(f"Process {proc.pid} shut down successfully.")
     except Exception as e:
@@ -118,6 +95,7 @@ def shutdown_process(proc):
 
 def shutdown():
     global _enricher_proc, _indexer_proc, _log_listener
+    logger.info("Shutting down localfiles input module")
 
     shutdown_process(_indexer_proc)
     shutdown_process(_enricher_proc)
