@@ -546,7 +546,7 @@ def main(
     enricher_queue: multiprocessing.Queue,
     logger_queue: multiprocessing.Queue,
 ):
-    """Main entry point for the indexer daemon."""
+    """Main entry point for the enricher daemon."""
 
     global _enricher_queue
 
@@ -565,4 +565,4 @@ def main(
     except Exception as e:
         logger.critical(f"Unhandled exception in asyncio.run: {e}", exc_info=True)
     finally:
-        logger.info("Indexer daemon finished.")
+        logger.info("Enricher daemon finished.")
