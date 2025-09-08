@@ -162,20 +162,13 @@ def read_or_create_module_config(
         with open(config_file, "r") as f:
             config_data = json.load(f)
     except FileNotFoundError:
-        logger.info(
+        logger.warning(
             f"Config file not found for {module_name}, creating default config."
         )
 
     if config_data is None:
         logger.info(f"Creating default config for {module_name} at {config_file}")
-        default_config = module.Config()
-        # Ensure the directory exists
-        config_dir = os.path.dirname(config_file)
-        if config_dir:  # Only create directory if path is not empty
-            os.makedirs(config_dir, exist_ok=True)
-        with open(config_file, "w") as f:
-            json.dump(default_config.model_dump(), f)
-        return default_config
+        return module.Config()
 
     return module.Config(**config_data)
 
@@ -282,10 +275,9 @@ def shutdown_modules(modules: dict[str, PreparedModule], config_path: str):
         config_dir = os.path.dirname(config_file_path)
         if config_dir:  # Only create directory if path is not empty
             os.makedirs(config_dir, exist_ok=True)
+
         with open(config_file_path, "w") as f:
-            json.dump(
-                prepared_module.config.model_dump(exclude_unset=True), f, indent=2
-            )
+            json.dump(prepared_module.config.model_dump(), f, indent=2)
             logger.info(f"Saved config for module {module_name} to {config_file_path}")
 
 
