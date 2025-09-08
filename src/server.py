@@ -18,7 +18,7 @@ from data_model.datamodel import (
 from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
 from src import state_keeper
 from src.config_model import KalinkaConfig
-from src.config_schema_processor import config_to_wire
+from src.config_schema_processor import config_to_wire, get_field_value, set_field_value
 from src.ext_device import ExternalOutputDevice, DeviceVolume
 from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
 from src.multisearch import calculate_fuzzy_score
@@ -613,19 +613,17 @@ def create_app(config_file, config: KalinkaConfig):
                         raise HTTPException(
                             status_code=400, detail="Cannot modify 'name' field"
                         )
-
             elif attrs[0] == "base_config":
                 config = app.state.config
                 attrs = attrs[1:]
 
-            for attr in attrs[:-1]:
-                if hasattr(config, attr):
-                    config = getattr(config, attr)
-                else:
-                    raise HTTPException(
-                        status_code=400, detail=f"Invalid config field: {key}"
-                    )
-            setattr(config, attrs[-1], value)
+            if config is None:
+                raise HTTPException(status_code=400, detail="Invalid config key")
+
+            set_field_value(config, attrs, value)
+            logger.info(
+                f"Set config field {'.'.join(attrs)} to {value}, saved value: {get_field_value(config, attrs)}"
+            )
 
         return {"message": "Ok"}
 

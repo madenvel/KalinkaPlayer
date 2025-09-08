@@ -78,6 +78,22 @@ def process_model(model: BaseModel) -> Dict[str, Any]:
     return output
 
 
+def set_field_value(model: BaseModel, field_path: List[str], value: Any) -> None:
+    """Set a field value in a nested Pydantic model given a path."""
+    current = model
+    for part in field_path[:-1]:
+        current = getattr(current, part)
+    setattr(current, field_path[-1], value)
+
+
+def get_field_value(model: BaseModel, field_path: List[str]) -> Any:
+    """Get a field value in a nested Pydantic model given a path."""
+    current = model
+    for part in field_path:
+        current = getattr(current, part)
+    return current
+
+
 def config_to_wire(
     base_config: BaseModel,
     input_modules: dict[str, ModuleConfig],
