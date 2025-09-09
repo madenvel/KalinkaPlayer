@@ -6,8 +6,8 @@ class MusicCastConfig(ModuleConfig):
     name: str = Field(default="musiccast", title="MusicCast", frozen=True, exclude=True)
     enabled: bool = Field(default=False, title="Module Enabled")
     device_addr: str = Field(
-        "127.0.0.1",
-        title="MusicCast device address",
+        "",
+        title="MusicCast device address (leave empty for auto-discovery)",
     )
     device_port: int = Field(5000, title="MusicCast device port")
     connected_input: str = Field("optical1", title="Connected input")
@@ -20,4 +20,10 @@ class MusicCastConfig(ModuleConfig):
         title="Autoloudness volume step in dB",
         ge=0.5,
         le=5,
+    )
+    discovery_timeout: int = Field(
+        10,
+        title="Device discovery timeout in seconds",
+        ge=5,
+        le=60,
     )
