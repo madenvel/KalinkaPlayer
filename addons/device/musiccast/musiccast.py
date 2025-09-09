@@ -50,10 +50,76 @@ def find_available_port(address, start_range=49152, end_range=65535):
     return None
 
 
+def get_network_interfaces():
+    """Get all active network interfaces with their IP addresses"""
+    interfaces = []
+
+    try:
+        import netifaces
+
+        for interface_name in netifaces.interfaces():
+            try:
+                addresses = netifaces.ifaddresses(interface_name)
+                if netifaces.AF_INET in addresses:
+                    for addr_info in addresses[netifaces.AF_INET]:
+                        ip = addr_info.get("addr")
+                        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                            interfaces.append((interface_name, ip))
+                            logger.debug(f"Found interface {interface_name}: {ip}")
+            except (KeyError, ValueError):
+                continue
+
+    except ImportError:
+        logger.info("netifaces not available, using socket-based interface detection")
+
+        # Fallback: try to detect interfaces using socket
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["ip", "addr", "show"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                current_interface = None
+                for line in result.stdout.split("\n"):
+                    # Parse interface names
+                    if line.strip() and not line.startswith(" "):
+                        parts = line.split(":")
+                        if len(parts) >= 2:
+                            current_interface = parts[1].strip()
+                    # Parse IP addresses
+                    elif "inet " in line and current_interface:
+                        parts = line.strip().split()
+                        for i, part in enumerate(parts):
+                            if part == "inet" and i + 1 < len(parts):
+                                ip = parts[i + 1].split("/")[0]
+                                if not ip.startswith("127.") and ip != "0.0.0.0":
+                                    interfaces.append((current_interface, ip))
+                                    logger.debug(
+                                        f"Found interface {current_interface}: {ip}"
+                                    )
+                                break
+        except Exception as e:
+            logger.debug(f"Failed to detect interfaces via ip command: {e}")
+
+    # Final fallback: use default interface
+    if not interfaces:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
+                interfaces.append(("default", local_ip))
+                logger.info(f"Using default interface: {local_ip}")
+        except Exception:
+            logger.warning("Could not detect any network interfaces")
+
+    return interfaces
+
+
 def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
     """
     Discover MusicCast devices using SSDP (Simple Service Discovery Protocol).
-    Sends M-SEARCH multicast requests and listens for responses.
+    Sends M-SEARCH multicast requests on all network interfaces and listens for responses.
     Returns the first device found or None if no devices are discovered.
     """
     logger.info("Starting SSDP MusicCast device discovery...")
@@ -74,49 +140,126 @@ def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
     ).encode("utf-8")
 
     found_device = None
-    sock = None
+    sockets = []
+
+    # Get all network interfaces
+    interfaces = get_network_interfaces()
+    if not interfaces:
+        logger.error("No network interfaces found for SSDP discovery")
+        return None
+
+    logger.info(f"Sending SSDP M-SEARCH on {len(interfaces)} interface(s)")
 
     try:
-        # Create UDP socket for multicast
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(timeout_seconds)
+        # Create sockets for each interface
+        for interface_name, interface_ip in interfaces:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(timeout_seconds)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        # Allow socket reuse
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                # Bind to specific interface
+                sock.bind((interface_ip, 0))
 
-        # Bind to any available port for receiving responses
-        sock.bind(("", 0))
+                # Send M-SEARCH request from this interface
+                logger.debug(
+                    f"Sending M-SEARCH from interface {interface_name} ({interface_ip}) to {SSDP_ADDR}:{SSDP_PORT}"
+                )
+                sock.sendto(msearch_request, (SSDP_ADDR, SSDP_PORT))
 
-        # Send M-SEARCH request
-        logger.debug(f"Sending M-SEARCH request to {SSDP_ADDR}:{SSDP_PORT}")
-        sock.sendto(msearch_request, (SSDP_ADDR, SSDP_PORT))
+                sockets.append((sock, interface_name, interface_ip))
+
+            except Exception as e:
+                logger.debug(
+                    f"Failed to create socket for interface {interface_name} ({interface_ip}): {e}"
+                )
+                continue
+
+        if not sockets:
+            logger.error("Failed to create any SSDP sockets")
+            return None
 
         start_time = time.time()
 
+        # Listen for responses on all interfaces
         while time.time() - start_time < timeout_seconds:
             try:
-                # Receive SSDP response
-                data, addr = sock.recvfrom(4096)
-                response = data.decode("utf-8")
+                # Use select to check all sockets for incoming data
+                import select
 
-                logger.debug(f"Received SSDP response from {addr[0]}:\n{response}")
+                ready_sockets, _, _ = select.select(
+                    [sock for sock, _, _ in sockets], [], [], 0.1
+                )
 
-                # Parse SSDP response
-                device = parse_ssdp_response(response, addr[0])
-                if device:
-                    found_device = device
+                for ready_sock in ready_sockets:
+                    try:
+                        data, addr = ready_sock.recvfrom(4096)
+                        response = data.decode("utf-8")
+
+                        # Find which interface received this response
+                        interface_info = next(
+                            (name, ip)
+                            for sock, name, ip in sockets
+                            if sock == ready_sock
+                        )
+                        logger.debug(
+                            f"Received SSDP response from {addr[0]} on interface {interface_info[0]} ({interface_info[1]}):\n{response}"
+                        )
+
+                        # Parse SSDP response
+                        device = parse_ssdp_response(response, addr[0])
+                        if device:
+                            found_device = device
+                            logger.info(
+                                f"Found device on interface {interface_info[0]} ({interface_info[1]})"
+                            )
+                            break
+
+                    except Exception as e:
+                        logger.debug(f"Error receiving SSDP response: {e}")
+                        continue
+
+                if found_device:
                     break
 
-            except socket.timeout:
-                continue
+            except ImportError:
+                # Fallback if select is not available - check sockets sequentially
+                for sock, interface_name, interface_ip in sockets:
+                    try:
+                        data, addr = sock.recvfrom(4096)
+                        response = data.decode("utf-8")
+
+                        logger.debug(
+                            f"Received SSDP response from {addr[0]} on interface {interface_name} ({interface_ip}):\n{response}"
+                        )
+
+                        # Parse SSDP response
+                        device = parse_ssdp_response(response, addr[0])
+                        if device:
+                            found_device = device
+                            logger.info(
+                                f"Found device on interface {interface_name} ({interface_ip})"
+                            )
+                            break
+
+                    except socket.timeout:
+                        continue
+                    except Exception as e:
+                        logger.debug(f"Error receiving SSDP response: {e}")
+                        continue
+
+                if found_device:
+                    break
+
             except Exception as e:
-                logger.debug(f"Error receiving SSDP response: {e}")
+                logger.debug(f"Error in select loop: {e}")
                 continue
 
     except Exception as e:
         logger.error(f"SSDP discovery failed: {e}")
     finally:
-        if sock:
+        # Close all sockets
+        for sock, _, _ in sockets:
             try:
                 sock.close()
             except:
@@ -127,7 +270,7 @@ def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
             f"SSDP discovery completed successfully: {found_device['model_name']} at {found_device['ip']}:{found_device['port']}"
         )
     else:
-        logger.warning("No MusicCast devices found via SSDP")
+        logger.warning("No MusicCast devices found via SSDP on any interface")
 
     return found_device
 
