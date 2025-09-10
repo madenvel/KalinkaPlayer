@@ -83,7 +83,9 @@ def get_network_interfaces():
     return interfaces
 
 
-def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
+def discover_musiccast_devices(
+    iface: str, timeout_seconds=10
+) -> Optional[Dict[str, Any]]:
     """
     Discover MusicCast devices using SSDP via the ssdpy library.
     Much more compact and reliable than manual SSDP implementation.
@@ -91,7 +93,7 @@ def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
     logger.info("Starting SSDP MusicCast device discovery...")
 
     # Create SSDP client with specified timeout
-    client = SSDPClient(timeout=timeout_seconds)
+    client = SSDPClient(iface=iface.encode("utf-8"), timeout=timeout_seconds)
 
     # Search for MediaRenderer devices (per MusicCast specification)
     logger.info("Sending SSDP M-SEARCH for MediaRenderer devices...")
@@ -353,6 +355,7 @@ class Device(ExternalOutputDevice):
         self.volume_step_to_db = config.volume_step_to_db
         self.auto_volume = config.auto_volume_correction
         self.session = httpx.Client(timeout=5)
+        self.ready = False
 
         # Use discovery if no valid device address is configured
         self.device_addr = None
@@ -366,29 +369,11 @@ class Device(ExternalOutputDevice):
             logger.info(
                 f"Using configured MusicCast device: {self.device_addr}:{self.device_port}"
             )
+            self.get_ready()
         else:
-            # Discover device using SSDP
-            logger.info(
-                "No valid device address configured, starting SSDP discovery..."
-            )
-            discovered_device = discover_musiccast_devices(
-                timeout_seconds=config.discovery_timeout
-            )
+            self.run_discovery()
 
-            if discovered_device:
-                self.device_addr = discovered_device["ip"]
-                self.device_port = discovered_device["port"]
-                # Use the exact control URL from device description if available
-                if "yxc_control_url" in discovered_device:
-                    self.yxc_control_url = discovered_device["yxc_control_url"]
-                logger.info(
-                    f"Using discovered device: {discovered_device.get('model_name', 'Unknown')} at {self.device_addr}:{self.device_port}"
-                )
-            else:
-                raise Exception(
-                    "No MusicCast devices found via SSDP discovery. MusicCast module will be disabled. Please ensure a MusicCast device is available on the network or configure device_addr manually."
-                )
-
+    def get_ready(self):
         self.base_url = (
             f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
         )
@@ -407,12 +392,51 @@ class Device(ExternalOutputDevice):
             raise Exception("Could not find available UDP port")
         logger.info(f"Using UDP port {self.udp_port}")
         self.terminate = False
-        self.event_loop_thread = threading.Thread(target=self._event_loop, daemon=True)
+        self.ready = True
+        self.event_loop_thread = threading.Thread(
+            target=self._event_loop, name="MusicCastEventLoopThread", daemon=True
+        )
         self.event_loop_thread.start()
-        self.timer_thread = threading.Thread(target=self._timer_loop, daemon=True)
+        self.timer_thread = threading.Thread(
+            target=self._timer_loop, name="MusicCastTimerThread", daemon=True
+        )
         self.timer_thread.start()
         self.volume_changed_event = threading.Event()
-        threading.Thread(target=self._event_sender, daemon=True).start()
+        threading.Thread(
+            target=self._event_sender, name="MusicCastEventSenderThread", daemon=True
+        ).start()
+
+    def run_discovery(self):
+        self.discovery_thread = threading.Thread(
+            target=self._run_discovery_thread,
+            name="MusicCastDiscoveryThread",
+            daemon=True,
+        )
+        self.discovery_thread.start()
+
+    def _run_discovery_thread(self):
+        interfaces = get_network_interfaces()
+        if not interfaces:
+            logger.error("No network interfaces found for discovery")
+            return
+
+        for iface_name, iface_ip in interfaces:
+            logger.info(f"Running discovery on interface {iface_name} ({iface_ip})")
+            device_info = discover_musiccast_devices(
+                iface=iface_name, timeout_seconds=10
+            )
+            if device_info:
+                self.device_addr = device_info["ip"]
+                self.device_port = device_info["port"]
+                self.yxc_control_url = device_info["yxc_control_url"]
+                self.base_url = f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
+                logger.info(
+                    f"Discovered MusicCast device at {self.device_addr}:{self.device_port}"
+                )
+                self.get_ready()
+                return
+
+        logger.error("MusicCast device discovery failed on all interfaces")
 
     def __del__(self):
         """Ensure clean shutdown when object is destroyed"""
@@ -422,6 +446,8 @@ class Device(ExternalOutputDevice):
         """Gracefully shutdown all threads and close connections"""
         logger.info("Shutting down MusicCast device...")
         self.terminate = True
+        if not self.ready:
+            return
 
         # Wait for threads to finish (with timeout)
         if hasattr(self, "event_loop_thread") and self.event_loop_thread.is_alive():
@@ -436,6 +462,8 @@ class Device(ExternalOutputDevice):
     def _db_to_device_units(self, db):
         return round(db / self.volume_step_to_db)
 
+    # This event sender runs in its own thread
+    # and used to throttle volume change notifications to once per second
     def _event_sender(self):
         last_sent_volume = -1
         while True:
@@ -579,6 +607,10 @@ class Device(ExternalOutputDevice):
             logger.debug("Status update event received")
 
     def _on_state_changed(self, state):
+        # Don't process state changes if device is not ready yet
+        if not self.ready:
+            return
+
         if "state" not in state:
             return
         if state["state"] == "PLAYING":
@@ -657,35 +689,24 @@ class Device(ExternalOutputDevice):
             # For now, just re-raise the exception
             raise
 
-    def rediscover_device(self) -> bool:
+    def rediscover_device(self):
         """
         Re-discover MusicCast device using SSDP if the current one becomes unavailable.
         Returns True if a new device was found, False otherwise.
         """
         logger.info("Current device unreachable, attempting SSDP rediscovery...")
-
-        discovered_device = discover_musiccast_devices(timeout_seconds=10)
-
-        if discovered_device:
-            old_addr = f"{self.device_addr}:{self.device_port}"
-            self.device_addr = discovered_device["ip"]
-            self.device_port = discovered_device["port"]
-            self.base_url = (
-                f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
-            )
-
-            logger.info(
-                f"Rediscovered device: {discovered_device['model_name']} at {self.device_addr}:{self.device_port} (was: {old_addr})"
-            )
-            return True
-        else:
-            logger.warning("No MusicCast devices found during SSDP rediscovery")
-            return False
+        self.ready = False
+        self.run_discovery()
 
     def get_volume(self) -> DeviceVolume:
+        if not self.ready:
+            return DeviceVolume(max_volume=0, current_volume=0, volume_gain=0)
+
         return self.volume
 
     def set_volume(self, volume: int) -> None:
+        if not self.ready:
+            return
         if volume != self.volume.current_volume:
             self.volume.current_volume = volume
             volume = min(volume, self.volume.max_volume)
@@ -693,15 +714,23 @@ class Device(ExternalOutputDevice):
             self._request_musiccast(f"/main/setVolume?volume={volume}")
 
     def power_on(self) -> None:
+        if not self.ready:
+            return
+
         if self.is_power_on():
             return
         self._request_musiccast("/main/setPower?power=on")
         self._set_input()
 
     def power_off(self) -> None:
+        if not self.ready:
+            return
         self._request_musiccast("/main/setPower?power=standby")
 
     def is_power_on(self) -> bool:
+        if not self.ready:
+            return False
+
         status = self._get_status()
 
         return status["power"] == "on" and status["input"] == self.connected_input
