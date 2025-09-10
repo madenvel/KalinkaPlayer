@@ -120,8 +120,6 @@ def discover_musiccast_devices(
             device_ip = response["source"][0]
         else:
             # Extract from location URL as fallback
-            import urllib.parse
-
             parsed_url = urllib.parse.urlparse(location)
             device_ip = parsed_url.hostname
 
@@ -232,7 +230,7 @@ def parse_device_description(
         )
 
         # Verify this is actually a MusicCast device by testing the API
-        api_base_url = urllib.parse.urljoin(base_url, yxc_control_url)
+        api_base_url = safe_urljoin(base_url, yxc_control_url)
         device_details = verify_musiccast_api(api_base_url)
 
         if not device_details:
@@ -260,6 +258,22 @@ def parse_device_description(
         return None
 
 
+def safe_urljoin(base: str, path: str) -> str:
+    """
+    Safely join a base URL with a path, handling cases where both base and path
+    have slashes to avoid double slashes or missing path components.
+    """
+    # Ensure base ends with /
+    if not base.endswith("/"):
+        base += "/"
+
+    # Remove leading / from path to avoid urljoin treating it as absolute
+    if path.startswith("/"):
+        path = path[1:]
+
+    return urllib.parse.urljoin(base, path)
+
+
 def verify_musiccast_api(api_base_url: str) -> Optional[Dict[str, Any]]:
     """
     Verify the device responds to MusicCast Extended Control API
@@ -267,7 +281,7 @@ def verify_musiccast_api(api_base_url: str) -> Optional[Dict[str, Any]]:
     """
     try:
         # Test the getDeviceInfo endpoint
-        url = urllib.parse.urljoin(api_base_url, "system/getDeviceInfo")
+        url = safe_urljoin(api_base_url, "/system/getDeviceInfo")
         response = httpx.get(url, timeout=3)
 
         if response.status_code == 200:
@@ -584,7 +598,9 @@ class Device(ExternalOutputDevice):
             logger.info(f"Loudness correction applied: {device_gain_units}")
 
     def _get_status(self, headers=None):
-        response = self._request_musiccast("/main/getStatus", headers=headers)
+        response = self._request_musiccast(
+            f"/{self.zone_name}/getStatus", headers=headers
+        )
         if response["response_code"] != 0:
             logger.warning(
                 "MusicCast returned error code %d", response["response_code"]
@@ -593,12 +609,14 @@ class Device(ExternalOutputDevice):
         return response
 
     def _set_input(self):
-        self._request_musiccast(f"/main/setInput?input={self.connected_input}")
+        self._request_musiccast(
+            f"/{self.zone_name}/setInput?input={self.connected_input}"
+        )
 
     def _request_musiccast(self, endpoint, headers=None):
         try:
             response = self.session.get(
-                urllib.parse.urljoin(self.base_url, endpoint),
+                safe_urljoin(self.base_url, endpoint),
                 headers=headers,
                 timeout=5,
             )
@@ -634,7 +652,7 @@ class Device(ExternalOutputDevice):
             self.volume.current_volume = volume
             volume = min(volume, self.volume.max_volume)
             volume = max(volume, 0)
-            self._request_musiccast(f"/main/setVolume?volume={volume}")
+            self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
 
     def power_on(self) -> None:
         if not self.ready:
@@ -642,13 +660,13 @@ class Device(ExternalOutputDevice):
 
         if self.is_power_on():
             return
-        self._request_musiccast("/main/setPower?power=on")
+        self._request_musiccast(f"/{self.zone_name}/setPower?power=on")
         self._set_input()
 
     def power_off(self) -> None:
         if not self.ready:
             return
-        self._request_musiccast("/main/setPower?power=standby")
+        self._request_musiccast(f"/{self.zone_name}/setPower?power=standby")
 
     def is_power_on(self) -> bool:
         if not self.ready:
