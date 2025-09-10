@@ -156,62 +156,6 @@ def discover_musiccast_devices(
     return None
 
 
-def parse_ssdp_response(response: str, device_ip: str) -> Optional[Dict[str, Any]]:
-    """
-    Parse SSDP response following MusicCast specification:
-    1. Check for MediaRenderer device type
-    2. Extract Location header
-    3. Fetch device description XML
-    4. Verify Yamaha manufacturer and X_device tags
-    5. Extract control URL and device info
-    """
-    lines = response.strip().split("\r\n")
-
-    # Check if this is a valid SSDP response
-    if not lines[0].startswith("HTTP/1.1 200 OK"):
-        return None
-
-    headers = {}
-    for line in lines[1:]:
-        if ":" in line:
-            key, value = line.split(":", 1)
-            headers[key.strip().upper()] = value.strip()
-
-    # Check if this is a MediaRenderer device
-    st = headers.get("ST", "")
-    if "MediaRenderer" not in st:
-        logger.debug(f"Skipping non-MediaRenderer device: {st}")
-        return None
-
-    # Get the location URL for device description
-    location = headers.get("LOCATION", "")
-    if not location:
-        logger.debug("No LOCATION header in SSDP response")
-        return None
-
-    logger.debug(f"Fetching device description from: {location}")
-
-    # Fetch and parse device description XML
-    try:
-        http_response = httpx.get(location, timeout=5)
-        if http_response.status_code != 200:
-            logger.debug(
-                f"Failed to fetch device description: HTTP {http_response.status_code}"
-            )
-            return None
-
-        device_desc_xml = http_response.text
-        logger.debug(f"Device description XML:\n{device_desc_xml}")
-
-        # Parse XML to check for Yamaha MusicCast device
-        device_info = parse_device_description(device_desc_xml, device_ip)
-        return device_info
-
-    except Exception as e:
-        logger.debug(f"Error fetching device description from {location}: {e}")
-        return None
-
-
 def parse_device_description(
     xml_content: str, device_ip: str
 ) -> Optional[Dict[str, Any]]:
@@ -281,29 +225,26 @@ def parse_device_description(
             return None
 
         # Extract base URL and port
-        base_url = url_base.text if url_base is not None else f"http://{device_ip}:80/"
-
-        # Parse port from base URL
-        parsed_url = urllib.parse.urlparse(base_url)
-        port = parsed_url.port or 80
-        host = str(parsed_url.hostname or device_ip)
+        base_url: str = (
+            url_base.text
+            if (url_base is not None and url_base.text is not None)
+            else f"http://{device_ip}:80/"
+        )
 
         # Verify this is actually a MusicCast device by testing the API
-        api_base_url = f"http://{host}:{port}{yxc_control_url}"
-        device_details = verify_musiccast_api(api_base_url, host, port)
+        api_base_url = urllib.parse.urljoin(base_url, yxc_control_url)
+        device_details = verify_musiccast_api(api_base_url)
 
         if not device_details:
             logger.debug("Device does not respond to MusicCast API")
             return None
 
         logger.info(
-            f"Found MusicCast device: {device_details['model_name']} at {host}:{port}"
+            f"Found MusicCast device: {device_details['model_name']} at {base_url}"
         )
 
         return {
-            "ip": host,
-            "port": port,
-            "base_url": base_url,
+            "api_base_url": api_base_url,
             "yxc_control_url": yxc_control_url,
             "friendly_name": friendly_name.text if friendly_name is not None else None,
             "serial_number": serial_number.text if serial_number is not None else None,
@@ -319,16 +260,14 @@ def parse_device_description(
         return None
 
 
-def verify_musiccast_api(
-    api_base_url: str, host: str, port: int
-) -> Optional[Dict[str, Any]]:
+def verify_musiccast_api(api_base_url: str) -> Optional[Dict[str, Any]]:
     """
     Verify the device responds to MusicCast Extended Control API
     and get device information.
     """
     try:
         # Test the getDeviceInfo endpoint
-        url = f"{api_base_url}system/getDeviceInfo"
+        url = urllib.parse.urljoin(api_base_url, "system/getDeviceInfo")
         response = httpx.get(url, timeout=3)
 
         if response.status_code == 200:
@@ -352,32 +291,27 @@ class Device(ExternalOutputDevice):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
         self.connected_input = config.connected_input
+        self.zone_name = config.zone_name
         self.volume_step_to_db = config.volume_step_to_db
         self.auto_volume = config.auto_volume_correction
+        self.discovery_timeout = config.discovery_timeout
         self.session = httpx.Client(timeout=5)
         self.ready = False
 
-        # Use discovery if no valid device address is configured
-        self.device_addr = None
-        self.device_port = None
-        self.yxc_control_url = "/YamahaExtendedControl/v1"  # default fallback
-
         if config.device_addr and config.device_addr.strip():
             # Use configured address
-            self.device_addr = config.device_addr
-            self.device_port = config.device_port
+            device_addr = config.device_addr
+            device_port = config.device_port
+            yxc_control_url = "/YamahaExtendedControl/v1/"
             logger.info(
-                f"Using configured MusicCast device: {self.device_addr}:{self.device_port}"
+                f"Using configured MusicCast device: {device_addr}:{device_port}"
             )
+            self.base_url = f"http://{device_addr}:{device_port}{yxc_control_url}"
             self.get_ready()
         else:
             self.run_discovery()
 
     def get_ready(self):
-        self.base_url = (
-            f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
-        )
-
         # Test connection and get initial status
         status = self._get_status()
         self.volume = DeviceVolume(
@@ -423,14 +357,11 @@ class Device(ExternalOutputDevice):
         for iface_name, iface_ip in interfaces:
             logger.info(f"Running discovery on interface {iface_name} ({iface_ip})")
             device_info = discover_musiccast_devices(
-                iface=iface_name, timeout_seconds=10
+                iface=iface_name, timeout_seconds=self.discovery_timeout
             )
             if device_info:
-                self.device_addr = device_info["ip"]
-                self.device_port = device_info["port"]
-                self.yxc_control_url = device_info["yxc_control_url"]
-                self.base_url = f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
-                logger.info(f"Device control URL: {self.base_url}")
+                logger.info(f"Device control URL: {device_info['api_base_url']}")
+                self.base_url = device_info["api_base_url"]
                 self.get_ready()
                 return
 
@@ -508,13 +439,15 @@ class Device(ExternalOutputDevice):
                     f"Listening for MusicCast events on 0.0.0.0:{self.udp_port}"
                 )
 
+                device_addr = urllib.parse.urlparse(self.base_url).hostname
+
                 while self.terminate is False:
                     try:
                         # Receive data from the client with larger buffer
                         data, client_address = udp_socket.recvfrom(4096)
 
                         # Validate that the event came from the expected device
-                        if client_address[0] != self.device_addr:
+                        if client_address[0] != device_addr:
                             logger.warning(
                                 f"Received event from unexpected address: {client_address[0]}"
                             )
@@ -552,21 +485,11 @@ class Device(ExternalOutputDevice):
         # Each zone can have different event data
         logger.debug(f"Received MusicCast event: {event_json}")
 
-        # Handle main zone events
-        if "main" in event_json:
-            self._handle_zone_event(event_json["main"], "main")
-
-        # Handle other zones if needed (zone2, zone3, etc.)
-        for zone_name in ["zone2", "zone3", "zone4"]:
-            if zone_name in event_json:
-                self._handle_zone_event(event_json[zone_name], zone_name)
-
-    def _handle_zone_event(self, zone_state, zone_name):
-        # Only process main zone events for now
-        if zone_name != "main":
+        if self.zone_name not in event_json:
+            logger.debug(f"No event data for configured zone: {self.zone_name}")
             return
 
-        logger.debug(f"Processing {zone_name} zone event: {zone_state}")
+        zone_state = event_json.get(self.zone_name)
 
         # Handle volume changes
         if "volume" in zone_state:
@@ -675,7 +598,9 @@ class Device(ExternalOutputDevice):
     def _request_musiccast(self, endpoint, headers=None):
         try:
             response = self.session.get(
-                self.base_url + endpoint, headers=headers, timeout=5
+                urllib.parse.urljoin(self.base_url, endpoint),
+                headers=headers,
+                timeout=5,
             )
             if response.status_code != 200:
                 raise Exception(f"MusicCast returned {response.status_code}")
