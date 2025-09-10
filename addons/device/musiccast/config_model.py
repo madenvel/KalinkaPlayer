@@ -7,10 +7,11 @@ class MusicCastConfig(ModuleConfig):
     enabled: bool = Field(default=False, title="Module Enabled")
     device_addr: str = Field(
         "",
-        title="MusicCast device address (leave empty for auto-discovery)",
+        title="Override MusicCast device IP address",
     )
-    device_port: int = Field(5000, title="MusicCast device port")
-    connected_input: str = Field("optical1", title="Connected input")
+    device_port: int = Field(default=80, title="Override MusicCast device port")
+    connected_input: str = Field(default="optical1", title="Connected input")
+    zone_name: str = Field(default="main", title="Zone name")
     auto_volume_correction: bool = Field(
         False,
         title="Adjust loudness using replaygain",
