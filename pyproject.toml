@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "kalinka-player"
 description = "Kalinka Audio Player backend service"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = [
     {name = "Dmitry Savin", email = "envelsavinds@gmail.com"}
 ]
@@ -44,6 +44,7 @@ dependencies = [
     "aiosqlite>=0.17.0",
     "netifaces>=0.11.0",
     "rapidfuzz>=2.0.0",
+    "ssdpy>=0.4.0",
 ]
 dynamic = ["version"]
 
@@ -148,5 +149,6 @@ module = [
     "netifaces.*",
     "rapidfuzz.*",
     "aiosqlite.*",
+    "ssdpy.*",
 ]
 ignore_missing_imports = true

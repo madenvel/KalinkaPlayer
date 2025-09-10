@@ -17,6 +17,7 @@ watchfiles>=0.18.0
 aiosqlite>=0.17.0
 netifaces>=0.11.0
 rapidfuzz>=2.0.0
+ssdpy>=0.4.0
 
 # Build dependencies
 setuptools>=61.0

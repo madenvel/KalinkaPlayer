@@ -1,11 +1,14 @@
 import time
 import httpx
 import logging
+import urllib.parse
 from .config_model import MusicCastConfig
 from src.events import EventType
+from ssdpy import SSDPClient
+import netifaces
+
 
 from src.ext_device import ExternalOutputDevice, SupportedFunction, DeviceVolume
-from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
 
 import threading
@@ -17,7 +20,7 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
-def is_port_available(address, port):
+def is_port_available(port):
     """Check if a port is available for binding on the local machine"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(1)
@@ -34,13 +37,13 @@ def is_port_available(address, port):
         sock.close()
 
 
-def find_available_port(address, start_range=49152, end_range=65535):
+def find_available_port(start_range=49152, end_range=65535):
     # We expect that we will find an available port within 100 tries
     for _ in range(100):
         port = random.randint(start_range, end_range)
 
         logger.debug(f"Checking port {port}")
-        if is_port_available(address, port):
+        if is_port_available(port):
             return port
 
         logger.debug(f"Port {port} is not available")
@@ -52,55 +55,19 @@ def find_available_port(address, start_range=49152, end_range=65535):
 
 def get_network_interfaces():
     """Get all active network interfaces with their IP addresses"""
+
     interfaces = []
-
-    try:
-        import netifaces
-
-        for interface_name in netifaces.interfaces():
-            try:
-                addresses = netifaces.ifaddresses(interface_name)
-                if netifaces.AF_INET in addresses:
-                    for addr_info in addresses[netifaces.AF_INET]:
-                        ip = addr_info.get("addr")
-                        if ip and not ip.startswith("127.") and ip != "0.0.0.0":
-                            interfaces.append((interface_name, ip))
-                            logger.debug(f"Found interface {interface_name}: {ip}")
-            except (KeyError, ValueError):
-                continue
-
-    except ImportError:
-        logger.info("netifaces not available, using socket-based interface detection")
-
-        # Fallback: try to detect interfaces using socket
+    for interface_name in netifaces.interfaces():
         try:
-            import subprocess
-
-            result = subprocess.run(
-                ["ip", "addr", "show"], capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                current_interface = None
-                for line in result.stdout.split("\n"):
-                    # Parse interface names
-                    if line.strip() and not line.startswith(" "):
-                        parts = line.split(":")
-                        if len(parts) >= 2:
-                            current_interface = parts[1].strip()
-                    # Parse IP addresses
-                    elif "inet " in line and current_interface:
-                        parts = line.strip().split()
-                        for i, part in enumerate(parts):
-                            if part == "inet" and i + 1 < len(parts):
-                                ip = parts[i + 1].split("/")[0]
-                                if not ip.startswith("127.") and ip != "0.0.0.0":
-                                    interfaces.append((current_interface, ip))
-                                    logger.debug(
-                                        f"Found interface {current_interface}: {ip}"
-                                    )
-                                break
-        except Exception as e:
-            logger.debug(f"Failed to detect interfaces via ip command: {e}")
+            addresses = netifaces.ifaddresses(interface_name)
+            if netifaces.AF_INET in addresses:
+                for addr_info in addresses[netifaces.AF_INET]:
+                    ip = addr_info.get("addr")
+                    if ip and not ip.startswith("127.") and ip != "0.0.0.0":
+                        interfaces.append((interface_name, ip))
+                        logger.debug(f"Found interface {interface_name}: {ip}")
+        except (KeyError, ValueError):
+            continue
 
     # Final fallback: use default interface
     if not interfaces:
@@ -118,167 +85,83 @@ def get_network_interfaces():
 
 def discover_musiccast_devices(timeout_seconds=10) -> Optional[Dict[str, Any]]:
     """
-    Discover MusicCast devices using SSDP (Simple Service Discovery Protocol).
-    Sends M-SEARCH multicast requests on all network interfaces and listens for responses.
-    Returns the first device found or None if no devices are discovered.
+    Discover MusicCast devices using SSDP via the ssdpy library.
+    Much more compact and reliable than manual SSDP implementation.
     """
     logger.info("Starting SSDP MusicCast device discovery...")
 
-    # SSDP multicast address and port
-    SSDP_ADDR = "239.255.255.250"
-    SSDP_PORT = 1900
+    # Create SSDP client with specified timeout
+    client = SSDPClient(timeout=timeout_seconds)
 
-    # M-SEARCH request for MusicCast devices
-    # Based on Yamaha MusicCast SSDP specification
-    msearch_request = (
-        "M-SEARCH * HTTP/1.1\r\n"
-        f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
-        'MAN: "ssdp:discover"\r\n'
-        f"MX: {timeout_seconds}\r\n"
-        "ST: urn:schemas-yamaha-com:device:MusicCast:1\r\n"
-        "\r\n"
-    ).encode("utf-8")
+    # Search for MediaRenderer devices (per MusicCast specification)
+    logger.info("Sending SSDP M-SEARCH for MediaRenderer devices...")
+    responses = client.m_search(
+        "urn:schemas-upnp-org:device:MediaRenderer:1", mx=timeout_seconds
+    )
 
-    found_device = None
-    sockets = []
+    logger.info(f"Received {len(responses)} SSDP responses")
 
-    # Get all network interfaces
-    interfaces = get_network_interfaces()
-    if not interfaces:
-        logger.error("No network interfaces found for SSDP discovery")
-        return None
+    # Process each response to find MusicCast devices
+    for response in responses:
+        logger.debug(f"Processing SSDP response: {response}")
 
-    logger.info(f"Sending SSDP M-SEARCH on {len(interfaces)} interface(s)")
+        # Extract location URL for device description
+        location = response.get("location")
+        if not location:
+            logger.debug("No location header in SSDP response")
+            continue
 
-    try:
-        # Create sockets for each interface
-        for interface_name, interface_ip in interfaces:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.settimeout(timeout_seconds)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Parse device IP from response source
+        device_ip = None
+        if "source" in response:
+            # ssdpy includes source IP in some versions
+            device_ip = response["source"][0]
+        else:
+            # Extract from location URL as fallback
+            import urllib.parse
 
-                # Bind to specific interface
-                sock.bind((interface_ip, 0))
+            parsed_url = urllib.parse.urlparse(location)
+            device_ip = parsed_url.hostname
 
-                # Send M-SEARCH request from this interface
+        if not device_ip:
+            logger.debug("Could not determine device IP")
+            continue
+
+        logger.debug(f"Fetching device description from: {location}")
+
+        # Fetch and parse device description XML
+        try:
+            http_response = httpx.get(location, timeout=5)
+            if http_response.status_code != 200:
                 logger.debug(
-                    f"Sending M-SEARCH from interface {interface_name} ({interface_ip}) to {SSDP_ADDR}:{SSDP_PORT}"
-                )
-                sock.sendto(msearch_request, (SSDP_ADDR, SSDP_PORT))
-
-                sockets.append((sock, interface_name, interface_ip))
-
-            except Exception as e:
-                logger.debug(
-                    f"Failed to create socket for interface {interface_name} ({interface_ip}): {e}"
+                    f"Failed to fetch device description: HTTP {http_response.status_code}"
                 )
                 continue
 
-        if not sockets:
-            logger.error("Failed to create any SSDP sockets")
-            return None
+            device_desc_xml = http_response.text
+            logger.debug(f"Device description XML:\n{device_desc_xml}")
 
-        start_time = time.time()
+            # Parse XML to check for Yamaha MusicCast device
+            device_info = parse_device_description(device_desc_xml, device_ip)
+            if device_info:
+                return device_info
 
-        # Listen for responses on all interfaces
-        while time.time() - start_time < timeout_seconds:
-            try:
-                # Use select to check all sockets for incoming data
-                import select
+        except Exception as e:
+            logger.debug(f"Error fetching device description from {location}: {e}")
+            continue
 
-                ready_sockets, _, _ = select.select(
-                    [sock for sock, _, _ in sockets], [], [], 0.1
-                )
-
-                for ready_sock in ready_sockets:
-                    try:
-                        data, addr = ready_sock.recvfrom(4096)
-                        response = data.decode("utf-8")
-
-                        # Find which interface received this response
-                        interface_info = next(
-                            (name, ip)
-                            for sock, name, ip in sockets
-                            if sock == ready_sock
-                        )
-                        logger.debug(
-                            f"Received SSDP response from {addr[0]} on interface {interface_info[0]} ({interface_info[1]}):\n{response}"
-                        )
-
-                        # Parse SSDP response
-                        device = parse_ssdp_response(response, addr[0])
-                        if device:
-                            found_device = device
-                            logger.info(
-                                f"Found device on interface {interface_info[0]} ({interface_info[1]})"
-                            )
-                            break
-
-                    except Exception as e:
-                        logger.debug(f"Error receiving SSDP response: {e}")
-                        continue
-
-                if found_device:
-                    break
-
-            except ImportError:
-                # Fallback if select is not available - check sockets sequentially
-                for sock, interface_name, interface_ip in sockets:
-                    try:
-                        data, addr = sock.recvfrom(4096)
-                        response = data.decode("utf-8")
-
-                        logger.debug(
-                            f"Received SSDP response from {addr[0]} on interface {interface_name} ({interface_ip}):\n{response}"
-                        )
-
-                        # Parse SSDP response
-                        device = parse_ssdp_response(response, addr[0])
-                        if device:
-                            found_device = device
-                            logger.info(
-                                f"Found device on interface {interface_name} ({interface_ip})"
-                            )
-                            break
-
-                    except socket.timeout:
-                        continue
-                    except Exception as e:
-                        logger.debug(f"Error receiving SSDP response: {e}")
-                        continue
-
-                if found_device:
-                    break
-
-            except Exception as e:
-                logger.debug(f"Error in select loop: {e}")
-                continue
-
-    except Exception as e:
-        logger.error(f"SSDP discovery failed: {e}")
-    finally:
-        # Close all sockets
-        for sock, _, _ in sockets:
-            try:
-                sock.close()
-            except:
-                pass
-
-    if found_device:
-        logger.info(
-            f"SSDP discovery completed successfully: {found_device['model_name']} at {found_device['ip']}:{found_device['port']}"
-        )
-    else:
-        logger.warning("No MusicCast devices found via SSDP on any interface")
-
-    return found_device
+    logger.info("No MusicCast devices found via SSDP discovery")
+    return None
 
 
 def parse_ssdp_response(response: str, device_ip: str) -> Optional[Dict[str, Any]]:
     """
-    Parse SSDP response and extract device information.
-    If the response contains a LOCATION header, fetch device details via HTTP.
+    Parse SSDP response following MusicCast specification:
+    1. Check for MediaRenderer device type
+    2. Extract Location header
+    3. Fetch device description XML
+    4. Verify Yamaha manufacturer and X_device tags
+    5. Extract control URL and device info
     """
     lines = response.strip().split("\r\n")
 
@@ -292,75 +175,163 @@ def parse_ssdp_response(response: str, device_ip: str) -> Optional[Dict[str, Any
             key, value = line.split(":", 1)
             headers[key.strip().upper()] = value.strip()
 
-    # Look for LOCATION header pointing to device description
-    location = headers.get("LOCATION", "")
-
-    # Check if this is a MusicCast device response
+    # Check if this is a MediaRenderer device
     st = headers.get("ST", "")
-    if "yamaha" not in st.lower() and "musiccast" not in st.lower():
+    if "MediaRenderer" not in st:
+        logger.debug(f"Skipping non-MediaRenderer device: {st}")
         return None
 
-    # Extract device information
-    device_info = {"ip": device_ip, "port": 80, "location": location}  # Default port
+    # Get the location URL for device description
+    location = headers.get("LOCATION", "")
+    if not location:
+        logger.debug("No LOCATION header in SSDP response")
+        return None
 
-    # If we have a location, try to get more device details
-    if location:
-        try:
-            # Parse port from location URL if available
-            import urllib.parse
+    logger.debug(f"Fetching device description from: {location}")
 
-            parsed = urllib.parse.urlparse(location)
-            if parsed.port:
-                device_info["port"] = parsed.port
-            elif parsed.hostname == device_ip:
-                # Try common MusicCast ports
-                for port in [5000, 8080, 80]:
-                    if verify_musiccast_device(device_ip, port):
-                        device_info["port"] = port
+    # Fetch and parse device description XML
+    try:
+        http_response = httpx.get(location, timeout=5)
+        if http_response.status_code != 200:
+            logger.debug(
+                f"Failed to fetch device description: HTTP {http_response.status_code}"
+            )
+            return None
+
+        device_desc_xml = http_response.text
+        logger.debug(f"Device description XML:\n{device_desc_xml}")
+
+        # Parse XML to check for Yamaha MusicCast device
+        device_info = parse_device_description(device_desc_xml, device_ip)
+        return device_info
+
+    except Exception as e:
+        logger.debug(f"Error fetching device description from {location}: {e}")
+        return None
+
+
+def parse_device_description(
+    xml_content: str, device_ip: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse device description XML to verify it's a Yamaha MusicCast device
+    and extract necessary information per specification.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_content)
+
+        # Define namespaces
+        namespaces = {
+            "upnp": "urn:schemas-upnp-org:device-1-0",
+            "yamaha": "urn:schemas-yamaha-com:device-1-0",
+        }
+
+        # Find the device element
+        device_elem = root.find(".//upnp:device", namespaces)
+        if device_elem is None:
+            logger.debug("No device element found in XML")
+            return None
+
+        # Check manufacturer - must be "Yamaha Corporation"
+        manufacturer = device_elem.find("upnp:manufacturer", namespaces)
+        if manufacturer is None or manufacturer.text != "Yamaha Corporation":
+            logger.debug(
+                f"Not a Yamaha device, manufacturer: {manufacturer.text if manufacturer is not None else 'None'}"
+            )
+            return None
+
+        # Check for Yamaha X_device tag
+        x_device = root.find(".//yamaha:X_device", namespaces)
+        if x_device is None:
+            logger.debug("No yamaha:X_device tag found")
+            return None
+
+        # Extract device information
+        model_name = device_elem.find("upnp:modelName", namespaces)
+        model_desc = device_elem.find("upnp:modelDescription", namespaces)
+        friendly_name = device_elem.find("upnp:friendlyName", namespaces)
+        serial_number = device_elem.find("upnp:serialNumber", namespaces)
+        udn = device_elem.find("upnp:UDN", namespaces)
+
+        # Extract Yamaha-specific information
+        url_base = x_device.find("yamaha:X_URLBase", namespaces)
+
+        # Find the YXC control URL
+        yxc_control_url = None
+        service_list = x_device.find("yamaha:X_serviceList", namespaces)
+        if service_list is not None:
+            for service in service_list.findall("yamaha:X_service", namespaces):
+                spec_type = service.find("yamaha:X_specType", namespaces)
+                if (
+                    spec_type is not None
+                    and spec_type.text
+                    and "YamahaExtendedControl" in spec_type.text
+                ):
+                    yxc_url_elem = service.find("yamaha:X_yxcControlURL", namespaces)
+                    if yxc_url_elem is not None:
+                        yxc_control_url = yxc_url_elem.text
                         break
 
-            # Get device details via HTTP API
-            device_details = get_device_details(device_ip, device_info["port"])
-            if device_details:
-                device_info.update(device_details)
-                return device_info
+        if not yxc_control_url:
+            logger.debug("No YamahaExtendedControl URL found")
+            return None
 
-        except Exception as e:
-            logger.debug(f"Failed to get device details from {device_ip}: {e}")
+        # Extract base URL and port
+        base_url = url_base.text if url_base is not None else f"http://{device_ip}:80/"
 
-    # Fallback: try to verify it's a MusicCast device using common ports
-    for port in [5000, 8080, 80]:
-        device_details = get_device_details(device_ip, port)
-        if device_details:
-            device_info.update(device_details)
-            device_info["port"] = port
-            return device_info
+        # Parse port from base URL
+        parsed_url = urllib.parse.urlparse(base_url)
+        port = parsed_url.port or 80
+        host = str(parsed_url.hostname or device_ip)
 
-    return None
+        # Verify this is actually a MusicCast device by testing the API
+        api_base_url = f"http://{host}:{port}{yxc_control_url}"
+        device_details = verify_musiccast_api(api_base_url, host, port)
+
+        if not device_details:
+            logger.debug("Device does not respond to MusicCast API")
+            return None
+
+        logger.info(
+            f"Found MusicCast device: {device_details['model_name']} at {host}:{port}"
+        )
+
+        return {
+            "ip": host,
+            "port": port,
+            "base_url": base_url,
+            "yxc_control_url": yxc_control_url,
+            "friendly_name": friendly_name.text if friendly_name is not None else None,
+            "serial_number": serial_number.text if serial_number is not None else None,
+            "udn": udn.text if udn is not None else None,
+            **device_details,
+        }
+
+    except ET.ParseError as e:
+        logger.debug(f"XML parsing error: {e}")
+        return None
+    except Exception as e:
+        logger.debug(f"Error parsing device description: {e}")
+        return None
 
 
-def verify_musiccast_device(ip: str, port: int) -> bool:
-    """Quick check if IP:port responds to MusicCast API"""
+def verify_musiccast_api(
+    api_base_url: str, host: str, port: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Verify the device responds to MusicCast Extended Control API
+    and get device information.
+    """
     try:
-        url = f"http://{ip}:{port}/YamahaExtendedControl/v1/system/getDeviceInfo"
-        response = httpx.get(url, timeout=2)
-        return response.status_code == 200 and response.json().get("response_code") == 0
-    except:
-        return False
-
-
-def get_device_details(ip: str, port: int) -> Optional[Dict[str, Any]]:
-    """Get detailed device information via HTTP API"""
-    try:
-        url = f"http://{ip}:{port}/YamahaExtendedControl/v1/system/getDeviceInfo"
+        # Test the getDeviceInfo endpoint
+        url = f"{api_base_url}system/getDeviceInfo"
         response = httpx.get(url, timeout=3)
 
         if response.status_code == 200:
             data = response.json()
             if data.get("response_code") == 0 and "model_name" in data:
-                logger.info(
-                    f"Found MusicCast device: {data.get('model_name')} at {ip}:{port}"
-                )
                 return {
                     "model_name": data.get("model_name"),
                     "device_id": data.get("device_id"),
@@ -368,15 +339,14 @@ def get_device_details(ip: str, port: int) -> Optional[Dict[str, Any]]:
                     "version": data.get("system_version"),
                     "api_version": data.get("api_version"),
                 }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"API verification failed for {api_base_url}: {e}")
+
     return None
 
 
 class Device(ExternalOutputDevice):
-    def __init__(
-        self, config: MusicCastConfig, playqueue: PlayQueue, event_emitter: EventEmitter
-    ):
+    def __init__(self, config: MusicCastConfig, playqueue, event_emitter: EventEmitter):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
         self.connected_input = config.connected_input
@@ -387,6 +357,7 @@ class Device(ExternalOutputDevice):
         # Use discovery if no valid device address is configured
         self.device_addr = None
         self.device_port = None
+        self.yxc_control_url = "/YamahaExtendedControl/v1"  # default fallback
 
         if config.device_addr and config.device_addr.strip():
             # Use configured address
@@ -407,8 +378,11 @@ class Device(ExternalOutputDevice):
             if discovered_device:
                 self.device_addr = discovered_device["ip"]
                 self.device_port = discovered_device["port"]
+                # Use the exact control URL from device description if available
+                if "yxc_control_url" in discovered_device:
+                    self.yxc_control_url = discovered_device["yxc_control_url"]
                 logger.info(
-                    f"Using discovered device: {discovered_device['model_name']} at {self.device_addr}:{self.device_port}"
+                    f"Using discovered device: {discovered_device.get('model_name', 'Unknown')} at {self.device_addr}:{self.device_port}"
                 )
             else:
                 raise Exception(
@@ -416,7 +390,7 @@ class Device(ExternalOutputDevice):
                 )
 
         self.base_url = (
-            f"http://{self.device_addr}:{self.device_port}/YamahaExtendedControl/v1"
+            f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
         )
 
         # Test connection and get initial status
@@ -428,7 +402,7 @@ class Device(ExternalOutputDevice):
         )
 
         self.poweroff_timer = None
-        self.udp_port = find_available_port(self.device_addr)
+        self.udp_port = find_available_port()
         if self.udp_port is None:
             raise Exception("Could not find available UDP port")
         logger.info(f"Using UDP port {self.udp_port}")
