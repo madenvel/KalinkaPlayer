@@ -430,9 +430,7 @@ class Device(ExternalOutputDevice):
                 self.device_port = device_info["port"]
                 self.yxc_control_url = device_info["yxc_control_url"]
                 self.base_url = f"http://{self.device_addr}:{self.device_port}{self.yxc_control_url}"
-                logger.info(
-                    f"Discovered MusicCast device at {self.device_addr}:{self.device_port}"
-                )
+                logger.info(f"Device control URL: {self.base_url}")
                 self.get_ready()
                 return
 
