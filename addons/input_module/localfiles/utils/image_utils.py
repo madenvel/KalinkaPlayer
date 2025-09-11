@@ -26,6 +26,8 @@ def create_playlist_cover_collage(
         logger.warning("No album IDs provided for playlist cover collage")
         return None
 
+    logger.info(f"Creating playlist cover collage, provided {len(album_ids)} album IDs")
+
     # Create the playlist directory if it doesn't exist
     playlist_dir = os.path.join(artwork_path, "playlist")
     os.makedirs(playlist_dir, exist_ok=True)
@@ -49,7 +51,7 @@ def create_playlist_cover_collage(
         return None
 
     # If we only have one image after all, just copy it
-    if len(image_paths) == 1:
+    if len(image_paths) < 4:
         return _copy_single_album_image(album_ids[0], artwork_path, playlist_id)
 
     try:

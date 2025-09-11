@@ -1514,7 +1514,11 @@ class QobuzInputModule(InputModule):
     def playlist_update(self, id, name, description) -> Playlist:
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + "playlist/update",
-            params={"playlist_id": id, "name": name, "description": description},
+            params={
+                "playlist_id": EntityId.from_string(id).id,
+                "name": name,
+                "description": description,
+            },
         )
 
         response.raise_for_status()
@@ -1526,7 +1530,7 @@ class QobuzInputModule(InputModule):
     def playlist_delete(self, id):
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + "playlist/delete",
-            params={"playlist_id": id},
+            params={"playlist_id": EntityId.from_string(id).id},
         )
 
         response.raise_for_status()
@@ -1540,8 +1544,10 @@ class QobuzInputModule(InputModule):
             self.qobuz_client.base + "playlist/addTracks",
             params={
                 "no_duplicate": not allow_duplicates,
-                "playlist_id": id,
-                "track_ids": ",".join(track_ids),
+                "playlist_id": EntityId.from_string(id).id,
+                "track_ids": ",".join(
+                    (EntityId.from_string(track_id).id for track_id in track_ids)
+                ),
             },
         )
 
@@ -1554,7 +1560,7 @@ class QobuzInputModule(InputModule):
         response = self.qobuz_client.session.post(
             self.qobuz_client.base + "playlist/deleteTracks",
             params={
-                "playlist_id": id,
+                "playlist_id": EntityId.from_string(id).id,
                 "playlist_track_ids": ",".join(playlist_track_ids),
             },
         )

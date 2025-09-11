@@ -530,26 +530,49 @@ class LocalFilesInputModuleDb:
             conn.close()
 
     def get_all_playlists(
-        self, offset: int = 0, limit: int = 50
+        self, offset: int = 0, limit: int = 50, filter_text: Optional[str] = None
     ) -> Tuple[List[Dict], int]:
-        """Get all playlists"""
+        """Get all playlists, optionally filtered by text in name or description."""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
 
-            # Get total count
-            cursor.execute("SELECT COUNT(*) as count FROM playlists")
-            total = cursor.fetchone()["count"]
+            if filter_text:
+                filter_value = f"%{filter_text.lower()}%"
+                # Get total count with filter
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) as count FROM playlists
+                    WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?
+                    """,
+                    (filter_value, filter_value),
+                )
+                total = cursor.fetchone()["count"]
 
-            # Get results
-            cursor.execute(
-                """
-                SELECT * FROM playlists
-                ORDER BY last_updated DESC
-                LIMIT ? OFFSET ?
-                """,
-                (limit, offset),
-            )
+                # Get results with filter
+                cursor.execute(
+                    """
+                    SELECT * FROM playlists
+                    WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?
+                    ORDER BY last_updated DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (filter_value, filter_value, limit, offset),
+                )
+            else:
+                # Get total count
+                cursor.execute("SELECT COUNT(*) as count FROM playlists")
+                total = cursor.fetchone()["count"]
+
+                # Get results
+                cursor.execute(
+                    """
+                    SELECT * FROM playlists
+                    ORDER BY last_updated DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                )
 
             return [dict(row) for row in cursor.fetchall()], total
         finally:
@@ -765,6 +788,21 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
+            placeholders = ", ".join("?" for _ in track_ids)
+            cursor.execute(
+                f"SELECT id FROM tracks WHERE id IN ({placeholders})",
+                track_ids,
+            )
+
+            # Get set of valid IDs from DB
+            valid_id_set = {row["id"] for row in cursor.fetchall()}
+            # Preserve order from input
+            valid_track_ids = [
+                track_id for track_id in track_ids if track_id in valid_id_set
+            ]
+            if not valid_track_ids:
+                return 0
+
             current_time = int(time.time())
 
             # Get the next position number
@@ -775,22 +813,22 @@ class LocalFilesInputModuleDb:
                 )
             else:
                 # Remove any track IDs that are already in the playlist
-                placeholders = ", ".join("?" for _ in track_ids)
+                placeholders = ", ".join("?" for _ in valid_track_ids)
                 cursor.execute(
                     f"""
                     SELECT track_id FROM playlist_tracks 
                     WHERE playlist_id = ? AND track_id IN ({placeholders})
                     """,
-                    [playlist_id] + track_ids,
+                    [playlist_id] + valid_track_ids,
                 )
                 existing_tracks = {row["track_id"] for row in cursor.fetchall()}
-                track_ids = [
+                valid_track_ids = [
                     track_id
-                    for track_id in track_ids
+                    for track_id in valid_track_ids
                     if track_id not in existing_tracks
                 ]
 
-                if not track_ids:
+                if not valid_track_ids:
                     return 0
 
                 # Get the next position number
@@ -802,7 +840,7 @@ class LocalFilesInputModuleDb:
             next_pos = cursor.fetchone()["next_pos"]
 
             # Insert the tracks with unique playlist_track_ids
-            for i, track_id in enumerate(track_ids):
+            for i, track_id in enumerate(valid_track_ids):
                 playlist_track_id = generate_playlist_track_id()
                 cursor.execute(
                     """
@@ -822,7 +860,7 @@ class LocalFilesInputModuleDb:
             self._update_playlist_stats(cursor, playlist_id)
 
             conn.commit()
-            return len(track_ids)
+            return len(valid_track_ids)
         except Exception as e:
             logger.error(f"Error adding tracks to playlist: {str(e)}")
             conn.rollback()

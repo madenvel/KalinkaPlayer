@@ -492,7 +492,15 @@ class LocalFilesInputModule(InputModule):
 
         if type == SearchType.playlist:
             # Return all user playlists as favorites
-            return self.playlist_user_list(offset, limit)
+            playlists, total = self.db_manager.get_all_playlists(
+                offset, limit, filter_text=filter
+            )
+
+            items = []
+            for playlist in playlists:
+                items.append(self._create_playlist_browse_item(playlist))
+
+            return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
         else:
             # For other types, return an empty list as before
             return EmptyList(offset, limit)
@@ -637,6 +645,8 @@ class LocalFilesInputModule(InputModule):
             logger.warning("Database is not initialized or corrupted")
             raise HTTPException(status_code=503, detail="Database service unavailable")
 
+        id = EntityId.from_string(id).id
+
         self.db_manager.update_playlist(id, name, description)
         playlist = self.db_manager.get_playlist_by_id(id)
 
@@ -671,6 +681,8 @@ class LocalFilesInputModule(InputModule):
             logger.warning("Database is not initialized or corrupted")
             return
 
+        id = EntityId.from_string(id).id
+
         self.db_manager.delete_playlist(id)
 
     def playlist_add_tracks(
@@ -682,9 +694,13 @@ class LocalFilesInputModule(InputModule):
             logger.warning("Database is not initialized or corrupted")
             raise HTTPException(status_code=503, detail="Database service unavailable")
 
+        id = EntityId.from_string(id).id
+
         # Add tracks to the playlist
         tracks_added = self.db_manager.add_tracks_to_playlist(
-            id, track_ids, allow_duplicates
+            id,
+            [EntityId.from_string(track_id).id for track_id in track_ids],
+            allow_duplicates,
         )
 
         # Generate playlist cover image if tracks were added
@@ -957,8 +973,6 @@ class LocalFilesInputModule(InputModule):
             name=playlist["name"],
             description=playlist["description"],
             track_count=playlist.get("track_count", 0),
-            # duration=playlist.get("duration", 0),
-            # last_updated=playlist["last_updated"],
             owner=owner,
         )
 
@@ -994,6 +1008,7 @@ class LocalFilesInputModule(InputModule):
             can_browse=True,
             can_add=True,
             subname=f"{playlist.get('track_count', 0)} tracks",
+            timestamp=playlist["last_updated"],
             playlist=playlist_obj,
             sections=sections_obj,
         )
