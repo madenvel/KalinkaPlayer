@@ -667,43 +667,6 @@ class QobuzInputModule(InputModule):
                     ),
                 ),
                 BrowseItem(
-                    id=catalog_id("myweeklyq"),
-                    name="My Weekly Q",
-                    can_browse=True,
-                    can_add=True,
-                    catalog=Catalog(
-                        id=catalog_id("myweeklyq"),
-                        title="My Weekly Q",
-                        description="Every Friday, a selection of discoveries curated especially for you.",
-                        can_genre_filter=False,
-                        image=CatalogImage(
-                            small="https://static.qobuz.com/images/dynamic/weekly_small_en.png",
-                            large="https://static.qobuz.com/images/dynamic/weekly_large_en.png",
-                        ),
-                        preview_config=Preview(type=PreviewType.NONE),
-                    ),
-                    sections=[
-                        BrowseItem(
-                            id=catalog_id("myweeklyq"),
-                            name="Tracks",
-                            can_browse=True,
-                            can_add=False,
-                            catalog=Catalog(
-                                id=catalog_id("myweeklyq"),
-                                title="Tracks",
-                                can_genre_filter=False,
-                                preview_config=Preview(
-                                    type=PreviewType.TILE,
-                                    content_type=PreviewContentType.TRACK,
-                                    rows_count=1,
-                                    aspect_ratio=1.0,
-                                    card_size=CardSize.SMALL,
-                                ),
-                            ),
-                        )
-                    ],
-                ),
-                BrowseItem(
                     id=catalog_id("press-awards"),
                     name="Press Awards",
                     can_browse=True,
@@ -758,8 +721,6 @@ class QobuzInputModule(InputModule):
             return self._get_new_releases("new-releases-full", offset, limit, genre_ids)
         elif endpoint == "qobuz-playlists":
             return self._get_qobuz_playlists(offset, limit, genre_ids)
-        elif endpoint == "myweeklyq":
-            return self._get_curated_tracks(offset, limit)
         elif endpoint == "playlist-by-category":
             return self._get_playists_by_category(offset, limit, genre_ids)
         elif endpoint == "press-awards":
@@ -1278,48 +1239,6 @@ class QobuzInputModule(InputModule):
             ),
             description=playlist["description"],
             track_count=playlist["tracks_count"],
-        )
-
-    def _get_curated_tracks(self, offset: int = 0, limit: int = 30) -> BrowseItemList:
-        """
-        Get weekly curated tracks for the user.
-
-        Parameters
-        ----------
-        limit : `int`, keyword-only, optional
-            The maximum number of tracks to return.
-
-            **Default**: :code:`30`.
-
-        offset : `int`, keyword-only, optional
-            The index of the first track to return. Use with `limit`
-            to get the next page of tracks.
-
-            **Default**: :code:`0`.
-
-        Returns
-        -------
-        tracks : `list`
-            Curated tracks.
-        """
-
-        epoint = "dynamic-tracks/get"
-        params = {"type": "weekly", "limit": limit, "offset": offset}
-
-        response = self.qobuz_client.session.get(
-            self.qobuz_client.base + epoint, params=params
-        )
-
-        if response.is_success != True:
-            return EmptyList(offset, limit)
-
-        rjson = response.json()
-
-        return BrowseItemList(
-            offset=offset,
-            limit=limit,
-            total=30,
-            items=self._tracks_to_browse_categories(rjson["tracks"]["items"]),
         )
 
     def get_favorite_ids(self) -> FavoriteIds:
