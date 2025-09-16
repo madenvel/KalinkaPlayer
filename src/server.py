@@ -442,17 +442,19 @@ def create_app(config_file, config: KalinkaConfig):
         return {"message": "Ok"}
 
     @app.get("/favorite/ids")
-    async def get_favorite_ids(sources: Optional[str] = None) -> FavoriteIds:
-        input_modules: list[InputModule] = extract_modules(sources)
+    async def get_favorite_ids(source: Optional[str] = None) -> FavoriteIds:
+        input_modules: list[InputModule] = extract_modules(source)
 
         return await get_favorite_ids_merged(modules=input_modules)
 
     @app.get("/genre/list")
     async def list_genre(
-        sources: Optional[str] = None, offset: int = 0, limit: int = 25
+        source: Optional[str] = None, offset: int = 0, limit: int = 25
     ) -> GenreList:
         genre_list = GenreList(offset=offset, limit=limit, total=0, items=[])
         for module_name in modules.enabled_input_modules:
+            if (source is not None) and (source != module_name):
+                continue
             module = modules.prepared_input_modules[module_name]
             if isinstance(module.interface, InputModule):
                 result = module.interface.list_genre(offset=offset, limit=limit)
