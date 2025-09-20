@@ -190,7 +190,12 @@ def create_app(config_file, config: KalinkaConfig):
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.playqueue = playqueue
     app.state.event_listener = event_listener
-    prepared_device = next(iter(modules.prepared_devices.values()), None)
+    first_enabled_device_name = next(iter(modules.enabled_devices), None)
+    prepared_device = (
+        modules.prepared_devices[first_enabled_device_name]
+        if first_enabled_device_name
+        else None
+    )
     device: Optional[ExternalOutputDevice] = (
         prepared_device.interface
         if prepared_device
