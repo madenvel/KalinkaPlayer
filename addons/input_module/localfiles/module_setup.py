@@ -1,7 +1,7 @@
 import logging
 import logging.handlers
 import multiprocessing
-import signal
+
 from addons.input_module.localfiles.config_model import LocalFilesConfig
 from addons.input_module.localfiles.enricher import enricher
 from addons.input_module.localfiles.indexer import indexer
