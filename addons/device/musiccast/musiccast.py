@@ -420,7 +420,7 @@ class Device(ExternalOutputDevice):
                 EventType.VolumeChanged, self.volume.current_volume
             )
             last_sent_volume = self.volume.current_volume
-            time.sleep(1)
+            time.sleep(0.1)
 
     def _timer_loop(self):
         # Recommended poll time for main zone is 5 seconds
