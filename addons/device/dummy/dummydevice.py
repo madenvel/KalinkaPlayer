@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from src.events import EventType
 from src.ext_device import DeviceVolume, ExternalOutputDevice, SupportedFunction
 
@@ -11,7 +13,43 @@ class DummyDevice(ExternalOutputDevice):
         self._volume = 50
         self._max_volume = 100
         self.event_emitter = event_emitter
+        self.volume_changed_event = threading.Event()
+        threading.Thread(
+            target=self._event_sender, name="DummyVolumeEventSenderThread", daemon=True
+        ).start()
         logger.info("DummyDevice initialized")
+
+    def _event_sender(self):
+        last_sent_volume = None
+        last_sent_at = 0.0
+        debounce_sec = 0.10
+        min_interval_sec = 0.00  # set to 0.10 to cap at 10 Hz
+
+        while True:
+            self.volume_changed_event.wait()
+            self.volume_changed_event.clear()
+
+            # Debounce: wait for quiet
+            while self.volume_changed_event.wait(timeout=debounce_sec):
+                self.volume_changed_event.clear()
+
+            target = self._volume
+
+            # Throttle: ensure at least min_interval between sends
+            if min_interval_sec > 0:
+                now = time.monotonic()
+                remaining = (last_sent_at + min_interval_sec) - now
+                if remaining > 0:
+                    # During throttle wait, keep coalescing new changes
+                    if self.volume_changed_event.wait(timeout=remaining):
+                        # new change arrived; restart loop to re-debounce
+                        self.volume_changed_event.clear()
+                        continue
+
+            if target != last_sent_volume:
+                self.event_emitter.dispatch(EventType.VolumeChanged, target)
+                last_sent_volume = target
+                last_sent_at = time.monotonic()
 
     def get_volume(self) -> DeviceVolume:
         return DeviceVolume(
@@ -24,7 +62,7 @@ class DummyDevice(ExternalOutputDevice):
     def set_volume(self, volume: int) -> None:
         if 0 <= volume <= self._max_volume:
             self._volume = volume
-            self.event_emitter.dispatch(EventType.VolumeChanged, self._volume)
+            self.volume_changed_event.set()
         else:
             raise ValueError(f"Volume must be between 0 and {self._max_volume}")
 
