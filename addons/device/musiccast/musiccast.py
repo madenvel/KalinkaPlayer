@@ -417,6 +417,7 @@ class Device(ExternalOutputDevice):
             self.volume_changed_event.wait()
             self.volume_changed_event.clear()
 
+            logger.info(f"Volume changed event received: {self.volume.current_volume}")
             # Debounce: wait for quiet
             while self.volume_changed_event.wait(timeout=debounce_sec):
                 self.volume_changed_event.clear()
@@ -665,11 +666,9 @@ class Device(ExternalOutputDevice):
     def set_volume(self, volume: int) -> None:
         if not self.ready:
             return
-        if volume != self.volume.current_volume:
-            self.volume.current_volume = volume
-            volume = min(volume, self.volume.max_volume)
-            volume = max(volume, 0)
-            self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
+
+        volume = max(0, min(volume, self.volume.max_volume))
+        self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
 
     def power_on(self) -> None:
         if not self.ready:
