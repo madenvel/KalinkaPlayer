@@ -659,7 +659,9 @@ class Device(ExternalOutputDevice):
 
     def get_volume(self) -> DeviceVolume:
         if not self.ready:
-            return DeviceVolume(max_volume=0, current_volume=0, volume_gain=0)
+            return DeviceVolume(
+                max_volume=0, current_volume=0, volume_gain=0, supported=False
+            )
 
         return self.volume
 
