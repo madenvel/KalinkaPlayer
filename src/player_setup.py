@@ -6,6 +6,7 @@ import importlib.util
 import types
 from typing import Generator
 
+from sdk.api import PluginContext
 from src.async_common import EventEmitter, EventListener
 from queue import Queue
 
@@ -14,6 +15,12 @@ from src.config_model import KalinkaConfig
 from sdk.ext_device import ExternalOutputDevice
 from src.playqueue import PlayQueue
 from sdk.inputmodule import InputModule
+from src.plugin_api import (
+    EventEmitterAPIImpl,
+    EventListenerAPIImpl,
+    PlayQueueAPIImpl,
+    PluginContextImpl,
+)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -36,16 +43,14 @@ class PreparedModule:
         self.health_state: ModuleHealthState = ModuleHealthState.DISABLED
         self.error_message: str | None = None
 
-    def setup(self, playqueue, event_emitter, event_listener):
+    def setup(self, plugin_context: PluginContext):
         """Setup the module with the provided components."""
         if hasattr(self.module, "setup"):
             if self.config.enabled is False:
                 logger.info(f"Skipping disabled module: {self.config.name}")
                 return
 
-            interface = self.module.setup(
-                self.config, playqueue, event_emitter, event_listener
-            )
+            interface = self.module.setup(self.config, plugin_context)
             if isinstance(interface, ExternalOutputDevice) or isinstance(
                 interface, InputModule
             ):
@@ -186,7 +191,10 @@ def scan_and_setup_addons(
             config = read_or_create_module_config(config_path, name, module)
             prepared_module = PreparedModule(module, config)
             if config.enabled:
-                prepared_module.setup(playqueue, event_emitter, event_listener)
+                plugin_context = make_plugin_context(
+                    name, playqueue, event_emitter, event_listener
+                )
+                prepared_module.setup(plugin_context)
                 prepared_module.health_state = ModuleHealthState.READY
             else:
                 logger.info(f"Module {name} is disabled in configuration.")
@@ -200,6 +208,25 @@ def scan_and_setup_addons(
 
         if prepared_module is not None:
             yield name, prepared_module
+
+
+def make_plugin_context(
+    name: str,
+    playqueue: PlayQueue,
+    event_emitter: EventEmitter,
+    event_listener: EventListener,
+) -> PluginContext:
+    """Create a PluginContextImpl instance."""
+    context = PluginContextImpl()
+    context.playqueue = PlayQueueAPIImpl(playqueue)
+    context.events = EventEmitterAPIImpl(event_emitter)
+    context.listener = EventListenerAPIImpl(event_listener)
+    # context.log = logging.getLogger("plugin")
+    context.plugin_id = "unknown_plugin"
+    context.sdk_version = "1.0.0"  # Example version, replace with actual version
+    context.capabilities = set()
+    context.config = {}
+    return context
 
 
 def scan_and_setup_input_modules(

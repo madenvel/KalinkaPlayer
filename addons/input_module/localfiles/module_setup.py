@@ -7,7 +7,7 @@ from addons.input_module.localfiles.enricher import enricher
 from addons.input_module.localfiles.indexer import indexer
 from addons.input_module.localfiles.input_module_db import LocalFilesInputModuleDb
 from addons.input_module.localfiles.localfiles import LocalFilesInputModule
-from sdk.api import PlayQueueAPI, EventEmitterAPI, EventListenerAPI
+from sdk.api import PluginContext
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -21,12 +21,7 @@ _logging_queue = multiprocessing.Queue()
 _log_listener = None
 
 
-def setup(
-    config: LocalFilesConfig,
-    playqueue: PlayQueueAPI,
-    event_emitter: EventEmitterAPI,
-    event_listener: EventListenerAPI,
-):
+def setup(config: LocalFilesConfig, context: PluginContext):
     global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue, _shutdown_event
 
     logger.info("Setting up localfiles input module")
@@ -34,7 +29,7 @@ def setup(
     input_module_db = LocalFilesInputModuleDb(config)
 
     # The LocalFilesInputModule will use its own specialized DB
-    inputmodule = LocalFilesInputModule(config, input_module_db, event_emitter)
+    inputmodule = LocalFilesInputModule(config, input_module_db, context.events)
 
     handler = logging.StreamHandler()
     handler.setLevel(logger.level)
