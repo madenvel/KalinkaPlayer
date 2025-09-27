@@ -4,9 +4,9 @@ from unittest.mock import Mock, call
 
 from data_model.response_model import AudioInfo, PlayerState
 from src.config_model import KalinkaConfig
-from src.events import EventType
-from src.inputmodule import TrackInfo, Track, TrackUrl
-from data_model.datamodel import Album, EntityId, EntityType
+from sdk.events import EventType
+from sdk.inputmodule import TrackInfo, Track, TrackUrl
+from sdk.datamodel import Album, EntityId, EntityType
 from src.playqueue import PlayQueue
 from src.async_common import EventEmitter
 

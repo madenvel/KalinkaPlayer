@@ -6,9 +6,9 @@ from addons.input_module.localfiles.config_model import LocalFilesConfig
 from addons.input_module.localfiles.enricher import enricher
 from addons.input_module.localfiles.indexer import indexer
 from addons.input_module.localfiles.input_module_db import LocalFilesInputModuleDb
-from src.async_common import EventEmitter, EventListener
 from addons.input_module.localfiles.localfiles import LocalFilesInputModule
-from src.playqueue import PlayQueue
+from sdk.api import PlayQueueAPI, EventEmitterAPI, EventListenerAPI
+
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -23,9 +23,9 @@ _log_listener = None
 
 def setup(
     config: LocalFilesConfig,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    event_listener: EventListenerAPI,
 ):
     global _enricher_proc, _indexer_proc, _enricher_queue, _logging_queue, _shutdown_event
 

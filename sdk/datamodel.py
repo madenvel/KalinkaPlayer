@@ -81,6 +81,11 @@ class EntityId(BaseModel):
 
 
 class PreviewType(str, Enum):
+    """
+    The enum defines different types of preview layouts for displaying content in a user interface.
+    Each type specifies a unique way to present items, such as images, text, or carousels.
+    """
+
     # Displays a card with an image and title / subtitle underneath
     IMAGE_TEXT = "image"
     # Displays a text-only card with title inside the card
@@ -97,6 +102,11 @@ class PreviewType(str, Enum):
 
 
 class PreviewContentType(str, Enum):
+    """
+    A hint to the UI about the type of content being displayed in the preview section.
+    This helps UI to choose appropriate size, icons and placeholders for the content.
+    """
+
     ALBUM = "album"
     ARTIST = "artist"
     PLAYLIST = "playlist"
@@ -109,43 +119,29 @@ class CardSize(str, Enum):
     LARGE = "large"
 
 
-class AlbumImage(BaseModel):
+class CoverImage(BaseModel):
     small: Optional[str] = ""
     thumbnail: Optional[str] = ""
     large: Optional[str] = ""
-
-
-class ArtistImage(BaseModel):
-    small: Optional[str] = ""
-    thumbnail: Optional[str] = ""
-    large: Optional[str] = ""
-
-
-class CatalogImage(BaseModel):
-    small: Optional[str] = ""
-    large: Optional[str] = ""
-    thumbnail: Optional[str] = ""
-
-
-class PlaylistImage(BaseModel):
-    small: Optional[str] = ""
-    large: Optional[str] = ""
-    thumbnail: Optional[str] = ""
 
 
 class Artist(BaseModel):
     id: EntityId
     name: str
-    image: Optional[ArtistImage] = None
+    image: Optional[CoverImage] = None
     album_count: Optional[int] = None
 
 
 class Label(BaseModel):
+    """A music label or record company."""
+
     id: EntityId
     name: str
 
 
 class Genre(BaseModel):
+    """A music genre."""
+
     id: EntityId
     name: str
 
@@ -155,7 +151,7 @@ class Album(BaseModel):
     title: str
     duration: Optional[int] = None
     track_count: Optional[int] = None
-    image: Optional[AlbumImage] = None
+    image: Optional[CoverImage] = None
     label: Optional[Label] = None
     genre: Optional[Genre] = None
     artist: Optional[Artist] = None
@@ -179,15 +175,19 @@ class Owner(BaseModel):
 
 
 class Playlist(BaseModel):
+    """A playlist created by a user or imported from an external source."""
+
     id: EntityId
     name: str
     owner: Owner
-    image: Optional[PlaylistImage] = None
+    image: Optional[CoverImage] = None
     description: Optional[str]
     track_count: int
 
 
 class Preview(BaseModel):
+    """Configuration for preview section in the catalog view."""
+
     # Maximum number of items to be shown in the preview section.
     # This is a UI configuration value, not the actual count of items available.
     items_count: Optional[int] = None
@@ -199,15 +199,19 @@ class Preview(BaseModel):
 
 
 class Catalog(BaseModel):
+    """Representation of a music catalog."""
+
     id: EntityId
     title: str
-    image: Optional[CatalogImage] = None
+    image: Optional[CoverImage] = None
     can_genre_filter: bool = False
     description: Optional[str] = ""
     preview_config: Optional[Preview] = None
 
 
 class BrowseItem(BaseModel):
+    """An item that can be displayed in a list or grid in the UI."""
+
     id: EntityId
     name: str
     url: Optional[str] = None
@@ -238,3 +242,24 @@ class BrowseItemList(BaseModel):
 
 def EmptyList(offset, limit) -> BrowseItemList:
     return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
+
+
+class FavoriteIds(BaseModel):
+    albums: List[EntityId] = []
+    artists: List[EntityId] = []
+    tracks: List[EntityId] = []
+    playlists: List[EntityId] = []
+
+
+class GenreList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[Genre]
+
+
+class DeviceVolume(BaseModel):
+    max_volume: int = 0
+    current_volume: int = 0
+    volume_gain: int = 0
+    supported: bool = True

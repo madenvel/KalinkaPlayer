@@ -1,1 +1,1 @@
-from .datamodel import EntityId, EntityType
+from sdk.datamodel import EntityId, EntityType

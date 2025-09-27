@@ -10,44 +10,44 @@ from .config_model import QobuzConfig
 from .bundle import Bundle
 
 from data_model.response_model import (
-    FavoriteAddedEvent,
-    FavoriteRemovedEvent,
-    FavoriteIds,
-    GenreList,
     LastUpdate,
 )
-from src.events import EventType
-from src.async_common import EventEmitter
+from sdk.events import (
+    EventType,
+    FavoriteAddedEvent,
+    FavoriteRemovedEvent,
+)
 
-from src.inputmodule import (
+from sdk.api import EventEmitterAPI
+
+from sdk.inputmodule import (
     SearchType,
     InputModule,
     TrackInfo,
     TrackUrl,
 )
 
-from data_model.datamodel import (
+from sdk.datamodel import (
     Album,
-    AlbumImage,
+    CoverImage,
     Artist,
-    ArtistImage,
     BrowseItem,
     BrowseItemList,
     CardSize,
     Catalog,
-    CatalogImage,
     EmptyList,
     EntityType,
     Genre,
     Label,
     Owner,
     Playlist,
-    PlaylistImage,
     Preview,
     PreviewContentType,
     PreviewType,
     Track,
     EntityId,
+    FavoriteIds,
+    GenreList,
 )
 
 import json
@@ -296,29 +296,14 @@ class QobuzClient:
         return r.json()["last_update"]
 
     def get_user_playlists(self, offset: int = 0, limit: int = 50, owner_id=None):
-        # Disable user playlist cache till we figure out how to deal with new playlists.
-        # last_update = self.get_qobuz_last_update()["playlist"]
-
-        # if self.last_update.favorite_playlists_ts != last_update:
-        #     logger.info(
-        #         f"Updating user playlists cache, last_update={last_update}, stored_update={self.last_update.favorite_playlists_ts}"
-        #     )
         r = self.session.get(
             self.base + "playlist/getUserPlaylists",
-            # params={"limit": 500},
             params={"offset": offset, "limit": limit},
         )
 
         r.raise_for_status()
 
         cached = {"playlists": r.json()["playlists"]}
-
-        # self.cached["playlists"] = copy.deepcopy(r.json()["playlists"])
-        # logger.info(
-        #     f"User playlists cache updated: {len(self.cached['playlists']['items'])}"
-        # )
-
-        # self.last_update.favorite_playlists_ts = last_update
 
         if owner_id is not None:
             filtered_playlists = [
@@ -443,7 +428,7 @@ class QobuzInputModule(InputModule):
         self,
         config: QobuzConfig,
         qobuz_client: QobuzClient,
-        event_emitter: EventEmitter,
+        event_emitter: EventEmitterAPI,
     ):
         self.format_id = (5, 6, 7, 27)[
             list(QobuzAudioFormat).index(QobuzAudioFormat(config.format))
@@ -920,7 +905,7 @@ class QobuzInputModule(InputModule):
                             name=album["artist"]["name"],
                             id=artist_id(str(album["artist"]["id"])),
                         ),
-                        image=AlbumImage(**album["image"]),
+                        image=CoverImage(**album["image"]),
                     ),
                     playlist_track_id=str(track.get("playlist_track_id", None)),
                 ),
@@ -990,7 +975,7 @@ class QobuzInputModule(InputModule):
                     id=artist_id(str(artist["id"])),
                     name=artist["name"],
                     image=(
-                        ArtistImage(
+                        CoverImage(
                             thumbnail=artist["image"].get("small", None),
                             small=artist["image"].get("medium", None),
                             large=artist["image"].get("large", None),
@@ -1060,7 +1045,7 @@ class QobuzInputModule(InputModule):
                     title=append_str(album["title"], album.get("version", None)),
                     artist=artist,
                     image=(
-                        AlbumImage(
+                        CoverImage(
                             thumbnail=album["image"].get("thumbnail", None),
                             small=album["image"].get("small", None),
                             large=album["image"].get("large", None),
@@ -1232,7 +1217,7 @@ class QobuzInputModule(InputModule):
                 name=playlist["owner"]["name"],
                 id=user_id(str(playlist["owner"]["id"])),
             ),
-            image=PlaylistImage(
+            image=CoverImage(
                 small=images150[0] if images150 else None,
                 large=image_rectangle[0] if image_rectangle else None,
                 thumbnail=image_rectangle_mini[0] if image_rectangle_mini else None,

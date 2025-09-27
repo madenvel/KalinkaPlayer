@@ -1,8 +1,8 @@
 import logging
 import threading
 import time
-from src.events import EventType
-from src.ext_device import DeviceVolume, ExternalOutputDevice, SupportedFunction
+from sdk.events import EventType
+from sdk.ext_device import DeviceVolume, ExternalOutputDevice, SupportedFunction
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

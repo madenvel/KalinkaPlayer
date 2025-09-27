@@ -7,9 +7,9 @@ import mimetypes
 
 from fastapi import HTTPException
 from .config_model import LocalFilesConfig
-from src.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
-from src.async_common import EventEmitter
-from data_model.datamodel import (
+from sdk.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
+from sdk.api import EventEmitterAPI
+from sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     EntityId,
@@ -17,18 +17,17 @@ from data_model.datamodel import (
     PreviewContentType,
     Track,
     Album,
-    AlbumImage,
+    CoverImage,
     Artist,
-    ArtistImage,
     Preview,
     PreviewType,
     CardSize,
     EmptyList,
     Playlist,
-    PlaylistImage,
     Catalog,
+    FavoriteIds,
+    GenreList,
 )
-from data_model.response_model import FavoriteIds, GenreList
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
 from .input_module_db import LocalFilesInputModuleDb
@@ -75,7 +74,7 @@ class LocalFilesInputModule(InputModule):
         self,
         config: LocalFilesConfig,
         db_manager: LocalFilesInputModuleDb,
-        event_emitter: EventEmitter,
+        event_emitter: EventEmitterAPI,
     ):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
@@ -624,7 +623,7 @@ class LocalFilesInputModule(InputModule):
             raise HTTPException(status_code=500, detail="Failed to create playlist")
 
         # Create the Owner object required by the Playlist model
-        from data_model.datamodel import Owner
+        from sdk.datamodel import Owner
 
         owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
@@ -655,7 +654,7 @@ class LocalFilesInputModule(InputModule):
             raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
-        from data_model.datamodel import Owner
+        from sdk.datamodel import Owner
 
         owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
@@ -717,7 +716,7 @@ class LocalFilesInputModule(InputModule):
             raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
-        from data_model.datamodel import Owner
+        from sdk.datamodel import Owner
 
         owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
@@ -781,7 +780,7 @@ class LocalFilesInputModule(InputModule):
             raise HTTPException(status_code=404, detail=f"Playlist not found: {id}")
 
         # Create the Owner object required by the Playlist model
-        from data_model.datamodel import Owner
+        from sdk.datamodel import Owner
 
         owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
@@ -963,7 +962,7 @@ class LocalFilesInputModule(InputModule):
     def _create_playlist_browse_item(self, playlist: Dict) -> BrowseItem:
         """Create a BrowseItem for a playlist"""
         # Create the Owner object required by the Playlist model
-        from data_model.datamodel import Owner
+        from sdk.datamodel import Owner
 
         owner = Owner(name="Local System", id=user_id("localfiles_system"))
 
@@ -1013,7 +1012,7 @@ class LocalFilesInputModule(InputModule):
             sections=sections_obj,
         )
 
-    def _get_album_image_urls(self, album_id: str) -> Optional[AlbumImage]:
+    def _get_album_image_urls(self, album_id: str) -> Optional[CoverImage]:
         """Get image URLs for an album"""
         # Get album data from database to check if image_url exists
         album = self.db_manager.get_album_by_id(album_id)
@@ -1033,11 +1032,11 @@ class LocalFilesInputModule(InputModule):
 
         # Only return image URLs if the thumbnail file exists
         if thumbnail_path.exists():
-            return AlbumImage(thumbnail=thumbnail, small=small, large=large)
+            return CoverImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
 
-    def _get_artist_image_urls(self, artist_id: str) -> Optional[ArtistImage]:
+    def _get_artist_image_urls(self, artist_id: str) -> Optional[CoverImage]:
         """Get image URLs for an artist"""
         # Get artist data from database to check if image_url exists
         artist = self.db_manager.get_artist_by_id(artist_id)
@@ -1057,11 +1056,11 @@ class LocalFilesInputModule(InputModule):
 
         # Only return image URLs if the thumbnail file exists
         if thumbnail_path.exists():
-            return ArtistImage(thumbnail=thumbnail, small=small, large=large)
+            return CoverImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
 
-    def _get_playlist_image_urls(self, playlist_id: str) -> Optional[PlaylistImage]:
+    def _get_playlist_image_urls(self, playlist_id: str) -> Optional[CoverImage]:
         """Get image URLs for a playlist"""
         # Get playlist data from database to check if image_url exists
         playlist = self.db_manager.get_playlist_by_id(playlist_id)
@@ -1081,7 +1080,7 @@ class LocalFilesInputModule(InputModule):
 
         # Only return image URLs if the thumbnail file exists
         if thumbnail_path.exists():
-            return PlaylistImage(thumbnail=thumbnail, small=small, large=large)
+            return CoverImage(thumbnail=thumbnail, small=small, large=large)
 
         return None
 

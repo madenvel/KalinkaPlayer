@@ -3,14 +3,15 @@ from pydantic import BaseModel, PositiveInt
 from enum import Enum
 from typing import Callable, List, Optional
 
-from data_model.datamodel import (
+from .datamodel import (
     BrowseItem,
     EntityId,
     Playlist,
     Track,
     BrowseItemList,
+    FavoriteIds,
+    GenreList,
 )
-from data_model.response_model import FavoriteIds, GenreList
 
 
 class TrackUrl(BaseModel):

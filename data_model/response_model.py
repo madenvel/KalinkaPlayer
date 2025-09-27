@@ -1,14 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, PositiveInt
 
-from data_model.datamodel import EntityId, Genre, Track
-
-
-class FavoriteIds(BaseModel):
-    albums: List[EntityId] = []
-    artists: List[EntityId] = []
-    tracks: List[EntityId] = []
-    playlists: List[EntityId] = []
+from sdk.datamodel import EntityId, Genre, Track
 
 
 class AudioInfo(BaseModel):
@@ -35,14 +28,6 @@ class PlayerState(BaseModel):
     timestamp: PositiveInt = 0
 
 
-class FavoriteAddedEvent(BaseModel):
-    id: EntityId
-
-
-class FavoriteRemovedEvent(BaseModel):
-    id: EntityId
-
-
 class ErrorResponse(BaseModel):
     error: str
     message: str
@@ -52,13 +37,6 @@ class ErrorResponse(BaseModel):
 class SuccessResponse(BaseModel):
     message: str
     status_code: int
-
-
-class GenreList(BaseModel):
-    offset: int
-    limit: int
-    total: int
-    items: List[Genre]
 
 
 class TrackList(BaseModel):

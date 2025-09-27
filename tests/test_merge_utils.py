@@ -6,7 +6,7 @@ import pytest
 import time
 from typing import List
 
-from data_model.datamodel import BrowseItem, BrowseItemList, EntityId, EntityType
+from sdk.datamodel import BrowseItem, BrowseItemList, EntityId, EntityType
 from src.merge_utils import k_way_merge_browse_items, flat_merge
 
 

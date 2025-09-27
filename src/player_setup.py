@@ -9,11 +9,11 @@ from typing import Generator
 from src.async_common import EventEmitter, EventListener
 from queue import Queue
 
-from src.base_config_model import ModuleConfig
+from sdk.module_config import ModuleConfig
 from src.config_model import KalinkaConfig
-from src.ext_device import ExternalOutputDevice
+from sdk.ext_device import ExternalOutputDevice
 from src.playqueue import PlayQueue
-from src.inputmodule import InputModule
+from sdk.inputmodule import InputModule
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

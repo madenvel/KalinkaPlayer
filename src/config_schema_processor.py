@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 import logging
 
-from src.base_config_model import ModuleConfig
+from sdk.module_config import ModuleConfig
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

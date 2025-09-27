@@ -1,5 +1,5 @@
 from functools import partial
-from src.events import EventType
+from sdk.events import EventType
 from src.async_common import EventListener
 from queue import Empty, Queue
 import logging
