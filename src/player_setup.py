@@ -219,7 +219,7 @@ def make_plugin_context(
     """Create a PluginContextImpl instance."""
     context = PluginContextImpl()
     context.playqueue = PlayQueueAPIImpl(playqueue)
-    context.events = EventEmitterAPIImpl(event_emitter)
+    context.event_emitter = EventEmitterAPIImpl(event_emitter)
     context.listener = EventListenerAPIImpl(event_listener)
     context.logger = logging.getLogger(name)
     context.plugin_id = name

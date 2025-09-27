@@ -59,7 +59,7 @@ def setup(
     context: PluginContext,
 ):
     client = get_client(config)
-    inputmodule = QobuzInputModule(config, client, context.events)
+    inputmodule = QobuzInputModule(config, client, context.event_emitter)
     setup_autoplay(client, context.playqueue, inputmodule, context.listener)
     setup_reporter(client, context.listener)
 

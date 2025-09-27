@@ -12,7 +12,7 @@ Config = MusicCastConfig
 
 def setup(config: MusicCastConfig, context: PluginContext):
     global device
-    device = Device(config, context.playqueue, context.events)
+    device = Device(config, context.playqueue, context.event_emitter)
     device_subscriptions.append(
         context.listener.subscribe(EventType.StateChanged, device._on_state_changed)
     )

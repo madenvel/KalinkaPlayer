@@ -29,7 +29,7 @@ def setup(config: LocalFilesConfig, context: PluginContext):
     input_module_db = LocalFilesInputModuleDb(config)
 
     # The LocalFilesInputModule will use its own specialized DB
-    inputmodule = LocalFilesInputModule(config, input_module_db, context.events)
+    inputmodule = LocalFilesInputModule(config, input_module_db, context.event_emitter)
 
     handler = logging.StreamHandler()
     handler.setLevel(logger.level)
