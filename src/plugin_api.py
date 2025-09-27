@@ -109,17 +109,11 @@ class EventListenerAPIImpl(EventListenerAPI):
         self.__event_listener.unsubscribe(topic, handler)
 
 
-class LoggerAPIImpl(LoggerAPI):
-    def info(self, msg: str, **kw): ...
-    def warning(self, msg: str, **kw): ...
-    def error(self, msg: str, **kw): ...
-
-
 class PluginContextImpl(PluginContext):
     playqueue: PlayQueueAPI
     events: EventEmitterAPI
     listener: EventListenerAPI
-    log: LoggerAPI
+    logger: LoggerAPI
     plugin_id: str
     sdk_version: str  # equals API_VERSION
     capabilities: set[str]

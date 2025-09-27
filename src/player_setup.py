@@ -221,8 +221,8 @@ def make_plugin_context(
     context.playqueue = PlayQueueAPIImpl(playqueue)
     context.events = EventEmitterAPIImpl(event_emitter)
     context.listener = EventListenerAPIImpl(event_listener)
-    # context.log = logging.getLogger("plugin")
-    context.plugin_id = "unknown_plugin"
+    context.logger = logging.getLogger(name)
+    context.plugin_id = name
     context.sdk_version = "1.0.0"  # Example version, replace with actual version
     context.capabilities = set()
     context.config = {}
