@@ -1,13 +1,14 @@
 from addons.input_module.qobuz.qobuz_reporter import QobuzReporter
-from src.async_common import EventEmitter, EventListener
+from sdk.api import PlayQueueAPI
 from addons.input_module.qobuz.qobuz_autoplay import QobuzAutoplay
 from addons.input_module.qobuz import (
     QobuzInputModule,
     get_client,
 )
 
-from src.playqueue import EventType, PlayQueue
-from src.inputmodule import InputModule
+from sdk.inputmodule import InputModule
+from sdk.api import PlayQueueAPI, EventEmitterAPI, EventListenerAPI
+from sdk.events import EventType
 from addons.input_module.qobuz.config_model import QobuzConfig
 
 autoplay = None
@@ -21,9 +22,9 @@ Config = QobuzConfig
 
 def setup_autoplay(
     client,
-    playqueue: PlayQueue,
+    playqueue: PlayQueueAPI,
     track_browser: InputModule,
-    event_listener: EventListener,
+    event_listener: EventListenerAPI,
 ):
     global autoplay, autoplay_subscriptions
 
@@ -43,7 +44,7 @@ def setup_autoplay(
 
 def setup_reporter(
     client,
-    event_listener: EventListener,
+    event_listener: EventListenerAPI,
 ):
     global reporter, reporter_subscriptions
 
@@ -55,9 +56,9 @@ def setup_reporter(
 
 def setup(
     config: QobuzConfig,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    event_listener: EventListenerAPI,
 ):
     client = get_client(config)
     inputmodule = QobuzInputModule(config, client, event_emitter)

@@ -2,8 +2,8 @@ import json
 import logging
 import os
 
-from data_model.datamodel import EntityId
-from src.inputmodule import InputModule, TrackInfo
+from sdk.datamodel import EntityId
+from sdk.inputmodule import InputModule, TrackInfo
 from src.playqueue import PlayQueue
 
 logger = logging.getLogger(__name__.split(".")[-1])

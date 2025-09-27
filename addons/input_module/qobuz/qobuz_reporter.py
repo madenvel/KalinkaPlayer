@@ -5,7 +5,7 @@ from queue import Queue
 import json
 import logging
 from typing import Mapping, Any, Optional, Union
-from data_model.datamodel import EntityId
+from sdk.datamodel import EntityId
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

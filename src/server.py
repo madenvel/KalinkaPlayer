@@ -8,18 +8,19 @@ from typing import List, Optional, Union
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
-from data_model.datamodel import (
+from sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     Catalog,
     EntityId,
     EntityType,
 )
-from data_model.response_model import FavoriteIds, GenreList, PlaybackMode, PlayerState
+from data_model.response_model import PlayerState
+from sdk.datamodel import FavoriteIds, GenreList
 from src import state_keeper
 from src.config_model import KalinkaConfig
 from src.config_schema_processor import config_to_wire, get_field_value, set_field_value
-from src.ext_device import ExternalOutputDevice, DeviceVolume
+from sdk.ext_device import ExternalOutputDevice, DeviceVolume
 from src.merge_utils import k_way_merge_browse_items, get_favorite_ids_merged
 from src.multisearch import calculate_fuzzy_score
 from src.player_setup import setup, shutdown, modules
@@ -28,7 +29,7 @@ from src.rest_event_proxy import EventStream
 import logging
 import json
 
-from src.inputmodule import InputModule, SearchType, TrackInfo
+from sdk.inputmodule import InputModule, SearchType, TrackInfo
 from src.service_discovery import ServiceDiscovery
 from src.version import get_version, get_api_version
 from typing import Dict, Any

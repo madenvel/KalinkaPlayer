@@ -1,4 +1,4 @@
-from data_model.datamodel import EntityId, EntityType
+from sdk.datamodel import EntityId, EntityType
 
 
 def test_entity_id_creation():

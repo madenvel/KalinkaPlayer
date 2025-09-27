@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import Field
-from src.base_config_model import ModuleConfig
+from sdk.module_config import ModuleConfig
 
 
 class QobuzAudioFormat(str, Enum):

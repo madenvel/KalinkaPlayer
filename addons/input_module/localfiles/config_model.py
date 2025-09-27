@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field
-from src.base_config_model import ModuleConfig
-from typing import List
+from sdk.module_config import ModuleConfig
 
 
 class MusicBrainzConfig(BaseModel):

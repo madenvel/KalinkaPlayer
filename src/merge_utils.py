@@ -3,9 +3,8 @@ import asyncio
 from typing import Sequence
 from typing import Callable
 
-from data_model.datamodel import BrowseItem, BrowseItemList
-from data_model.response_model import FavoriteIds
-from src.inputmodule import InputModule
+from sdk.datamodel import BrowseItem, BrowseItemList, FavoriteIds
+from sdk.inputmodule import InputModule
 
 BrowseItemsSource = Callable[[int, int], BrowseItemList]
 ComparedValue = Callable[[BrowseItem], int]

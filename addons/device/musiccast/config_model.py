@@ -1,5 +1,5 @@
 from pydantic import Field
-from src.base_config_model import ModuleConfig
+from sdk.module_config import ModuleConfig
 
 
 class MusicCastConfig(ModuleConfig):

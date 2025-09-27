@@ -1,21 +1,20 @@
-import time
-import httpx
-import logging
-import urllib.parse
-from .config_model import MusicCastConfig
-from src.events import EventType
-from ssdpy import SSDPClient
-import netifaces
-
-
-from src.ext_device import ExternalOutputDevice, SupportedFunction, DeviceVolume
-from src.async_common import EventEmitter
-
-import threading
-import socket
-import random
 import json
-from typing import Optional, Dict, Any
+import logging
+import random
+import socket
+import threading
+import time
+import urllib.parse
+from typing import Any, Dict, Optional
+
+import httpx
+import netifaces
+from ssdpy import SSDPClient
+
+from sdk.api import PlayQueueAPI, EventEmitterAPI
+from sdk.events import EventType
+from sdk.ext_device import DeviceVolume, ExternalOutputDevice, SupportedFunction
+from .config_model import MusicCastConfig
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -301,7 +300,12 @@ def verify_musiccast_api(api_base_url: str) -> Optional[Dict[str, Any]]:
 
 
 class Device(ExternalOutputDevice):
-    def __init__(self, config: MusicCastConfig, playqueue, event_emitter: EventEmitter):
+    def __init__(
+        self,
+        config: MusicCastConfig,
+        playqueue: PlayQueueAPI,
+        event_emitter: EventEmitterAPI,
+    ):
         self.playqueue = playqueue
         self.event_emitter = event_emitter
         self.connected_input = config.connected_input

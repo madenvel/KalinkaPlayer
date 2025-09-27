@@ -7,13 +7,13 @@ from collections import OrderedDict
 from typing import Optional
 
 from data_model.response_model import AudioInfo, PlayerState, PlaybackMode, TrackList
-from data_model.datamodel import Track
+from sdk.datamodel import Track
 
 from src.config_model import KalinkaConfig
 from src.event_loop import AsyncExecutor, enqueue
 from src.async_common import EventEmitter
-from src.inputmodule import TrackInfo
-from src.events import EventType
+from sdk.inputmodule import TrackInfo
+from sdk.events import EventType
 
 from native_player.native_player import (
     AudioPlayer,

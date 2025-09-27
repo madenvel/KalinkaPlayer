@@ -1,9 +1,9 @@
 import logging
 
-from data_model.datamodel import Track
-from src.playqueue import PlayQueue
+from sdk.datamodel import Track
+from sdk.api import PlayQueueAPI
 from .qobuz import QobuzClient
-from src.inputmodule import InputModule
+from sdk.inputmodule import InputModule
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -12,7 +12,7 @@ class QobuzAutoplay:
     def __init__(
         self,
         qobuz_client: QobuzClient,
-        playqueue: PlayQueue,
+        playqueue: PlayQueueAPI,
         track_browser: InputModule,
         amount_to_request: int = 50,
     ):

@@ -1,2 +1,2 @@
-from . import inputmodule
-from . import events
+from sdk import inputmodule
+from sdk import events

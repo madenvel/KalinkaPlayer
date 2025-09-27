@@ -1,4 +1,9 @@
 from enum import Enum
+from typing import Any, Callable, Mapping, Protocol
+
+from pydantic import BaseModel
+
+from sdk.datamodel import EntityId
 
 
 class EventType(Enum):
@@ -12,3 +17,11 @@ class EventType(Enum):
     VolumeChanged = "volume_changed"
     StateReplay = "state_replay"
     PlaybackModeChanged = "playback_mode_changed"
+
+
+class FavoriteAddedEvent(BaseModel):
+    id: EntityId
+
+
+class FavoriteRemovedEvent(BaseModel):
+    id: EntityId

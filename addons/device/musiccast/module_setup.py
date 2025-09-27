@@ -1,7 +1,8 @@
 from addons.device.musiccast.config_model import MusicCastConfig
 from addons.device.musiccast.musiccast import Device
-from src.async_common import EventEmitter, EventListener
-from src.playqueue import PlayQueue, EventType
+from sdk.api import PlayQueueAPI, EventEmitterAPI, EventListenerAPI
+from sdk.events import EventType
+
 
 device = None
 device_subscriptions = []
@@ -11,9 +12,9 @@ Config = MusicCastConfig
 
 def setup(
     config: MusicCastConfig,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    event_listener: EventListenerAPI,
 ):
     global device
     device = Device(config, playqueue, event_emitter)
