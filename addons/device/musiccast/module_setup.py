@@ -1,6 +1,6 @@
 from addons.device.musiccast.config_model import MusicCastConfig
 from addons.device.musiccast.musiccast import Device
-from sdk.api import PlayQueueAPI, EventEmitterAPI, EventListenerAPI
+from sdk.api import PluginContext
 from sdk.events import EventType
 
 
@@ -10,16 +10,11 @@ device_subscriptions = []
 Config = MusicCastConfig
 
 
-def setup(
-    config: MusicCastConfig,
-    playqueue: PlayQueueAPI,
-    event_emitter: EventEmitterAPI,
-    event_listener: EventListenerAPI,
-):
+def setup(config: MusicCastConfig, context: PluginContext):
     global device
-    device = Device(config, playqueue, event_emitter)
+    device = Device(config, context.playqueue, context.events)
     device_subscriptions.append(
-        event_listener.subscribe(EventType.StateChanged, device._on_state_changed)
+        context.listener.subscribe(EventType.StateChanged, device._on_state_changed)
     )
 
     return device
