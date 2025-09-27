@@ -13,7 +13,7 @@ def setup(
     context: PluginContext,
 ):
     global device
-    device = DummyDevice(context.events)
+    device = DummyDevice(context.event_emitter)
 
     return device
 

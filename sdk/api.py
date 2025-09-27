@@ -102,7 +102,7 @@ class LoggerAPI(Protocol):
 
 class PluginContext(Protocol):
     playqueue: PlayQueueAPI
-    events: EventEmitterAPI
+    event_emitter: EventEmitterAPI
     listener: EventListenerAPI
     logger: LoggerAPI
     plugin_id: str

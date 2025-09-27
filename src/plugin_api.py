@@ -111,7 +111,7 @@ class EventListenerAPIImpl(EventListenerAPI):
 
 class PluginContextImpl(PluginContext):
     playqueue: PlayQueueAPI
-    events: EventEmitterAPI
+    event_emitter: EventEmitterAPI
     listener: EventListenerAPI
     logger: LoggerAPI
     plugin_id: str
