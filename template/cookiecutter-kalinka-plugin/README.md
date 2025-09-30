@@ -37,21 +37,26 @@ cookiecutter cookiecutter-kalinka-plugin
 
 When you run cookiecutter, you'll be prompted to provide values for the following variables:
 
-- **plugin_name**: Your plugin name (e.g., "my-awesome-plugin")
-  - Used for: package naming, folder names, git tags
-  - Format: kebab-case (lowercase with hyphens)
+- **name**: Your plugin's core name (e.g., "myawesome", "musicbox", "localfiles")
+  - Used as base for: package naming, folder names, git tags
+  - Format: Simple name without prefixes (lowercase, no hyphens or spaces)
+  - Example: "musicbox" becomes "kalinka-plugin-musicbox"
 
-- **plugin_id**: Python package identifier (auto-generated from plugin_name)
-  - Format: snake_case (lowercase with underscores)
-  - Example: "my_awesome_plugin"
+- **plugin_name**: Full plugin name (auto-generated from name)
+  - Format: "kalinka-plugin-{name}"
+  - Example: "kalinka-plugin-musicbox"
 
-- **plugin_class_prefix**: Class name prefix (auto-generated from plugin_name)
+- **plugin_id**: Python package identifier (auto-generated from name)
+  - Format: "kalinka_plugin_{name}" (snake_case)
+  - Example: "kalinka_plugin_musicbox"
+
+- **plugin_class_prefix**: Class name prefix (auto-generated from name)
   - Format: PascalCase (no spaces or hyphens)
-  - Example: "MyAwesomePlugin"
+  - Example: "Musicbox" becomes "MusicboxPlugin"
 
-- **plugin_display_name**: Human-readable name (auto-generated from plugin_name)
+- **plugin_display_name**: Human-readable name (auto-generated from name)
   - Format: Title Case
-  - Example: "My Awesome Plugin"
+  - Example: "Musicbox"
 
 - **plugin_description**: Brief description of your plugin's functionality
 
@@ -79,11 +84,12 @@ When you run cookiecutter, you'll be prompted to provide values for the followin
 
 ```bash
 $ cookiecutter cookiecutter-kalinka-plugin
-plugin_name [my-awesome-plugin]: spotify-plugin
-plugin_id [spotify_plugin]: 
-plugin_class_prefix [SpotifyPlugin]: 
-plugin_display_name [Spotify Plugin]: 
-plugin_description [A Kalinka music player plugin]: Spotify integration for Kalinka
+name [myawesome]: musicbox
+plugin_name [kalinka-plugin-musicbox]: 
+plugin_id [kalinka_plugin_musicbox]: 
+plugin_class_prefix [Musicbox]: 
+plugin_display_name [Musicbox]: 
+plugin_description [A Kalinka music player plugin]: Music streaming service integration for Kalinka
 plugin_type [input_module]: 
 author_name [Your Name]: John Doe
 author_email [your.email@example.com]: john@example.com
@@ -99,16 +105,16 @@ year [2025]:
 After generation, you'll have a complete plugin project:
 
 ```
-spotify-plugin/
+kalinka-plugin-musicbox/
 ├── README.md                    # Project documentation
 ├── pyproject.toml              # Python package configuration
 ├── src/
-│   └── spotify_plugin/         # Main Python package
+│   └── kalinka_plugin_musicbox/ # Main Python package
 │       ├── __init__.py         # Package initialization
 │       ├── _version.py         # Auto-generated version file
 │       ├── config_model.py     # Plugin configuration schema
 │       ├── module_setup.py     # Plugin entry point
-│       └── spotify_plugin_input_module.py  # Input module (or device)
+│       └── musicbox_input_module.py  # Input module (or device)
 ├── debian/                     # Debian packaging files
 │   ├── control.in             # Package metadata template
 │   ├── postinst              # Post-installation script
@@ -134,24 +140,36 @@ git commit -m "Initial commit from cookiecutter template"
 
 ### 2. Implement Your Plugin Logic
 
+**Note**: For detailed API documentation, parameter specifications, and implementation examples, refer to the [kalinka-plugin-sdk documentation](../kalinka-plugin-sdk/README.md).
+
 #### For Input Module Plugins:
 Edit `src/your_plugin/your_plugin_input_module.py` and implement:
-- `search()` - Search for tracks, albums, artists
-- `browse()` - Browse music catalogs
-- `get_track_info()` - Get detailed track information
-- `list_favorite()` - List user favorites
-- `playlist_*()` - Playlist management methods
-- `get_resource_path()` - Get cover art URLs
+- `module_name()` - Return the display name of your module
+- `search()` - Search for tracks, albums, artists, playlists
+- `browse()` - Browse music catalogs and collections
+- `get_track_info()` - Get detailed track information for playback
+- `list_favorite()` - List user favorites (tracks, albums, etc.)
+- `get_favorite_ids()` - Get all favorite IDs
+- `add_to_favorite()` - Add items to favorites
+- `remove_from_favorite()` - Remove items from favorites
+- `list_genre()` - List available genres
+- `get()` - Get specific entity by ID
+- `playlist_user_list()` - List user playlists
+- `playlist_create()` - Create new playlist
+- `playlist_update()` - Update playlist metadata
+- `playlist_delete()` - Delete playlist
+- `playlist_add_tracks()` - Add tracks to playlist
+- `playlist_remove_tracks()` - Remove tracks from playlist
+- `get_resource_path()` - Get URLs for cover art and other resources
 
 #### For Device Plugins:
 Edit `src/your_plugin/your_plugin_device.py` and implement:
-- `play()` - Start playing a track
-- `pause()` - Pause playback
-- `resume()` - Resume playback
-- `stop()` - Stop playback
-- `set_volume()` - Control volume
-- `seek()` - Seek to position
-- Other device control methods
+- `get_volume()` - Get current device volume
+- `set_volume()` - Set device volume
+- `power_on()` - Turn device on
+- `is_power_on()` - Check if device is powered on
+- `power_off()` - Turn device off
+- `supported_functions()` - Return list of supported device functions
 
 ### 3. Add Configuration Fields
 
@@ -173,7 +191,7 @@ class YourPluginConfig(ModuleConfig):
 Edit `src/your_plugin/module_setup.py` to add any initialization logic:
 
 ```python
-def setup(cfg: YourPluginConfig, ctx: "PluginContext") -> InputModule:
+def setup(cfg: YourPluginConfig, ctx: PluginContext) -> InputModule:
     """Entry point used by Kalinka"""
     ctx.logger.info("plugin_setup", plugin=PLUGIN_ID, version=ctx.sdk_version)
     
@@ -220,8 +238,8 @@ The template uses setuptools_scm for automatic versioning:
 
 ```bash
 # Create a release
-git tag kalinka-plugin-your-plugin-v1.0.0
-git push origin kalinka-plugin-your-plugin-v1.0.0
+git tag kalinka-plugin-{name}-v1.0.0
+git push origin kalinka-plugin-{name}-v1.0.0
 
 # Development versions are automatically generated
 ```
@@ -238,7 +256,8 @@ The template includes conditional content based on plugin type:
 ### Automatic Naming
 
 Many values are automatically derived from your plugin name:
-- Package names are converted to snake_case
+- Plugin names get "kalinka-plugin-" prefix automatically
+- Package names are converted to "kalinka_plugin_{name}" format
 - Class names are converted to PascalCase
 - Display names are converted to Title Case
 
@@ -261,8 +280,9 @@ Each generated project includes:
 ## Best Practices
 
 ### Plugin Naming
-- Use descriptive, kebab-case names (e.g., "spotify-plugin", "local-files")
-- Avoid overly generic names
+- Use descriptive, simple names (e.g., "myawesome", "localfiles", "musiccast")
+- Avoid prefixes like "kalinka-plugin-" (these are added automatically)
+- Use lowercase, no hyphens or spaces in the base name
 - Include the service/device name if applicable
 
 ### Development
