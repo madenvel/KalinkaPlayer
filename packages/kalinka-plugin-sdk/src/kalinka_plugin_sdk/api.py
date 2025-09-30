@@ -1,6 +1,8 @@
 # kalinka_plugin_sdk/api.py
 from collections.abc import Callable
 from typing import Protocol, Mapping, Any, Optional
+
+from kalinka_plugin_sdk.inputmodule import TrackInfo
 from .events import EventType
 
 API_VERSION = "1.0"
@@ -42,7 +44,7 @@ class PlayQueueAPI(Protocol):
         """Stop playback."""
         ...
 
-    def add(self, tracks: list[Any]) -> None:
+    def add(self, tracks: list[TrackInfo]) -> None:
         """Add tracks to the queue."""
         ...
 
