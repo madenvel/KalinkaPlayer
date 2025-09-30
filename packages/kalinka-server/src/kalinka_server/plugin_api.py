@@ -1,13 +1,13 @@
-from typing import Any, Callable, Mapping, Optional
+from typing import Optional
 from kalinka_plugin_sdk.api import (
-    LoggerAPI,
     PlayQueueAPI,
-    PluginContext,
     EventEmitterAPI,
-    EventListenerAPI,
 )
+from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
 from kalinka_plugin_sdk.events import EventType
-from .async_common import EventEmitter, EventListener
+from kalinka_plugin_sdk.inputmodule import TrackInfo
+
+from .async_common import EventEmitter
 from .playqueue import PlayQueue
 
 
@@ -50,7 +50,7 @@ class PlayQueueAPIImpl(PlayQueueAPI):
         """Stop playback."""
         self.__playqueue.stop()
 
-    def add(self, tracks: list[Any]) -> None:
+    def add(self, tracks: list[TrackInfo]) -> None:
         """Add tracks to the queue."""
         self.__playqueue.add(tracks)
 
@@ -58,15 +58,15 @@ class PlayQueueAPIImpl(PlayQueueAPI):
         """Remove tracks by their indices."""
         self.__playqueue.remove(tracks)
 
-    def list(self, offset: int, limit: int) -> Any:
+    def list(self, offset: int, limit: int) -> TrackList:
         """List tracks in the queue with pagination."""
         return self.__playqueue.list(offset, limit)
 
-    def get_track_info(self, index: int) -> Optional[Any]:
+    def get_track_info(self, index: int) -> Optional[Track]:
         """Get info for the track at the given index."""
         return self.__playqueue.get_track_info(index)
 
-    def get_state(self) -> Any:
+    def get_state(self) -> PlayerState:
         """Get the current playback state."""
         return self.__playqueue.get_state()
 
@@ -81,11 +81,11 @@ class PlayQueueAPIImpl(PlayQueueAPI):
         shuffle: Optional[bool],
         repeat_single: Optional[bool],
         repeat_all: Optional[bool],
-    ) -> Any:
+    ) -> None:
         """Set playback modes: shuffle, repeat single, repeat all."""
-        return self.__playqueue.set_playback_mode(shuffle, repeat_single, repeat_all)
+        self.__playqueue.set_playback_mode(shuffle, repeat_single, repeat_all)
 
-    def get_playback_mode(self) -> Any:
+    def get_playback_mode(self) -> PlaybackMode:
         """Get the current playback mode."""
         return self.__playqueue.get_playback_mode()
 
@@ -94,27 +94,5 @@ class EventEmitterAPIImpl(EventEmitterAPI):
     def __init__(self, event_emitter: EventEmitter):
         self.__event_emitter = event_emitter
 
-    def dispatch(self, topic: EventType, payload: Any) -> None:
-        self.__event_emitter.dispatch(topic, payload)
-
-
-class EventListenerAPIImpl(EventListenerAPI):
-    def __init__(self, event_listener: EventListener):
-        self.__event_listener = event_listener
-
-    def subscribe(self, topic: EventType, handler: Callable) -> None:
-        self.__event_listener.subscribe(topic, handler)
-
-    def unsubscribe(self, topic: EventType, handler: Callable) -> None:
-        self.__event_listener.unsubscribe(topic, handler)
-
-
-class PluginContextImpl(PluginContext):
-    playqueue: PlayQueueAPI
-    event_emitter: EventEmitterAPI
-    listener: EventListenerAPI
-    logger: LoggerAPI
-    plugin_id: str
-    sdk_version: str  # equals API_VERSION
-    capabilities: set[str]
-    config: Mapping[str, Any]
+    def dispatch(self, topic: EventType, *args, **kwargs) -> None:
+        self.__event_emitter.dispatch(topic, *args, **kwargs)

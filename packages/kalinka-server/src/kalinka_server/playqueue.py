@@ -488,11 +488,11 @@ class PlayQueue(AsyncExecutor):
             shuffle=self.shuffle,
             repeat_single=self.repeat_single,
             repeat_all=self.repeat_all,
-        ).model_dump(exclude_none=True)
+        )
 
     def get_playback_mode(self):
         return PlaybackMode(
             shuffle=self.shuffle,
             repeat_single=self.repeat_single,
             repeat_all=self.repeat_all,
-        ).model_dump(exclude_none=True)
+        )
