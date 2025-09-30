@@ -6,7 +6,7 @@ from enum import Enum
 from importlib.metadata import entry_points
 from importlib import import_module
 from queue import Queue
-from typing import Generator
+from typing import Generator, get_type_hints
 
 from kalinka_plugin_sdk.api import PluginContext
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
@@ -74,6 +74,23 @@ class PreparedModule:
                 )
         else:
             raise AttributeError(f"Module {self.config.name} has no setup method.")
+
+    def setup_as_disabled(self):
+        """Setup the module as disabled."""
+        self.health_state = ModuleHealthState.DISABLED
+        self.interface = None
+        type_hints = get_type_hints(self.module.setup)
+        return_type = type_hints.get("return", None)
+        if return_type not in [ExternalOutputDevice, InputModule]:
+            raise TypeError(
+                f"Module {self.config.name} setup must return an instance of ExternalOutputDevice or InputModule."
+            )
+
+        self.plugin_type = (
+            PluginType.DEVICE
+            if return_type is ExternalOutputDevice
+            else PluginType.INPUT_MODULE
+        )
 
     def shutdown(self):
         """Shutdown the module if it has a shutdown method."""
@@ -206,7 +223,7 @@ def scan_and_setup_plugins_from_entry_points(
                 prepared_module.health_state = ModuleHealthState.READY
             else:
                 logger.info(f"Plugin {name} is disabled in configuration.")
-                prepared_module.health_state = ModuleHealthState.DISABLED
+                prepared_module.setup_as_disabled()
 
         except Exception as e:
             logger.error(f"Failed to setup plugin {name}: {e}")
