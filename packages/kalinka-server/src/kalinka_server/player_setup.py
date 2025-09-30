@@ -8,19 +8,24 @@ from importlib import import_module
 from queue import Queue
 from typing import Generator, get_type_hints
 
-from kalinka_plugin_sdk.api import PluginContext
+from kalinka_plugin_sdk.api import (
+    EventEmitterAPI,
+    EventListenerAPI,
+    PlayQueueAPI,
+    PluginContext,
+)
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 from kalinka_plugin_sdk.inputmodule import InputModule
 from kalinka_plugin_sdk.module_config import ModuleConfig
+from kalinka_plugin_sdk import API_VERSION
+from kalinka_server.plugin_event_queue import KalinkaPluginEventQueue
 
 from .async_common import EventEmitter, EventListener
 from .config_model import KalinkaConfig
 from .playqueue import PlayQueue
 from .plugin_api import (
     EventEmitterAPIImpl,
-    EventListenerAPIImpl,
     PlayQueueAPIImpl,
-    PluginContextImpl,
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -204,7 +209,10 @@ def read_or_create_module_config(
 
 
 def scan_and_setup_plugins_from_entry_points(
-    config_path: str, playqueue, event_emitter, event_listener
+    config_path: str,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    plugin_event_queue: EventListenerAPI,
 ) -> Generator[tuple[str, PreparedModule], None, None]:
     """Scan for installed plugins using entry points and setup those matching the specified type."""
 
@@ -217,7 +225,7 @@ def scan_and_setup_plugins_from_entry_points(
             prepared_module = PreparedModule(module, config)
             if config.enabled:
                 plugin_context = make_plugin_context(
-                    name, playqueue, event_emitter, event_listener
+                    name, playqueue, event_emitter, plugin_event_queue
                 )
                 prepared_module.setup(plugin_context)
                 prepared_module.health_state = ModuleHealthState.READY
@@ -237,31 +245,35 @@ def scan_and_setup_plugins_from_entry_points(
 
 def make_plugin_context(
     name: str,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    plugin_event_queue: EventListenerAPI,
 ) -> PluginContext:
-    """Create a PluginContextImpl instance."""
-    context = PluginContextImpl()
-    context.playqueue = PlayQueueAPIImpl(playqueue)
-    context.event_emitter = EventEmitterAPIImpl(event_emitter)
-    context.listener = EventListenerAPIImpl(event_listener)
+    """Create a PluginContext instance."""
+    context = PluginContext()
+    context.playqueue = playqueue
+    context.event_emitter = event_emitter
+    context.listener = plugin_event_queue
     context.logger = logging.getLogger(name)
     context.plugin_id = name
-    context.sdk_version = "1.0.0"  # Example version, replace with actual version
+    context.sdk_version = API_VERSION
     context.capabilities = set()
-    context.config = {}
     return context
 
 
-def scan_and_setup_plugins(config_path: str, playqueue, event_emitter, event_listener):
+def scan_and_setup_plugins(
+    config_path: str,
+    playqueue: PlayQueueAPI,
+    event_emitter: EventEmitterAPI,
+    plugin_event_queue: EventListenerAPI,
+):
     """Scan for input modules from both entry points and legacy filesystem locations."""
 
     # First, scan for input modules using entry points
     input_modules = {}
     devices = {}
     for name, module in scan_and_setup_plugins_from_entry_points(
-        config_path, playqueue, event_emitter, event_listener
+        config_path, playqueue, event_emitter, plugin_event_queue
     ):
         plugin_type = module.plugin_type
         if plugin_type == PluginType.INPUT_MODULE:
@@ -293,8 +305,15 @@ def setup(config_path: str, config: KalinkaConfig) -> tuple[PlayQueue, EventList
     event_listener = EventListener(queue)
     playqueue = PlayQueue(config, event_emitter)
 
+    # Create plugin interface
+    plugin_event_queue = KalinkaPluginEventQueue(event_listener, max_workers=2)
+    plugin_event_emitter = EventEmitterAPIImpl(event_emitter)
+    plugin_playqueue = PlayQueueAPIImpl(playqueue)
+
     # Scan and setup plugins
-    scan_and_setup_plugins(config_path, playqueue, event_emitter, event_listener)
+    scan_and_setup_plugins(
+        config_path, plugin_playqueue, plugin_event_emitter, plugin_event_queue
+    )
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))

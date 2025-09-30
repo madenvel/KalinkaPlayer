@@ -1,11 +1,10 @@
 # kalinka_plugin_sdk/api.py
 from collections.abc import Callable
-from typing import Protocol, Any, Optional
+from typing import Protocol, Optional
 
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
 
 from .inputmodule import TrackInfo
-from .module_config import ModuleConfig
 from .events import EventType
 
 API_VERSION = "1.0"
@@ -88,12 +87,15 @@ class PlayQueueAPI(Protocol):
 
 
 class EventEmitterAPI(Protocol):
-    def dispatch(self, topic: EventType, payload: Any) -> None: ...
+    def dispatch(self, topic: EventType, *args, **kwargs) -> None: ...
+
+
+class SubscriptionHandle(Protocol):
+    def unsubscribe(self) -> None: ...
 
 
 class EventListenerAPI(Protocol):
-    def subscribe(self, topic: EventType, handler: Callable) -> None: ...
-    def unsubscribe(self, topic: EventType, handler: Callable) -> None: ...
+    def subscribe(self, topic: EventType, handler: Callable) -> SubscriptionHandle: ...
 
 
 class LoggerAPI(Protocol):
@@ -105,7 +107,7 @@ class LoggerAPI(Protocol):
     def fatal(self, msg, *args, **kwargs): ...
 
 
-class PluginContext(Protocol):
+class PluginContext:
     playqueue: PlayQueueAPI
     event_emitter: EventEmitterAPI
     listener: EventListenerAPI
@@ -113,4 +115,3 @@ class PluginContext(Protocol):
     plugin_id: str
     sdk_version: str  # equals API_VERSION
     capabilities: set[str]
-    config: ModuleConfig
