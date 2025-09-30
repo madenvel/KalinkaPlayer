@@ -1,0 +1,98 @@
+# Kalinka Plugin SDK
+
+A Software Development Kit for developing input modules and device plugins for the Kalinka Player.
+
+## Overview
+
+The Kalinka Plugin SDK provides the necessary interfaces and base classes for creating:
+- Input modules for different music streaming services
+- External device plugins for audio output control
+
+## Installation
+
+```bash
+pip install kalinka-plugin-sdk
+```
+
+## Usage
+
+### Creating an Input Module
+
+```python
+from kalinka_plugin_sdk import InputModule, TrackInfo, SearchType
+
+class MyInputModule(InputModule):
+    @property
+    def module_name(self) -> str:
+        return "my_music_service"
+    
+    def search(self, query: str, search_type: SearchType, offset: int = 0, limit: int = 25):
+        # Implement search functionality
+        pass
+    
+    def browse(self, entity_id=None, offset: int = 0, limit: int = 25):
+        # Implement browse functionality
+        pass
+    
+    def get_track_info(self, track_ids):
+        # Implement track info retrieval
+        pass
+```
+
+### Creating an External Device Plugin
+
+```python
+from kalinka_plugin_sdk import ExternalOutputDevice, DeviceVolume
+
+class MyDevice(ExternalOutputDevice):
+    def get_volume(self) -> DeviceVolume:
+        # Implement volume getting
+        pass
+    
+    def set_volume(self, volume: int) -> None:
+        # Implement volume setting
+        pass
+    
+    def power_on(self) -> None:
+        # Implement power on
+        pass
+    
+    def is_power_on(self) -> bool:
+        # Implement power status check
+        pass
+    
+    def power_off(self) -> None:
+        # Implement power off
+        pass
+```
+
+## API Reference
+
+### Core APIs
+- `PlayQueueAPI`: Interface for playqueue operations
+- `EventEmitterAPI`: Interface for dispatching events
+- `EventListenerAPI`: Interface for subscribing to events
+- `LoggerAPI`: Interface for logging
+- `PluginContext`: Context provided to plugins
+
+### Base Classes
+- `InputModule`: Base class for input modules
+- `ExternalOutputDevice`: Base class for external device plugins
+- `ModuleConfig`: Base class for module configuration
+
+### Data Models
+- `EntityId`: Represents an entity identifier
+- `TrackInfo`: Contains track information
+- `DeviceVolume`: Represents device volume information
+
+### Events
+- `EventType`: Enumeration of available event types
+- Various event classes for different event types
+
+## License
+
+GPL-3.0-or-later
+
+## Contributing
+
+Please refer to the main Kalinka Player repository for contribution guidelines.

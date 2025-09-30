@@ -1,0 +1,8 @@
+kalinka-plugin-sdk (1.0.0) unstable; urgency=low
+
+  * Initial release of Kalinka Plugin SDK
+  * Provides APIs and base classes for Kalinka Player plugins
+  * Supports input modules and external device plugins
+  * Installation into /opt/kalinka/venv for integration with Kalinka Player
+
+ -- Dmitry Savin <envelsavinds@gmail.com>  Sat, 28 Sep 2024 12:00:00 +0000

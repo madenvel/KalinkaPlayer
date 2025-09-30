@@ -1,0 +1,118 @@
+import logging
+import time
+from uuid import UUID, uuid4
+from abc import ABC, abstractmethod
+from functools import partial, wraps
+from threading import Thread
+from multiprocessing import Queue, Process
+
+logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def timeit(func):
+    @wraps(func)
+    def timeit_wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        end_time = time.perf_counter()
+        total_time = end_time - start_time
+        # first item in the args, ie `args[0]` is `self`
+        print(f"{func.__name__}{args} {kwargs}: {total_time:.4f} s")
+        return result
+
+    return timeit_wrapper
+
+
+class AsyncLoop(ABC):
+
+    def __init__(self, queue):
+        super().__init__()
+        self.queue = queue
+        self.thread = Thread(target=self._loop)
+        self.thread.start()
+
+    def _loop(self):
+        while True:
+            e = self.queue.get(block=True)
+            if e == "terminate":
+                break
+            self.process(e)
+
+    def terminate(self):
+        self.queue.put("terminate")
+        self.thread.join()
+
+    @abstractmethod
+    def process(self, e):
+        pass
+
+
+def pickle(obj_method_name, *args, **kwargs):
+    return {
+        "method": obj_method_name,
+        "args": args,
+        "kwargs": kwargs,
+    }
+
+
+def unpickle(obj, data):
+    method = getattr(obj, data["method"], None)
+    if method is not None:
+        args = data["args"]
+        kwargs = data["kwargs"]
+        return partial(method, *args, **kwargs)
+
+    return None
+
+
+class Subscription:
+    uuid: UUID
+    event_name: str
+
+    def __init__(self, uuid, event_name, event_listener):
+        self.uuid = uuid
+        self.event_name = event_name
+        self.event_listener = event_listener
+
+    def unsubscribe(self):
+        self.event_listener.unsubscribe(self.event_name, self.uuid)
+
+
+class EventListener(AsyncLoop):
+    def __init__(self, queue):
+        self.subscribers = {}
+        super().__init__(queue)
+
+    def subscribe(self, event_name, callback) -> Subscription:
+        uuid = uuid4()
+        self.subscribers.setdefault(event_name, [])
+        self.subscribers[event_name].append({"uuid": uuid, "cb": callback})
+        return Subscription(uuid, event_name, self)
+
+    def subscribe_all(self, map):
+        for k, v in map.items():
+            self.subscribe(k, v)
+
+    def unsubscribe(self, event_name, uuid):
+        for subscriber in self.subscribers.get(event_name, []):
+            if subscriber["uuid"] == uuid:
+                self.subscribers[event_name].remove(subscriber)
+
+    def process(self, e):
+        event = e["event_name"]
+        for subscriber in self.subscribers.get(event, []):
+            try:
+                callback = subscriber["cb"]
+                callback(*e["args"], **e["kwargs"])
+            except Exception as ex:
+                logger.warning(
+                    f"Exception caught while processing event {event}, exception: {ex}"
+                )
+
+
+class EventEmitter:
+    def __init__(self, queue):
+        self.queue = queue
+
+    def dispatch(self, event_name, *args, **kwargs):
+        self.queue.put({"event_name": event_name, "args": args, "kwargs": kwargs})

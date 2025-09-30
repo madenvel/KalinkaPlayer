@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "build", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "{{ cookiecutter.plugin_name }}"
+dynamic = ["version"]
+description = "{{ cookiecutter.plugin_description }}"
+readme = "README.md"
+license = "{{ cookiecutter.license }}"
+requires-python = ">={{ cookiecutter.python_version }}"
+authors = [
+    {name = "{{ cookiecutter.author_name }}", email = "{{ cookiecutter.author_email }}"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "kalinka-plugin-sdk{{ cookiecutter.sdk_version_constraint }}",
+]
+
+[project.optional-dependencies]
+dev = [
+    "kalinka-plugin-dev{{ cookiecutter.sdk_version_constraint }}",
+    "pytest",
+    "setuptools-scm",
+]
+
+[project.entry-points."kalinka.plugins"]
+{{ cookiecutter.plugin_id }} = "{{ cookiecutter.plugin_id }}.module_setup:setup"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "{{ cookiecutter.plugin_id }}._version.__version__"}
+
+[tool.setuptools_scm]
+write_to = "src/{{ cookiecutter.plugin_id }}/_version.py"
+tag_regex = "^{{ cookiecutter.plugin_name }}-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match {{ cookiecutter.plugin_name }}-v*"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+fallback_version = "{{ cookiecutter.version }}"
+search_parent_directories = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "smoke: smoke tests for basic functionality",
+    "integration: integration tests",
+]

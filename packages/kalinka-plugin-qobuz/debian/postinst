@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+VENVDIR="/opt/kalinka/venv"
+WHEEL="/usr/share/kalinka/plugins/kalinka_plugin_qobuz-@VERSION@-py3-none-any.whl"
+
+if [ ! -x "$VENVDIR/bin/pip" ]; then
+  echo "Kalinka venv not found at $VENVDIR" >&2
+  exit 1
+fi
+
+"$VENVDIR/bin/pip" install --no-deps --upgrade "$WHEEL"
+
+# Optionally: validate entry point visibility
+"$VENVDIR/bin/python" - <<'PY'
+from importlib.metadata import entry_points
+eps = entry_points(group="kalinka.plugins")
+print("Installed EPs:", [e.name for e in eps])
+PY
+
+# Restart Kalinka if service exists (comment out if you prefer manual)
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl try-restart kalinka.service || true
+fi
+
+exit 0

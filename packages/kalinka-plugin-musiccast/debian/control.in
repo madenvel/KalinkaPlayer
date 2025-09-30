@@ -1,0 +1,9 @@
+Package: kalinka-plugin-musiccast
+Version: @VERSION@
+Section: python
+Priority: optional
+Architecture: all
+Depends: kalinka-player (>=1.0), kalinka-plugin-sdk (>=1.0), python3, ca-certificates
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Description: Kalinka MusicCast Plugin – A plugin for Kalinka to support Yamaha MusicCast device for volume control and automatic power on / off and input switch
+ A plugin for Kalinka to support Yamaha MusicCast device for volume control and automatic power on / off and input switch
