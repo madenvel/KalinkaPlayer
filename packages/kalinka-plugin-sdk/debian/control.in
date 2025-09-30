@@ -1,0 +1,19 @@
+Source: kalinka-plugin-sdk
+Priority: optional
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.6
+Homepage: https://github.com/madenvel/KalinkaPlayer
+Package: kalinka-plugin-sdk
+Version: @VERSION@
+Architecture: @ARCH@
+Depends: python3 (>= 3.8),
+    python3-venv,
+    python3-pip,
+    python3-setuptools,
+    python3-pydantic (>= 2.0.0),
+    python3-yaml (>= 6.0)
+Description: Kalinka Plugin SDK
+ Software Development Kit for developing input modules and device plugins 
+ for the Kalinka Player. Provides APIs and base classes for creating
+ custom plugins that extend Kalinka Player functionality.

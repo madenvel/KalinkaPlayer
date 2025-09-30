@@ -1,0 +1,158 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm[toml]>=6.2", "wheel", "pybind11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalinka-player"
+description = "Kalinka Audio Player backend service"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+authors = [
+    {name = "Dmitry Savin", email = "envelsavinds@gmail.com"}
+]
+maintainers = [
+    {name = "Dmitry Savin", email = "envelsavinds@gmail.com"}
+]
+keywords = ["audio", "player", "music", "streaming"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pydantic>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "zeroconf>=0.47.0",
+    "pyyaml>=6.0",
+    "pybind11>=2.10.0",
+    "httpx[http2]>=0.24.0",
+    "schedule>=1.2.0",
+    "mutagen>=1.46.0",
+    "pillow>=9.0.0",
+    "musicbrainzngs>=0.7.1",
+    "requests>=2.28.0",
+    "watchfiles>=0.18.0",
+    "aiosqlite>=0.17.0",
+    "netifaces>=0.11.0",
+    "rapidfuzz>=2.0.0",
+    "ssdpy>=0.4.0",
+    "kalinka-plugin-sdk>=1.0.0",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "httpx>=0.24.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=5.0.0",
+    "mypy>=1.0.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "httpx>=0.24.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/madenvel/KalinkaPlayer"
+Repository = "https://github.com/madenvel/KalinkaPlayer"
+Issues = "https://github.com/madenvel/KalinkaPlayer/issues"
+Documentation = "https://github.com/madenvel/KalinkaPlayer/blob/main/README.md"
+
+[project.scripts]
+kalinka-server = "kalinka_server.__main__:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kalinka_server*", "native_player*"]
+exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
+
+[tool.setuptools.package-data]
+native_player = ["*.so"]
+
+[tool.setuptools.exclude-package-data]
+native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py"]
+
+[tool.setuptools_scm]
+write_to = "src/kalinka_server/_version.py"
+tag_regex = "^kalinka-server-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match kalinka-server-v*"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+fallback_version = "0.0.0"
+search_parent_directories = true
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["kalinka_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mutagen.*",
+    "musicbrainzngs.*",
+    "schedule.*",
+    "netifaces.*",
+    "rapidfuzz.*",
+    "aiosqlite.*",
+    "ssdpy.*",
+]
+ignore_missing_imports = true

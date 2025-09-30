@@ -1,57 +1,45 @@
-VERSION := $(shell scripts/get_latest_version.sh)
-RELEASE_TAG := $(shell scripts/get_release_tag.sh)
-ARCH:=$(shell dpkg --print-architecture)
-PYTHON_VERSION=$(shell python3 -c "import sys; print('{}.{}'.format(*sys.version_info[:2]))")
-WHEEL_PATH ?= $(shell ls dist/*.whl 2>/dev/null | head -1)
+## KalinkaPlayer Development Makefile
 
-all: $(TARGET)
+.PHONY: setup-dev clean build-native run-server test help
 
-# Wheel-based build (default)
-build-deb:
-	@echo "Building native player first..."
-	cd native_player && make && cd ..
-	@echo "Building wheel with native player included..."
-	@if command -v python3 > /dev/null && [ -f setup.py ]; then \
-		python3 -m pip install --upgrade build >/dev/null 2>&1 || true; \
-		rm -rf dist/*.whl; \
-		python3 -m build --wheel || python3 setup.py bdist_wheel; \
-	else \
-		echo "Error: Python build tools not found."; \
-		exit 1; \
-	fi
-	@WHEEL_PATH=$$(ls dist/*.whl 2>/dev/null | head -1); \
-	if [ -z "$$WHEEL_PATH" ] || [ ! -f "$$WHEEL_PATH" ]; then \
-		echo "Error: No wheel could be built."; \
-		exit 1; \
-	fi; \
-	WHEEL_VERSION=$$(basename "$$WHEEL_PATH" | sed 's/kalinka_player-\(.*\)-py3-none-any\.whl/\1/'); \
-	TARGET_DIR="kalinka-player-$$WHEEL_VERSION"; \
-	TARGET_FILE="$$TARGET_DIR.$(ARCH).deb"; \
-	echo "Building Debian package with version: $$WHEEL_VERSION"; \
-	echo "Target directory: $$TARGET_DIR"; \
-	echo "Target file: $$TARGET_FILE"; \
-	mkdir -p "$$TARGET_DIR"; \
-	cp -r DEBIAN "$$TARGET_DIR"; \
-	sed "s/@ARCH@/$(ARCH)/; s/@VERSION@/$$WHEEL_VERSION/; s/PYTHON_VERSION/$(PYTHON_VERSION)/g" DEBIAN/control.in > "$$TARGET_DIR/DEBIAN/control"; \
-	rm "$$TARGET_DIR/DEBIAN/control.in"; \
-	mkdir -p "$$TARGET_DIR/usr/bin"; \
-	mkdir -p "$$TARGET_DIR/opt/kalinka/wheels"; \
-	mkdir -p "$$TARGET_DIR/etc/systemd/system/"; \
-	cp "$$WHEEL_PATH" "$$TARGET_DIR/opt/kalinka/wheels/"; \
-	cp kalinka_server.sh "$$TARGET_DIR/usr/bin/"; \
-	cp scripts/kalinka.service "$$TARGET_DIR/etc/systemd/system/"; \
-	cp requirements.txt "$$TARGET_DIR/opt/kalinka/"; \
-	cp README.md "$$TARGET_DIR/opt/kalinka/"; \
-	cp LICENSE "$$TARGET_DIR/opt/kalinka/"; \
-	dpkg-deb --root-owner-group --build "$$TARGET_DIR"; \
-	mv "$$TARGET_DIR.deb" "$$TARGET_FILE"; \
-	rm -rf "$$TARGET_DIR"; \
-	echo "Successfully built: $$TARGET_FILE"
+## Set up development environment
+setup-dev:
+	@echo "Setting up development environment..."
+	@cd packages/kalinka-plugin-sdk && pip install -e .
+	@cd packages/kalinka-server/src/native_player && python setup.py build_ext --inplace
+	@cd packages/kalinka-server && pip install -e .
+	@echo "Development environment ready!"
 
-# Legacy target for compatibility
-$(TARGET): build-deb
-
+## Clean build artifacts
 clean:
-	rm -rf kalinka-player-*.$(ARCH).deb
-	rm -rf kalinka-player-*/
-	cd native_player && make clean
+	@echo "Cleaning build artifacts..."
+	@find . -name "*.pyc" -delete
+	@find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+	@find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
+	@cd packages/kalinka-server/src/native_player && make clean
+
+## Build native player module
+build-native:
+	@echo "Building native player module..."
+	@cd packages/kalinka-server/src/native_player && python setup.py build_ext --inplace
+
+## Run the server (requires config file)
+run-server:
+	@cd packages/kalinka-server && python -m kalinka_server --config ../../kalinka_conf.cfg
+
+## Run tests
+test:
+	@echo "Running tests..."
+	@cd packages/kalinka-plugin-sdk && python -m pytest tests/ -v
+	@cd packages/kalinka-server && python -m pytest ../../tests/ -v
+
+## Show help
+help:
+	@echo "KalinkaPlayer Development Commands:"
+	@echo ""
+	@echo "  setup-dev    Set up development environment (install packages in editable mode)"
+	@echo "  build-native Build the native player C++ extension"
+	@echo "  run-server   Run the kalinka server (requires kalinka_conf.cfg)"
+	@echo "  test         Run all tests"
+	@echo "  clean        Clean build artifacts"
+	@echo "  help         Show this help message"

@@ -1,0 +1,27 @@
+{
+    "name": "myawesome",
+    "plugin_name": "kalinka-plugin-{{ cookiecutter.name }}",
+    "plugin_id": "kalinka_plugin_{{ cookiecutter.name.lower().replace('-', '_').replace(' ', '_') }}",
+    "plugin_class_prefix": "{{ cookiecutter.name.title().replace('-', '').replace(' ', '') }}",
+    "plugin_display_name": "{{ cookiecutter.name.title().replace('-', ' ') }}",
+    "plugin_description": "A Kalinka music player plugin",
+    "plugin_type": [
+        "input_module",
+        "device"
+    ],
+    "author_name": "Your Name",
+    "author_email": "your.email@example.com",
+    "version": "1.0.0",
+    "python_version": "3.10",
+    "sdk_version_constraint": ">=1.0,<2",
+    "license": [
+        "GPL-3.0-or-later",
+        "MIT",
+        "Apache-2.0",
+        "BSD-3-Clause"
+    ],
+    "year": "{% now 'utc', '%Y' %}",
+    "_extensions": [
+        "jinja2_time.TimeExtension"
+    ]
+}

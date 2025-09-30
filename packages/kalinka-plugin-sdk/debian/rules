@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python3
+
+override_dh_auto_build:
+	# Skip build phase as we're using pre-built wheels
+
+override_dh_auto_test:
+	# Skip tests
+
+override_dh_python3:
+	# Skip python3 dependency detection as we handle it manually

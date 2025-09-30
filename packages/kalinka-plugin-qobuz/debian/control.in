@@ -1,0 +1,9 @@
+Package: kalinka-plugin-qobuz
+Version: @VERSION@
+Section: python
+Priority: optional
+Architecture: all
+Depends: kalinka-player (>=1.0), kalinka-plugin-sdk (>=1.0), python3, ca-certificates
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Description: Kalinka Plugin for Qobuz – Qobuz plugin for Kalinka Music Player
+ Qobuz plugin for Kalinka Music Player

@@ -1,0 +1,304 @@
+from typing import Optional, List
+from pydantic import (
+    BaseModel,
+    NonNegativeInt,
+    PositiveInt,
+    model_serializer,
+    field_validator,
+    model_validator,
+)
+from enum import Enum
+
+
+class EntityType(str, Enum):
+    CATALOG = "catalog"
+    ALBUM = "album"
+    ARTIST = "artist"
+    PLAYLIST = "playlist"
+    TRACK = "track"
+    LABEL = "label"
+    GENRE = "genre"
+    USER = "user"
+
+
+class EntityId(BaseModel):
+    id: str
+    type: EntityType
+    source: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_entity_id_model(cls, values):
+        # Handle the case where we receive a string instead of a dict
+        if isinstance(values, str):
+            return cls.from_string(values).__dict__
+        return values
+
+    @field_validator("id", "type", "source", mode="before")
+    @classmethod
+    def validate_from_string(cls, v, info):
+        # If we receive a string for any field and it looks like a full entity ID,
+        # parse the entire string and return the appropriate field value
+        if isinstance(v, str) and v.startswith("kalinka:") and ":" in v:
+            # This is a full entity ID string, parse it
+            parts = v.split(":")
+            if len(parts) == 4 and parts[0] == "kalinka":
+                _, source, type_str, id_ = parts
+                # Return the value for the specific field being validated
+                if info.field_name == "id":
+                    return id_
+                elif info.field_name == "type":
+                    return EntityType(type_str)
+                elif info.field_name == "source":
+                    return source
+        return v
+
+    @property
+    def to_string(self) -> str:
+        return f"kalinka:{self.source}:{self.type.value}:{self.id}"
+
+    @classmethod
+    def from_string(cls, full_id: str) -> "EntityId":
+        # Expected format: kalinka:{source}:{type}:{id}
+        parts = full_id.split(":")
+        if len(parts) != 4 or parts[0] != "kalinka":
+            raise ValueError(f"Invalid full_id format: {full_id}")
+        _, source, type_str, id_ = parts
+        return cls(id=id_, type=EntityType(type_str), source=source)
+
+    def __hash__(self):
+        return hash(self.to_string)
+
+    def __eq__(self, other):
+        if isinstance(other, EntityId):
+            return self.to_string == other.to_string
+        elif isinstance(other, str):
+            return self.to_string == other
+        return False
+
+    @model_serializer
+    def ser_model(self) -> str:
+        return self.to_string
+
+
+class PreviewType(str, Enum):
+    """
+    The enum defines different types of preview layouts for displaying content in a user interface.
+    Each type specifies a unique way to present items, such as images, text, or carousels.
+    """
+
+    # Displays a card with an image and title / subtitle underneath
+    IMAGE_TEXT = "image"
+    # Displays a text-only card with title inside the card
+    TEXT_ONLY = "text"
+    # Displays a carousel of items (first 5 items)
+    # This is used for the root catalog and should not be used for other sections
+    CAROUSEL = "carousel"
+    # Displays a list of tiles with image and title / subtitle to the right
+    TILE = "tile"
+    # Displays a list of tiles with order number and title / subtitle to the right
+    TILE_NUMBERED = "tile_numbered"
+    # No preview content, used for sections with an image or text only
+    NONE = "none"
+
+
+class PreviewContentType(str, Enum):
+    """
+    A hint to the UI about the type of content being displayed in the preview section.
+    This helps UI to choose appropriate size, icons and placeholders for the content.
+    """
+
+    ALBUM = "album"
+    ARTIST = "artist"
+    PLAYLIST = "playlist"
+    TRACK = "track"
+    CATALOG = "catalog"
+
+
+class CardSize(str, Enum):
+    SMALL = "small"
+    LARGE = "large"
+
+
+class CoverImage(BaseModel):
+    small: Optional[str] = ""
+    thumbnail: Optional[str] = ""
+    large: Optional[str] = ""
+
+
+class Artist(BaseModel):
+    id: EntityId
+    name: str
+    image: Optional[CoverImage] = None
+    album_count: Optional[int] = None
+
+
+class Label(BaseModel):
+    """A music label or record company."""
+
+    id: EntityId
+    name: str
+
+
+class Genre(BaseModel):
+    """A music genre."""
+
+    id: EntityId
+    name: str
+
+
+class Album(BaseModel):
+    id: EntityId
+    title: str
+    duration: Optional[int] = None
+    track_count: Optional[int] = None
+    image: Optional[CoverImage] = None
+    label: Optional[Label] = None
+    genre: Optional[Genre] = None
+    artist: Optional[Artist] = None
+
+
+class Track(BaseModel):
+    id: EntityId
+    title: str
+    # Duration in seconds
+    duration: int
+    performer: Optional[Artist] = None
+    album: Album
+    replaygain_peak: Optional[float] = None
+    replaygain_gain: Optional[float] = None
+    playlist_track_id: Optional[str] = None
+
+
+class Owner(BaseModel):
+    name: str
+    id: EntityId
+
+
+class Playlist(BaseModel):
+    """A playlist created by a user or imported from an external source."""
+
+    id: EntityId
+    name: str
+    owner: Owner
+    image: Optional[CoverImage] = None
+    description: Optional[str]
+    track_count: int
+
+
+class Preview(BaseModel):
+    """Configuration for preview section in the catalog view."""
+
+    # Maximum number of items to be shown in the preview section.
+    # This is a UI configuration value, not the actual count of items available.
+    items_count: Optional[int] = None
+    type: PreviewType
+    content_type: Optional[PreviewContentType] = None
+    rows_count: Optional[int] = None
+    aspect_ratio: Optional[float] = None
+    card_size: Optional[CardSize] = None
+
+
+class Catalog(BaseModel):
+    """Representation of a music catalog."""
+
+    id: EntityId
+    title: str
+    image: Optional[CoverImage] = None
+    can_genre_filter: bool = False
+    description: Optional[str] = ""
+    preview_config: Optional[Preview] = None
+
+
+class BrowseItem(BaseModel):
+    """An item that can be displayed in a list or grid in the UI."""
+
+    id: EntityId
+    name: str
+    url: Optional[str] = None
+    can_browse: bool = False
+    can_add: bool = False
+    subname: Optional[str] = None
+    album: Optional[Album] = None
+    artist: Optional[Artist] = None
+    playlist: Optional[Playlist] = None
+    catalog: Optional[Catalog] = None
+    track: Optional[Track] = None
+
+    # Used for merging multiple items into a single view
+    timestamp: NonNegativeInt = 0
+
+    # Used for additional catalog sections to display alongside the current item
+    # Examples: "Similar albums", "From the same artist", "Recommended" etc.
+    # Not to be used for preview content in the root catalog
+    sections: Optional[List["BrowseItem"]] = None
+
+
+class BrowseItemList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[BrowseItem]
+
+
+def EmptyList(offset, limit) -> BrowseItemList:
+    return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
+
+
+class FavoriteIds(BaseModel):
+    albums: List[EntityId] = []
+    artists: List[EntityId] = []
+    tracks: List[EntityId] = []
+    playlists: List[EntityId] = []
+
+
+class GenreList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[Genre]
+
+
+class DeviceVolume(BaseModel):
+    max_volume: int = 0
+    current_volume: int = 0
+    volume_gain: int = 0
+    supported: bool = True
+
+
+class AudioInfo(BaseModel):
+    sample_rate: int
+    bits_per_sample: int
+    channels: int
+    duration_ms: int
+
+
+class PlaybackMode(BaseModel):
+    shuffle: bool
+    repeat_single: bool
+    repeat_all: bool
+
+
+class PlayerState(BaseModel):
+    state: Optional[str] = None
+    current_track: Optional[Track] = None
+    index: Optional[int] = None
+    position: Optional[int] = None
+    message: Optional[str] = None
+    audio_info: Optional[AudioInfo] = None
+    mime_type: Optional[str] = None
+    timestamp: PositiveInt = 0
+
+
+class TrackList(BaseModel):
+    offset: int
+    limit: int
+    total: int
+    items: List[Track]
+
+
+class LastUpdate(BaseModel):
+    favorite_tracks_ts: int = 0
+    favorite_albums_ts: int = 0
+    favorite_artists_ts: int = 0
+    favorite_playlists_ts: int = 0

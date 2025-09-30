@@ -1,0 +1,46 @@
+{
+    "folders": [
+        {
+            "name": "KalinkaPlayer (Root)",
+            "path": "."
+        },
+        {
+            "name": "kalinka-server",
+            "path": "./packages/kalinka-server"
+        },
+        {
+            "name": "kalinka-plugin-sdk",
+            "path": "./packages/kalinka-plugin-sdk"
+        }
+    ],
+    "settings": {
+        "python.defaultInterpreterPath": "./.venv/bin/python",
+        "python.analysis.extraPaths": [
+            "./packages/kalinka-server/src",
+            "./packages/kalinka-plugin-sdk/src"
+        ],
+        "python.analysis.autoSearchPaths": true,
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black",
+        "files.exclude": {
+            "**/__pycache__": true,
+            "**/*.pyc": true,
+            "**/build": true,
+            "**/*.egg-info": true
+        },
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+            "tests",
+            "packages/*/tests"
+        ]
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-python.python",
+            "ms-python.pylint",
+            "ms-python.black-formatter",
+            "ms-python.debugpy"
+        ]
+    }
+}
