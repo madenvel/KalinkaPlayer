@@ -1,8 +1,11 @@
 # kalinka_plugin_sdk/api.py
 from collections.abc import Callable
-from typing import Protocol, Mapping, Any, Optional
+from typing import Protocol, Any, Optional
 
-from kalinka_plugin_sdk.inputmodule import TrackInfo
+from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
+
+from .inputmodule import TrackInfo
+from .module_config import ModuleConfig
 from .events import EventType
 
 API_VERSION = "1.0"
@@ -52,15 +55,15 @@ class PlayQueueAPI(Protocol):
         """Remove tracks by their indices."""
         ...
 
-    def list(self, offset: int, limit: int) -> Any:
+    def list(self, offset: int, limit: int) -> TrackList:
         """List tracks in the queue with pagination."""
         ...
 
-    def get_track_info(self, index: int) -> Optional[Any]:
+    def get_track_info(self, index: int) -> Optional[Track]:
         """Get info for the track at the given index."""
         ...
 
-    def get_state(self) -> Any:
+    def get_state(self) -> PlayerState:
         """Get the current playback state."""
         ...
 
@@ -75,11 +78,11 @@ class PlayQueueAPI(Protocol):
         shuffle: Optional[bool],
         repeat_single: Optional[bool],
         repeat_all: Optional[bool],
-    ) -> Any:
+    ) -> None:
         """Set playback modes: shuffle, repeat single, repeat all."""
         ...
 
-    def get_playback_mode(self) -> Any:
+    def get_playback_mode(self) -> PlaybackMode:
         """Get the current playback mode."""
         ...
 
@@ -110,4 +113,4 @@ class PluginContext(Protocol):
     plugin_id: str
     sdk_version: str  # equals API_VERSION
     capabilities: set[str]
-    config: Mapping[str, Any]
+    config: ModuleConfig
