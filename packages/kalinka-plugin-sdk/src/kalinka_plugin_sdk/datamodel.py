@@ -11,6 +11,13 @@ from enum import Enum
 
 
 class EntityType(str, Enum):
+    """
+    Enumeration of all entity types supported in the Kalinka system.
+
+    These types define the different kinds of content objects that can be
+    referenced and manipulated within the music player ecosystem.
+    """
+
     CATALOG = "catalog"
     ALBUM = "album"
     ARTIST = "artist"
@@ -22,6 +29,33 @@ class EntityType(str, Enum):
 
 
 class EntityId(BaseModel):
+    """
+    Universal identifier for all entities in the Kalinka system.
+
+    EntityId provides a structured way to uniquely identify any content object
+    across different input modules and sources. It combines the source module,
+    entity type, and local ID into a globally unique identifier.
+
+    The string representation follows the format:
+    "kalinka:{source}:{type}:{id}"
+
+    Examples:
+        - "kalinka:streamingservice:track:4iV5W9uYEdYUVa79Axb7Rh"
+        - "kalinka:localfiles:album:artist_album_2023"
+        - "kalinka:musicservice:artist:123456"
+
+    Attributes:
+        id (str): The local identifier within the source module
+        type (EntityType): The type of entity (track, album, artist, etc.)
+        source (str): The name of the input module that provides this entity
+
+    Features:
+        - Automatic string serialization/deserialization
+        - Hash and equality support for use in sets and dictionaries
+        - Flexible construction from strings or component parts
+        - Validation of format and structure
+    """
+
     id: str
     type: EntityType
     source: str
@@ -29,6 +63,12 @@ class EntityId(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_entity_id_model(cls, values):
+        """
+        Validates and converts string representations to EntityId objects.
+
+        Handles cases where a full entity ID string is provided instead of
+        a dictionary with separate fields.
+        """
         # Handle the case where we receive a string instead of a dict
         if isinstance(values, str):
             return cls.from_string(values).__dict__
@@ -37,6 +77,12 @@ class EntityId(BaseModel):
     @field_validator("id", "type", "source", mode="before")
     @classmethod
     def validate_from_string(cls, v, info):
+        """
+        Validates individual fields, parsing full entity ID strings when needed.
+
+        This validator allows flexible construction where any field can receive
+        a full entity ID string and extract the appropriate component.
+        """
         # If we receive a string for any field and it looks like a full entity ID,
         # parse the entire string and return the appropriate field value
         if isinstance(v, str) and v.startswith("kalinka:") and ":" in v:
@@ -55,10 +101,28 @@ class EntityId(BaseModel):
 
     @property
     def to_string(self) -> str:
+        """
+        Convert the EntityId to its string representation.
+
+        Returns:
+            str: The full entity ID in format "kalinka:{source}:{type}:{id}"
+        """
         return f"kalinka:{self.source}:{self.type.value}:{self.id}"
 
     @classmethod
     def from_string(cls, full_id: str) -> "EntityId":
+        """
+        Create an EntityId from its string representation.
+
+        Args:
+            full_id (str): Full entity ID string in format "kalinka:{source}:{type}:{id}"
+
+        Returns:
+            EntityId: A new EntityId object
+
+        Raises:
+            ValueError: If the string format is invalid
+        """
         # Expected format: kalinka:{source}:{type}:{id}
         parts = full_id.split(":")
         if len(parts) != 4 or parts[0] != "kalinka":
@@ -67,9 +131,19 @@ class EntityId(BaseModel):
         return cls(id=id_, type=EntityType(type_str), source=source)
 
     def __hash__(self):
+        """Enable use of EntityId in sets and as dictionary keys."""
         return hash(self.to_string)
 
     def __eq__(self, other):
+        """
+        Compare EntityId with another EntityId or string.
+
+        Args:
+            other: Another EntityId object or string representation
+
+        Returns:
+            bool: True if the entities are the same
+        """
         if isinstance(other, EntityId):
             return self.to_string == other.to_string
         elif isinstance(other, str):
@@ -78,6 +152,7 @@ class EntityId(BaseModel):
 
     @model_serializer
     def ser_model(self) -> str:
+        """Serialize EntityId as a string for JSON/API output."""
         return self.to_string
 
 
@@ -87,18 +162,17 @@ class PreviewType(str, Enum):
     Each type specifies a unique way to present items, such as images, text, or carousels.
     """
 
-    # Displays a card with an image and title / subtitle underneath
+    # Card with image above, title and subtitle below (default card layout)
     IMAGE_TEXT = "image"
-    # Displays a text-only card with title inside the card
+    # Card with only text (title centered inside the card)
     TEXT_ONLY = "text"
-    # Displays a carousel of items (first 5 items)
-    # This is used for the root catalog and should not be used for other sections
+    # Horizontal carousel of up to 5 items (used for root catalog only)
     CAROUSEL = "carousel"
-    # Displays a list of tiles with image and title / subtitle to the right
+    # Tile layout: image on the left, title and subtitle on the right
     TILE = "tile"
-    # Displays a list of tiles with order number and title / subtitle to the right
+    # Numbered tile layout: order number, title, and subtitle on the right
     TILE_NUMBERED = "tile_numbered"
-    # No preview content, used for sections with an image or text only
+    # No preview items (section displays only an image or text)
     NONE = "none"
 
 
@@ -121,12 +195,34 @@ class CardSize(str, Enum):
 
 
 class CoverImage(BaseModel):
+    """
+    Container for cover art images in different sizes.
+
+    Provides URLs for the same image in multiple resolutions to support
+    different UI contexts and device capabilities.
+
+    Attributes:
+        small (Optional[str]): Small resolution image URL (e.g., for list items)
+        thumbnail (Optional[str]): Thumbnail resolution image URL
+        large (Optional[str]): High resolution image URL (e.g., for full-screen display)
+    """
+
     small: Optional[str] = ""
     thumbnail: Optional[str] = ""
     large: Optional[str] = ""
 
 
 class Artist(BaseModel):
+    """
+    Represents a musical artist or performer.
+
+    Attributes:
+        id (EntityId): Unique identifier for the artist
+        name (str): Artist's display name
+        image (Optional[CoverImage]): Artist's profile/promotional images
+        album_count (Optional[int]): Number of albums by this artist
+    """
+
     id: EntityId
     name: str
     image: Optional[CoverImage] = None
@@ -134,20 +230,46 @@ class Artist(BaseModel):
 
 
 class Label(BaseModel):
-    """A music label or record company."""
+    """
+    A music label or record company.
+
+    Attributes:
+        id (EntityId): Unique identifier for the label
+        name (str): Label's display name
+    """
 
     id: EntityId
     name: str
 
 
 class Genre(BaseModel):
-    """A music genre."""
+    """
+    A music genre classification.
+
+    Attributes:
+        id (EntityId): Unique identifier for the genre
+        name (str): Genre name (e.g., "Rock", "Jazz", "Electronic")
+    """
 
     id: EntityId
     name: str
 
 
 class Album(BaseModel):
+    """
+    Represents a music album or collection of tracks.
+
+    Attributes:
+        id (EntityId): Unique identifier for the album
+        title (str): Album title
+        duration (Optional[int]): Total album duration in seconds
+        track_count (Optional[int]): Number of tracks in the album
+        image (Optional[CoverImage]): Album cover art in different sizes
+        label (Optional[Label]): Record label that released the album
+        genre (Optional[Genre]): Primary genre classification
+        artist (Optional[Artist]): Primary artist/performer
+    """
+
     id: EntityId
     title: str
     duration: Optional[int] = None
@@ -159,6 +281,20 @@ class Album(BaseModel):
 
 
 class Track(BaseModel):
+    """
+    Represents an individual music track.
+
+    Attributes:
+        id (EntityId): Unique identifier for the track
+        title (str): Track title
+        duration (int): Track duration in seconds
+        performer (Optional[Artist]): Track performer (may differ from album artist)
+        album (Album): Album containing this track
+        replaygain_peak (Optional[float]): ReplayGain peak value for audio normalization
+        replaygain_gain (Optional[float]): ReplayGain gain value for audio normalization
+        playlist_track_id (Optional[str]): ID specific to playlist membership
+    """
+
     id: EntityId
     title: str
     # Duration in seconds
@@ -171,12 +307,30 @@ class Track(BaseModel):
 
 
 class Owner(BaseModel):
+    """
+    Represents the owner/creator of a playlist.
+
+    Attributes:
+        name (str): Owner's display name
+        id (EntityId): Unique identifier for the owner
+    """
+
     name: str
     id: EntityId
 
 
 class Playlist(BaseModel):
-    """A playlist created by a user or imported from an external source."""
+    """
+    A playlist created by a user or imported from an external source.
+
+    Attributes:
+        id (EntityId): Unique identifier for the playlist
+        name (str): Playlist name
+        owner (Owner): User who created/owns the playlist
+        image (Optional[CoverImage]): Playlist cover art
+        description (Optional[str]): Playlist description
+        track_count (int): Number of tracks in the playlist
+    """
 
     id: EntityId
     name: str
@@ -187,7 +341,20 @@ class Playlist(BaseModel):
 
 
 class Preview(BaseModel):
-    """Configuration for preview section in the catalog view."""
+    """
+    Configuration for preview section in the catalog view.
+
+    Defines how content should be displayed in preview sections of the UI,
+    including layout, sizing, and presentation hints.
+
+    Attributes:
+        items_count (Optional[int]): Maximum number of items to show in preview
+        type (PreviewType): Layout type for the preview section
+        content_type (Optional[PreviewContentType]): Hint about content type for UI styling
+        rows_count (Optional[int]): Number of rows to display
+        aspect_ratio (Optional[float]): Preferred aspect ratio for items
+        card_size (Optional[CardSize]): Size preference for cards/items
+    """
 
     # Maximum number of items to be shown in the preview section.
     # This is a UI configuration value, not the actual count of items available.
@@ -200,7 +367,20 @@ class Preview(BaseModel):
 
 
 class Catalog(BaseModel):
-    """Representation of a music catalog."""
+    """
+    Representation of a music catalog or browsable section.
+
+    Catalogs are top-level containers that organize content into browsable
+    sections like "New Releases", "Genres", "My Library", etc.
+
+    Attributes:
+        id (EntityId): Unique identifier for the catalog
+        title (str): Display title for the catalog section
+        image (Optional[CoverImage]): Representative image for the catalog
+        can_genre_filter (bool): Whether genre filtering is available
+        description (Optional[str]): Description of the catalog content
+        preview_config (Optional[Preview]): Configuration for preview display
+    """
 
     id: EntityId
     title: str
@@ -211,7 +391,80 @@ class Catalog(BaseModel):
 
 
 class BrowseItem(BaseModel):
-    """An item that can be displayed in a list or grid in the UI."""
+    """
+    A universal container for any item that can be displayed in the Kalinka UI.
+
+    BrowseItem is the primary data structure used throughout the Kalinka system
+    for representing content that users can browse, search, and interact with.
+    It provides a flexible container that can represent any type of musical content
+    while maintaining a consistent interface for the UI.
+
+    Key Concepts:
+    - **Polymorphic Design**: A single BrowseItem can represent different types
+      of content (tracks, albums, artists, playlists, catalogs) by populating
+      the appropriate nested object fields.
+
+    - **Browsable Content**: Items with `can_browse=True` can be "opened" to
+      reveal their contents (e.g., browsing into an album shows its tracks).
+
+    - **Addable Content**: Items with `can_add=True` can be added to playlists
+      or queues directly.
+
+    - **Hierarchical Structure**: Items can contain sections with related content,
+      enabling rich browsing experiences.
+
+    Usage Patterns:
+    - For a track: Populate `track` field, set `can_add=True`
+    - For an album: Populate `album` field, set `can_browse=True` to show tracks
+    - For a catalog: Populate `catalog` field, set `can_browse=True`
+    - For mixed content: Use `name`/`subname` with appropriate nested objects
+
+    Attributes:
+        id (EntityId): Unique identifier for this item
+        name (str): Primary display name (title, artist name, etc.)
+        url (Optional[str]): Direct URL for web-based content
+        can_browse (bool): Whether this item can be browsed into (has children)
+        can_add (bool): Whether this item can be added to playlists/queues
+        subname (Optional[str]): Secondary display text (subtitle, artist, etc.)
+        album (Optional[Album]): Album data if this represents an album
+        artist (Optional[Artist]): Artist data if this represents an artist
+        playlist (Optional[Playlist]): Playlist data if this represents a playlist
+        catalog (Optional[Catalog]): Catalog data if this represents a catalog section
+        track (Optional[Track]): Track data if this represents a track
+        timestamp (NonNegativeInt): Used for sorting/merging items by time
+        sections (Optional[List[BrowseItem]]): Related content sections
+
+    Examples:
+        # Track item
+        BrowseItem(
+            id=track_id,
+            name="Song Title",
+            subname="Artist Name",
+            can_add=True,
+            track=Track(...)
+        )
+
+        # Album item
+        BrowseItem(
+            id=album_id,
+            name="Album Title",
+            subname="Artist Name",
+            can_browse=True,
+            album=Album(...)
+        )
+
+        # Catalog section with related content
+        BrowseItem(
+            id=catalog_id,
+            name="New Releases",
+            can_browse=True,
+            catalog=Catalog(...),
+            sections=[
+                BrowseItem(name="Similar Artists", ...),
+                BrowseItem(name="Recommended Albums", ...)
+            ]
+        )
+    """
 
     id: EntityId
     name: str
@@ -235,6 +488,19 @@ class BrowseItem(BaseModel):
 
 
 class BrowseItemList(BaseModel):
+    """
+    Paginated list of browse items with metadata.
+
+    Standard container for returning lists of content with pagination support.
+    Used throughout the API for browse, search, and listing operations.
+
+    Attributes:
+        offset (int): Starting position of this page in the full result set
+        limit (int): Maximum number of items requested for this page
+        total (int): Total number of items available across all pages
+        items (List[BrowseItem]): The actual items for this page
+    """
+
     offset: int
     limit: int
     total: int
@@ -242,10 +508,33 @@ class BrowseItemList(BaseModel):
 
 
 def EmptyList(offset, limit) -> BrowseItemList:
+    """
+    Create an empty BrowseItemList with the specified pagination parameters.
+
+    Args:
+        offset (int): The offset for the empty list
+        limit (int): The limit for the empty list
+
+    Returns:
+        BrowseItemList: An empty list with total=0 and no items
+    """
     return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
 
 
 class FavoriteIds(BaseModel):
+    """
+    Collection of user's favorite item IDs organized by content type.
+
+    Provides efficient access to user's favorites for quick lookup
+    without requiring full metadata retrieval.
+
+    Attributes:
+        albums (List[EntityId]): List of favorite album IDs
+        artists (List[EntityId]): List of favorite artist IDs
+        tracks (List[EntityId]): List of favorite track IDs
+        playlists (List[EntityId]): List of favorite playlist IDs
+    """
+
     albums: List[EntityId] = []
     artists: List[EntityId] = []
     tracks: List[EntityId] = []
@@ -253,6 +542,16 @@ class FavoriteIds(BaseModel):
 
 
 class GenreList(BaseModel):
+    """
+    Paginated list of genre items.
+
+    Attributes:
+        offset (int): Starting position in the full genre list
+        limit (int): Maximum number of genres in this response
+        total (int): Total number of genres available
+        items (List[Genre]): The genre items for this page
+    """
+
     offset: int
     limit: int
     total: int
@@ -260,6 +559,16 @@ class GenreList(BaseModel):
 
 
 class DeviceVolume(BaseModel):
+    """
+    Volume control information for audio devices.
+
+    Attributes:
+        max_volume (int): Maximum volume level supported by the device
+        current_volume (int): Current volume level
+        volume_gain (int): Additional gain/boost applied
+        supported (bool): Whether volume control is supported on this device
+    """
+
     max_volume: int = 0
     current_volume: int = 0
     volume_gain: int = 0
@@ -267,6 +576,16 @@ class DeviceVolume(BaseModel):
 
 
 class AudioInfo(BaseModel):
+    """
+    Technical information about the currently playing audio stream.
+
+    Attributes:
+        sample_rate (int): Audio sample rate in Hz (e.g., 44100, 48000)
+        bits_per_sample (int): Bit depth (e.g., 16, 24)
+        channels (int): Number of audio channels (1=mono, 2=stereo)
+        duration_ms (int): Track duration in milliseconds
+    """
+
     sample_rate: int
     bits_per_sample: int
     channels: int
@@ -274,12 +593,38 @@ class AudioInfo(BaseModel):
 
 
 class PlaybackMode(BaseModel):
+    """
+    Playback behavior configuration.
+
+    Attributes:
+        shuffle (bool): Whether tracks are played in random order
+        repeat_single (bool): Whether to repeat the current track
+        repeat_all (bool): Whether to repeat the entire playlist/queue
+    """
+
     shuffle: bool
     repeat_single: bool
     repeat_all: bool
 
 
 class PlayerState(BaseModel):
+    """
+    Complete state information for the audio player.
+
+    Represents the current status of the player including what's playing,
+    playback position, and technical details about the audio stream.
+
+    Attributes:
+        state (Optional[str]): Current player state (playing, paused, stopped, etc.)
+        current_track (Optional[Track]): Currently loaded/playing track
+        index (Optional[int]): Position in the current playlist/queue
+        position (Optional[int]): Playback position in seconds
+        message (Optional[str]): Status message or error information
+        audio_info (Optional[AudioInfo]): Technical details about the audio stream
+        mime_type (Optional[str]): MIME type of the audio stream
+        timestamp (PositiveInt): Timestamp when this state was captured
+    """
+
     state: Optional[str] = None
     current_track: Optional[Track] = None
     index: Optional[int] = None
@@ -291,6 +636,18 @@ class PlayerState(BaseModel):
 
 
 class TrackList(BaseModel):
+    """
+    Paginated list of tracks.
+
+    Used for playlist contents, album tracks, and other track collections.
+
+    Attributes:
+        offset (int): Starting position in the full track list
+        limit (int): Maximum number of tracks in this response
+        total (int): Total number of tracks available
+        items (List[Track]): The track items for this page
+    """
+
     offset: int
     limit: int
     total: int
@@ -298,6 +655,19 @@ class TrackList(BaseModel):
 
 
 class LastUpdate(BaseModel):
+    """
+    Timestamp tracking for user's favorite content changes.
+
+    Used to efficiently synchronize favorites between client and server
+    by tracking when each category was last modified.
+
+    Attributes:
+        favorite_tracks_ts (int): Unix timestamp of last favorite tracks update
+        favorite_albums_ts (int): Unix timestamp of last favorite albums update
+        favorite_artists_ts (int): Unix timestamp of last favorite artists update
+        favorite_playlists_ts (int): Unix timestamp of last favorite playlists update
+    """
+
     favorite_tracks_ts: int = 0
     favorite_albums_ts: int = 0
     favorite_artists_ts: int = 0
