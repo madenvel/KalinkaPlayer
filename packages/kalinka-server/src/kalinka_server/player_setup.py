@@ -9,16 +9,13 @@ from queue import Queue
 from typing import Generator, get_type_hints
 
 from kalinka_plugin_sdk.api import (
-    EventEmitterAPI,
-    EventListenerAPI,
-    PlayQueueAPI,
     PluginContext,
 )
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 from kalinka_plugin_sdk.inputmodule import InputModule
 from kalinka_plugin_sdk.module_config import ModuleConfig
 from kalinka_plugin_sdk import API_VERSION
-from kalinka_server.plugin_event_queue import KalinkaPluginEventQueue
+from kalinka_server.plugin_event_queue import PluginEventQueue
 
 from .async_common import EventEmitter, EventListener
 from .config_model import KalinkaConfig
@@ -210,9 +207,9 @@ def read_or_create_module_config(
 
 def scan_and_setup_plugins_from_entry_points(
     config_path: str,
-    playqueue: PlayQueueAPI,
-    event_emitter: EventEmitterAPI,
-    plugin_event_queue: EventListenerAPI,
+    playqueue: PlayQueue,
+    event_emitter: EventEmitter,
+    event_listener: EventListener,
 ) -> Generator[tuple[str, PreparedModule], None, None]:
     """Scan for installed plugins using entry points and setup those matching the specified type."""
 
@@ -225,7 +222,7 @@ def scan_and_setup_plugins_from_entry_points(
             prepared_module = PreparedModule(module, config)
             if config.enabled:
                 plugin_context = make_plugin_context(
-                    name, playqueue, event_emitter, plugin_event_queue
+                    name, playqueue, event_emitter, event_listener
                 )
                 prepared_module.setup(plugin_context)
                 prepared_module.health_state = ModuleHealthState.READY
@@ -245,15 +242,15 @@ def scan_and_setup_plugins_from_entry_points(
 
 def make_plugin_context(
     name: str,
-    playqueue: PlayQueueAPI,
-    event_emitter: EventEmitterAPI,
-    plugin_event_queue: EventListenerAPI,
+    playqueue: PlayQueue,
+    event_emitter: EventEmitter,
+    event_listener: EventListener,
 ) -> PluginContext:
     """Create a PluginContext instance."""
     context = PluginContext()
-    context.playqueue = playqueue
-    context.event_emitter = event_emitter
-    context.listener = plugin_event_queue
+    context.playqueue = PlayQueueAPIImpl(playqueue)
+    context.event_emitter = EventEmitterAPIImpl(event_emitter)
+    context.listener = PluginEventQueue(event_listener)
     context.logger = logging.getLogger(name)
     context.plugin_id = name
     context.sdk_version = API_VERSION
@@ -263,9 +260,9 @@ def make_plugin_context(
 
 def scan_and_setup_plugins(
     config_path: str,
-    playqueue: PlayQueueAPI,
-    event_emitter: EventEmitterAPI,
-    plugin_event_queue: EventListenerAPI,
+    playqueue: PlayQueue,
+    event_emitter: EventEmitter,
+    event_listener: EventListener,
 ):
     """Scan for input modules from both entry points and legacy filesystem locations."""
 
@@ -273,7 +270,7 @@ def scan_and_setup_plugins(
     input_modules = {}
     devices = {}
     for name, module in scan_and_setup_plugins_from_entry_points(
-        config_path, playqueue, event_emitter, plugin_event_queue
+        config_path, playqueue, event_emitter, event_listener
     ):
         plugin_type = module.plugin_type
         if plugin_type == PluginType.INPUT_MODULE:
@@ -305,15 +302,8 @@ def setup(config_path: str, config: KalinkaConfig) -> tuple[PlayQueue, EventList
     event_listener = EventListener(queue)
     playqueue = PlayQueue(config, event_emitter)
 
-    # Create plugin interface
-    plugin_event_queue = KalinkaPluginEventQueue(event_listener, max_workers=2)
-    plugin_event_emitter = EventEmitterAPIImpl(event_emitter)
-    plugin_playqueue = PlayQueueAPIImpl(playqueue)
-
     # Scan and setup plugins
-    scan_and_setup_plugins(
-        config_path, plugin_playqueue, plugin_event_emitter, plugin_event_queue
-    )
+    scan_and_setup_plugins(config_path, playqueue, event_emitter, event_listener)
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))
