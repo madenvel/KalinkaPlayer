@@ -1,5 +1,4 @@
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
-from kalinka_plugin_sdk.datamodel import TrackInfo
+from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction, DeviceVolume
 
 from .config_model import {{ cookiecutter.plugin_class_prefix }}Config
 
@@ -8,41 +7,32 @@ class {{ cookiecutter.plugin_class_prefix }}Device(ExternalOutputDevice):
     def __init__(self, config: {{ cookiecutter.plugin_class_prefix }}Config):
         self.config = config
 
-    def device_name(self) -> str:
-        return "{{ cookiecutter.plugin_display_name }}"
-
-    def play(self, track_info: TrackInfo):
-        """Start playing the given track"""
+    def get_volume(self) -> DeviceVolume:
+        """Get current volume level"""
         raise NotImplementedError
 
-    def pause(self):
-        """Pause playback"""
-        raise NotImplementedError
-
-    def resume(self):
-        """Resume playback"""
-        raise NotImplementedError
-
-    def stop(self):
-        """Stop playback"""
-        raise NotImplementedError
-
-    def set_volume(self, volume: float):
+    def set_volume(self, volume: float) -> None:
         """Set volume (0.0 to 1.0)"""
         raise NotImplementedError
 
-    def get_volume(self) -> float:
-        """Get current volume (0.0 to 1.0)"""
+    def power_on(self) -> None:
+        """Power on the device"""
         raise NotImplementedError
 
-    def seek(self, position: float):
-        """Seek to position in seconds"""
+    def is_power_on(self) -> bool:
+        """Check if device is powered on"""
         raise NotImplementedError
 
-    def get_position(self) -> float:
-        """Get current position in seconds"""
+    def power_off(self) -> None:
+        """Power off the device"""
         raise NotImplementedError
 
-    def is_playing(self) -> bool:
-        """Check if currently playing"""
-        raise NotImplementedError
+    def supported_functions(self) -> list[SupportedFunction]:
+        """Return list of supported functions"""
+        return [
+            SupportedFunction.GET_VOLUME,
+            SupportedFunction.SET_VOLUME,
+            SupportedFunction.POWER_ON,
+            SupportedFunction.IS_POWER_ON,
+            SupportedFunction.POWER_OFF,
+        ]

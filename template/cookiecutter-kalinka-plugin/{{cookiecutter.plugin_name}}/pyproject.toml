@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.entry-points."kalinka.plugins"]
-{{ cookiecutter.plugin_id }} = "{{ cookiecutter.plugin_id }}.module_setup:setup"
+{{ cookiecutter.plugin_id }} = "{{ cookiecutter.plugin_id }}:KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}"
 
 [tool.setuptools.packages.find]
 where = ["src"]
