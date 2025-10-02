@@ -1,37 +1,41 @@
-from kalinka_plugin_sdk.api import PluginContext  # runtime Protocols
+from typing import Optional
+from kalinka_plugin_sdk.api import (
+    PluginContext,
+    OutputDevicePlugin,
+)
 from kalinka_plugin_sdk.events import EventType
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 
 from .config_model import KalinkaPluginMusiccastConfig
 from .musiccast import KalinkaPluginMusiccastDevice
 
-device = None
-device_subscriptions = []
 
-Config = KalinkaPluginMusiccastConfig
+class KalinkaPluginMusiccast(OutputDevicePlugin):
+    REQUIRES_SDK = ">=1.0,<2"
+    PLUGIN_ID = "musiccast"
+    CONFIG_MODEL = KalinkaPluginMusiccastConfig
 
-REQUIRES_SDK = ">=1.0,<2"
-PLUGIN_ID = "musiccast"
+    def __init__(self):
+        self._device = None  #
+        self._device_subscriptions = []
 
+    def get_interface(self) -> Optional[ExternalOutputDevice]:
+        return self._device
 
-def setup(
-    config: KalinkaPluginMusiccastConfig, context: PluginContext
-) -> ExternalOutputDevice:
-    global device
-    device = KalinkaPluginMusiccastDevice(
-        config, context.playqueue, context.event_emitter
-    )
-    device_subscriptions.append(
-        context.listener.subscribe(EventType.StateChanged, device._on_state_changed)
-    )
+    def setup(self, context: PluginContext) -> None:
+        config = KalinkaPluginMusiccastConfig(**context.config.model_dump())
+        self._device = KalinkaPluginMusiccastDevice(
+            config, context.playqueue, context.event_emitter
+        )
+        self._device_subscriptions.append(
+            context.listener.subscribe(
+                EventType.StateChanged, self._device._on_state_changed
+            )
+        )
 
-    return device
+    def shutdown(self) -> None:
+        for subscription in self._device_subscriptions:
+            subscription.unsubscribe()
 
-
-def shutdown():
-    global device_subscriptions, device
-    for subscription in device_subscriptions:
-        subscription.unsubscribe()
-
-    device_subscriptions.clear()
-    device = None
+        self._device_subscriptions.clear()
+        self._device = None

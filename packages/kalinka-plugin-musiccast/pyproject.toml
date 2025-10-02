@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.entry-points."kalinka.plugins"]
-kalinka_plugin_musiccast = "kalinka_plugin_musiccast.module_setup:setup"
+kalinka_plugin_musiccast = "kalinka_plugin_musiccast:KalinkaPluginMusiccast"
 
 [tool.setuptools.packages.find]
 where = ["src"]

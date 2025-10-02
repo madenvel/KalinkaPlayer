@@ -15,13 +15,30 @@ def test_entry_point_visible():
         ep.name == "{{ cookiecutter.plugin_id }}" for ep in eps
     ), "Plugin entry point '{{ cookiecutter.plugin_id }}' not found in kalinka.plugins group"
 
+    for ep in eps:
+        if ep.name == "{{ cookiecutter.plugin_id }}":
+            plugin = ep.load()
+            assert plugin is not None
+            assert hasattr(plugin, "PLUGIN_ID")
+            assert plugin.PLUGIN_ID == "{{ cookiecutter.name }}"
+            assert hasattr(plugin, "REQUIRES_SDK")
+            assert hasattr(plugin, "CONFIG_MODEL")
+            obj = plugin()
+            assert hasattr(obj, "setup")
+            assert hasattr(obj, "shutdown")
+
+            config = plugin.CONFIG_MODEL()
+            assert config is not None
+
+            break
+
 
 @pytest.mark.smoke
 def test_imports():
     """Test that all plugin modules can be imported"""
     # These imports should not raise ImportError
     from {{ cookiecutter.plugin_id }}.config_model import {{ cookiecutter.plugin_class_prefix }}Config
-    from {{ cookiecutter.plugin_id }}.module_setup import setup
+    from {{ cookiecutter.plugin_id }}.module_setup import KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}
 {%- if cookiecutter.plugin_type == "input_module" %}
     from {{ cookiecutter.plugin_id }}.{{ cookiecutter.plugin_id }}_input_module import {{ cookiecutter.plugin_class_prefix }}InputModule
 {%- else %}
@@ -30,7 +47,7 @@ def test_imports():
 
     # Verify the imported classes/functions exist
     assert {{ cookiecutter.plugin_class_prefix }}Config is not None
-    assert setup is not None
+    assert KalinkaPlugin{{ cookiecutter.plugin_class_prefix }} is not None
 {%- if cookiecutter.plugin_type == "input_module" %}
     assert {{ cookiecutter.plugin_class_prefix }}InputModule is not None
 {%- else %}
@@ -131,17 +148,19 @@ def test_device_supported_functions():
 
 def test_module_setup_constants():
     """Test that module setup has required constants"""
-    from {{ cookiecutter.plugin_id }}.module_setup import (
-        REQUIRES_SDK,
-        PLUGIN_ID,
-        Config,
-        setup,
-    )
+    from {{ cookiecutter.plugin_id }}.module_setup import KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}
 
-    assert REQUIRES_SDK == "{{ cookiecutter.sdk_version_constraint }}"
-    assert PLUGIN_ID == "{{ cookiecutter.plugin_id }}"
-    assert Config is not None
-    assert callable(setup)
+    plugin_class = KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}
+    assert plugin_class.REQUIRES_SDK == "{{ cookiecutter.sdk_version_constraint }}"
+    assert plugin_class.PLUGIN_ID == "{{ cookiecutter.name }}"
+    assert plugin_class.CONFIG_MODEL is not None
+    
+    # Test instantiation
+    plugin_instance = plugin_class()
+    assert hasattr(plugin_instance, "setup")
+    assert hasattr(plugin_instance, "shutdown")
+    assert callable(plugin_instance.setup)
+    assert callable(plugin_instance.shutdown)
 
 
 {%- if cookiecutter.plugin_type == "input_module" %}

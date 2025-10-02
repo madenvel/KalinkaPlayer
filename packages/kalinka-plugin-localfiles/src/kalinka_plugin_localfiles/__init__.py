@@ -1,1 +1,1 @@
-from .localfiles import LocalFilesInputModule
+from .module_setup import KalinkaPluginLocalFiles

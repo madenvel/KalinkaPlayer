@@ -60,24 +60,57 @@ class {{ cookiecutter.plugin_class_prefix }}Config(ModuleConfig):
 ```
 
 ### 2. Module Setup (`module_setup.py`)
-The main entry point that Kalinka calls to initialize your plugin:
+The main entry point class that Kalinka instantiates for your plugin:
 
 ```python
-from kalinka_plugin_sdk.api import PluginContext
 {%- if cookiecutter.plugin_type == "input_module" %}
+from kalinka_plugin_sdk.api import InputModulePlugin, PluginContext
 from kalinka_plugin_sdk.inputmodule import InputModule
 
-def setup(cfg: {{ cookiecutter.plugin_class_prefix }}Config, ctx: PluginContext) -> InputModule:
-    """Entry point used by Kalinka"""
-    ctx.logger.info("plugin_setup", plugin="{{ cookiecutter.plugin_id }}")
-    return {{ cookiecutter.plugin_class_prefix }}InputModule(cfg)
+class KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}(InputModulePlugin):
+    REQUIRES_SDK = "{{ cookiecutter.sdk_version_constraint }}"
+    PLUGIN_ID = "{{ cookiecutter.name }}"
+    CONFIG_MODEL = {{ cookiecutter.plugin_class_prefix }}Config
+
+    def __init__(self):
+        self.interface = None
+
+    def get_interface(self) -> Optional[InputModule]:
+        return self.interface
+
+    def setup(self, context: PluginContext) -> None:
+        """Entry point used by Kalinka"""
+        config = {{ cookiecutter.plugin_class_prefix }}Config(**context.config.model_dump())
+        self.interface = {{ cookiecutter.plugin_class_prefix }}InputModule(config)
+        context.logger.info("plugin_setup", plugin=self.PLUGIN_ID)
+
+    def shutdown(self) -> None:
+        """Clean up resources"""
+        self.interface = None
 {%- else %}
+from kalinka_plugin_sdk.api import OutputDevicePlugin, PluginContext
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 
-def setup(cfg: {{ cookiecutter.plugin_class_prefix }}Config, ctx: PluginContext) -> ExternalOutputDevice:
-    """Entry point used by Kalinka"""
-    ctx.logger.info("plugin_setup", plugin="{{ cookiecutter.plugin_id }}")
-    return {{ cookiecutter.plugin_class_prefix }}Device(cfg)
+class KalinkaPlugin{{ cookiecutter.plugin_class_prefix }}(OutputDevicePlugin):
+    REQUIRES_SDK = "{{ cookiecutter.sdk_version_constraint }}"
+    PLUGIN_ID = "{{ cookiecutter.name }}"
+    CONFIG_MODEL = {{ cookiecutter.plugin_class_prefix }}Config
+
+    def __init__(self):
+        self._device = None
+
+    def get_interface(self) -> Optional[ExternalOutputDevice]:
+        return self._device
+
+    def setup(self, context: PluginContext) -> None:
+        """Entry point used by Kalinka"""
+        config = {{ cookiecutter.plugin_class_prefix }}Config(**context.config.model_dump())
+        self._device = {{ cookiecutter.plugin_class_prefix }}Device(config)
+        context.logger.info("plugin_setup", plugin=self.PLUGIN_ID)
+
+    def shutdown(self) -> None:
+        """Clean up resources"""
+        self._device = None
 {%- endif %}
 ```
 
@@ -85,23 +118,35 @@ def setup(cfg: {{ cookiecutter.plugin_class_prefix }}Config, ctx: PluginContext)
 ### 3. Input Module Implementation (`{{ cookiecutter.plugin_id }}_input_module.py`)
 Implements the `InputModule` interface with all required methods for music streaming functionality:
 
+- `module_name()` - Return display name of the module
 - `search()` - Search for tracks, albums, artists
 - `browse()` - Browse music catalogs
 - `get_track_info()` - Get detailed track information
 - `list_favorite()` - List user favorites
-- `playlist_*()` - Playlist management methods
+- `get_favorite_ids()` - Get all favorite IDs
+- `add_to_favorite()` - Add items to favorites
+- `remove_from_favorite()` - Remove items from favorites
+- `list_genre()` - List available genres
+- `get()` - Get specific entity by ID
+- `playlist_user_list()` - List user playlists
+- `playlist_create()` - Create new playlist
+- `playlist_update()` - Update playlist metadata
+- `playlist_delete()` - Delete playlist
+- `playlist_add_tracks()` - Add tracks to playlist
+- `playlist_remove_tracks()` - Remove tracks from playlist
 - `get_resource_path()` - Get cover art resource URLs
 {%- else %}
 ### 3. Device Implementation (`{{ cookiecutter.plugin_id }}_device.py`)
-Implements the `ExternalOutputDevice` interface with all required methods for audio output:
+Implements the `ExternalOutputDevice` interface with all required methods for device control:
 
-- `play()` - Start playing a track
-- `pause()` - Pause playback
-- `resume()` - Resume playback
-- `stop()` - Stop playback
-- `set_volume()` - Control volume
-- `seek()` - Seek to position
-- And other device control methods
+- `get_volume()` - Get current device volume
+- `set_volume()` - Set device volume (0.0 to 1.0)
+- `power_on()` - Turn device on
+- `is_power_on()` - Check if device is powered on
+- `power_off()` - Turn device off
+- `supported_functions()` - Return list of supported device functions
+
+The device interface focuses on external audio device control rather than playback control.
 {%- endif %}
 
 ## Building

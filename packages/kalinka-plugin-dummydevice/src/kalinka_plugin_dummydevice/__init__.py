@@ -1,1 +1,1 @@
-# This package contains stub implementations for Kalinka plugin development
+from .module_setup import KalinkaPluginDummydevice

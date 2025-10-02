@@ -1,13 +1,44 @@
 # kalinka_plugin_sdk/api.py
+from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Protocol, Optional
+from dataclasses import dataclass
+from typing import Protocol, Optional, TypeVar, Generic, Union
+from enum import Enum
 
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
+from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
+from kalinka_plugin_sdk.module_config import ModuleConfig
 
-from .inputmodule import TrackInfo
+from .inputmodule import InputModule, TrackInfo
 from .events import EventType
 
 API_VERSION = "1.0"
+
+
+class PluginType(Enum):
+    """Enumeration of plugin types."""
+
+    INPUT_MODULE = "input_module"
+    OUTPUT_DEVICE = "output_device"
+    EVENT_LISTENER = "event_listener"
+
+
+class PluginException(Exception):
+    """Base exception for plugin-related errors."""
+
+    pass
+
+
+class PluginSetupException(PluginException):
+    """Raised when plugin setup fails."""
+
+    pass
+
+
+class PluginInterfaceException(PluginException):
+    """Raised when plugin interface is invalid."""
+
+    pass
 
 
 class PlayQueueAPI(Protocol):
@@ -107,6 +138,11 @@ class LoggerAPI(Protocol):
     def fatal(self, msg, *args, **kwargs): ...
 
 
+# Type variable for plugin interfaces
+T = TypeVar("T", InputModule, ExternalOutputDevice, None)
+
+
+@dataclass
 class PluginContext:
     playqueue: PlayQueueAPI
     event_emitter: EventEmitterAPI
@@ -115,3 +151,92 @@ class PluginContext:
     plugin_id: str
     sdk_version: str  # equals API_VERSION
     capabilities: set[str]
+    config: ModuleConfig
+
+
+class PluginBase(ABC):
+    PLUGIN_ID: str
+    REQUIRES_SDK: str
+    PLUGIN_TYPE: PluginType
+    CONFIG_MODEL: type[ModuleConfig]
+
+    @abstractmethod
+    def setup(self, context: PluginContext) -> None:
+        """Called when the plugin is being loaded. Initialize resources here.
+
+        Raises:
+            PluginSetupException: If setup fails
+        """
+        ...
+
+    def shutdown(self) -> None:
+        """Called when the plugin is being unloaded. Clean up resources here.
+        Should not raise exceptions - log errors instead.
+        """
+        pass
+
+
+class TypedPluginBase(PluginBase, Generic[T]):
+    """Base class for plugins with typed interfaces."""
+
+    def get_interface(self) -> Optional[T]:
+        """Return the plugin's specific interface if applicable."""
+        return None
+
+
+class InputModulePlugin(TypedPluginBase[InputModule]):
+    """Base class for input module plugins."""
+
+    PLUGIN_TYPE = PluginType.INPUT_MODULE
+
+    @abstractmethod
+    def get_interface(self) -> Optional[InputModule]:
+        """Return the plugin's specific interface if applicable."""
+        ...
+
+
+class OutputDevicePlugin(TypedPluginBase[ExternalOutputDevice]):
+    """Base class for output device plugins."""
+
+    PLUGIN_TYPE = PluginType.OUTPUT_DEVICE
+
+    @abstractmethod
+    def get_interface(self) -> Optional[ExternalOutputDevice]:
+        """Return the plugin's specific interface if applicable."""
+        ...
+
+
+class EventListenerPlugin(TypedPluginBase[None]):
+    """Base class for event listener plugins."""
+
+    PLUGIN_TYPE = PluginType.EVENT_LISTENER
+
+
+# def get_plugin_type(plugin: PluginBase) -> PluginType:
+#     """Get the plugin type safely."""
+#     return plugin.PLUGIN_TYPE
+
+
+def validate_plugin_consistency(plugin: PluginBase) -> bool:
+    """Validate that plugin type matches its interface capabilities."""
+    plugin_type = plugin.PLUGIN_TYPE
+
+    if plugin_type == PluginType.INPUT_MODULE:
+        return isinstance(plugin, InputModulePlugin)
+    elif plugin_type == PluginType.OUTPUT_DEVICE:
+        return isinstance(plugin, OutputDevicePlugin)
+    elif plugin_type == PluginType.EVENT_LISTENER:
+        return isinstance(plugin, EventListenerPlugin)
+
+    return False
+
+
+def cast_plugin_interface(
+    plugin: PluginBase,
+) -> Union[InputModule, ExternalOutputDevice, None]:
+    """Safely cast plugin to its interface type."""
+    if isinstance(plugin, (InputModulePlugin, OutputDevicePlugin)):
+        interface = plugin.get_interface()
+        if validate_plugin_consistency(plugin):
+            return interface
+    return None

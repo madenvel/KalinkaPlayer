@@ -1,8 +1,10 @@
+from typing import Optional
 from kalinka_plugin_sdk.api import (
     EventListenerAPI,
+    InputModulePlugin,
     PlayQueueAPI,
     PluginContext,
-)  # runtime Protocols
+)
 from kalinka_plugin_sdk.events import EventType
 from kalinka_plugin_sdk.inputmodule import InputModule
 
@@ -12,82 +14,88 @@ from .qobuz_reporter import QobuzReporter
 from .qobuz import QobuzInputModule, get_client
 
 
-REQUIRES_SDK = ">=1.0,<2"
-PLUGIN_ID = "qobuz"
+class KalinkaPluginQobuz(InputModulePlugin):
+    REQUIRES_SDK = ">=1.0,<2"
+    PLUGIN_ID = "qobuz"
+    CONFIG_MODEL = QobuzConfig
 
-Config = QobuzConfig
+    def __init__(self):
+        self.autoplay_subscriptions = []
+        self.reporter_subscriptions = []
+        self.autoplay = None
+        self.reporter = None
+        self.interface = None
 
-autoplay = None
-reporter = None
-# Store subscriptions for cleanup
-autoplay_subscriptions = []
-reporter_subscriptions = []
+    def module_name(self) -> str:
+        return "Qobuz Input Module"
 
+    def get_interface(self) -> Optional[InputModule]:
+        return self.interface
 
-def setup_autoplay(
-    client,
-    playqueue: PlayQueueAPI,
-    track_browser: InputModule,
-    event_listener: EventListenerAPI,
-):
-    global autoplay, autoplay_subscriptions
-
-    autoplay = QobuzAutoplay(client, playqueue, track_browser)
-    autoplay_subscriptions.append(
-        event_listener.subscribe(
-            EventType.RequestMoreTracks, autoplay.add_recommendation
+    def _setup_autoplay(
+        self,
+        client,
+        playqueue: PlayQueueAPI,
+        track_browser: InputModule,
+        event_listener: EventListenerAPI,
+    ):
+        self.autoplay = QobuzAutoplay(client, playqueue, track_browser)
+        self.autoplay_subscriptions.append(
+            event_listener.subscribe(
+                EventType.RequestMoreTracks, self.autoplay.add_recommendation
+            )
         )
-    )
-    autoplay_subscriptions.append(
-        event_listener.subscribe(EventType.TracksAdded, autoplay.add_tracks)
-    )
-    autoplay_subscriptions.append(
-        event_listener.subscribe(EventType.TracksRemoved, autoplay.remove_tracks)
-    )
+        self.autoplay_subscriptions.append(
+            event_listener.subscribe(EventType.TracksAdded, self.autoplay.add_tracks)
+        )
+        self.autoplay_subscriptions.append(
+            event_listener.subscribe(
+                EventType.TracksRemoved, self.autoplay.remove_tracks
+            )
+        )
 
+    def _setup_reporter(
+        self,
+        client,
+        event_listener: EventListenerAPI,
+    ):
 
-def setup_reporter(
-    client,
-    event_listener: EventListenerAPI,
-):
-    global reporter, reporter_subscriptions
+        self.reporter = QobuzReporter(client)
+        self.reporter_subscriptions.append(
+            event_listener.subscribe(
+                EventType.StateChanged, self.reporter.on_state_changed
+            )
+        )
 
-    reporter = QobuzReporter(client)
-    reporter_subscriptions.append(
-        event_listener.subscribe(EventType.StateChanged, reporter.on_state_changed)
-    )
+    def setup(
+        self,
+        context: PluginContext,
+    ) -> None:
+        config = QobuzConfig(**context.config.model_dump())
+        client = get_client(config)
+        self.interface = QobuzInputModule(config, client, context.event_emitter)
+        self._setup_autoplay(
+            client, context.playqueue, self.interface, context.listener
+        )
+        self._setup_reporter(client, context.listener)
 
+    def shutdown(self):
 
-def setup(
-    config: QobuzConfig,
-    context: PluginContext,
-) -> InputModule:
-    client = get_client(config)
-    inputmodule = QobuzInputModule(config, client, context.event_emitter)
-    setup_autoplay(client, context.playqueue, inputmodule, context.listener)
-    setup_reporter(client, context.listener)
+        # Unsubscribe from all autoplay event subscriptions
+        for subscription in self.autoplay_subscriptions:
+            subscription.unsubscribe()
+        self.autoplay_subscriptions.clear()
 
-    return inputmodule
+        # Unsubscribe from all reporter event subscriptions
+        for subscription in self.reporter_subscriptions:
+            subscription.unsubscribe()
+        self.reporter_subscriptions.clear()
 
+        # Clean up the QobuzReporter using its shutdown method
+        if self.reporter is not None:
+            self.reporter.shutdown()
+            self.reporter = None
 
-def shutdown():
-    global autoplay, reporter, autoplay_subscriptions, reporter_subscriptions
-
-    # Unsubscribe from all autoplay event subscriptions
-    for subscription in autoplay_subscriptions:
-        subscription.unsubscribe()
-    autoplay_subscriptions.clear()
-
-    # Unsubscribe from all reporter event subscriptions
-    for subscription in reporter_subscriptions:
-        subscription.unsubscribe()
-    reporter_subscriptions.clear()
-
-    # Clean up the QobuzReporter using its shutdown method
-    if reporter is not None:
-        reporter.shutdown()
-        reporter = None
-
-    # Clean up the QobuzAutoplay module
-    if autoplay is not None:
-        autoplay = None
+        # Clean up the QobuzAutoplay module
+        if self.autoplay is not None:
+            self.autoplay = None

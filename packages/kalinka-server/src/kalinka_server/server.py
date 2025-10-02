@@ -279,13 +279,14 @@ def create_app(config_file, config: KalinkaConfig):
                 result.items.append(
                     BrowseItem(
                         id=entity_id,
-                        name=module.config.name.title() or module_name,
+                        name=module.plugin_context.config.name.title() or module_name,
                         url=f"/browse/{entity_id.to_string}",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
                             id=entity_id,
-                            title=module.config.name.title() or module_name,
+                            title=module.plugin_context.config.name.title()
+                            or module_name,
                             image=None,  # Placeholder for catalog image
                             can_genre_filter=False,
                             description="Kalinka Input Module",
@@ -547,9 +548,13 @@ def create_app(config_file, config: KalinkaConfig):
         return config_to_wire(
             base_config=config,
             input_modules={
-                name: m.config for name, m in modules.prepared_input_modules.items()
+                name: m.plugin_context.config
+                for name, m in modules.prepared_input_modules.items()
             },
-            devices={name: d.config for name, d in modules.prepared_devices.items()},
+            devices={
+                name: d.plugin_context.config
+                for name, d in modules.prepared_devices.items()
+            },
         )
 
     @app.get("/server/version")
@@ -571,10 +576,12 @@ def create_app(config_file, config: KalinkaConfig):
         return {
             "input_modules": [
                 {
-                    "name": module.config.name,
-                    "title": module.config.__class__.model_fields["name"].title
-                    or module.config.name,
-                    "enabled": module.config.enabled,
+                    "name": module.plugin_context.config.name,
+                    "title": module.plugin_context.config.__class__.model_fields[
+                        "name"
+                    ].title
+                    or module.plugin_context.config.name,
+                    "enabled": module.plugin_context.config.enabled,
                     "state": module.health_state,
                     "error_message": module.error_message,
                 }
@@ -582,10 +589,12 @@ def create_app(config_file, config: KalinkaConfig):
             ],
             "devices": [
                 {
-                    "name": device.config.name,
-                    "title": device.config.__class__.model_fields["name"].title
-                    or device.config.name,
-                    "enabled": device.config.enabled,
+                    "name": device.plugin_context.config.name,
+                    "title": device.plugin_context.config.__class__.model_fields[
+                        "name"
+                    ].title
+                    or device.plugin_context.config.name,
+                    "enabled": device.plugin_context.config.enabled,
                     "state": device.health_state,
                     "error_message": device.error_message,
                 }
@@ -607,7 +616,9 @@ def create_app(config_file, config: KalinkaConfig):
             if attrs[0] == "input_modules":
                 module_name = attrs[1]
                 if module_name in modules.prepared_input_modules:
-                    config = modules.prepared_input_modules[module_name].config
+                    config = modules.prepared_input_modules[
+                        module_name
+                    ].plugin_context.config
                     attrs = attrs[2:]
                     if attrs[0] == "name":
                         raise HTTPException(
@@ -616,7 +627,7 @@ def create_app(config_file, config: KalinkaConfig):
             elif attrs[0] == "devices":
                 device_name = attrs[1]
                 if device_name in modules.prepared_devices:
-                    config = modules.prepared_devices[device_name].config
+                    config = modules.prepared_devices[device_name].plugin_context.config
                     attrs = attrs[2:]
                     if attrs[0] == "name":
                         raise HTTPException(

@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.entry-points."kalinka.plugins"]
-kalinka_plugin_qobuz = "kalinka_plugin_qobuz.module_setup:setup"
+kalinka_plugin_qobuz = "kalinka_plugin_qobuz:KalinkaPluginQobuz"
 
 [tool.setuptools.packages.find]
 where = ["src"]

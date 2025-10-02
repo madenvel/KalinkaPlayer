@@ -110,11 +110,11 @@ kalinka-plugin-musicbox/
 ├── pyproject.toml              # Python package configuration
 ├── src/
 │   └── kalinka_plugin_musicbox/ # Main Python package
-│       ├── __init__.py         # Package initialization
+│       ├── __init__.py         # Package initialization with plugin class import
 │       ├── _version.py         # Auto-generated version file
 │       ├── config_model.py     # Plugin configuration schema
-│       ├── module_setup.py     # Plugin entry point
-│       └── musicbox_input_module.py  # Input module (or device)
+│       ├── module_setup.py     # Plugin class definition and entry point
+│       └── musicbox_input_module.py  # Input module (or device) implementation
 ├── debian/                     # Debian packaging files
 │   ├── control.in             # Package metadata template
 │   ├── postinst              # Post-installation script
@@ -191,15 +191,28 @@ class YourPluginConfig(ModuleConfig):
 Edit `src/your_plugin/module_setup.py` to add any initialization logic:
 
 ```python
-def setup(cfg: YourPluginConfig, ctx: PluginContext) -> InputModule:
-    """Entry point used by Kalinka"""
-    ctx.logger.info("plugin_setup", plugin=PLUGIN_ID, version=ctx.sdk_version)
-    
-    # Add any initialization logic here
-    if not cfg.api_key:
-        ctx.logger.warning("No API key configured")
-    
-    return YourPluginInputModule(cfg)
+class KalinkaPluginYourPlugin(InputModulePlugin):  # or OutputDevicePlugin
+    REQUIRES_SDK = ">=1.0,<2"
+    PLUGIN_ID = "your_plugin"
+    CONFIG_MODEL = YourPluginConfig
+
+    def __init__(self):
+        self.interface = None  # or self._device = None for devices
+
+    def setup(self, context: PluginContext) -> None:
+        """Entry point used by Kalinka"""
+        config = YourPluginConfig(**context.config.model_dump())
+        
+        # Add any initialization logic here
+        if not config.api_key:
+            context.logger.warning("No API key configured")
+        
+        self.interface = YourPluginInputModule(config)  # or YourPluginDevice
+        context.logger.info("plugin_setup", plugin=self.PLUGIN_ID, version=context.sdk_version)
+
+    def shutdown(self) -> None:
+        """Clean up resources"""
+        self.interface = None  # or self._device = None
 ```
 
 ### 5. Add Tests
@@ -265,6 +278,7 @@ Many values are automatically derived from your plugin name:
 
 The generated project includes:
 - Python packaging with setuptools
+- Class-based entry points for plugin discovery (`kalinka_plugin_name = "package:PluginClass"`)
 - Automatic version management with setuptools_scm
 - Debian packaging support
 - Test framework setup

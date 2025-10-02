@@ -1,1 +1,1 @@
-from .qobuz import QobuzInputModule, get_client
+from .module_setup import KalinkaPluginQobuz

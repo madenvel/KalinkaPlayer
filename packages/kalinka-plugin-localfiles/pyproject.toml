@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.entry-points."kalinka.plugins"]
-kalinka_plugin_localfiles = "kalinka_plugin_localfiles.module_setup:setup"
+kalinka_plugin_localfiles = "kalinka_plugin_localfiles:KalinkaPluginLocalFiles"
 
 [tool.setuptools.packages.find]
 where = ["src"]
