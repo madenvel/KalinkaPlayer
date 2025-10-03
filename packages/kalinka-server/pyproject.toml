@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "setuptools-scm[toml]>=6.2", "wheel", "pybind11"
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kalinka-player"
+name = "kalinka-server"
 description = "Kalinka Audio Player backend service"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -28,23 +28,16 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
+    "asyncio>=4.0.0",
     "pydantic>=2.0.0",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
     "zeroconf>=0.47.0",
-    "pyyaml>=6.0",
     "pybind11>=2.10.0",
     "httpx[http2]>=0.24.0",
-    "schedule>=1.2.0",
-    "mutagen>=1.46.0",
     "pillow>=9.0.0",
-    "musicbrainzngs>=0.7.1",
-    "requests>=2.28.0",
-    "watchfiles>=0.18.0",
     "aiosqlite>=0.17.0",
     "netifaces>=0.11.0",
-    "rapidfuzz>=2.0.0",
-    "ssdpy>=0.4.0",
     "kalinka-plugin-sdk>=1.0.0",
 ]
 dynamic = ["version"]

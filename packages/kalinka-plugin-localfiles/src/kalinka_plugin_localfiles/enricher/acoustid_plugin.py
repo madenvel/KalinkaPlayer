@@ -2,14 +2,7 @@ import logging
 import math
 import time
 import os
-import subprocess
-import requests
 import json
-import os
-import logging
-import time
-import json
-import math
 import subprocess
 import requests
 from typing import Dict, Optional, List, Tuple

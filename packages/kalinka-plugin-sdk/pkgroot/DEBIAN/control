@@ -5,7 +5,7 @@ Build-Depends: debhelper (>= 9)
 Standards-Version: 3.9.6
 Homepage: https://github.com/madenvel/KalinkaPlayer
 Package: kalinka-plugin-sdk
-Version: @VERSION@
+Version: 1.0.1.dev462+gd4f3a4ef4.d20251003
 Architecture: all
 Depends: python3 (>= 3.8),
     python3-venv,

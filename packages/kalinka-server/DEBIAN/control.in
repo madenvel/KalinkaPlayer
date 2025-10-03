@@ -1,10 +1,10 @@
-Source: kalinka-player
+Source: kalinka-server
 Priority: optional
 Maintainer: Dmitry Savin <envelsavinds@gmail.com>
 Build-Depends: debhelper (>= 9)
 Standards-Version: 3.9.6
 Homepage: https://github.com/madenvel/KalinkaPlayer
-Package: kalinka-player
+Package: kalinka-server
 Version: @VERSION@
 Architecture: @ARCH@
 Depends: python3 (>= PYTHON_VERSION),
@@ -36,5 +36,5 @@ Depends: python3 (>= PYTHON_VERSION),
     libkeyutils1,
     libselinux1,
     libpcre2-8-0
-Description: Kalinka Audio Player (backend)
-  Kalinka Audio Player backend service used in a pair with Kalinka App.
+Description: Kalinka Music Player (server)
+  Kalinka Music Player service used in a pair with Kalinka App.

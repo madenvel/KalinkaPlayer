@@ -24,6 +24,11 @@ classifiers = [
 
 dependencies = [
     "kalinka-plugin-sdk>=1.0,<2",
+    "rapidfuzz>=2.0.0",
+    "musicbrainzngs>=0.7.1",
+    "watchfiles>=0.18.0",
+    "requests>=2.28.0",
+    "mutagen>=1.46.0",
 ]
 
 [project.optional-dependencies]

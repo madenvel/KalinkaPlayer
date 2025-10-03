@@ -58,7 +58,7 @@ chmod 755 pkgroot/DEBIAN/postinst
 chmod 755 pkgroot/DEBIAN/prerm
 
 # Build the .deb package
-dpkg-deb --build pkgroot "${PLUGIN_SLUG}_${VERSION}_all.deb"
+dpkg-deb --root-owner-group --build pkgroot "${PLUGIN_SLUG}_${VERSION}_all.deb"
 
 echo "Package built: ${PLUGIN_SLUG}_${VERSION}_all.deb"
 ls -l "${PLUGIN_SLUG}_${VERSION}_all.deb"

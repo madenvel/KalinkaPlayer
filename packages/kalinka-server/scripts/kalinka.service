@@ -1,5 +1,5 @@
 [Unit]
-Description=Run kalinka backend
+Description=Kalinka Server
 After=multi-user.target
 
 [Service]

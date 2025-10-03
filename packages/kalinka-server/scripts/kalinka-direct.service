@@ -1,0 +1,14 @@
+[Unit]
+Description=Kalinka Server (Direct)
+After=multi-user.target
+
+[Service]
+Type=simple
+User=kalusr
+WorkingDirectory=/opt/kalinka
+ExecStart=/opt/kalinka/venv/bin/python3 /opt/kalinka/venv/bin/kalinka-server --config /etc/kalinka/kalinka_conf.cfg --state /home/kalusr/.local/share/kalinka/kalinka_state.json
+Restart=on-failure
+Environment=HOME=/home/kalusr
+
+[Install]
+WantedBy=multi-user.target

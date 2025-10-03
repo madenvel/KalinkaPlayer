@@ -4,9 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kalinka-plugin-sdk"
+dynamic = ["version"]
 description = "Kalinka Plugin SDK for developing input modules and device plugins"
 readme = "README.md"
 license = "GPL-3.0-or-later"
+requires-python = ">=3.10"
 authors = [
     {name = "Dmitry Savin", email = "envelsavinds@gmail.com"}
 ]
@@ -17,27 +19,22 @@ keywords = ["audio", "player", "plugin", "sdk", "kalinka"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
-requires-python = ">=3.8"
 dependencies = [
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
 ]
-dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "pytest-asyncio>=0.20.0",
     "black>=22.0.0",
     "isort>=5.10.0",
     "flake8>=5.0.0",
@@ -45,7 +42,6 @@ dev = [
 ]
 test = [
     "pytest>=7.0.0",
-    "pytest-asyncio>=0.20.0",
 ]
 
 [project.urls]
@@ -71,30 +67,6 @@ local_scheme = "node-and-date"
 fallback_version = "1.0.0"
 search_parent_directories = true
 
-[tool.black]
-line-length = 88
-target-version = ['py38']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
-[tool.isort]
-profile = "black"
-multi_line_output = 3
-line_length = 88
-known_first_party = ["kalinka_plugin_sdk"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
@@ -102,24 +74,3 @@ python_classes = "Test*"
 python_functions = "test_*"
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
-
-[tool.mypy]
-python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_no_return = true
-warn_unreachable = true
-strict_equality = true
-
-[[tool.mypy.overrides]]
-module = [
-    "pydantic.*",
-]
-ignore_missing_imports = true

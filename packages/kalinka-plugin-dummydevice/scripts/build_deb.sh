@@ -15,7 +15,7 @@ echo "Building wheel first to detect version..."
 ./scripts/build_wheel.sh
 
 # Extract version from the generated _version.py file
-if [ ! -f "src/dummydevice/_version.py" ]; then
+if [ ! -f "src/kalinka_plugin_dummydevice/_version.py" ]; then
     echo "Error: _version.py not found. Build wheel first." >&2
     exit 1
 fi
@@ -58,7 +58,7 @@ chmod 755 pkgroot/DEBIAN/postinst
 chmod 755 pkgroot/DEBIAN/prerm
 
 # Build the .deb package
-dpkg-deb --build pkgroot "${PLUGIN_SLUG}_${VERSION}_all.deb"
+dpkg-deb --root-owner-group --build pkgroot "${PLUGIN_SLUG}_${VERSION}_all.deb"
 
 echo "Package built: ${PLUGIN_SLUG}_${VERSION}_all.deb"
 ls -l "${PLUGIN_SLUG}_${VERSION}_all.deb"

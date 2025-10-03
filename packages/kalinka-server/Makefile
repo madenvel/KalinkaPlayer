@@ -22,8 +22,8 @@ build-deb:
 		echo "Error: No wheel could be built."; \
 		exit 1; \
 	fi; \
-	WHEEL_VERSION=$$(basename "$$WHEEL_PATH" | sed 's/kalinka_player-\(.*\)-py3-none-any\.whl/\1/'); \
-	TARGET_DIR="kalinka-player-$$WHEEL_VERSION"; \
+	WHEEL_VERSION=$$(basename "$$WHEEL_PATH" | sed 's/kalinka_server-\(.*\)-py3-none-any\.whl/\1/'); \
+	TARGET_DIR="kalinka-server-$$WHEEL_VERSION"; \
 	TARGET_FILE="$$TARGET_DIR.$(ARCH).deb"; \
 	echo "Building Debian package with version: $$WHEEL_VERSION"; \
 	echo "Target directory: $$TARGET_DIR"; \
@@ -39,7 +39,7 @@ build-deb:
 	cp kalinka_server.sh "$$TARGET_DIR/usr/bin/"; \
 	cp scripts/kalinka.service "$$TARGET_DIR/etc/systemd/system/"; \
 	cp requirements.txt "$$TARGET_DIR/opt/kalinka/"; \
-	cp README.md "$$TARGET_DIR/opt/kalinka/"; \
+	cp ../../README.md "$$TARGET_DIR/opt/kalinka/"; \
 	cp LICENSE "$$TARGET_DIR/opt/kalinka/"; \
 	dpkg-deb --root-owner-group --build "$$TARGET_DIR"; \
 	mv "$$TARGET_DIR.deb" "$$TARGET_FILE"; \
@@ -50,6 +50,6 @@ build-deb:
 $(TARGET): build-deb
 
 clean:
-	rm -rf kalinka-player-*.$(ARCH).deb
-	rm -rf kalinka-player-*/
+	rm -rf kalinka-server-*.$(ARCH).deb
+	rm -rf kalinka-server-*/
 	cd src/native_player && make clean
