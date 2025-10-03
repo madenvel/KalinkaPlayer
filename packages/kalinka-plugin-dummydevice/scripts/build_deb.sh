@@ -14,19 +14,14 @@ mkdir -p pkgroot/DEBIAN
 echo "Building wheel first to detect version..."
 ./scripts/build_wheel.sh
 
-# Extract version from the generated _version.py file
-if [ ! -f "src/kalinka_plugin_dummydevice/_version.py" ]; then
-    echo "Error: _version.py not found. Build wheel first." >&2
+# Extract version from the built wheel filename using sed
+WHEEL_PATH=$(ls dist/*.whl 2>/dev/null | head -1)
+if [ -z "$WHEEL_PATH" ] || [ ! -f "$WHEEL_PATH" ]; then
+    echo "Error: No wheel could be built." >&2
     exit 1
 fi
 
-# Extract version from _version.py
-VERSION=$(python3 -c "
-import sys
-sys.path.insert(0, 'src')
-from kalinka_plugin_dummydevice._version import __version__
-print(__version__)
-")
+VERSION=$(basename "$WHEEL_PATH" | sed 's/kalinka_plugin_dummydevice-\(.*\)-py3-none-any\.whl/\1/')
 
 PLUGIN_WHEEL="kalinka_plugin_dummydevice-${VERSION}-py3-none-any.whl"
 
