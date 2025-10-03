@@ -3,6 +3,12 @@ import logging
 from kalinka_plugin_sdk.datamodel import Track
 from kalinka_plugin_sdk.api import PlayQueueAPI
 from kalinka_plugin_sdk.inputmodule import InputModule
+from kalinka_plugin_sdk.events import (
+    AnyEventPayload,
+    TracksAddedEvent,
+    RequestMoreTracksEvent,
+    TracksRemovedEvent,
+)
 
 from .qobuz import QobuzClient
 
@@ -34,12 +40,20 @@ class QobuzAutoplay:
             "track_id": int(track.id.id) if track.id else None,
         }
 
-    def add_tracks(self, tracks: list[dict]) -> None:
-        self.tracks.extend([Track(**track) for track in tracks])
+    def add_tracks(self, event: AnyEventPayload) -> None:
+        if not isinstance(event, TracksAddedEvent):
+            logger.warning("Expected TracksAddedEvent, got %s", type(event))
+            return
+
+        self.tracks.extend(event.tracks)
         self.can_request_new = True
 
-    def remove_tracks(self, tracks: list[int]) -> None:
-        for track in tracks:
+    def remove_tracks(self, event: AnyEventPayload) -> None:
+        if not isinstance(event, TracksRemovedEvent):
+            logger.warning("Expected TracksRemovedEvent, got %s", type(event))
+            return
+
+        for track in event.indices:
             del self.tracks[track]
 
         if not self._has_any_qobuz_tracks():
@@ -50,7 +64,11 @@ class QobuzAutoplay:
     def _has_any_qobuz_tracks(self) -> bool:
         return any(track.id.source == "qobuz" for track in self.tracks)
 
-    def add_recommendation(self) -> None:
+    def add_recommendation(self, event) -> None:
+        if not isinstance(event, RequestMoreTracksEvent):
+            logger.warning("Expected RequestMoreTracksEvent, got %s", type(event))
+            return
+
         if not self.remaining_tracks:
             if self.can_request_new:
                 self._retrieve_new_recommendations()

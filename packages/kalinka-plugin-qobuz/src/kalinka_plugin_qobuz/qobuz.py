@@ -1273,8 +1273,7 @@ class QobuzInputModule(InputModule):
             raise Exception(f"Failed to add to favorite: {response.text}")
 
         self.event_emitter.dispatch(
-            EventType.FavoriteAdded,
-            FavoriteAddedEvent(id=entity_id).model_dump(),
+            FavoriteAddedEvent(id=entity_id),
         )
 
     def remove_from_favorite(self, id: str):
@@ -1299,8 +1298,7 @@ class QobuzInputModule(InputModule):
             raise Exception(f"Failed to remove from favorite: {response.text}")
 
         self.event_emitter.dispatch(
-            EventType.FavoriteRemoved,
-            FavoriteRemovedEvent(id=entity_id).model_dump(),
+            FavoriteRemovedEvent(id=entity_id),
         )
 
     def list_genre(self, offset: int, limit: int) -> GenreList:

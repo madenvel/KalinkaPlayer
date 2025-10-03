@@ -2,7 +2,7 @@ import queue
 import threading
 from typing import Callable
 from kalinka_plugin_sdk.api import EventListenerAPI, SubscriptionHandle
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import EventType, AnyEventPayload
 from .async_common import EventListener
 
 import logging
@@ -27,9 +27,9 @@ class PluginEventQueue(EventListenerAPI):
                 if event_data is None:  # Sentinel value to stop processing
                     break
 
-                handler, args, kwargs = event_data
+                handler, payload = event_data
                 try:
-                    handler(*args, **kwargs)
+                    handler(payload)
                 except Exception as e:
                     logger.exception("Exception in event handler: %s", e)
                 finally:
@@ -37,10 +37,12 @@ class PluginEventQueue(EventListenerAPI):
             except queue.Empty:
                 continue  # Timeout occurred, check __running and continue
 
-    def subscribe(self, topic: EventType, handler: Callable) -> SubscriptionHandle:
-        def queue_handler(*args, **kwargs):
+    def subscribe(
+        self, topic: EventType, handler: Callable[[AnyEventPayload], None]
+    ) -> SubscriptionHandle:
+        def queue_handler(payload: AnyEventPayload):
             """Put the event into the queue for processing by the worker thread."""
-            self.__event_queue.put((handler, args, kwargs))
+            self.__event_queue.put((handler, payload))
 
         return self.__event_listener.subscribe(topic, queue_handler)
 

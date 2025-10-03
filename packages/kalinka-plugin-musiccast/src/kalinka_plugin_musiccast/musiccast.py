@@ -8,11 +8,16 @@ import urllib.parse
 from typing import Any, Dict, Optional
 
 import httpx
+from kalinka_plugin_sdk.datamodel import PlayerStateEnum
 import netifaces
 from ssdpy import SSDPClient
 
 from kalinka_plugin_sdk.api import PlayQueueAPI, EventEmitterAPI
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import (
+    VolumeChangedEvent,
+    StateChangedEvent,
+    AnyEventPayload,
+)
 from kalinka_plugin_sdk.ext_device import (
     DeviceVolume,
     ExternalOutputDevice,
@@ -444,7 +449,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                         continue
 
             if target != last_sent_volume:
-                self.event_emitter.dispatch(EventType.VolumeChanged, target)
+                self.event_emitter.dispatch(VolumeChangedEvent(volume=target))
                 last_sent_volume = target
                 last_sent_at = time.monotonic()
 
@@ -567,17 +572,22 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if zone_state.get("status_updated", False):
             logger.debug("Status update event received")
 
-    def _on_state_changed(self, state):
+    def _on_state_changed(self, event: AnyEventPayload):
+        if not isinstance(event, StateChangedEvent):
+            logger.warning("Expected StateChangedEvent, got %s", type(event))
+            return
         # Don't process state changes if device is not ready yet
         if not self.ready:
             return
+        state = event.state
 
-        if "state" not in state:
-            return
-        if state["state"] == "PLAYING":
+        if state.state == PlayerStateEnum.PLAYING:
             self._on_playing(state)
-        elif state["state"] == "PAUSED" or state["state"] == "STOPPED":
-            self._on_paused_or_stopped(state["state"] == "STOPPED")
+        elif (
+            state.state == PlayerStateEnum.PAUSED
+            or state.state == PlayerStateEnum.STOPPED
+        ):
+            self._on_paused_or_stopped(state.state == PlayerStateEnum.STOPPED)
 
     def _on_paused_or_stopped(self, stopped: bool):
         if self.poweroff_timer is not None:

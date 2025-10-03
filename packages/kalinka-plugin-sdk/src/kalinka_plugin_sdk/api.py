@@ -10,7 +10,7 @@ from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 from .inputmodule import InputModule, TrackInfo
-from .events import EventType
+from .events import AnyEventPayload, EventType
 
 API_VERSION = "1.0"
 
@@ -118,7 +118,7 @@ class PlayQueueAPI(Protocol):
 
 
 class EventEmitterAPI(Protocol):
-    def dispatch(self, topic: EventType, *args, **kwargs) -> None: ...
+    def dispatch(self, event: AnyEventPayload) -> None: ...
 
 
 class SubscriptionHandle(Protocol):
@@ -126,7 +126,9 @@ class SubscriptionHandle(Protocol):
 
 
 class EventListenerAPI(Protocol):
-    def subscribe(self, topic: EventType, handler: Callable) -> SubscriptionHandle: ...
+    def subscribe(
+        self, topic: EventType, handler: Callable[[AnyEventPayload], None]
+    ) -> SubscriptionHandle: ...
 
 
 class LoggerAPI(Protocol):
