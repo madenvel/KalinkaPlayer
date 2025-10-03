@@ -7,12 +7,9 @@ Homepage: https://github.com/madenvel/KalinkaPlayer
 Package: kalinka-plugin-sdk
 Version: @VERSION@
 Architecture: all
-Depends: python3 (>= 3.8),
+Depends: python3 (>= 3.10),
     python3-venv,
-    python3-pip,
-    python3-setuptools,
-    python3-pydantic (>= 2.0.0),
-    python3-yaml (>= 6.0)
+    python3-pip
 Description: Kalinka Plugin SDK
  Software Development Kit for developing input modules and device plugins 
  for the Kalinka Player. Provides APIs and base classes for creating
