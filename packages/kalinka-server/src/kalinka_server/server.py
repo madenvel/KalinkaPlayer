@@ -30,7 +30,7 @@ from .config_schema_processor import config_to_wire, get_field_value, set_field_
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .multisearch import calculate_fuzzy_score
 from .player_setup import modules, setup, shutdown
-from .rest_event_proxy import EventStream
+from .rest_event_proxy import EventStream, WireEvent
 from .service_discovery import ServiceDiscovery
 from .version import get_api_version, get_version
 from .state_keeper import save_state, restore_state
@@ -357,12 +357,11 @@ def create_app(config_file, config: KalinkaConfig):
                 while True:
                     if await request.is_disconnected():
                         break
-                    event = await run_in_threadpool(event_stream.get_event)
+                    event: Optional[WireEvent] = await event_stream.get_last_event()
                     if event is not None:
-                        yield json.dumps(event) + "\n"
+                        yield event.model_dump_json() + "\n"
             except asyncio.CancelledError:
-                # Handle graceful shutdown - connection was cancelled
-                logger.info("Event stream cancelled during server shutdown")
+                logger.debug("Event stream cancelled")
                 return
             except Exception as e:
                 logger.error(f"Error processing events: {e}")

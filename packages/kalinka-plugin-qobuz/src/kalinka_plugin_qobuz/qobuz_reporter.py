@@ -3,8 +3,9 @@ import logging
 import threading
 import time
 from queue import Queue
-from typing import Any, Mapping, Optional
-from kalinka_plugin_sdk.datamodel import PlayerState
+from typing import Optional
+from kalinka_plugin_sdk.datamodel import PlayerState, PlayerStateEnum
+from kalinka_plugin_sdk.events import AnyEventPayload, StateChangedEvent
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -28,7 +29,7 @@ class QobuzReporter:
         self.last_report_time = report_time
         return time_played
 
-    def on_state_changed(self, state: Mapping[str, Any]):
+    def on_state_changed(self, event: AnyEventPayload) -> None:
         """
         Handle player state changes for Qobuz reporting.
 
@@ -36,14 +37,18 @@ class QobuzReporter:
         It properly handles transitions between Qobuz and non-Qobuz tracks by ending
         Qobuz tracking when switching to a different source.
         """
-        player_state = PlayerState(**state)
+        if not isinstance(event, StateChangedEvent):
+            logger.warning("Expected StateChangedEvent, got %s", type(event))
+            return
+
+        player_state = event.state
         # playing and current track != previous track
         # => report streaming start for new track, report streaming end for previous track
         # if playing and current track == previous track
         # => likely search request, report streaming end
         # if stopped or paused, report streaming end for current track
 
-        if player_state.state == "PLAYING":
+        if player_state.state == PlayerStateEnum.PLAYING:
             track = player_state.current_track
 
             if track is not None and track.id.source == "qobuz":

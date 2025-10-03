@@ -9,13 +9,22 @@ from .config_model import KalinkaConfig
 from .event_loop import AsyncExecutor, enqueue
 
 from kalinka_plugin_sdk.datamodel import (
+    PlayerStateEnum,
     Track,
     AudioInfo,
     PlayerState,
     PlaybackMode,
     TrackList,
 )
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import (
+    NetworkErrorEvent,
+    PlaybackModeChangedEvent,
+    RequestMoreTracksEvent,
+    StateChangedEvent,
+    StateReplayEvent,
+    TracksAddedEvent,
+    TracksRemovedEvent,
+)
 from kalinka_plugin_sdk.inputmodule import TrackInfo
 
 from native_player.native_player import (
@@ -88,17 +97,17 @@ def mime_to_format(mime: str) -> AudioFormat:
     return AudioFormat.MPEG
 
 
-def to_state_name(state: AudioGraphNodeState) -> Optional[str]:
+def to_state_name(state: AudioGraphNodeState) -> Optional[PlayerStateEnum]:
     if state == AudioGraphNodeState.ERROR:
-        return "ERROR"
+        return PlayerStateEnum.ERROR
     elif state == AudioGraphNodeState.STOPPED or state == AudioGraphNodeState.FINISHED:
-        return "STOPPED"
+        return PlayerStateEnum.STOPPED
     elif state == AudioGraphNodeState.PREPARING:
-        return "BUFFERING"
+        return PlayerStateEnum.BUFFERING
     elif state == AudioGraphNodeState.STREAMING:
-        return "PLAYING"
+        return PlayerStateEnum.PLAYING
     elif state == AudioGraphNodeState.PAUSED:
-        return "PAUSED"
+        return PlayerStateEnum.PAUSED
 
 
 def flatten_dict(d, parent_key="", sep="."):
@@ -174,17 +183,18 @@ class PlayQueue(AsyncExecutor):
             new_state.position = 0
 
         self.event_emitter.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state=to_state_name(new_state.state),
-                current_track=self.get_track_info(self.current_track_id),
-                index=self.current_track_id,
-                position=new_state.position + position_diff,
-                message=new_state.message,
-                audio_info=to_audio_info(new_state.stream_info),
-                mime_type=self.current_format,
-                timestamp=state_update_ts,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state=to_state_name(new_state.state),
+                    current_track=self.get_track_info(self.current_track_id),
+                    index=self.current_track_id,
+                    position=new_state.position + position_diff,
+                    message=new_state.message,
+                    audio_info=to_audio_info(new_state.stream_info),
+                    mime_type=self.current_format,
+                    timestamp=state_update_ts,
+                )
+            ),
         )
 
     @enqueue
@@ -258,12 +268,13 @@ class PlayQueue(AsyncExecutor):
         index = len(self.track_list)
         self.track_list.extend(tracks)
         self.event_emitter.dispatch(
-            EventType.TracksAdded,
-            [
-                track_info.model_dump(exclude_none=True)
-                for i in range(index, len(self.track_list))
-                if ((track_info := self.get_track_info(i)) is not None)
-            ],
+            TracksAddedEvent(
+                tracks=[
+                    track_info
+                    for i in range(index, len(self.track_list))
+                    if ((track_info := self.get_track_info(i)) is not None)
+                ]
+            ),
         )
 
         if index == 0:
@@ -288,7 +299,7 @@ class PlayQueue(AsyncExecutor):
         self.current_track_id = min(self.current_track_id, len(self.track_list) - 1)
         if self.current_track_id < 0:
             self.current_track_id = 0
-        self.event_emitter.dispatch(EventType.TracksRemoved, tracks)
+        self.event_emitter.dispatch(TracksRemovedEvent(indices=tracks))
         if prev_track_id != self.current_track_id or prev_track_id in tracks:
             self._notify_track_change()
 
@@ -339,22 +350,23 @@ class PlayQueue(AsyncExecutor):
     def replay(self):
         stream_state = self.track_player.get_state()
         self.event_emitter.dispatch(
-            EventType.StateReplay,
-            PlayerState(
-                state=to_state_name(stream_state.state),
-                current_track=self.get_track_info(self.current_track_id),
-                index=self.current_track_id,
-                position=self._estimated_progress(stream_state),
-                message=stream_state.message,
-                audio_info=to_audio_info(stream_state.stream_info),
-                mime_type=self.current_format,
-            ).model_dump(exclude_none=True),
-            self.list(0, len(self.track_list)).model_dump(exclude_none=True),
-            PlaybackMode(
-                shuffle=self.shuffle,
-                repeat_single=self.repeat_single,
-                repeat_all=self.repeat_all,
-            ).model_dump(exclude_none=True),
+            StateReplayEvent(
+                state=PlayerState(
+                    state=to_state_name(stream_state.state),
+                    current_track=self.get_track_info(self.current_track_id),
+                    index=self.current_track_id,
+                    position=self._estimated_progress(stream_state),
+                    message=stream_state.message,
+                    audio_info=to_audio_info(stream_state.stream_info),
+                    mime_type=self.current_format,
+                ),
+                track_list=self.list(0, len(self.track_list)),
+                playback_mode=PlaybackMode(
+                    shuffle=self.shuffle,
+                    repeat_single=self.repeat_single,
+                    repeat_all=self.repeat_all,
+                ),
+            ),
         )
 
     @enqueue
@@ -368,8 +380,7 @@ class PlayQueue(AsyncExecutor):
         self.track_list = []
         self.current_track_id = 0
         self.event_emitter.dispatch(
-            EventType.TracksRemoved,
-            [i for i in range(list_len - 1, -1, -1)],
+            TracksRemovedEvent(indices=[i for i in range(list_len - 1, -1, -1)])
         )
 
     def _estimated_progress(self, stream_state: StreamState) -> int:
@@ -390,7 +401,7 @@ class PlayQueue(AsyncExecutor):
             except Exception as e:
                 logger.warn("Failed to retrieve track link:", repr(e))
                 self.event_emitter.dispatch(
-                    EventType.NetworkError, "Failed to retrieve track link"
+                    NetworkErrorEvent(message="Failed to retrieve track link")
                 )
                 return None
 
@@ -400,7 +411,7 @@ class PlayQueue(AsyncExecutor):
 
     def _request_more_tracks(self):
         if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:
-            self.event_emitter.dispatch(EventType.RequestMoreTracks)
+            self.event_emitter.dispatch(RequestMoreTracksEvent())
 
     def _setup_prefetch_timer(self, state: StreamInfo):
         self._cancel_prefetch_timer()
@@ -441,14 +452,15 @@ class PlayQueue(AsyncExecutor):
 
     def _notify_track_change(self):
         self.event_emitter.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                current_track=self.get_track_info(self.current_track_id),
-                index=self.current_track_id,
-                state=to_state_name(AudioGraphNodeState.STOPPED),
-                position=0,
-                timestamp=time.monotonic_ns(),
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    current_track=self.get_track_info(self.current_track_id),
+                    index=self.current_track_id,
+                    state=to_state_name(AudioGraphNodeState.STOPPED),
+                    position=0,
+                    timestamp=time.monotonic_ns(),
+                )
+            ),
         )
 
     @enqueue
@@ -472,12 +484,13 @@ class PlayQueue(AsyncExecutor):
             or self.repeat_single is not None
         ):
             self.event_emitter.dispatch(
-                EventType.PlaybackModeChanged,
-                PlaybackMode(
-                    shuffle=self.shuffle,
-                    repeat_single=self.repeat_single,
-                    repeat_all=self.repeat_all,
-                ).model_dump(exclude_none=True),
+                PlaybackModeChangedEvent(
+                    mode=PlaybackMode(
+                        shuffle=self.shuffle,
+                        repeat_single=self.repeat_single,
+                        repeat_all=self.repeat_all,
+                    )
+                ),
             )
             if repeat_single_updated:
                 if self.prepared_tracks:

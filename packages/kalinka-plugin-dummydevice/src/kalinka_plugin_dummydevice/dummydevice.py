@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import EventType, VolumeChangedEvent
 from kalinka_plugin_sdk.ext_device import (
     DeviceVolume,
     ExternalOutputDevice,
@@ -51,7 +51,7 @@ class DummyDevice(ExternalOutputDevice):
                         continue
 
             if target != last_sent_volume:
-                self.event_emitter.dispatch(EventType.VolumeChanged, target)
+                self.event_emitter.dispatch(VolumeChangedEvent(volume=target))
                 last_sent_volume = target
                 last_sent_at = time.monotonic()
 

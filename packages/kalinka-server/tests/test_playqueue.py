@@ -4,7 +4,13 @@ from unittest.mock import Mock, call
 
 from kalinka_plugin_sdk.datamodel import AudioInfo, PlayerState
 from kalinka_server.config_model import KalinkaConfig
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import (
+    EventType,
+    StateChangedEvent,
+    TracksAddedEvent,
+    TracksRemovedEvent,
+    RequestMoreTracksEvent,
+)
 from kalinka_plugin_sdk.inputmodule import TrackInfo, Track, TrackUrl
 from kalinka_plugin_sdk.datamodel import Album, EntityId, EntityType
 from kalinka_server.playqueue import PlayQueue
@@ -79,26 +85,44 @@ def playqueue(config, event_emitter):
 
 def assert_call_args(actual_args, expected_args, position):
     for actual, expected in zip(actual_args, expected_args):
-        if isinstance(expected, dict) and "state" in expected:
-            # This is a serialized PlayerState, reconstruct and compare
-            actual_state = PlayerState(**actual)
-            expected_state = PlayerState(**expected)
+        if isinstance(expected, StateChangedEvent):
+            # Compare StateChangedEvent payloads
+            assert isinstance(
+                actual, StateChangedEvent
+            ), f"at position {position} expected StateChangedEvent but got {type(actual)}"
+            actual_state = actual.state
+            expected_state = expected.state
             # ignore timestamp and position for PlayerState comparisons
             actual_state.timestamp = expected_state.timestamp
-            if "position" in actual and "position" in expected:
+            if (
+                actual_state.position is not None
+                and expected_state.position is not None
+            ):
                 actual_state.position = expected_state.position
             assert (
                 actual_state == expected_state
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
-        elif isinstance(expected, PlayerState):
-            actual_clone = PlayerState(**actual)
-            # ignore timestamp
-            actual_clone.timestamp = expected.timestamp
-            # ignore position
-            actual_clone.position = expected.position
+        elif isinstance(expected, TracksAddedEvent):
+            # Compare TracksAddedEvent payloads
+            assert isinstance(
+                actual, TracksAddedEvent
+            ), f"at position {position} expected TracksAddedEvent but got {type(actual)}"
             assert (
-                actual_clone == expected
+                actual.tracks == expected.tracks
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
+        elif isinstance(expected, TracksRemovedEvent):
+            # Compare TracksRemovedEvent payloads
+            assert isinstance(
+                actual, TracksRemovedEvent
+            ), f"at position {position} expected TracksRemovedEvent but got {type(actual)}"
+            assert (
+                actual.indices == expected.indices
+            ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
+        elif isinstance(expected, RequestMoreTracksEvent):
+            # Compare RequestMoreTracksEvent payloads
+            assert isinstance(
+                actual, RequestMoreTracksEvent
+            ), f"at position {position} expected RequestMoreTracksEvent but got {type(actual)}"
         else:
             assert (
                 actual == expected
@@ -123,26 +147,24 @@ def test_add_remove_track(event_emitter, playqueue):
     time.sleep(1)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(state="STOPPED", index=0, position=0),
+            StateChangedEvent(state=PlayerState(state="STOPPED", index=0, position=0))
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_unset=True) if track.metadata else None],
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-            ),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                )
+            )
         ),
-        call.dispatch(EventType.TracksRemoved, [0]),
+        call.dispatch(TracksRemovedEvent(indices=[0])),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(state="STOPPED", index=0, position=0),
+            StateChangedEvent(state=PlayerState(state="STOPPED", index=0, position=0))
         ),
     ]
 
@@ -158,50 +180,54 @@ def test_play(event_emitter, playqueue):
     time.sleep(4)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(state="STOPPED", index=0, position=0, timestamp=1).model_dump(
-                exclude_none=True
-            ),
+            StateChangedEvent(
+                state=PlayerState(state="STOPPED", index=0, position=0, timestamp=1)
+            )
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    timestamp=1,
+                )
+            )
         ),
-        call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
@@ -221,89 +247,89 @@ def test_switch_track(event_emitter, playqueue):
     time.sleep(4)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [
-                (
-                    track1.metadata.model_dump(exclude_none=True)
-                    if track1.metadata
-                    else None
-                ),
-                (
-                    track2.metadata.model_dump(exclude_none=True)
-                    if track2.metadata
-                    else None
-                ),
-            ],
+            TracksAddedEvent(tracks=[track1.metadata, track2.metadata])  # type: ignore
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
-        call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=1,
-                position=0,
-                current_track=track2.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=1,
+                    position=0,
+                    current_track=track2.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=1,
-                position=0,
-                current_track=track2.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=14814
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=1,
+                    position=0,
+                    current_track=track2.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=14814,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
@@ -328,94 +354,91 @@ def test_play_next(event_emitter, playqueue):
     time.sleep(4)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [
-                (
-                    track1.metadata.model_dump(exclude_none=True)
-                    if track1.metadata
-                    else None
-                ),
-                (
-                    track2.metadata.model_dump(exclude_none=True)
-                    if track2.metadata
-                    else None
-                ),
-                (
-                    track3.metadata.model_dump(exclude_none=True)
-                    if track3.metadata
-                    else None
-                ),
-            ],
+            TracksAddedEvent(
+                tracks=[track1.metadata, track2.metadata, track3.metadata]  # type: ignore
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track1.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track1.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
-        call.dispatch(EventType.RequestMoreTracks),
+        call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=2,
-                position=0,
-                current_track=track3.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=2,
+                    position=0,
+                    current_track=track3.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=2,
-                position=0,
-                current_track=track3.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=90632
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=2,
+                    position=0,
+                    current_track=track3.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=90632,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
@@ -437,104 +460,118 @@ def test_play_pause_stop_play(event_emitter, playqueue):
     time.sleep(4)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    timestamp=1,
+                )
+            )
+        ),
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    timestamp=1,
+                )
+            )
+        ),
+        call.dispatch(RequestMoreTracksEvent()),
+        call.dispatch(
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(EventType.RequestMoreTracks),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PAUSED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
+        ),
+        call.dispatch(RequestMoreTracksEvent()),
+        call.dispatch(
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PAUSED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(EventType.RequestMoreTracks),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
@@ -552,78 +589,87 @@ def test_seek(event_emitter, playqueue):
     time.sleep(4)
     expected_calls = [
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    timestamp=1,
+                )
+            )
+        ),
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(
+            StateChangedEvent(
+                state=PlayerState(
+                    state="STOPPED",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    timestamp=1,
+                )
+            )
+        ),
+        call.dispatch(RequestMoreTracksEvent()),
+        call.dispatch(
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.TracksAdded,
-            [track.metadata.model_dump(exclude_none=True) if track.metadata else None],
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=3000,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="STOPPED",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(EventType.RequestMoreTracks),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="BUFFERING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
         call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=3000,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="BUFFERING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
-        ),
-        call.dispatch(
-            EventType.StateChanged,
-            PlayerState(
-                state="PLAYING",
-                index=0,
-                position=0,
-                current_track=track.metadata,
-                audio_info=AudioInfo(
-                    sample_rate=32000, bits_per_sample=24, channels=2, duration_ms=13839
-                ),
-                mime_type="FLAC",
-                timestamp=1,
-            ).model_dump(exclude_none=True),
+            StateChangedEvent(
+                state=PlayerState(
+                    state="PLAYING",
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp=1,
+                )
+            )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)

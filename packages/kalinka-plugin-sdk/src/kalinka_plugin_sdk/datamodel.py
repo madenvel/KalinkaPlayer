@@ -607,6 +607,21 @@ class PlaybackMode(BaseModel):
     repeat_all: bool
 
 
+class PlayerStateEnum(str, Enum):
+    """
+    Enumeration of possible player states.
+
+    Defines the various states the audio player can be in, such as playing,
+    paused, stopped, buffering, or encountering an error.
+    """
+
+    PLAYING = "PLAYING"
+    PAUSED = "PAUSED"
+    STOPPED = "STOPPED"
+    BUFFERING = "BUFFERING"
+    ERROR = "ERROR"
+
+
 class PlayerState(BaseModel):
     """
     Complete state information for the audio player.
@@ -625,7 +640,7 @@ class PlayerState(BaseModel):
         timestamp (PositiveInt): Timestamp when this state was captured
     """
 
-    state: Optional[str] = None
+    state: Optional[PlayerStateEnum] = None
     current_track: Optional[Track] = None
     index: Optional[int] = None
     position: Optional[int] = None

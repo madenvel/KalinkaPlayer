@@ -1,10 +1,12 @@
 import logging
 import time
+from typing import Callable
 from uuid import UUID, uuid4
 from abc import ABC, abstractmethod
 from functools import partial, wraps
 from threading import Thread
-from multiprocessing import Queue, Process
+
+from kalinka_plugin_sdk.events import AnyEventPayload, EventType
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -80,30 +82,32 @@ class Subscription:
 
 class EventListener(AsyncLoop):
     def __init__(self, queue):
-        self.subscribers = {}
+        self.subscribers: dict[EventType, list[dict]] = {}
         super().__init__(queue)
 
-    def subscribe(self, event_name, callback) -> Subscription:
+    def subscribe(
+        self, event_type: EventType, callback: Callable[[AnyEventPayload], None]
+    ) -> Subscription:
         uuid = uuid4()
-        self.subscribers.setdefault(event_name, [])
-        self.subscribers[event_name].append({"uuid": uuid, "cb": callback})
-        return Subscription(uuid, event_name, self)
+        self.subscribers.setdefault(event_type, [])
+        self.subscribers[event_type].append({"uuid": uuid, "cb": callback})
+        return Subscription(uuid, event_type, self)
 
     def subscribe_all(self, map):
         for k, v in map.items():
             self.subscribe(k, v)
 
-    def unsubscribe(self, event_name, uuid):
-        for subscriber in self.subscribers.get(event_name, []):
+    def unsubscribe(self, event_type: EventType, uuid: UUID):
+        for subscriber in self.subscribers.get(event_type, []):
             if subscriber["uuid"] == uuid:
-                self.subscribers[event_name].remove(subscriber)
+                self.subscribers[event_type].remove(subscriber)
 
-    def process(self, e):
-        event = e["event_name"]
+    def process(self, e: AnyEventPayload):
+        event = e.event_type
         for subscriber in self.subscribers.get(event, []):
             try:
                 callback = subscriber["cb"]
-                callback(*e["args"], **e["kwargs"])
+                callback(e)
             except Exception as ex:
                 logger.warning(
                     f"Exception caught while processing event {event}, exception: {ex}"
@@ -114,5 +118,5 @@ class EventEmitter:
     def __init__(self, queue):
         self.queue = queue
 
-    def dispatch(self, event_name, *args, **kwargs):
-        self.queue.put({"event_name": event_name, "args": args, "kwargs": kwargs})
+    def dispatch(self, payload: AnyEventPayload) -> None:
+        self.queue.put(payload)

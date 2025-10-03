@@ -49,9 +49,16 @@ class PreparedPlugin:
         """Setup the module with the provided components."""
         self.plugin_instance = self.plugin_class()
         self.plugin_context = plugin_context
-        self.plugin_instance.setup(plugin_context)
-        self.health_state = ModuleHealthState.READY
-        self.interface = cast_plugin_interface(self.plugin_instance)
+        if plugin_context.config.enabled is True:
+            self.plugin_instance.setup(plugin_context)
+            self.health_state = ModuleHealthState.READY
+            self.interface = cast_plugin_interface(self.plugin_instance)
+        else:
+            self.health_state = ModuleHealthState.DISABLED
+            self.interface = None
+            logger.info(
+                f"Plugin {self.plugin_class.PLUGIN_ID} is disabled in configuration - skipping setup"
+            )
 
     def shutdown(self):
         """Shutdown the module if it has a shutdown method."""
@@ -164,18 +171,11 @@ def scan_and_setup_plugins_from_entry_points(
             config = read_or_create_module_config(
                 config_path, plugin_name, plugin_class
             )
-            logger.info(f"Loaded config for {plugin_name}: {config}")
             prepared_module = PreparedPlugin(plugin_class)
-            if config.enabled:
-                plugin_context = make_plugin_context(
-                    plugin_name, playqueue, event_emitter, event_listener, config
-                )
-                prepared_module.setup(plugin_context)
-                prepared_module.health_state = ModuleHealthState.READY
-            else:
-                logger.info(
-                    f"Plugin {plugin_name} is disabled in configuration - skipping"
-                )
+            plugin_context = make_plugin_context(
+                plugin_name, playqueue, event_emitter, event_listener, config
+            )
+            prepared_module.setup(plugin_context)
 
         except Exception as e:
             logger.error(f"Failed to setup plugin {plugin_name}: {e}")

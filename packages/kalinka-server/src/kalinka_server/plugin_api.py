@@ -4,7 +4,7 @@ from kalinka_plugin_sdk.api import (
     EventEmitterAPI,
 )
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import AnyEventPayload
 from kalinka_plugin_sdk.inputmodule import TrackInfo
 
 from .async_common import EventEmitter
@@ -94,5 +94,5 @@ class EventEmitterAPIImpl(EventEmitterAPI):
     def __init__(self, event_emitter: EventEmitter):
         self.__event_emitter = event_emitter
 
-    def dispatch(self, topic: EventType, *args, **kwargs) -> None:
-        self.__event_emitter.dispatch(topic, *args, **kwargs)
+    def dispatch(self, event: AnyEventPayload) -> None:
+        self.__event_emitter.dispatch(event)
