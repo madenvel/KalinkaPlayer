@@ -78,3 +78,4 @@ logs/
 venv/
 ENV/
 env/
+pkgroot/

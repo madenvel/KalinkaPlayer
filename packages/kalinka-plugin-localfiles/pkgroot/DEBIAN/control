@@ -1,8 +1,0 @@
-Package: kalinka-plugin-localfiles
-Version: 0.0.1.dev462+gd4f3a4ef4.d20251003
-Section: python
-Priority: optional
-Architecture: all
-Depends: kalinka-player (>=1.0), kalinka-plugin-sdk (>=1.0), python3, ca-certificates
-Maintainer: Dmitry Savin <envelsavinds@gmail.com>
-Description: Kalinka Plugin For local files indexing and enriching
