@@ -9,7 +9,7 @@ if [ ! -x "$VENVDIR/bin/pip" ]; then
   exit 1
 fi
 
-"$VENVDIR/bin/pip" install --no-deps --upgrade "$WHEEL"
+"$VENVDIR/bin/pip" install --upgrade "$WHEEL"
 
 # Optionally: validate entry point visibility
 "$VENVDIR/bin/python" - <<'PY'
