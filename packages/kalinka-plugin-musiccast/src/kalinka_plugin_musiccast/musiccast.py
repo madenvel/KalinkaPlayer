@@ -618,10 +618,11 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         # ReplayGain
         if (
             self.auto_volume is True
-            and state.get("current_track", {}).get("replaygain_gain", None) is not None
+            and state.current_track is not None
+            and state.current_track.replaygain_gain is not None
         ):
             device_gain_units = self._db_to_device_units(
-                state["current_track"]["replaygain_gain"]
+                state.current_track.replaygain_gain
             )
             if self.volume.volume_gain == device_gain_units:
                 return
