@@ -3,7 +3,7 @@ Version: @VERSION@
 Section: python
 Priority: optional
 Architecture: all
-Depends: kalinka-player (>=1.0), kalinka-plugin-sdk (>=1.0), python3, ca-certificates
+Depends: kalinka-plugin-sdk (>=1.0), python3, ca-certificates
 Maintainer: Dmitry Savin <envelsavinds@gmail.com>
 Description: Kalinka Plugin Dummydevice – Kalinka Music Player Plugin for Dummy Device (used for testing)
  Kalinka Music Player Plugin for Dummy Device (used for testing)
