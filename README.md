@@ -248,7 +248,3 @@ After installing editable packages, start the server (`kalinka-server --config <
 - Install any plugin you will develop editable too: `cd packages/kalinka-plugin-localfiles && pip install -e .`
 - Build native player: `cd packages/kalinka-server/src/native_player && make`
 - Run server: `kalinka-server --config <config>` - when in virtual environment and kalinka-server wheel installed locally.
-
----
-
-If you'd like, I can also add a short example `dev-setup.sh` script to the repository to automate the above steps. 
