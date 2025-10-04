@@ -3,6 +3,7 @@ set -e
 
 # Define variables
 VENV_DIR=/opt/kalinka/venv
+WHEELS_DIR=/opt/kalinka/wheels
 
 echo "Removing Kalinka Plugin SDK..."
 
@@ -12,5 +13,11 @@ if [ -d "$VENV_DIR" ]; then
     pip uninstall -y kalinka-plugin-sdk || echo "Package already uninstalled"
     deactivate
 fi
+
+find /opt/kalinka/ -type d -name "__pycache__" -exec rm -r {} +
+if [ -d "$WHEELS_DIR" ] && [ -z "$(ls -A $WHEELS_DIR)" ]; then
+    rm -rf $VENV_DIR
+fi
+
 
 echo "Kalinka Plugin SDK removed."
