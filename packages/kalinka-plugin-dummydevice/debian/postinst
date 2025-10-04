@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
 VENVDIR="/opt/kalinka/venv"
-WHEEL="/usr/share/kalinka/plugins/kalinka_plugin_dummydevice-@VERSION@-py3-none-any.whl"
+INSTALL_DIR="/opt/kalinka"
+WHEEL="$INSTALL_DIR/wheels/kalinka_plugin_dummydevice-@VERSION@-py3-none-any.whl"
 
 if [ ! -x "$VENVDIR/bin/pip" ]; then
   echo "Kalinka venv not found at $VENVDIR" >&2

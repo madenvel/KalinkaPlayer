@@ -7,7 +7,7 @@ echo "Building .deb package for ${PLUGIN_SLUG} using setuptools_scm for version 
 
 # Clean up previous build
 rm -rf pkgroot/
-mkdir -p pkgroot/usr/share/kalinka/plugins
+mkdir -p pkgroot/opt/kalinka/wheels
 mkdir -p pkgroot/DEBIAN
 
 # Build wheel first to generate version
@@ -37,7 +37,7 @@ if [ ! -f "dist/${PLUGIN_WHEEL}" ]; then
 fi
 
 # Copy wheel to package root
-cp "dist/${PLUGIN_WHEEL}" "pkgroot/usr/share/kalinka/plugins/"
+cp "dist/${PLUGIN_WHEEL}" "pkgroot/opt/kalinka/wheels/"
 
 # Generate control file from template
 sed "s/@VERSION@/${VERSION}/g" debian/control.in > pkgroot/DEBIAN/control

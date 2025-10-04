@@ -3,7 +3,6 @@ set -e
 
 # Define variables
 VENV_DIR=/opt/kalinka/venv
-SDK_DIR=/opt/kalinka/sdk
 
 echo "Removing Kalinka Plugin SDK..."
 
@@ -13,8 +12,5 @@ if [ -d "$VENV_DIR" ]; then
     pip uninstall -y kalinka-plugin-sdk || echo "Package already uninstalled"
     deactivate
 fi
-
-# Clean up SDK directory
-rm -rf $SDK_DIR
 
 echo "Kalinka Plugin SDK removed."
