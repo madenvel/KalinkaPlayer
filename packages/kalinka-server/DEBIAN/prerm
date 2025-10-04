@@ -2,4 +2,6 @@
 set -e
 
 find /opt/kalinka/ -type d -name "__pycache__" -exec rm -r {} +
-rm -rf /opt/kalinka/venv
+if [ -d /opt/kalinka/wheels ] && [ -z "$(ls -A /opt/kalinka/wheels)" ]; then
+    rm -rf /opt/kalinka/venv
+fi
