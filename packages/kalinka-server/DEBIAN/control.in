@@ -7,7 +7,7 @@ Homepage: https://github.com/madenvel/KalinkaPlayer
 Package: kalinka-server
 Version: @VERSION@
 Architecture: @ARCH@
-Depends: python3 (>= PYTHON_VERSION),
+Depends: python3 (>= @PYTHON_VERSION@), python3 (<< @PYTHON_VERSION_UPPER@),
     python3-venv,
     python3-pip,
     python3-setuptools,

@@ -9,11 +9,6 @@ include run_server.py
 # Include scripts
 recursive-include scripts *
 
-# Include DEBIAN packaging files (for reference)
-recursive-include DEBIAN *
-
-# Include native player binaries and source
-recursive-include native_player *.h *.cpp *.py Makefile
 recursive-exclude native_player *.o
 recursive-exclude native_player *.so
 recursive-exclude native_player __pycache__

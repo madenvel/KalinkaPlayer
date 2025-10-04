@@ -5,7 +5,6 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kalinka-server"
 description = "Kalinka Audio Player backend service"
-readme = "README.md"
 license = "GPL-3.0-or-later"
 authors = [
     {name = "Dmitry Savin", email = "envelsavinds@gmail.com"}
@@ -69,22 +68,20 @@ kalinka-server = "kalinka_server.__main__:main"
 
 [tool.setuptools]
 include-package-data = false
+zip-safe = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["kalinka_server*", "native_player*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 
-[tool.setuptools.package-data]
-native_player = ["*.so"]
-
 [tool.setuptools.exclude-package-data]
-native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py"]
+native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py", "*.so"]
 
 [tool.setuptools_scm]
 write_to = "src/kalinka_server/_version.py"
 tag_regex = "^kalinka-server-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
-git_describe_command = "git describe --dirty --tags --long --match kalinka-server-v*"
+git_describe_command = "git describe --dirty --tags --long --match kalinka-server-v* --always"
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 fallback_version = "0.0.0"

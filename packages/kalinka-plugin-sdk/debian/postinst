@@ -1,49 +1,45 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Define variables
-VENV_DIR=/opt/kalinka/venv
-INSTALL_DIR=/opt/kalinka
-WHEEL="$INSTALL_DIR/wheels/kalinka_plugin_sdk-@VERSION@-py3-none-any.whl"
-USER=kalusr
+# --- Constants (can be overridden by maintainer scripts) ---
+USER="kalusr"
+INSTALL_DIR="/opt/kalinka"
+VENV_DIR="$INSTALL_DIR/venv"
+WHEELS_DIR="$INSTALL_DIR/wheels"
+WHEEL="$WHEELS_DIR/kalinka_plugin_sdk-@VERSION@-py3-none-any.whl"
 
-echo "Installing Kalinka Plugin SDK to $VENV_DIR"
-
-# Create system user if it doesn't exist
-if ! id "$USER" &>/dev/null; then
-    echo "Creating system user $USER"
-    adduser --system --no-create-home --group $USER
-    usermod -aG audio $USER
-    mkhomedir_helper $USER
+echo "[1/5] Ensure system user exists (nologin, no home)"
+if ! id -u "$USER" >/dev/null 2>&1; then
+  adduser --system --no-create-home --group --disabled-login "$USER"
+  # For ALSA access later if needed; harmless if unused
+  usermod -aG audio "$USER" || true
+else
+  # Harden an existing account if created differently before
+  usermod -s /usr/sbin/nologin "$USER" || true
+  usermod -aG audio "$USER" || true
 fi
 
-USER_HOME=$(sudo -u "$USER" sh -c 'echo $HOME')
+echo "[2/5] Ensure install directories exist (root-owned)"
+install -d -m 0755 "$INSTALL_DIR"
+install -d -m 0755 "$WHEELS_DIR"
 
-# Ensure user home directories exist with proper permissions
-mkdir -p $USER_HOME/.local/share/kalinka
-chown $USER:$USER -R $USER_HOME/.local/share/kalinka
-
-# Check if Kalinka venv exists, create if it doesn't
+echo "[3/5] Create venv if missing (root-owned, read-only for runtime)"
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating Kalinka virtual environment at $VENV_DIR"
-    python3 -m venv $VENV_DIR
-else
-    echo "Virtual environment already exists at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
 fi
+# Make sure code/venv stays root-owned and not group/world-writable
+chown -R root:root "$INSTALL_DIR"
+chmod -R go-w "$INSTALL_DIR"
 
-# Install the wheel package using the venv's pip directly
-if [ -d "$INSTALL_DIR/wheels" ] && [ -n "$(ls $WHEEL 2>/dev/null)" ]; then
-    echo "Installing Kalinka Plugin SDK from wheel package..."
-    # Install the wheel
-    $VENV_DIR/bin/pip install --upgrade pip
-    $VENV_DIR/bin/pip install $WHEEL
-else
-    echo "Error: Kalinka Plugin SDK wheel package not found"
-    exit 1
+echo "[4/5] Install SDK wheel into the venv"
+if [ ! -f "$WHEEL" ]; then
+  echo "Error: SDK wheel not found at: $WHEEL" >&2
+  echo "Ensure the package placed the wheel under $WHEELS_DIR before postinst." >&2
+  exit 1
 fi
+"$VENV_DIR/bin/pip" install --upgrade pip
+"$VENV_DIR/bin/pip" install "$WHEEL"
 
-# Fix ownership of the entire installation directory
-chown -R $USER:$USER /opt/kalinka
-
-echo "Kalinka Plugin SDK installation complete."
-echo "The SDK is now available in the Kalinka virtual environment at $VENV_DIR"
+echo "[5/5] Done"
+echo "Kalinka Plugin SDK installed into $VENV_DIR (root-owned)."
+echo "Service user '$USER' exists with login disabled. No services restarted."

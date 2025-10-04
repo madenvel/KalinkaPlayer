@@ -1,13 +1,30 @@
 [Unit]
 Description=Kalinka Server
-After=multi-user.target
+After=network.target
 
 [Service]
 Type=simple
 User=kalusr
+Group=kalusr
 WorkingDirectory=/opt/kalinka
-ExecStart=/usr/bin/kalinka_server.sh
+StateDirectory=kalinka
+StateDirectoryMode=0750
+LogsDirectory=kalinka
+LogsDirectoryMode=0750
+RuntimeDirectory=kalinka
+RuntimeDirectoryMode=0755
+
+ExecStart=/opt/kalinka/venv/bin/kalinka-server \
+  --config /etc/kalinka/kalinka_conf.cfg \
+  --state  /var/lib/kalinka/kalinka_state.json
+
 Restart=on-failure
+
+ProtectSystem=full
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/kalinka /var/log/kalinka /etc/kalinka
 
 [Install]
 WantedBy=multi-user.target
