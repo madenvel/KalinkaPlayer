@@ -4,6 +4,7 @@ set -e
 # Define variables
 VENV_DIR=/opt/kalinka/venv
 INSTALL_DIR=/opt/kalinka
+WHEEL="$INSTALL_DIR/wheels/kalinka_plugin_sdk-@VERSION@-py3-none-any.whl"
 USER=kalusr
 
 echo "Installing Kalinka Plugin SDK to $VENV_DIR"
@@ -31,11 +32,11 @@ else
 fi
 
 # Install the wheel package using the venv's pip directly
-if [ -d "$INSTALL_DIR/wheels" ] && [ -n "$(ls $INSTALL_DIR/wheels/kalinka_plugin_sdk*.whl 2>/dev/null)" ]; then
+if [ -d "$INSTALL_DIR/wheels" ] && [ -n "$(ls $WHEEL 2>/dev/null)" ]; then
     echo "Installing Kalinka Plugin SDK from wheel package..."
     # Install the wheel
     $VENV_DIR/bin/pip install --upgrade pip
-    $VENV_DIR/bin/pip install $INSTALL_DIR/wheels/kalinka_plugin_sdk*.whl
+    $VENV_DIR/bin/pip install $WHEEL
 else
     echo "Error: Kalinka Plugin SDK wheel package not found"
     exit 1

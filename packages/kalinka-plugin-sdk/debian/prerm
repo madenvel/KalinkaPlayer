@@ -14,10 +14,27 @@ if [ -d "$VENV_DIR" ]; then
     deactivate
 fi
 
-find /opt/kalinka/ -type d -name "__pycache__" -exec rm -r {} +
-if [ -d "$WHEELS_DIR" ] && [ -z "$(ls -A $WHEELS_DIR)" ]; then
-    rm -rf $VENV_DIR
+# Only clean up pycache for kalinka-plugin-sdk specifically
+if [ -d "$VENV_DIR/lib" ]; then
+    find "$VENV_DIR/lib" -path "*/site-packages/kalinka_plugin_sdk*" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 fi
 
+# Only remove venv and do global cleanup if this is the last kalinka package
+# Check if wheels directory is empty (no other kalinka packages)
+if [ -d "$WHEELS_DIR" ] && [ -z "$(ls -A $WHEELS_DIR 2>/dev/null)" ]; then
+    echo "No more Kalinka packages installed, cleaning up environment..."
+    
+    # Clean up all pycache directories since no packages remain
+    find /opt/kalinka/ -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    
+    # Remove the virtual environment
+    rm -rf $VENV_DIR
+    
+    # Remove wheels directory if empty
+    rmdir "$WHEELS_DIR" 2>/dev/null || true
+    
+    # Remove parent directory if empty
+    rmdir /opt/kalinka 2>/dev/null || true
+fi
 
 echo "Kalinka Plugin SDK removed."
