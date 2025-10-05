@@ -8,7 +8,7 @@ import urllib.parse
 from typing import Any, Dict, Optional
 
 import httpx
-from kalinka_plugin_sdk.datamodel import PlayerStateEnum
+from kalinka_plugin_sdk.datamodel import PlayerState, PlayerStateEnum
 import netifaces
 from ssdpy import SSDPClient
 
@@ -609,7 +609,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if status["input"] == self.connected_input:
             self.power_off()
 
-    def _on_playing(self, state):
+    def _on_playing(self, state: PlayerState):
         if self.poweroff_timer is not None:
             self.poweroff_timer.cancel()
             self.poweroff_timer = None
