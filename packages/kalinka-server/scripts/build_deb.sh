@@ -30,7 +30,7 @@ fi
 
 echo "Getting version directly from source..."
 
-WHEEL_VERSION=$(cd "$SCRIPT_DIR/.." && python3 -c "import setuptools_scm; print(setuptools_scm.get_version(search_parent_directories=True))" 2>/dev/null)
+WHEEL_VERSION=$(grep "__version__ = version =" "$SCRIPT_DIR/../src/kalinka_server/_version.py" | sed -n "s/.*['\"]\\([^'\"]*\\)['\"].*/\\1/p")
 
 if [ -z "$WHEEL_VERSION" ]; then
     echo "Error: Could not determine package version."
