@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: setup-dev clean build-native run-server test help
+.PHONY: setup-dev clean build-native run-server test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs
 
 ## Set up development environment
 setup-dev:
@@ -33,13 +33,49 @@ test:
 	@cd packages/kalinka-plugin-sdk && python -m pytest tests/ -v
 	@cd packages/kalinka-server && python -m pytest ../../tests/ -v
 
+## Helper function to move debs to debs directory
+copy-debs:
+	@mkdir -p debs
+	@for dir in packages/*/; do \
+		for deb in "$$dir"/*.deb; do \
+			if [ -f "$$deb" ]; then \
+				echo "Moving $$(basename $$deb) to debs/"; \
+				mv "$$deb" debs/; \
+			fi; \
+		done; \
+	done
+
+## Build kalinka-server deb package
+kalinka-server-deb:
+	@echo "Building kalinka-server deb package..."
+	@cd packages/kalinka-server && ./scripts/build_deb.sh
+
+## Build all plugin deb packages (SDK, local files, musiccast, dummydevice)
+kalinka-plugins-deb:
+	@echo "Building plugin deb packages..."
+	@for dir in packages/kalinka-plugin-*; do \
+		if [ -f "$$dir/scripts/build_deb.sh" ]; then \
+			echo "Building $$(basename $$dir)..."; \
+			(cd "$$dir" && ./scripts/build_deb.sh) || exit 1; \
+		fi; \
+	done
+
+## Build all deb packages (server and plugins)
+build-all-deb: kalinka-server-deb kalinka-plugins-deb copy-debs
+	@echo "All deb packages built successfully!"
+	@echo "Debs moved to debs/ directory"
+
 ## Show help
 help:
 	@echo "KalinkaPlayer Development Commands:"
 	@echo ""
-	@echo "  setup-dev    Set up development environment (install packages in editable mode)"
-	@echo "  build-native Build the native player C++ extension"
-	@echo "  run-server   Run the kalinka server (requires kalinka_conf.cfg)"
-	@echo "  test         Run all tests"
-	@echo "  clean        Clean build artifacts"
-	@echo "  help         Show this help message"
+	@echo "  setup-dev         Set up development environment (install packages in editable mode)"
+	@echo "  build-native      Build the native player C++ extension"
+	@echo "  kalinka-server-deb  Build kalinka-server deb package"
+	@echo "  kalinka-plugins-deb Build all plugin deb packages (including SDK)"
+	@echo "  build-all-deb     Build all deb packages (server and plugins) and move to debs/"
+	@echo "  copy-debs         Move built deb packages to debs/ directory"
+	@echo "  run-server        Run the kalinka server (requires kalinka_conf.cfg)"
+	@echo "  test              Run all tests"
+	@echo "  clean             Clean build artifacts"
+	@echo "  help              Show this help message"
