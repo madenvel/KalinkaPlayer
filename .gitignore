@@ -79,3 +79,4 @@ venv/
 ENV/
 env/
 pkgroot/
+debs/
