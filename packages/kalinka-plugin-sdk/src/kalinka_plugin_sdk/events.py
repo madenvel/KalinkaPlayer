@@ -21,6 +21,8 @@ class EventType(Enum):
 
 
 class BaseEventPayload(BaseModel, ABC):
+    # Sequence number assigned by the dispatcher to preserve ordering across threads.
+    sequence: int = 0
 
     @property
     @abstractmethod
@@ -41,8 +43,6 @@ class FavoriteRemovedEvent(BaseEventPayload):
     @property
     def event_type(self) -> EventType:
         return EventType.FavoriteRemoved
-
-    id: EntityId
 
 
 class VolumeChangedEvent(BaseEventPayload):

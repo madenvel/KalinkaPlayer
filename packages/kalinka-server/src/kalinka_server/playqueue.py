@@ -347,29 +347,6 @@ class PlayQueue(AsyncExecutor):
         )
 
     @enqueue
-    def replay(self):
-        stream_state = self.track_player.get_state()
-        self.event_emitter.dispatch(
-            StateReplayEvent(
-                state=PlayerState(
-                    state=to_state_name(stream_state.state),
-                    current_track=self.get_track_info(self.current_track_id),
-                    index=self.current_track_id,
-                    position=self._estimated_progress(stream_state),
-                    message=stream_state.message,
-                    audio_info=to_audio_info(stream_state.stream_info),
-                    mime_type=self.current_format,
-                ),
-                track_list=self.list(0, len(self.track_list)),
-                playback_mode=PlaybackMode(
-                    shuffle=self.shuffle,
-                    repeat_single=self.repeat_single,
-                    repeat_all=self.repeat_all,
-                ),
-            ),
-        )
-
-    @enqueue
     def clear(self):
         self._clear()
 

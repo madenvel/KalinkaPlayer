@@ -8,7 +8,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -24,6 +30,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.ext_device import DeviceVolume, ExternalOutputDevice
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
+from kalinka_server.state_manager import StateManager
 
 from .config_model import KalinkaConfig
 from .config_schema_processor import config_to_wire, get_field_value, set_field_value
@@ -34,6 +41,7 @@ from .rest_event_proxy import EventStream, WireEvent
 from .service_discovery import ServiceDiscovery
 from .version import get_api_version, get_version
 from .state_keeper import save_state, restore_state
+from .ws_handler import handle_websocket_connection
 
 
 def save_config(config_file: str, config: KalinkaConfig):
@@ -189,9 +197,11 @@ def create_app(config_file, config: KalinkaConfig):
     app.state.config = config
     app.state.config_file = config_file
     playqueue, event_listener = setup(os.path.dirname(config_file), config)
+    state_manager = StateManager(event_listener)
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.playqueue = playqueue
     app.state.event_listener = event_listener
+    app.state.state_manager = state_manager
     first_enabled_device_name = next(iter(modules.enabled_devices), None)
     prepared_device = (
         modules.prepared_devices[first_enabled_device_name]
@@ -351,9 +361,8 @@ def create_app(config_file, config: KalinkaConfig):
     @app.get("/queue/events")
     async def stream(request: Request):
         async def process_events():
-            event_stream = EventStream(event_listener)
+            event_stream = EventStream(event_listener, state_manager)
             try:
-                playqueue.replay()
                 while True:
                     if await request.is_disconnected():
                         break
@@ -667,5 +676,12 @@ def create_app(config_file, config: KalinkaConfig):
         mime_type, _ = mimetypes.guess_type(str(file_path))
 
         return FileResponse(resolved_path, media_type=mime_type)
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for real-time playback control and event streaming."""
+        await handle_websocket_connection(
+            websocket, event_listener, playqueue, state_manager, device
+        )
 
     return app
