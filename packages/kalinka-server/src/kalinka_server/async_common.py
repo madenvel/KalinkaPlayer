@@ -4,7 +4,8 @@ from typing import Callable
 from uuid import UUID, uuid4
 from abc import ABC, abstractmethod
 from functools import partial, wraps
-from threading import Thread
+from threading import Lock, Thread
+from itertools import count
 
 from kalinka_plugin_sdk.events import AnyEventPayload, EventType
 
@@ -83,9 +84,17 @@ class Subscription:
 class EventListener(AsyncLoop):
     def __init__(self, queue):
         self.subscribers: dict[EventType, list[dict]] = {}
+        self._lock = Lock()
+        self._sequence = count(start=1)
         super().__init__(queue)
 
     def subscribe(
+        self, event_type: EventType, callback: Callable[[AnyEventPayload], None]
+    ) -> Subscription:
+        with self._lock:
+            return self._subscribe(event_type, callback)
+
+    def _subscribe(
         self, event_type: EventType, callback: Callable[[AnyEventPayload], None]
     ) -> Subscription:
         uuid = uuid4()
@@ -93,18 +102,28 @@ class EventListener(AsyncLoop):
         self.subscribers[event_type].append({"uuid": uuid, "cb": callback})
         return Subscription(uuid, event_type, self)
 
-    def subscribe_all(self, map):
-        for k, v in map.items():
-            self.subscribe(k, v)
+    def subscribe_all(self, map) -> dict[EventType, Subscription]:
+        subscriptions = {}
+        with self._lock:
+            for k, v in map.items():
+                subscriptions[k] = self._subscribe(k, v)
+
+        return subscriptions
 
     def unsubscribe(self, event_type: EventType, uuid: UUID):
-        for subscriber in self.subscribers.get(event_type, []):
-            if subscriber["uuid"] == uuid:
-                self.subscribers[event_type].remove(subscriber)
+        with self._lock:
+            for subscriber in list(self.subscribers.get(event_type, [])):
+                if subscriber["uuid"] == uuid:
+                    self.subscribers[event_type].remove(subscriber)
 
     def process(self, e: AnyEventPayload):
+        if not getattr(e, "sequence", 0):
+            # Ensure every event is assigned a sequence even if emitter missed it.
+            setattr(e, "sequence", next(self._sequence))
         event = e.event_type
-        for subscriber in self.subscribers.get(event, []):
+        with self._lock:
+            subscribers = list(self.subscribers.get(event, []))
+        for subscriber in subscribers:
             try:
                 callback = subscriber["cb"]
                 callback(e)
@@ -117,6 +136,11 @@ class EventListener(AsyncLoop):
 class EventEmitter:
     def __init__(self, queue):
         self.queue = queue
+        self._sequence_lock = Lock()
+        self._sequence = count(start=1)
 
     def dispatch(self, payload: AnyEventPayload) -> None:
+        # Assign a monotonically increasing sequence to each payload.
+        with self._sequence_lock:
+            payload.sequence = next(self._sequence)
         self.queue.put(payload)
