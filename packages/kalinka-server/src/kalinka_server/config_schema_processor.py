@@ -2,7 +2,7 @@
 
 import logging
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union, get_origin, get_args
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -13,15 +13,30 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 def annotation_to_type(annotation: Any) -> str:
-    """Convert a Pydantic annotation to a string representation."""
+    """Convert a Pydantic annotation to a string representation.
 
-    if issubclass(annotation, BaseModel):
-        return "section"
+    NOTE: In Python 3.10+, type annotations like Optional[X] are represented as
+    X | None (typing.Union), which are not classes. This changed from Python 3.11
+    to 3.14 where Pydantic now stores these union types directly in field.annotation
+    instead of unwrapping them. We must unwrap Optional types to get the base type.
+    """
 
-    if issubclass(annotation, Enum):
-        return "enum"
+    # Unwrap Optional[X] (which is Union[X, None]) to get X
+    origin = get_origin(annotation)
+    if origin is Union:
+        args = get_args(annotation)
+        # Filter out NoneType to get the actual type
+        non_none_args = [arg for arg in args if arg is not type(None)]
+        if len(non_none_args) == 1:
+            annotation = non_none_args[0]
 
     if isinstance(annotation, type):
+        if issubclass(annotation, BaseModel):
+            return "section"
+
+        if issubclass(annotation, Enum):
+            return "enum"
+
         if annotation.__module__ == "builtins":
             return annotation.__name__
         return annotation.__module__ + "." + annotation.__qualname__
