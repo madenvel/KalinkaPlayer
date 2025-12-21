@@ -3,7 +3,6 @@ import os
 import sys
 import io
 import time
-import json
 import logging
 import asyncio
 import mimetypes
@@ -832,6 +831,8 @@ def main(config: LocalFilesConfig, enricher_queue, logger_queue):
         root = logging.getLogger()
         for handler in root.handlers[:]:
             root.removeHandler(handler)
+        # Set root logger level to DEBUG to allow all logs through to the queue
+        root.setLevel(logging.DEBUG)
         root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
         asyncio.run(async_main(config))

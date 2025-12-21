@@ -46,21 +46,23 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             config, input_module_db, context.event_emitter
         )
 
-        handler = logging.StreamHandler()
-        handler.setLevel(logger.level)
-        # Use the same formatter as the parent process root logger
-        root_logger = logging.getLogger()
-        if root_logger.handlers and root_logger.handlers[0].formatter:
-            handler.setFormatter(root_logger.handlers[0].formatter)
-        else:
-            # Fallback to a reasonable default format if no formatter is found
-            formatter = logging.Formatter(
-                "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-            handler.setFormatter(formatter)
+        # Forward subprocess log records into the main logging pipeline so the
+        # main kalinka-server handlers (and their levels/formatters) decide what
+        # to emit. This avoids a parallel StreamHandler that would bypass the
+        # server's log level filtering.
+        class SubprocessForwardingHandler(logging.Handler):
+            def emit(self, record):
+                target = logging.getLogger(record.name)
+                if target.isEnabledFor(record.levelno):
+                    target.handle(record)
+
+        handler = SubprocessForwardingHandler()
+
+        # In Python 3.14, respect_handler_level defaults to True; we keep it
+        # False for backward compatibility and to let the target logger handle
+        # level filtering.
         self._log_listener = logging.handlers.QueueListener(
-            self._logging_queue, handler
+            self._logging_queue, handler, respect_handler_level=False
         )
         self._log_listener.start()
 
