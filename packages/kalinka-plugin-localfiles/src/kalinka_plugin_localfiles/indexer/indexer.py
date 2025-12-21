@@ -44,7 +44,7 @@ _indexer_queue: asyncio.Queue = asyncio.Queue()
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
 _shutdown_event = asyncio.Event()
-_enricher_queue: multiprocessing.Queue = multiprocessing.Queue()
+_enricher_queue: Optional[multiprocessing.Queue] = None
 
 
 async def trigger_enricher_update(data):
@@ -54,6 +54,10 @@ async def trigger_enricher_update(data):
         return
 
     logger.info(f"Triggering enricher update with data: {data}")
+
+    if _enricher_queue is None:
+        logger.error("Enricher queue is not initialized; cannot trigger update")
+        return
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(

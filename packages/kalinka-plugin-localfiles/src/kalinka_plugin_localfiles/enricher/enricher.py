@@ -40,7 +40,7 @@ TRACK_REQUIRED_FIELDS = [
 
 # Global variables to manage enricher state
 _enricher_task: Optional[asyncio.Task] = None
-_enricher_queue: multiprocessing.Queue = multiprocessing.Queue()
+_enricher_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
@@ -405,6 +405,11 @@ class MetadataEnricher:
 async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     """Background worker task for the enricher"""
 
+    if _enricher_queue is None:
+        logger.error("Enricher queue is not initialized; stopping worker")
+        _shutdown_event.set()
+        return
+
     enricher_instance = MetadataEnricher(config, db_manager)
     enricher_tasks = set()
 
@@ -483,6 +488,9 @@ async def stop_enricher() -> bool:
     if _enricher_task and not _enricher_task.done():
         logger.info("Sending stop command to enricher task")
         try:
+            if _enricher_queue is None:
+                logger.error("Enricher queue is not initialized; cannot send stop")
+                return False
             _enricher_queue.put("stop")
 
             await asyncio.wait_for(_enricher_task, timeout=10.0)
