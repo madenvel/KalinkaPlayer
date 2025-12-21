@@ -109,3 +109,9 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         if self._log_listener is not None:
             self._log_listener.stop()
+
+        # Ensure multiprocessing queues release their semaphores
+        for q in (self._enricher_queue, self._logging_queue):
+            if q is not None:
+                q.close()
+                q.join_thread()
