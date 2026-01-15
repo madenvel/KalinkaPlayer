@@ -1,134 +1,193 @@
 # kalinka_plugin_sdk/api.py
-from abc import ABC, abstractmethod
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol, Optional, TypeVar, Generic, Union
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from enum import Enum
+from typing import Any, Generic, Literal, Optional, Protocol, TypeVar, Union
 
-from kalinka_plugin_sdk.datamodel import PlaybackMode, PlayerState, Track, TrackList
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
-from kalinka_plugin_sdk.module_config import ModuleConfig
+from pydantic import BaseModel, ConfigDict
 
-from .inputmodule import InputModule, TrackInfo
-from .events import AnyEventPayload, EventType
+from .datamodel import EntityId, PlaybackMode, PlaybackState, Track, TrackList
+from .inputmodule import TrackInfo
 
 API_VERSION = "1.0"
 
 
-class PluginType(Enum):
-    """Enumeration of plugin types."""
-
-    INPUT_MODULE = "input_module"
-    OUTPUT_DEVICE = "output_device"
-    EVENT_LISTENER = "event_listener"
-
-
-class PluginException(Exception):
-    """Base exception for plugin-related errors."""
-
-    pass
-
-
-class PluginSetupException(PluginException):
-    """Raised when plugin setup fails."""
-
-    pass
-
-
-class PluginInterfaceException(PluginException):
-    """Raised when plugin interface is invalid."""
-
-    pass
-
-
-class PlayQueueAPI(Protocol):
+class PlayQueueController(Protocol):
     """
     Contract for play queue operations.
     All methods should be implemented by the play queue provider.
     """
 
-    def play(self, index: Optional[int] = None) -> None:
+    async def play(self, index: Optional[int] = None) -> None:
         """Start playback at the given index, or resume if index is None."""
         ...
 
-    def play_next(self, index: int) -> None:
+    async def play_next(self, index: int) -> None:
         """Play the track at the given index next."""
         ...
 
-    def pause(self, paused: bool) -> None:
+    async def pause(self, paused: bool) -> None:
         """Pause or resume playback.
         If paused is True, pause playback; if False, resume playback.
         """
         ...
 
-    def next(self) -> None:
+    async def next(self) -> None:
         """Skip to the next track."""
         ...
 
-    def prev(self) -> None:
+    async def prev(self) -> None:
         """Go back to the previous track."""
         ...
 
-    def seek(self, position_ms: int) -> None:
+    async def seek(self, position_ms: int) -> None:
         """Seek to the given position in milliseconds."""
         ...
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop playback."""
         ...
 
-    def add(self, tracks: list[TrackInfo]) -> None:
+    async def add(self, tracks: list[TrackInfo]) -> None:
         """Add tracks to the queue."""
         ...
 
-    def remove(self, tracks: list[int]) -> None:
+    async def remove(self, tracks: list[int]) -> None:
         """Remove tracks by their indices."""
         ...
 
-    def list(self, offset: int, limit: int) -> TrackList:
+    async def list(self, offset: int, limit: int) -> TrackList:
         """List tracks in the queue with pagination."""
         ...
 
-    def get_track_info(self, index: int) -> Optional[Track]:
+    async def get_track_info(self, index: int) -> Optional[Track]:
         """Get info for the track at the given index."""
         ...
 
-    def get_state(self) -> PlayerState:
+    async def get_playback_state(self) -> PlaybackState:
         """Get the current playback state."""
         ...
 
-    def clear(self) -> None:
+    async def restore_from_state(
+        self,
+        state: Any,
+        track_info_retriever: Callable[[EntityId], Awaitable[TrackInfo]],
+    ) -> None:
+        """Restore the playback state from a saved state."""
+        ...
+
+    async def clear(self):
         """Clear the play queue.
         Stops the playback if it is active.
         """
         ...
 
-    def set_playback_mode(
+    async def set_playback_mode(
         self,
         shuffle: Optional[bool],
         repeat_single: Optional[bool],
         repeat_all: Optional[bool],
-    ) -> None:
+    ) -> PlaybackMode:
         """Set playback modes: shuffle, repeat single, repeat all."""
         ...
 
-    def get_playback_mode(self) -> PlaybackMode:
+    async def get_playback_mode(self) -> PlaybackMode:
         """Get the current playback mode."""
         ...
 
 
-class EventEmitterAPI(Protocol):
-    def dispatch(self, event: AnyEventPayload) -> None: ...
+E_contra = TypeVar("E_contra", bound=Enum, contravariant=True)
+E = TypeVar("E", bound=Enum)
+S = TypeVar("S")
 
 
-class SubscriptionHandle(Protocol):
-    def unsubscribe(self) -> None: ...
+class BaseEvent(BaseModel, Generic[E]):
+    """Base event type for user-defined events.
+
+    Users should subclass this and add event-specific fields.
+    `event_type` should be set to an enum value describing the event.
+    Global sequence `seq` is assigned by the bus on dispatch.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    event_type: E
+    seq: int = 0
 
 
-class EventListenerAPI(Protocol):
+class ReplayEvent(BaseModel, Generic[S]):
+    """Synthetic event delivered first on subscription containing a snapshot of state.
+
+    `seq` is the per-subscription sequence number (starts at 0).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    event_type: Literal["replay_event"] = "replay_event"
+    state: S
+    seq: int
+
+
+EV_emit = TypeVar("EV_emit", bound=BaseEvent, contravariant=True)
+EV_listen = TypeVar("EV_listen", bound=BaseEvent, covariant=True)
+
+
+class EventEmitter(Protocol[EV_emit]):
+    def dispatch(self, event: EV_emit) -> None:
+        """Dispatch a new event to the bus (thread-safe)."""
+        ...
+
+
+class AsyncEventStream(Protocol[EV_listen, S]):
+    """Protocol for async iteration over events.
+
+    Represents an async iterable stream of events that can be consumed
+    using async for loops. May include replay events at the start of the stream.
+    """
+
+    def __aiter__(self) -> "AsyncEventStream[EV_listen, S]":
+        """Return the async iterator object."""
+        ...
+
+    async def __anext__(self) -> Union[EV_listen, ReplayEvent[S]]:
+        """Return the next event in the stream.
+
+        Raises StopAsyncIteration when the stream is closed.
+        """
+        ...
+
+
+class EventListener(Protocol[E_contra, EV_listen, S]):
     def subscribe(
-        self, topic: EventType, handler: Callable[[AnyEventPayload], None]
-    ) -> SubscriptionHandle: ...
+        self,
+        event_types: Iterable[E_contra],
+        callback: Optional[Callable[[Union[EV_listen, ReplayEvent[S]]], None]] = None,
+        listener_id: Optional[str] = None,
+    ) -> "Subscription":
+        """Subscribe to event types with optional callback; returns a Subscription."""
+        ...
+
+    def unsubscribe(self, listener_id: str) -> None:
+        """Unsubscribe and close the listener's queue."""
+        ...
+
+    def stream(
+        self,
+        event_types: Iterable[E_contra],
+    ) -> "AsyncEventStream[EV_listen, S]":
+        """Create an async event stream for the given event types.
+
+        Returns an AsyncEventStream that can be consumed using async for loops.
+        The stream will include a replay event at the start containing the current state.
+        """
+        ...
+
+
+class Subscription(Protocol):
+    @property
+    def id(self) -> str:  # unique per subscription
+        ...
+
+    def unsubscribe(self) -> None: ...
 
 
 class LoggerAPI(Protocol):
@@ -138,107 +197,3 @@ class LoggerAPI(Protocol):
     def error(self, msg, *args, **kwargs): ...
     def critical(self, msg, *args, **kwargs): ...
     def fatal(self, msg, *args, **kwargs): ...
-
-
-# Type variable for plugin interfaces
-T = TypeVar("T", InputModule, ExternalOutputDevice, None)
-
-
-@dataclass
-class PluginContext:
-    playqueue: PlayQueueAPI
-    event_emitter: EventEmitterAPI
-    listener: EventListenerAPI
-    logger: LoggerAPI
-    plugin_id: str
-    sdk_version: str  # equals API_VERSION
-    capabilities: set[str]
-    config: ModuleConfig
-
-
-class PluginBase(ABC):
-    PLUGIN_ID: str
-    REQUIRES_SDK: str
-    PLUGIN_TYPE: PluginType
-    CONFIG_MODEL: type[ModuleConfig]
-
-    @abstractmethod
-    def setup(self, context: PluginContext) -> None:
-        """Called when the plugin is being loaded. Initialize resources here.
-
-        Raises:
-            PluginSetupException: If setup fails
-        """
-        ...
-
-    def shutdown(self) -> None:
-        """Called when the plugin is being unloaded. Clean up resources here.
-        Should not raise exceptions - log errors instead.
-        """
-        pass
-
-
-class TypedPluginBase(PluginBase, Generic[T]):
-    """Base class for plugins with typed interfaces."""
-
-    def get_interface(self) -> Optional[T]:
-        """Return the plugin's specific interface if applicable."""
-        return None
-
-
-class InputModulePlugin(TypedPluginBase[InputModule]):
-    """Base class for input module plugins."""
-
-    PLUGIN_TYPE = PluginType.INPUT_MODULE
-
-    @abstractmethod
-    def get_interface(self) -> Optional[InputModule]:
-        """Return the plugin's specific interface if applicable."""
-        ...
-
-
-class OutputDevicePlugin(TypedPluginBase[ExternalOutputDevice]):
-    """Base class for output device plugins."""
-
-    PLUGIN_TYPE = PluginType.OUTPUT_DEVICE
-
-    @abstractmethod
-    def get_interface(self) -> Optional[ExternalOutputDevice]:
-        """Return the plugin's specific interface if applicable."""
-        ...
-
-
-class EventListenerPlugin(TypedPluginBase[None]):
-    """Base class for event listener plugins."""
-
-    PLUGIN_TYPE = PluginType.EVENT_LISTENER
-
-
-# def get_plugin_type(plugin: PluginBase) -> PluginType:
-#     """Get the plugin type safely."""
-#     return plugin.PLUGIN_TYPE
-
-
-def validate_plugin_consistency(plugin: PluginBase) -> bool:
-    """Validate that plugin type matches its interface capabilities."""
-    plugin_type = plugin.PLUGIN_TYPE
-
-    if plugin_type == PluginType.INPUT_MODULE:
-        return isinstance(plugin, InputModulePlugin)
-    elif plugin_type == PluginType.OUTPUT_DEVICE:
-        return isinstance(plugin, OutputDevicePlugin)
-    elif plugin_type == PluginType.EVENT_LISTENER:
-        return isinstance(plugin, EventListenerPlugin)
-
-    return False
-
-
-def cast_plugin_interface(
-    plugin: PluginBase,
-) -> Union[InputModule, ExternalOutputDevice, None]:
-    """Safely cast plugin to its interface type."""
-    if isinstance(plugin, (InputModulePlugin, OutputDevicePlugin)):
-        interface = plugin.get_interface()
-        if validate_plugin_consistency(plugin):
-            return interface
-    return None
