@@ -1,11 +1,11 @@
 import asyncio
 import heapq
-from typing import Callable, Sequence
+from typing import Awaitable, Callable, Sequence
 
 from kalinka_plugin_sdk.datamodel import BrowseItem, BrowseItemList, FavoriteIds
 from kalinka_plugin_sdk.inputmodule import InputModule
 
-BrowseItemsSource = Callable[[int, int], BrowseItemList]
+BrowseItemsSource = Callable[[int, int], Awaitable[BrowseItemList]]
 ComparedValue = Callable[[BrowseItem], int]
 
 
@@ -41,12 +41,7 @@ async def k_way_merge_browse_items(
 
     # Initialize each data source in parallel
     async def fetch_initial_data(list_idx, data_source):
-        """Fetch initial data for a single source in a thread pool"""
-        loop = asyncio.get_event_loop()
-
-        browse_list = await loop.run_in_executor(
-            None, data_source, 0, initial_chunk_size
-        )
+        browse_list = await data_source(0, initial_chunk_size)
         return list_idx, browse_list
 
     # Fetch initial data from all sources in parallel
@@ -165,10 +160,7 @@ async def flat_merge(
     total_count = 0
 
     # Fetch data from all sources in parallel
-    fetch_tasks = [
-        asyncio.get_event_loop().run_in_executor(None, data_source, offset, limit)
-        for data_source in data_sources
-    ]
+    fetch_tasks = [data_source(offset, limit) for data_source in data_sources]
     browse_lists = await asyncio.gather(*fetch_tasks)
 
     # Merge all results

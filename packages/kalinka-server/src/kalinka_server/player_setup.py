@@ -1,31 +1,48 @@
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from enum import Enum
 from importlib.metadata import entry_points
-from queue import Queue
-from typing import Generator
-from kalinka_plugin_sdk.api import (
-    PluginContext,
+from typing import AsyncGenerator, Generator
+
+from kalinka_eventbus import EventBus
+from kalinka_plugin_sdk import API_VERSION, DeviceVolume
+from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
+from kalinka_plugin_sdk.events import (
+    PlayQueueState,
+    PlayQueueEvent,
+    PlayQueueEventType,
+)
+from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
+from kalinka_plugin_sdk.ext_device_events import (
+    ExtDeviceEvent,
+    ExtDeviceEventType,
+    ExtDeviceState,
+)
+from kalinka_plugin_sdk.inputmodule import InputModule
+from kalinka_plugin_sdk.module_config import ModuleConfig
+from kalinka_plugin_sdk.plugin import (
+    InputPluginContext,
+    OutputDevicePluginContext,
+    PluginBase,
     PluginType,
     cast_plugin_interface,
 )
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
-from kalinka_plugin_sdk.inputmodule import InputModule
-from kalinka_plugin_sdk.module_config import ModuleConfig
-from kalinka_plugin_sdk import API_VERSION
-from kalinka_server.plugin_event_queue import PluginEventQueue
+from pydantic import BaseModel, ConfigDict
 
-from .async_common import EventEmitter, EventListener
 from .config_model import KalinkaConfig
-from .playqueue import PlayQueue
-from kalinka_plugin_sdk.api import PluginBase
-from .plugin_api import (
-    EventEmitterAPIImpl,
-    PlayQueueAPIImpl,
-)
+from .playqueue import PlayQueueImpl
+from kalinka_plugin_sdk.api import PlayQueueController
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+@dataclass
+class PlayerContext:
+    playqueue: PlayQueueController
+    playqueue_eventbus: EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent]  # type: ignore[type-var]
+    ext_device_eventbus: EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent]  # type: ignore[type-var]
 
 
 class ModuleHealthState(str, Enum):
@@ -36,46 +53,59 @@ class ModuleHealthState(str, Enum):
     DISABLED = "disabled"
 
 
+@dataclass
 class PreparedPlugin:
     """A class to hold prepared plugins for shutdown."""
 
-    def __init__(self, plugin_class: type[PluginBase]):
-        self.plugin_class = plugin_class
-        self.plugin_instance = None
-        self.health_state = ModuleHealthState.DISABLED
-        self.error_message: str | None = None
+    plugin_class: type[PluginBase]
+    plugin_instance: PluginBase | None
+    health_state: ModuleHealthState
+    plugin_context: InputPluginContext | OutputDevicePluginContext
+    interface: InputModule | ExternalOutputDevice | None
+    error_message: str | None = None
 
-    def setup(self, plugin_context: PluginContext):
+    @classmethod
+    async def setup(cls, 
+              plugin_class: type[PluginBase],
+              plugin_context: InputPluginContext | OutputDevicePluginContext):
         """Setup the module with the provided components."""
-        self.plugin_instance = self.plugin_class()
-        self.plugin_context = plugin_context
+        plugin_instance = plugin_class()
+        health_state = ModuleHealthState.DISABLED
+        interface = None
         if plugin_context.config.enabled is True:
-            self.plugin_instance.setup(plugin_context)
-            self.health_state = ModuleHealthState.READY
-            self.interface = cast_plugin_interface(self.plugin_instance)
+            await plugin_instance.setup(plugin_context)
+            health_state = ModuleHealthState.READY
+            interface = cast_plugin_interface(plugin_instance)
         else:
-            self.health_state = ModuleHealthState.DISABLED
-            self.interface = None
             logger.info(
-                f"Plugin {self.plugin_class.PLUGIN_ID} is disabled in configuration - skipping setup"
+                f"Plugin {plugin_class.PLUGIN_ID} is disabled in configuration - skipping setup"
             )
 
-    def shutdown(self):
+        return cls(
+            plugin_class=plugin_class,
+            plugin_instance=plugin_instance,
+            health_state=health_state,
+            plugin_context=plugin_context,
+            interface=interface,
+        )
+
+    async def shutdown(self):
         """Shutdown the module if it has a shutdown method."""
         if self.plugin_instance:
-            self.plugin_instance.shutdown()
+            await self.plugin_instance.shutdown()
 
 
+@dataclass
 class PreparedModuleCollection:
     """A collection to hold prepared input modules and devices."""
 
-    def __init__(self):
-        self.prepared_input_modules: dict[str, PreparedPlugin] = {}
-        self.prepared_devices: dict[str, PreparedPlugin] = {}
-        self.enabled_input_modules: set[str] = set()
-        self.enabled_devices: set[str] = set()
+    prepared_input_modules: dict[str, PreparedPlugin] = field(default_factory=dict)
+    prepared_devices: dict[str, PreparedPlugin] = field(default_factory=dict)
+    enabled_input_modules: set[str] = field(default_factory=set)
+    enabled_devices: set[str] = field(default_factory=set)
+    player_context: PlayerContext | None = None
 
-    def update_enabled_input_modules(self):
+    def _update_enabled_input_modules(self):
         """Update the set of enabled input module names."""
         self.enabled_input_modules = {
             name
@@ -83,7 +113,7 @@ class PreparedModuleCollection:
             if module.health_state == ModuleHealthState.READY
         }
 
-    def update_enabled_devices(self):
+    def _update_enabled_devices(self):
         """Update the set of enabled device names."""
         self.enabled_devices = {
             name
@@ -91,150 +121,169 @@ class PreparedModuleCollection:
             if module.health_state == ModuleHealthState.READY
         }
 
+    def _scan_entry_points(self) -> Generator[tuple[str, type], None, None]:
+        """Scan for installed plugins using entry points and yield classes derived from PluginBase."""
+
+        try:
+            eps = entry_points(group="kalinka.plugins")
+        except Exception as e:
+            logger.warning(f"Failed to load entry points: {e}")
+            return
+
+        for ep in eps:
+            try:
+                logger.debug(f"Loading entry point: {ep.name}")
+
+                # Load the class from the entry point
+                plugin_cls = ep.load()
+
+                # Check if it's a subclass of PluginBase
+                if isinstance(plugin_cls, type) and issubclass(plugin_cls, PluginBase):
+                    # Check for required attributes
+                    if hasattr(plugin_cls, "PLUGIN_ID"):
+                        logger.info("Found plugin class: %s, name: %s", plugin_cls.PLUGIN_TYPE, plugin_cls.PLUGIN_ID)
+                        yield (plugin_cls.PLUGIN_ID, plugin_cls)
+                    else:
+                        logger.warning(
+                            f"Plugin class {ep.name} is missing required attribute: PLUGIN_ID"
+                        )
+                else:
+                    logger.warning(
+                        f"Entry point {ep.name} is not a subclass of PluginBase"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to load plugin {ep.name}: {e}", exc_info=True)
+
+    def _read_or_create_module_config(
+        self, config_path: str, plugin_name: str, plugin_class: type[PluginBase]
+    ):
+        """Read or create a module configuration file.
+        If the file does not exist, it will be created with the default configuration.
+        """
+        config_file = os.path.join(config_path, f"{plugin_name}_config.cfg")
+
+        config_data: dict | None = None
+
+        try:
+            with open(config_file, "r") as f:
+                config_data = json.load(f)
+        except FileNotFoundError:
+            logger.warning(
+                f"Config file not found for {plugin_name}, creating default config."
+            )
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON config for {plugin_name}: {e}")
+
+        if config_data is None:
+            logger.info(f"Creating default config for {plugin_name} at {config_file}")
+            return plugin_class.CONFIG_MODEL()
+
+        return plugin_class.CONFIG_MODEL(**config_data)
+
+    async def _scan_and_setup_plugins_from_entry_points(
+        self,
+        config_path: str,
+    ) -> AsyncGenerator[tuple[str, PreparedPlugin], None]:
+        """Scan for installed plugins using entry points and setup those matching the specified type."""
+
+        for plugin_name, plugin_class in self._scan_entry_points():
+
+            logger.info(f"Found plugin: {plugin_name}")
+            prepared_module = None
+            try:
+                config = self._read_or_create_module_config(
+                    config_path, plugin_name, plugin_class
+                )
+                plugin_context = self._make_plugin_context(
+                    plugin_name, plugin_class, config
+                )
+                prepared_module = await PreparedPlugin.setup(plugin_class, plugin_context)
+
+            except Exception as e:
+                logger.error(f"Failed to setup plugin {plugin_name}: {e}")
+                if prepared_module is not None:
+                    prepared_module.health_state = ModuleHealthState.ERROR
+                    prepared_module.error_message = str(e)
+
+            if prepared_module is not None:
+                yield plugin_name, prepared_module
+
+    def _make_plugin_context(
+        self,
+        name: str,
+        plugin_class: type[PluginBase],
+        config: ModuleConfig,
+    ) -> InputPluginContext | OutputDevicePluginContext:
+        """Create a PluginContext instance."""
+        if self.player_context is None:
+            raise ValueError("PlayerContext is not set in PreparedModuleCollection")
+        
+        match plugin_class.PLUGIN_TYPE:
+            case PluginType.INPUT_MODULE:
+                return InputPluginContext(
+                    playqueue=self.player_context.playqueue,
+                    listener=self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
+                    logger=logging.getLogger(name),
+                    plugin_id=name,
+                    sdk_version=API_VERSION,
+                    config=config,
+                )
+            case PluginType.OUTPUT_DEVICE:
+                return OutputDevicePluginContext(
+                    listener=self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
+                    emitter=self.player_context.ext_device_eventbus,  # type: ignore[arg-type]
+                    logger=logging.getLogger(name),
+                    plugin_id=name,
+                    sdk_version=API_VERSION,
+                    config=config,
+                )
+            case _:
+                raise ValueError(
+                    f"Unsupported plugin type: {plugin_class.PLUGIN_TYPE}"
+                )
+
+        return PluginContext(
+            playqueue=self.player_context.playqueue,
+            listener=self.player_context.playqueue_eventbus,
+            logger=logging.getLogger(name),
+            plugin_id=name,
+            sdk_version=API_VERSION,
+            capabilities=set(),
+            config=config,
+        )
+
+    async def scan_and_setup_plugins(
+        self,
+        config_path: str,
+        player_context: PlayerContext,
+    ):
+        """Scan for input modules from both entry points and legacy filesystem locations."""
+
+        # First, scan for input modules using entry points
+        self.player_context = player_context
+        input_modules = {}
+        devices = {}
+        async for (
+            plugin_name,
+            prepared_plugin,
+        ) in self._scan_and_setup_plugins_from_entry_points(config_path):
+            plugin_type = prepared_plugin.plugin_class.PLUGIN_TYPE
+            if plugin_type == PluginType.INPUT_MODULE:
+                input_modules[plugin_name] = prepared_plugin
+            elif plugin_type == PluginType.OUTPUT_DEVICE:
+                devices[plugin_name] = prepared_plugin
+
+        self.prepared_input_modules = {**input_modules}
+        self._update_enabled_input_modules()
+
+        self.prepared_devices = {**devices}
+        self._update_enabled_devices()
 
 modules = PreparedModuleCollection()
 
 
-def scan_entry_points() -> Generator[tuple[str, type], None, None]:
-    """Scan for installed plugins using entry points and yield classes derived from PluginBase."""
-
-    try:
-        eps = entry_points(group="kalinka.plugins")
-    except Exception as e:
-        logger.warning(f"Failed to load entry points: {e}")
-        return
-
-    for ep in eps:
-        try:
-            logger.debug(f"Loading entry point: {ep.name}")
-
-            # Load the class from the entry point
-            plugin_cls = ep.load()
-
-            # Check if it's a subclass of PluginBase
-            if isinstance(plugin_cls, type) and issubclass(plugin_cls, PluginBase):
-                # Check for required attributes
-                if hasattr(plugin_cls, "PLUGIN_ID"):
-                    logger.info("Found plugin class: %s", plugin_cls.PLUGIN_ID)
-                    yield (plugin_cls.PLUGIN_ID, plugin_cls)
-                else:
-                    logger.warning(
-                        f"Plugin class {ep.name} is missing required attribute: PLUGIN_ID"
-                    )
-            else:
-                logger.warning(f"Entry point {ep.name} is not a subclass of PluginBase")
-
-        except Exception as e:
-            logger.error(f"Failed to load plugin {ep.name}: {e}", exc_info=True)
-
-
-def read_or_create_module_config(
-    config_path: str, plugin_name: str, plugin_class: type[PluginBase]
-):
-    """Read or create a module configuration file.
-    If the file does not exist, it will be created with the default configuration.
-    """
-    config_file = os.path.join(config_path, f"{plugin_name}_config.cfg")
-
-    config_data: dict | None = None
-
-    try:
-        with open(config_file, "r") as f:
-            config_data = json.load(f)
-    except FileNotFoundError:
-        logger.warning(
-            f"Config file not found for {plugin_name}, creating default config."
-        )
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON config for {plugin_name}: {e}")
-
-    if config_data is None:
-        logger.info(f"Creating default config for {plugin_name} at {config_file}")
-        return plugin_class.CONFIG_MODEL()
-
-    return plugin_class.CONFIG_MODEL(**config_data)
-
-
-def scan_and_setup_plugins_from_entry_points(
-    config_path: str,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
-) -> Generator[tuple[str, PreparedPlugin], None, None]:
-    """Scan for installed plugins using entry points and setup those matching the specified type."""
-
-    for plugin_name, plugin_class in scan_entry_points():
-
-        logger.info(f"Found plugin: {plugin_name}")
-        prepared_module = None
-        try:
-            config = read_or_create_module_config(
-                config_path, plugin_name, plugin_class
-            )
-            prepared_module = PreparedPlugin(plugin_class)
-            plugin_context = make_plugin_context(
-                plugin_name, playqueue, event_emitter, event_listener, config
-            )
-            prepared_module.setup(plugin_context)
-
-        except Exception as e:
-            logger.error(f"Failed to setup plugin {plugin_name}: {e}")
-            if prepared_module is not None:
-                prepared_module.health_state = ModuleHealthState.ERROR
-                prepared_module.error_message = str(e)
-
-        if prepared_module is not None:
-            yield plugin_name, prepared_module
-
-
-def make_plugin_context(
-    name: str,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
-    config: ModuleConfig,
-) -> PluginContext:
-    """Create a PluginContext instance."""
-    return PluginContext(
-        playqueue=PlayQueueAPIImpl(playqueue),
-        event_emitter=EventEmitterAPIImpl(event_emitter),
-        listener=PluginEventQueue(event_listener),
-        logger=logging.getLogger(name),
-        plugin_id=name,
-        sdk_version=API_VERSION,
-        capabilities=set(),
-        config=config,
-    )
-
-
-def scan_and_setup_plugins(
-    config_path: str,
-    playqueue: PlayQueue,
-    event_emitter: EventEmitter,
-    event_listener: EventListener,
-):
-    """Scan for input modules from both entry points and legacy filesystem locations."""
-
-    # First, scan for input modules using entry points
-    input_modules = {}
-    devices = {}
-    for plugin_name, prepared_plugin in scan_and_setup_plugins_from_entry_points(
-        config_path, playqueue, event_emitter, event_listener
-    ):
-        plugin_type = prepared_plugin.plugin_class.PLUGIN_TYPE
-        if plugin_type == PluginType.INPUT_MODULE:
-            input_modules[plugin_name] = prepared_plugin
-        elif plugin_type == PluginType.OUTPUT_DEVICE:
-            devices[plugin_name] = prepared_plugin
-
-    modules.prepared_input_modules = {**input_modules}
-    modules.update_enabled_input_modules()
-
-    modules.prepared_devices = {**devices}
-    modules.update_enabled_devices()
-
-
-def setup(config_path: str, config: KalinkaConfig) -> tuple[PlayQueue, EventListener]:
+async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
     """
     Setup the player components.
 
@@ -245,22 +294,34 @@ def setup(config_path: str, config: KalinkaConfig) -> tuple[PlayQueue, EventList
         tuple: (playqueue, event_listener)
     """
 
+    playqueue_eventbus=EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](  # type: ignore[type-var]
+            initial_state=PlayQueueState(
+                playbackState=PlaybackState(),
+                trackList=[],
+                playbackMode=PlaybackMode(
+                    shuffle=False, repeat_single=False, repeat_all=False
+                ),
+            )
+        )
+    
     # Create core components
-    queue = Queue()
-    event_emitter = EventEmitter(queue)
-    event_listener = EventListener(queue)
-    playqueue = PlayQueue(config, event_emitter)
-
+    player_context = PlayerContext(
+        playqueue_eventbus=playqueue_eventbus,
+        playqueue=PlayQueueImpl(config, playqueue_eventbus),
+        ext_device_eventbus=EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent](  # type: ignore[type-var]
+            initial_state=ExtDeviceState(power_on=False, volume=DeviceVolume())
+        ),
+    )
     # Scan and setup plugins
-    scan_and_setup_plugins(config_path, playqueue, event_emitter, event_listener)
+    await modules.scan_and_setup_plugins(config_path, player_context)
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))
 
-    return playqueue, event_listener
+    return player_context
 
 
-def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str):
+async def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str):
     """Shutdown all modules and save their configurations."""
     for module_name, prepared_module in modules.items():
         logger.info(f"Shutting down module: {module_name}")
@@ -269,7 +330,7 @@ def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str):
             continue
 
         try:
-            prepared_module.plugin_instance.shutdown()
+            await prepared_module.plugin_instance.shutdown()
         except Exception as e:
             logger.error(f"Error shutting down module {module_name}: {e}")
 
@@ -279,13 +340,16 @@ def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str):
         if config_dir:  # Only create directory if path is not empty
             os.makedirs(config_dir, exist_ok=True)
 
-        with open(config_file_path, "w") as f:
-            json.dump(prepared_module.plugin_context.config.model_dump(), f, indent=2)
-            logger.info(f"Saved config for module {module_name} to {config_file_path}")
+        if prepared_module.plugin_context is not None:
+            with open(config_file_path, "w") as f:
+                json.dump(prepared_module.plugin_context.config.model_dump(), f, indent=2)
+                logger.info(f"Saved config for module {module_name} to {config_file_path}")
 
 
-def shutdown(config_path: str):
-    global prepared_input_modules, prepared_devices
+async def shutdown(config_path: str):
+    """Shutdown all plugin modules."""
+    global modules
 
-    shutdown_modules(modules.prepared_input_modules, config_path)
-    shutdown_modules(modules.prepared_devices, config_path)
+    await shutdown_modules(modules.prepared_input_modules, config_path)
+    await shutdown_modules(modules.prepared_devices, config_path)
+

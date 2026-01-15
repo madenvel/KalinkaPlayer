@@ -91,6 +91,23 @@ class FixupsConfig(BaseModel):
     )
 
 
+class DeviceAutomationConfig(BaseModel):
+    """Device automation configuration."""
+
+    auto_power_on: bool = Field(
+        default=True,
+        title="Automatically turn on device when playback starts",
+    )
+    auto_power_off: bool = Field(
+        default=True,
+        title="Automatically turn off device when playback stops",
+    )
+    pause_timeout_seconds: int = Field(
+        default=60,
+        title="Stop playback if paused for this many seconds (0 to disable)",
+    )
+
+
 class KalinkaConfig(BaseModel):
     """Main Kalinka configuration model"""
 
@@ -106,5 +123,8 @@ class KalinkaConfig(BaseModel):
     )
     fixups: FixupsConfig = Field(
         default_factory=FixupsConfig, title="Hacks to work around hardware issues"
+    )
+    device_automation: DeviceAutomationConfig = Field(
+        default_factory=DeviceAutomationConfig, title="Automatic device management"
     )
     restart: bool = Field(default=False, title="Restart the server")
