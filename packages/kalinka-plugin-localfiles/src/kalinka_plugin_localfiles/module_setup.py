@@ -3,7 +3,7 @@ import logging.handlers
 import multiprocessing
 from typing import Optional
 
-from kalinka_plugin_sdk.api import PluginContext, InputModulePlugin
+from kalinka_plugin_sdk.plugin import InputPluginContext, InputModulePlugin
 from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .config_model import LocalFilesConfig
@@ -35,16 +35,14 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def get_interface(self) -> Optional[InputModule]:
         return self._inputmodule
 
-    def setup(self, context: PluginContext) -> None:
+    async def setup(self, context: InputPluginContext) -> None:
         config = LocalFilesConfig(**context.config.model_dump())
         logger.info("Setting up localfiles input module")
 
         input_module_db = LocalFilesInputModuleDb(config)
 
         # The LocalFilesInputModule will use its own specialized DB
-        self._inputmodule = LocalFilesInputModule(
-            config, input_module_db, context.event_emitter
-        )
+        self._inputmodule = LocalFilesInputModule(config, input_module_db)
 
         # Forward subprocess log records into the main logging pipeline so the
         # main kalinka-server handlers (and their levels/formatters) decide what
@@ -103,7 +101,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         except Exception as e:
             logger.error(f"Error shutting down process {proc.pid}: {e}")
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         logger.info("Shutting down localfiles input module")
 
         self._shutdown_process(self._indexer_proc)

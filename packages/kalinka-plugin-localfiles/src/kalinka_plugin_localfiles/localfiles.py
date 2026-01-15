@@ -8,7 +8,6 @@ import mimetypes
 from fastapi import HTTPException
 from .config_model import LocalFilesConfig
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
-from kalinka_plugin_sdk.api import EventEmitterAPI
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
@@ -75,11 +74,9 @@ class LocalFilesInputModule(InputModule):
         self,
         config: LocalFilesConfig,
         db_manager: LocalFilesInputModuleDb,
-        event_emitter: EventEmitterAPI,
     ):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.db_manager = db_manager
-        self.event_emitter = event_emitter
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
         # Ensure artwork directories exist
@@ -95,7 +92,7 @@ class LocalFilesInputModule(InputModule):
         """Return the name of the module"""
         return "localfiles"
 
-    def search(
+    async def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:
         """Search for items in the local database"""
@@ -151,7 +148,7 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def browse(
+    async def browse(
         self,
         entity_id: EntityId,
         offset: int = 0,
@@ -170,13 +167,13 @@ class LocalFilesInputModule(InputModule):
         elif entity_id.type == EntityType.PLAYLIST:
             return self._browse_playlist(entity_id.id, offset, limit)
         elif entity_id.type == EntityType.CATALOG:
-            return self.browse_catalog(
+            return await self.browse_catalog(
                 entity_id.id, offset=offset, limit=limit, genre_ids=genre_ids
             )
 
         return EmptyList(offset, limit)
 
-    def browse_catalog(
+    async def browse_catalog(
         self,
         endpoint: str,
         offset: int = 0,
@@ -445,7 +442,7 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
+    async def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         """Get track info for a list of track IDs"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -482,7 +479,7 @@ class LocalFilesInputModule(InputModule):
 
         return result
 
-    def list_favorite(
+    async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """List favorites - for playlists, returns all user playlists"""
@@ -505,23 +502,23 @@ class LocalFilesInputModule(InputModule):
             # For other types, return an empty list as before
             return EmptyList(offset, limit)
 
-    def get_favorite_ids(self) -> FavoriteIds:
+    async def get_favorite_ids(self) -> FavoriteIds:
         """Get favorite IDs (not supported)"""
         return FavoriteIds(tracks=[], albums=[], artists=[], playlists=[])
 
-    def add_to_favorite(self, id: str):
+    async def add_to_favorite(self, id: str):
         """Add to favorites (not supported)"""
         logger.warning("Favorites are not supported in local files input module")
 
-    def remove_from_favorite(self, id: str):
+    async def remove_from_favorite(self, id: str):
         """Remove from favorites (not supported)"""
         logger.warning("Favorites are not supported in local files input module")
 
-    def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
+    async def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
         """List genres (not implemented yet)"""
         return GenreList(total=0, offset=offset, limit=limit, items=[])
 
-    def get(self, entity_id: EntityId) -> BrowseItem:
+    async def get(self, entity_id: EntityId) -> BrowseItem:
         """Get details for a specific entity by ID"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -591,7 +588,9 @@ class LocalFilesInputModule(InputModule):
 
         return self._create_playlist_browse_item(playlist)
 
-    def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
+    async def playlist_user_list(
+        self, offset: int = 0, limit: int = 25
+    ) -> BrowseItemList:
         """List user playlists"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -605,7 +604,7 @@ class LocalFilesInputModule(InputModule):
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def playlist_create(self, name: str, description: str) -> Playlist:
+    async def playlist_create(self, name: str, description: str) -> Playlist:
         """Create playlist"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -634,7 +633,7 @@ class LocalFilesInputModule(InputModule):
             owner=owner,
         )
 
-    def playlist_update(
+    async def playlist_update(
         self, id: str, name: Optional[str], description: Optional[str]
     ) -> Playlist:
         """Update playlist"""
@@ -669,7 +668,7 @@ class LocalFilesInputModule(InputModule):
 
         return playlist_obj
 
-    def playlist_delete(self, id: str):
+    async def playlist_delete(self, id: str):
         """Delete playlist"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
@@ -679,7 +678,7 @@ class LocalFilesInputModule(InputModule):
 
         self.db_manager.delete_playlist(id)
 
-    def playlist_add_tracks(
+    async def playlist_add_tracks(
         self, id: str, track_ids: List[str], allow_duplicates: bool = False
     ) -> Playlist:
         """Add tracks to playlist"""
@@ -755,7 +754,7 @@ class LocalFilesInputModule(InputModule):
         # Create the cover image
         return create_playlist_cover_collage(album_ids, self.artwork_path, playlist_id)
 
-    def playlist_remove_tracks(
+    async def playlist_remove_tracks(
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
         """Remove tracks from playlist"""
@@ -1071,7 +1070,7 @@ class LocalFilesInputModule(InputModule):
 
         return None
 
-    def get_resource_path(self, id: str) -> str | None:
+    async def get_resource_path(self, id: str) -> str | None:
         """Get full path to a resource"""
         # Assuming the ID is the file path
         resource_path = (Path(self.artwork_path) / id).resolve()
