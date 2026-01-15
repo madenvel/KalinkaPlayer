@@ -1,9 +1,9 @@
 from typing import Optional
-from kalinka_plugin_sdk.api import (
-    PluginContext,
+from kalinka_plugin_sdk.plugin import (
+    OutputDevicePluginContext,
     OutputDevicePlugin,
 )
-from kalinka_plugin_sdk.events import EventType
+from kalinka_plugin_sdk.events import PlayQueueEventType
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 
 from .config_model import KalinkaPluginMusiccastConfig
@@ -22,20 +22,22 @@ class KalinkaPluginMusiccast(OutputDevicePlugin):
     def get_interface(self) -> Optional[ExternalOutputDevice]:
         return self._device
 
-    def setup(self, context: PluginContext) -> None:
+    async def setup(self, context: OutputDevicePluginContext) -> None:
         config = KalinkaPluginMusiccastConfig(**context.config.model_dump())
         self._device = KalinkaPluginMusiccastDevice(
-            config, context.playqueue, context.event_emitter
+            config, context.emitter, context.listener
         )
-        self._device_subscriptions.append(
-            context.listener.subscribe(
-                EventType.StateChanged, self._device._on_state_changed
-            )
-        )
+        # Start the device and its async tasks
+        await self._device.start()
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         for subscription in self._device_subscriptions:
             subscription.unsubscribe()
 
         self._device_subscriptions.clear()
+
+        # Terminate the device and all its async tasks
+        if self._device:
+            await self._device.terminate()
+
         self._device = None
