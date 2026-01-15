@@ -1,6 +1,6 @@
 from typing import Optional
-from kalinka_plugin_sdk.api import (
-    PluginContext,
+from kalinka_plugin_sdk.plugin import (
+    OutputDevicePluginContext,
     OutputDevicePlugin,
 )  # runtime Protocols
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
@@ -20,8 +20,11 @@ class KalinkaPluginDummydevice(OutputDevicePlugin):
     def get_interface(self) -> Optional[ExternalOutputDevice]:
         return self._device
 
-    def setup(self, context: PluginContext) -> None:
-        self._device = DummyDevice(context.event_emitter)
+    async def setup(self, context: OutputDevicePluginContext) -> None:
+        self._device = DummyDevice(context.emitter)
+        await self._device.start()
 
-    def shutdown(self) -> None:
-        pass
+    async def shutdown(self) -> None:
+        if self._device:
+            await self._device.shutdown()
+        self._device = None
