@@ -28,10 +28,12 @@ class ReplayEvent(BaseModel, Generic[S]):
     """Synthetic event delivered first on subscription containing a snapshot of state.
 
     `seq` is the per-subscription sequence number (starts at 0).
+    `state_type` identifies the type of state for proper deserialization.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    state_type: str
     state: S
     seq: int
 

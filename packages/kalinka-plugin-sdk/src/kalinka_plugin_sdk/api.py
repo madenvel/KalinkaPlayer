@@ -1,5 +1,5 @@
 # kalinka_plugin_sdk/api.py
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from enum import Enum
 from typing import Any, Generic, Literal, Optional, Protocol, TypeVar, Union
 
@@ -118,11 +118,13 @@ class ReplayEvent(BaseModel, Generic[S]):
     """Synthetic event delivered first on subscription containing a snapshot of state.
 
     `seq` is the per-subscription sequence number (starts at 0).
+    `state_type` identifies the type of state for proper deserialization.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
     event_type: Literal["replay_event"] = "replay_event"
+    state_type: str
     state: S
     seq: int
 

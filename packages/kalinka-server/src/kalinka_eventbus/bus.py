@@ -110,7 +110,9 @@ class _Subscription(Generic[S, E, EV]):
             # Initialize local state and first replay event
             self._local_state = copy.deepcopy(state)
             replay = ReplayEvent[S](
-                state=copy.deepcopy(self._local_state), seq=self._next_sub_seq
+                state_type=type(state).__name__,
+                state=copy.deepcopy(self._local_state),
+                seq=self._next_sub_seq,
             )
             self._next_sub_seq += 1
             self._q.append(replay)
@@ -170,7 +172,9 @@ class _Subscription(Generic[S, E, EV]):
         if removed_any and self._local_state is not None and first_seq is not None:
             # Insert a new replay event representing the collapsed prefix
             collapsed = ReplayEvent[S](
-                state=copy.deepcopy(self._local_state), seq=first_seq
+                state_type=type(self._local_state).__name__,
+                state=copy.deepcopy(self._local_state),
+                seq=first_seq,
             )
             self._q.appendleft(collapsed)
 
