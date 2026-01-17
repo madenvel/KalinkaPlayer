@@ -378,7 +378,6 @@ async def create_app(config_file, config: KalinkaConfig):
                             break
 
                         if event is not None:
-                            logger.info(f"Sending event: {event}")
                             yield event.model_dump_json() + "\n"
 
                 except asyncio.CancelledError:
@@ -402,7 +401,6 @@ async def create_app(config_file, config: KalinkaConfig):
                             break
 
                         if event is not None:
-                            logger.info(f"Sending device event: {event}")
                             yield event.model_dump_json() + "\n"
 
                 except asyncio.CancelledError:

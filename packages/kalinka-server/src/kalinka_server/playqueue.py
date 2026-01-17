@@ -264,7 +264,7 @@ class PlayQueueImpl(PlayQueueController):
                     message=new_state.message,
                     audio_info=to_audio_info(new_state.stream_info),
                     mime_type=self.current_format,
-                    timestamp=state_update_ts,
+                    timestamp_ns=state_update_ts,
                 )
             ),
         )
@@ -418,7 +418,7 @@ class PlayQueueImpl(PlayQueueController):
             message=stream_state.message,
             audio_info=to_audio_info(stream_state.stream_info),
             mime_type=self.current_format,
-            timestamp=time.monotonic_ns(),
+            timestamp_ns=time.monotonic_ns(),
         )
 
     async def restore_from_state(
@@ -491,7 +491,7 @@ class PlayQueueImpl(PlayQueueController):
                     index=self.current_track_id,
                     state=PlayerStateEnum.STOPPED,
                     position=0,
-                    timestamp=time.monotonic_ns(),
+                    timestamp_ns=time.monotonic_ns(),
                 )
             )
         )
@@ -594,7 +594,7 @@ class PlayQueueImpl(PlayQueueController):
                     index=self.current_track_id,
                     state=to_state_name(AudioGraphNodeState.STOPPED),
                     position=0,
-                    timestamp=time.monotonic_ns(),
+                    timestamp_ns=time.monotonic_ns(),
                 )
             ),
         )

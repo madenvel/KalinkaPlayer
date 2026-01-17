@@ -126,6 +126,7 @@ class ReplayEvent(BaseModel, Generic[S]):
     event_type: Literal["replay_event"] = "replay_event"
     state_type: str
     state: S
+    server_time_ns: int
     seq: int
 
 

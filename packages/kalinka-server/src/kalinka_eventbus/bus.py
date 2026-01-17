@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import threading
+import time
 import uuid
 from collections import deque
 from enum import Enum
@@ -113,6 +114,7 @@ class _Subscription(Generic[S, E, EV]):
                 state_type=type(state).__name__,
                 state=copy.deepcopy(self._local_state),
                 seq=self._next_sub_seq,
+                server_time_ns=time.monotonic_ns(),
             )
             self._next_sub_seq += 1
             self._q.append(replay)
@@ -175,6 +177,7 @@ class _Subscription(Generic[S, E, EV]):
                 state_type=type(self._local_state).__name__,
                 state=copy.deepcopy(self._local_state),
                 seq=first_seq,
+                server_time_ns=time.monotonic_ns(),
             )
             self._q.appendleft(collapsed)
 

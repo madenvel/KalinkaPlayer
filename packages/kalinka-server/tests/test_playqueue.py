@@ -106,7 +106,7 @@ def assert_call_args(actual_args, expected_args, position):
             actual_state = actual.state
             expected_state = expected.state
             # ignore timestamp and position for PlaybackState comparisons
-            actual_state.timestamp = expected_state.timestamp
+            actual_state.timestamp_ns = expected_state.timestamp_ns
             if (
                 actual_state.position is not None
                 and expected_state.position is not None
@@ -201,7 +201,7 @@ async def test_play(event_emitter, playqueue):
         call.dispatch(
             PlaybackStateChangedEvent(
                 state=PlaybackState(
-                    state=PlayerStateEnum.STOPPED, index=0, position=0, timestamp=1
+                    state=PlayerStateEnum.STOPPED, index=0, position=0, timestamp_ns=1
                 )
             )
         ),
@@ -215,7 +215,7 @@ async def test_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -228,7 +228,7 @@ async def test_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -246,7 +246,7 @@ async def test_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -274,7 +274,7 @@ async def test_switch_track(event_emitter, playqueue):
                     state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -288,7 +288,7 @@ async def test_switch_track(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -300,7 +300,7 @@ async def test_switch_track(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -318,7 +318,7 @@ async def test_switch_track(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -331,7 +331,7 @@ async def test_switch_track(event_emitter, playqueue):
                     position=0,
                     current_track=track2.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -349,7 +349,7 @@ async def test_switch_track(event_emitter, playqueue):
                         duration_ms=14814,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -382,7 +382,7 @@ async def test_play_next(event_emitter, playqueue):
                     state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -398,7 +398,7 @@ async def test_play_next(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -410,7 +410,7 @@ async def test_play_next(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -428,7 +428,7 @@ async def test_play_next(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -441,7 +441,7 @@ async def test_play_next(event_emitter, playqueue):
                     position=0,
                     current_track=track3.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -459,7 +459,7 @@ async def test_play_next(event_emitter, playqueue):
                         duration_ms=90632,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -489,7 +489,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -501,7 +501,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -514,7 +514,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -532,7 +532,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -550,7 +550,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -562,7 +562,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -575,7 +575,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -593,7 +593,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -619,7 +619,7 @@ async def test_seek(event_emitter, playqueue):
                     state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -631,7 +631,7 @@ async def test_seek(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -644,7 +644,7 @@ async def test_seek(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -662,7 +662,7 @@ async def test_seek(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -674,7 +674,7 @@ async def test_seek(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -692,7 +692,7 @@ async def test_seek(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
