@@ -28,23 +28,33 @@ class PlayQueueEvent(BaseEvent[PlayQueueEventType]):
 
 
 class PlayQueueState(BaseModel):
-    playbackState: PlaybackState
-    trackList: List[Track]
-    playbackMode: PlaybackMode
+    """State model for playqueue - uses Pydantic BaseModel for serialization."""
+
+    playback_state: PlaybackState
+    track_list: List[Track]
+    playback_mode: PlaybackMode
+    seq: int = 0
 
     def apply(self, event: PlayQueueEvent) -> None:
+        """Apply event to create a new state (mutable pattern)."""
+        if self.seq >= event.seq:
+            return
+
         if isinstance(event, PlaybackStateChangedEvent):
-            self.playbackState = event.state
+            self.playback_state = event.state
         elif isinstance(event, TracksAddedEvent):
-            self.trackList.extend(event.tracks)
+            self.track_list = self.track_list + event.tracks
         elif isinstance(event, TracksRemovedEvent):
-            self.trackList = [
+            new_track_list = [
                 track
-                for i, track in enumerate(self.trackList)
+                for i, track in enumerate(self.track_list)
                 if i not in event.indices
             ]
+            self.track_list = new_track_list
         elif isinstance(event, PlaybackModeChangedEvent):
-            self.playbackMode = event.mode
+            self.playback_mode = event.mode
+
+        self.seq = event.seq
 
 
 class PlaybackStateChangedEvent(PlayQueueEvent):

@@ -505,7 +505,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                 # Skip replay events as they are just initial state
                 if isinstance(item, ReplayEvent):
                     logger.debug(
-                        f"Received replay event with state: {item.state.playbackState}"
+                        f"Received replay event with state: {item.state.playback_state}"
                     )
                     continue
 

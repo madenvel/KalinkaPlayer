@@ -20,6 +20,8 @@ from kalinka_eventbus.bus import EventBus
 class TestEventType(Enum):
     """Event types for testing."""
 
+    __test__ = False
+
     EVENT_A = "event_a"
     EVENT_B = "event_b"
     EVENT_C = "event_c"
@@ -28,6 +30,8 @@ class TestEventType(Enum):
 @dataclass
 class TestState:
     """Simple state for testing."""
+
+    __test__ = False
 
     counter: int = 0
     values: List[str] = field(default_factory=list)
@@ -44,6 +48,8 @@ class TestState:
 
 class TestEvent(BaseEvent[TestEventType]):
     """Test event with optional fields."""
+
+    __test__ = False
 
     increment: int = 0
     value: str = ""

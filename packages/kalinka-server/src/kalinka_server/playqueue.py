@@ -444,9 +444,9 @@ class PlayQueueImpl(PlayQueueController):
         self._cancel_prefetch_timer()
 
         # Restore track list
-        if state.trackList:
+        if state.track_list:
             track_infos = []
-            for track in state.trackList:
+            for track in state.track_list:
                 try:
                     track_info = await track_info_retriever(track.id)
                     track_infos.append(track_info)
@@ -458,19 +458,19 @@ class PlayQueueImpl(PlayQueueController):
                 self._add(track_infos)
 
         # Restore playback mode
-        if state.playbackMode:
-            self.shuffle = state.playbackMode.shuffle
-            self.repeat_single = state.playbackMode.repeat_single
-            self.repeat_all = state.playbackMode.repeat_all
+        if state.playback_mode:
+            self.shuffle = state.playback_mode.shuffle
+            self.repeat_single = state.playback_mode.repeat_single
+            self.repeat_all = state.playback_mode.repeat_all
 
             self.event_emitter.dispatch(
-                PlaybackModeChangedEvent(mode=state.playbackMode)
+                PlaybackModeChangedEvent(mode=state.playback_mode)
             )
 
         # Restore current track index
-        if state.playbackState and state.playbackState.index is not None:
+        if state.playback_state and state.playback_state.index is not None:
             self.current_track_id = max(
-                0, min(state.playbackState.index, len(self.track_list) - 1)
+                0, min(state.playback_state.index, len(self.track_list) - 1)
             )
         else:
             self.current_track_id = 0

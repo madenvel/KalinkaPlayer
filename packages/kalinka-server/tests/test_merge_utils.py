@@ -3,6 +3,7 @@ Test module for k_way_merge_browse_items function in merge_utils.py
 """
 
 import pytest
+import asyncio
 import time
 from typing import List
 
@@ -49,13 +50,13 @@ class MockDataSource:
         self.call_count = 0
         self.call_history = []
 
-    def __call__(self, offset: int, limit: int) -> BrowseItemList:
-        """Simulate data source call with delay"""
+    async def __call__(self, offset: int, limit: int) -> BrowseItemList:
+        """Simulate async data source call with delay"""
         self.call_count += 1
         start_time = time.time()
 
-        # Simulate network delay
-        time.sleep(self.call_delay)
+        # Simulate network delay asynchronously
+        await asyncio.sleep(self.call_delay)
 
         start_idx = offset
         end_idx = min(offset + limit, len(self.all_items))

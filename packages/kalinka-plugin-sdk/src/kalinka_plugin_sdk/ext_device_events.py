@@ -23,14 +23,20 @@ class ExtDeviceState(BaseModel):
 
     power_on: bool
     volume: DeviceVolume
+    seq: int = 0
 
-    def apply(self, event: ExtDeviceEvent) -> "ExtDeviceState":
+    def apply(self, event: ExtDeviceEvent) -> None:
         """Apply event to create a new state (immutable pattern)."""
+        if self.seq >= event.seq:
+            return
+
         if isinstance(event, DevicePowerStateChangedEvent):
-            return self.model_copy(update={"power_on": event.power_on})
+            self.power_on = event.power_on
+
         elif isinstance(event, VolumeChangedEvent):
-            return self.model_copy(update={"volume": event.volume})
-        return self
+            self.volume = event.volume
+
+        self.seq = event.seq
 
 
 class DevicePowerStateChangedEvent(ExtDeviceEvent):

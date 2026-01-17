@@ -296,9 +296,9 @@ async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
 
     playqueue_eventbus=EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](  # type: ignore[type-var]
             initial_state=PlayQueueState(
-                playbackState=PlaybackState(),
-                trackList=[],
-                playbackMode=PlaybackMode(
+                playback_state=PlaybackState(),
+                track_list=[],
+                playback_mode=PlaybackMode(
                     shuffle=False, repeat_single=False, repeat_all=False
                 ),
             )

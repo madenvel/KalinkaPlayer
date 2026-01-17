@@ -109,13 +109,9 @@ async def k_way_merge_browse_items(
                 300,  # Cap at 300 to avoid excessive memory
             )
 
-            # Fetch next chunk asynchronously
+            # Fetch next chunk asynchronously using the async data source
             new_offset = source_state["fetched_count"]
-            loop = asyncio.get_event_loop()
-
-            browse_list = await loop.run_in_executor(
-                None,
-                source_state["data_source"],
+            browse_list = await source_state["data_source"](
                 new_offset,
                 adaptive_chunk_size,
             )
@@ -192,16 +188,7 @@ async def get_favorite_ids_merged(modules: Sequence[InputModule]) -> FavoriteIds
     """
     ids = FavoriteIds()
 
-    async def fetch_ids(module):
-        try:
-            # Run synchronous get_favorite_ids in a thread pool
-            return await asyncio.get_event_loop().run_in_executor(
-                None, module.get_favorite_ids
-            )
-        except Exception:
-            return None
-
-    results = await asyncio.gather(*(fetch_ids(module) for module in modules))
+    results = await asyncio.gather(*(module.get_favorite_ids() for module in modules))
     for result in results:
         if result:
             ids.albums.extend(result.albums)
