@@ -199,19 +199,17 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
 }
 
 bool AlsaAudioEmitter::handleSeekSignal() {
-  snd_pcm_sframes_t delay = 0;
-  int err = snd_pcm_delay(pcmHandle, &delay);
-  if (err < 0) {
-    spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
-    return false;
-  }
-
-  setState({AudioGraphNodeState::PREPARING,
-            framesToTimeMs(currentSourceTotalFramesWritten - delay).count()});
-
   auto positionMs = *seekRequestSignal.getValue();
   auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
-  spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
+
+  // Calculate the quantized position (what we'll actually achieve)
+  auto quantizedPositionMs = framesToTimeMs(seekValue).count();
+
+  // Report PREPARING state with the quantized target position
+  setState({AudioGraphNodeState::PREPARING, quantizedPositionMs});
+
+  spdlog::info("Request seek to {}ms ({} frames), quantized to {}ms",
+               positionMs, seekValue, quantizedPositionMs);
   auto retVal = inputNode->seekTo(seekValue);
   if (retVal == -1U) {
     spdlog::warn("Seek request failed: requested={}", seekValue);
