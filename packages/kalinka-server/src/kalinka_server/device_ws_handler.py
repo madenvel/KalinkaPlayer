@@ -1,13 +1,38 @@
 import asyncio
 import logging
+from typing import Literal, Union, Annotated
 
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field, TypeAdapter
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+# Command Models
+class PowerOnCommand(BaseModel):
+    command: Literal["power_on"] = "power_on"
+
+
+class PowerOffCommand(BaseModel):
+    command: Literal["power_off"] = "power_off"
+
+
+class SetVolumeCommand(BaseModel):
+    command: Literal["set_volume"] = "set_volume"
+    volume: int = Field(..., ge=0, le=100, description="Volume level (0-100)")
+
+
+# Discriminated union of all commands
+DeviceCommand = Annotated[
+    Union[PowerOnCommand, PowerOffCommand, SetVolumeCommand],
+    Field(discriminator="command"),
+]
+
+command_adapter = TypeAdapter(DeviceCommand)
 
 
 async def handle_websocket_connection(
@@ -40,42 +65,24 @@ async def handle_websocket_connection(
         try:
             while True:
                 data = await websocket.receive_json()
-                command = data.get("command")
 
                 try:
-                    if command == "power_on":
+                    # Pydantic automatically deserializes to the correct command type
+                    cmd = command_adapter.validate_python(data)
+
+                    if isinstance(cmd, PowerOnCommand):
                         await device.power_on()
-
-                    elif command == "power_off":
+                    elif isinstance(cmd, PowerOffCommand):
                         await device.power_off()
-
-                    elif command == "set_volume":
-                        volume = data.get("volume")
-                        if volume is None:
-                            raise ValueError(
-                                "volume is required for set_volume command"
-                            )
-                        await device.set_volume(volume)
+                    elif isinstance(cmd, SetVolumeCommand):
+                        await device.set_volume(cmd.volume)
 
                 except ValueError as e:
-                    logger.error(f"Error processing command {command}: {e}")
-                    await websocket.send_json({"status": "error", "message": str(e)})
+                    logger.error(f"Error validating command: {e}")
                 except NotImplementedError:
-                    logger.warning(f"Command {command} is not supported by the device")
-                    await websocket.send_json(
-                        {
-                            "status": "error",
-                            "message": f"Command {command} is not supported by the device",
-                        }
-                    )
+                    logger.warning(f"Command not supported by device")
                 except Exception as e:
-                    logger.error(f"Error processing command {command}: {e}")
-                    await websocket.send_json(
-                        {
-                            "status": "error",
-                            "message": f"Error processing command {command}: {str(e)}",
-                        }
-                    )
+                    logger.error(f"Error processing command: {e}")
 
         except WebSocketDisconnect:
             logger.info("Device WebSocket client disconnected")

@@ -1,13 +1,67 @@
 import asyncio
 import logging
+from typing import Optional, Literal, Union, Annotated
 
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field, TypeAdapter
 from kalinka_plugin_sdk.api import PlayQueueController
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk.events import PlayQueueEventType
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+# Command Models
+class PlayCommand(BaseModel):
+    command: Literal["play"] = "play"
+    index: Optional[int] = None
+
+
+class PauseCommand(BaseModel):
+    command: Literal["pause"] = "pause"
+    paused: bool = True
+
+
+class NextCommand(BaseModel):
+    command: Literal["next"] = "next"
+
+
+class PrevCommand(BaseModel):
+    command: Literal["prev"] = "prev"
+
+
+class StopCommand(BaseModel):
+    command: Literal["stop"] = "stop"
+
+
+class SeekCommand(BaseModel):
+    command: Literal["seek"] = "seek"
+    position_ms: int = Field(..., description="Position in milliseconds")
+
+
+class SetPlaybackModeCommand(BaseModel):
+    command: Literal["set_playback_mode"] = "set_playback_mode"
+    shuffle: Optional[bool] = None
+    repeat_single: Optional[bool] = None
+    repeat_all: Optional[bool] = None
+
+
+# Discriminated union of all commands
+QueueCommand = Annotated[
+    Union[
+        PlayCommand,
+        PauseCommand,
+        NextCommand,
+        PrevCommand,
+        StopCommand,
+        SeekCommand,
+        SetPlaybackModeCommand,
+    ],
+    Field(discriminator="command"),
+]
+
+command_adapter = TypeAdapter(QueueCommand)
 
 
 async def handle_websocket_connection(
@@ -40,44 +94,32 @@ async def handle_websocket_connection(
         try:
             while True:
                 data = await websocket.receive_json()
-                command = data.get("command")
 
                 try:
-                    if command == "play":
-                        index = data.get("index")
-                        await playqueue.play(index)
+                    # Pydantic automatically deserializes to the correct command type
+                    cmd = command_adapter.validate_python(data)
 
-                    elif command == "pause":
-                        paused = data.get("paused", True)
-                        await playqueue.pause(paused)
-
-                    elif command == "next":
+                    if isinstance(cmd, PlayCommand):
+                        await playqueue.play(cmd.index)
+                    elif isinstance(cmd, PauseCommand):
+                        await playqueue.pause(cmd.paused)
+                    elif isinstance(cmd, NextCommand):
                         await playqueue.next()
-
-                    elif command == "prev":
+                    elif isinstance(cmd, PrevCommand):
                         await playqueue.prev()
-
-                    elif command == "stop":
+                    elif isinstance(cmd, StopCommand):
                         await playqueue.stop()
-
-                    elif command == "seek":
-                        position_ms = data.get("position_ms")
-                        if position_ms is None:
-                            raise ValueError("position_ms is required for seek command")
-                        await playqueue.seek(position_ms)
-
-                    elif command == "set_playback_mode":
-                        shuffle = data.get("shuffle")
-                        repeat_single = data.get("repeat_single")
-                        repeat_all = data.get("repeat_all")
+                    elif isinstance(cmd, SeekCommand):
+                        await playqueue.seek(cmd.position_ms)
+                    elif isinstance(cmd, SetPlaybackModeCommand):
                         await playqueue.set_playback_mode(
-                            shuffle, repeat_single, repeat_all
+                            cmd.shuffle, cmd.repeat_single, cmd.repeat_all
                         )
 
                 except ValueError as e:
-                    logger.error(f"Error processing command {command}: {e}")
+                    logger.error(f"Error validating command: {e}")
                 except Exception as e:
-                    logger.error(f"Error processing command {command}: {e}")
+                    logger.error(f"Error processing command: {e}")
 
         except WebSocketDisconnect:
             logger.info("WebSocket client disconnected")
