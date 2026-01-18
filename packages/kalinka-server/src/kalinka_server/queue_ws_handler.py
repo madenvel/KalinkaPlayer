@@ -31,9 +31,7 @@ async def handle_websocket_connection(
             try:
                 async for event in stream:
                     if event is not None:
-                        await websocket.send_json(
-                            {"type": "event", "data": event.model_dump()}
-                        )
+                        await websocket.send_text(event.model_dump_json())
             except Exception as e:
                 logger.error(f"Error sending events: {e}")
 

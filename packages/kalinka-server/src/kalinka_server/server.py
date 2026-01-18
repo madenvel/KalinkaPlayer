@@ -41,7 +41,12 @@ from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from .version import get_api_version, get_version
 from .state_keeper import save_state, restore_state
-from .queue_ws_handler import handle_websocket_connection
+from .queue_ws_handler import (
+    handle_websocket_connection as handle_queue_websocket_connection,
+)
+from .device_ws_handler import (
+    handle_websocket_connection as handle_device_websocket_connection,
+)
 
 
 def save_config(config_file: str, config: KalinkaConfig):
@@ -712,13 +717,21 @@ async def create_app(config_file, config: KalinkaConfig):
     @app.websocket("/queue/ws")
     async def queue_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for real-time playback control and event streaming."""
-        await handle_websocket_connection(
+        await handle_queue_websocket_connection(
             websocket, player_context.playqueue_eventbus, player_context.playqueue
         )
 
     @app.websocket("/device/ws")
     async def device_websocket_endpoint(websocket: WebSocket):
-        """WebSocket endpoint for device volume control and event streaming."""
-        pass
+        """WebSocket endpoint for device control and event streaming."""
+        if device is None:
+            await websocket.accept()
+            await websocket.send_json({"error": "No device configured"})
+            await websocket.close()
+            return
+
+        await handle_device_websocket_connection(
+            websocket, player_context.ext_device_eventbus, device
+        )
 
     return app
