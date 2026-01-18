@@ -304,14 +304,16 @@ async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
             )
         )
     
+    device_eventbus=EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent](  # type: ignore[type-var]
+            initial_state=ExtDeviceState(power_on=False, volume=DeviceVolume()))
+
     # Create core components
     player_context = PlayerContext(
         playqueue_eventbus=playqueue_eventbus,
         playqueue=PlayQueueImpl(config, playqueue_eventbus),
-        ext_device_eventbus=EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent](  # type: ignore[type-var]
-            initial_state=ExtDeviceState(power_on=False, volume=DeviceVolume())
-        ),
-    )
+        ext_device_eventbus=device_eventbus,
+        )
+
     # Scan and setup plugins
     await modules.scan_and_setup_plugins(config_path, player_context)
 

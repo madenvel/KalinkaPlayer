@@ -97,7 +97,8 @@ class PlayQueueController(Protocol):
 
 E_contra = TypeVar("E_contra", bound=Enum, contravariant=True)
 E = TypeVar("E", bound=Enum)
-S = TypeVar("S")
+EV_state = TypeVar("EV_state", bound="BaseEvent")
+S = TypeVar("S", bound="BaseState")
 
 
 class BaseEvent(BaseModel, Generic[E]):
@@ -130,13 +131,53 @@ class ReplayEvent(BaseModel, Generic[S]):
     seq: int
 
 
+class BaseState(BaseModel, Generic[EV_state]):
+    """Base state type for user-defined states.
+
+    Users should subclass this and add state-specific fields.
+    Subclasses should implement apply(event) to return a new state instance.
+
+    Type parameter EV_state specifies the event type this state handles.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    seq: int = 0
+
+    def apply(self, event: EV_state) -> "BaseState[EV_state]":
+        """Apply an event to produce a new state (immutable pattern).
+
+        Subclasses must override this to return a new state with updates applied.
+        If the event is stale (seq <= self.seq), return self unchanged.
+
+        Args:
+            event: The event to apply (type matches the state's event type parameter)
+
+        Returns:
+            A new state with the event applied, or self if event is stale
+        """
+        raise NotImplementedError("Subclasses must implement apply()")
+
+
 EV_emit = TypeVar("EV_emit", bound=BaseEvent, contravariant=True)
 EV_listen = TypeVar("EV_listen", bound=BaseEvent, covariant=True)
+S_emit = TypeVar("S_emit", bound=BaseState, contravariant=True)
 
 
-class EventEmitter(Protocol[EV_emit]):
+class EventEmitter(Protocol[EV_emit, S_emit]):
     def dispatch(self, event: EV_emit) -> None:
         """Dispatch a new event to the bus (thread-safe)."""
+        ...
+
+    def set_initial_state(self, state: S_emit) -> None:
+        """Set the initial state and notify subscribers with a replay event.
+
+        This method is intended for initialization (e.g., during device setup).
+        It replaces the current bus state, increments the global sequence, and sends
+        a replay event to all existing subscribers.
+
+        Args:
+            state: The new initial state to set.
+        """
         ...
 
 

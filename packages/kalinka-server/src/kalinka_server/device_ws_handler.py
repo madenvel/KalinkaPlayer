@@ -45,15 +45,9 @@ async def handle_websocket_connection(
                 try:
                     if command == "power_on":
                         await device.power_on()
-                        await websocket.send_json(
-                            {"status": "success", "message": "Device powered on"}
-                        )
 
                     elif command == "power_off":
                         await device.power_off()
-                        await websocket.send_json(
-                            {"status": "success", "message": "Device powered off"}
-                        )
 
                     elif command == "set_volume":
                         volume = data.get("volume")
@@ -62,44 +56,6 @@ async def handle_websocket_connection(
                                 "volume is required for set_volume command"
                             )
                         await device.set_volume(volume)
-                        await websocket.send_json(
-                            {"status": "success", "message": f"Volume set to {volume}"}
-                        )
-
-                    elif command == "get_volume":
-                        volume_info = await device.get_volume()
-                        await websocket.send_json(
-                            {
-                                "status": "success",
-                                "data": volume_info.model_dump(exclude_unset=True),
-                            }
-                        )
-
-                    elif command == "is_power_on":
-                        power_state = await device.is_power_on()
-                        await websocket.send_json(
-                            {"status": "success", "data": {"power_on": power_state}}
-                        )
-
-                    elif command == "supported_functions":
-                        functions = device.supported_functions()
-                        await websocket.send_json(
-                            {
-                                "status": "success",
-                                "data": {
-                                    "functions": [func.value for func in functions]
-                                },
-                            }
-                        )
-
-                    else:
-                        logger.warning(f"Unknown command: {command}")
-                        await websocket.send_json(
-                            {
-                                "status": "error",
-                                "message": f"Unknown command: {command}",
-                            }
-                        )
 
                 except ValueError as e:
                     logger.error(f"Error processing command {command}: {e}")

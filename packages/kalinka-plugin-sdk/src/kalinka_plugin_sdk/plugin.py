@@ -89,7 +89,7 @@ class InputPluginContext(PluginContextBase):
 class OutputDevicePluginContext(PluginContextBase):
     """Context provided to output device plugins."""
 
-    emitter: EventEmitter[ExtDeviceEvent]
+    emitter: EventEmitter[ExtDeviceEvent, ExtDeviceState]
 
 
 @dataclass

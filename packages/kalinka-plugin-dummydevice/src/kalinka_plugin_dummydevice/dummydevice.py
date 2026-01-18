@@ -1,6 +1,11 @@
 import asyncio
 import logging
-from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType, VolumeChangedEvent
+from kalinka_plugin_sdk.api import ReplayEvent
+from kalinka_plugin_sdk.ext_device_events import (
+    ExtDeviceEventType,
+    ExtDeviceState,
+    VolumeChangedEvent,
+)
 from kalinka_plugin_sdk.ext_device import (
     DeviceVolume,
     ExternalOutputDevice,
@@ -23,6 +28,18 @@ class DummyDevice(ExternalOutputDevice):
 
     async def start(self):
         """Start the event sender task. Call this after initialization."""
+        # Set initial device state before starting event emission
+        initial_state = ExtDeviceState(
+            power_on=self._power_on,
+            volume=DeviceVolume(
+                max_volume=self._max_volume,
+                current_volume=self._volume,
+                volume_gain=0,
+                supported=True,
+            ),
+        )
+        self.event_emitter.set_initial_state(initial_state)
+
         self._event_sender_task = asyncio.create_task(self._event_sender_async())
         return self
 

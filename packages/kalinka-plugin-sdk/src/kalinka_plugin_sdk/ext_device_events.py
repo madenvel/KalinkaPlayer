@@ -1,8 +1,9 @@
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel
 
-from .api import BaseEvent
+from .api import BaseEvent, BaseState
 
 from .datamodel import DeviceVolume
 
@@ -18,25 +19,27 @@ class ExtDeviceEvent(BaseEvent[ExtDeviceEventType]):
     pass
 
 
-class ExtDeviceState(BaseModel):
+class ExtDeviceState(BaseState[ExtDeviceEvent]):
     """State model for external device - uses Pydantic BaseModel for serialization."""
 
     power_on: bool
     volume: DeviceVolume
-    seq: int = 0
 
-    def apply(self, event: ExtDeviceEvent) -> None:
-        """Apply event to create a new state (immutable pattern)."""
+    def apply(self, event: ExtDeviceEvent) -> "ExtDeviceState":
+        """Apply event and return a new state (immutable pattern)."""
         if self.seq >= event.seq:
-            return
+            return self
+
+        updates: dict[str, Any] = {"seq": event.seq}
 
         if isinstance(event, DevicePowerStateChangedEvent):
-            self.power_on = event.power_on
-
+            updates["power_on"] = event.power_on
         elif isinstance(event, VolumeChangedEvent):
-            self.volume = event.volume
+            updates["volume"] = event.volume
+        else:
+            return self
 
-        self.seq = event.seq
+        return self.model_copy(update=updates)
 
 
 class DevicePowerStateChangedEvent(ExtDeviceEvent):

@@ -22,6 +22,7 @@ from typing import (
 
 from kalinka_plugin_sdk.api import (
     BaseEvent,
+    BaseState,
     ReplayEvent,
     EventEmitter,
     EventListener,
@@ -29,12 +30,12 @@ from kalinka_plugin_sdk.api import (
 )
 
 E = TypeVar("E", bound=Enum)
-S = TypeVar("S")
+S = TypeVar("S", bound=BaseState)
 EV = TypeVar("EV", bound=BaseEvent)
 
 # Async stream type vars (distinct to avoid shadowing warnings)
 E_stream = TypeVar("E_stream", bound=Enum)
-S_stream = TypeVar("S_stream")
+S_stream = TypeVar("S_stream", bound=BaseState)
 EV_stream = TypeVar("EV_stream", bound=BaseEvent)
 
 
@@ -163,10 +164,11 @@ class _Subscription(Generic[S, E, EV]):
             if isinstance(itm, ReplayEvent):
                 self._local_state = copy.deepcopy(itm.state)
             else:
-                # Apply event to local state
+                # Apply event to local state, capturing new state
                 try:
                     # type: ignore[attr-defined]
-                    self._local_state.apply(itm)  # type: ignore[arg-type]
+                    new_state = self._local_state.apply(itm)  # type: ignore[arg-type]
+                    self._local_state = new_state  # type: ignore[assignment]
                 except Exception:
                     # If state apply fails, skip applying but continue coalescing
                     pass
@@ -235,7 +237,7 @@ class AsyncEventStream(Generic[S_stream, E_stream, EV_stream]):
         return item  # type: ignore[return-value]
 
 
-class EventBus(Generic[S, E, EV], EventEmitter[EV], EventListener[E, EV, S]):
+class EventBus(Generic[S, E, EV], EventEmitter[EV, S], EventListener[E, EV, S]):
     def __init__(
         self,
         initial_state: S,
@@ -247,7 +249,7 @@ class EventBus(Generic[S, E, EV], EventEmitter[EV], EventListener[E, EV, S]):
             raise ValueError("low_watermark must be < max_queue_size")
         self._state: S = initial_state
         self._state_lock = threading.RLock()
-        self._next_global_seq: int = 0
+        self._next_global_seq: int = 1
 
         # Registry of subscriptions
         self._subs_lock = threading.RLock()
@@ -274,10 +276,11 @@ class EventBus(Generic[S, E, EV], EventEmitter[EV], EventListener[E, EV, S]):
             seq = self._next_global_seq
             self._next_global_seq += 1
             ev_with_seq: EV = event.model_copy(update={"seq": seq})  # type: ignore[assignment]
-            # User state must implement apply(event)
+            # User state must implement apply(event) to return new state
             try:
                 # type: ignore[attr-defined]
-                self._state.apply(ev_with_seq)  # type: ignore[arg-type]
+                new_state: S = self._state.apply(ev_with_seq)  # type: ignore[arg-type]
+                self._state = new_state
             except Exception:
                 # Do not block dispatch if apply fails; still deliver event
                 pass
@@ -339,6 +342,37 @@ class EventBus(Generic[S, E, EV], EventEmitter[EV], EventListener[E, EV, S]):
         """
         with self._state_lock:
             return copy.deepcopy(self._state)
+
+    def set_initial_state(self, state: S) -> None:
+        """Set the initial state and notify all subscribers.
+
+        This method is intended for initialization (e.g., during device setup).
+        It replaces the current state, increments the global sequence, and sends
+        a replay event to all existing subscribers.
+
+        Args:
+            state: The new initial state to set.
+        """
+        with self._state_lock:
+            # Increment global sequence to mark this state change
+            seq = self._next_global_seq
+            self._next_global_seq += 1
+
+            # Update state with new seq (immutable pattern)
+            state_copy = copy.deepcopy(state)
+            self._state = state_copy.model_copy(update={"seq": seq})
+
+        # Notify all existing subscribers with a new replay event
+        with self._subs_lock:
+            subs = list(self._subs.values())
+
+        snapshot = copy.deepcopy(self._state)
+        for sub in subs:
+            try:
+                sub.enqueue_replay(snapshot)
+            except Exception:
+                # Ignore failures for individual subscribers
+                pass
 
     def stream(self, event_types: Iterable[E]) -> "AsyncEventStream[S, E, EV]":
         return AsyncEventStream(self, event_types)

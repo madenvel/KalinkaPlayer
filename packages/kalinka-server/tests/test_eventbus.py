@@ -6,13 +6,13 @@ import asyncio
 import copy
 import time
 import threading
-from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Union
+from typing import Any, List, Union
 
 import pytest
+from pydantic import ConfigDict, Field
 
-from kalinka_plugin_sdk.api import BaseEvent, ReplayEvent
+from kalinka_plugin_sdk.api import BaseEvent, BaseState, ReplayEvent
 from kalinka_eventbus.bus import EventBus
 
 
@@ -27,23 +27,33 @@ class TestEventType(Enum):
     EVENT_C = "event_c"
 
 
-@dataclass
-class TestState:
+class TestState(BaseState["TestEvent"]):
     """Simple state for testing."""
 
     __test__ = False
 
-    counter: int = 0
-    values: List[str] = field(default_factory=list)
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
 
-    def apply(self, event: "TestEvent") -> None:
-        """Apply an event to update state."""
+    counter: int = 0
+    values: List[str] = Field(default_factory=list)
+
+    def apply(self, event: "TestEvent") -> "TestState":
+        """Apply an event and return a new state (immutable pattern)."""
+        if self.seq >= event.seq:
+            return self
+
+        updates: dict[str, Any] = {"seq": event.seq}
+
         if event.event_type == TestEventType.EVENT_A:
-            self.counter += event.increment
+            updates["counter"] = self.counter + event.increment
         elif event.event_type == TestEventType.EVENT_B:
-            self.values.append(event.value)
+            updates["values"] = self.values + [event.value]
         elif event.event_type == TestEventType.EVENT_C:
-            self.counter -= 1
+            updates["counter"] = self.counter - 1
+        else:
+            return self
+
+        return self.model_copy(update=updates)
 
 
 class TestEvent(BaseEvent[TestEventType]):
@@ -277,6 +287,149 @@ class TestEventBusSubscription:
         assert count_after_unsub == 1
 
 
+class TestSetInitialState:
+    """Test set_initial_state functionality."""
+
+    def test_set_initial_state_updates_state(self):
+        """Test that set_initial_state replaces the bus state."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState(counter=0))
+
+        # Set new initial state
+        new_state = TestState(counter=42, values=["initial"])
+        bus.set_initial_state(new_state)
+
+        time.sleep(0.05)
+
+        # Get snapshot to verify state was updated
+        snapshot = bus.get_snapshot()
+
+        bus.close()
+
+        assert snapshot.counter == 42
+        assert snapshot.values == ["initial"]
+
+    def test_set_initial_state_notifies_subscribers(self):
+        """Test that set_initial_state sends replay events to existing subscribers."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState(counter=0))
+
+        received = []
+
+        def callback(event: Union[TestEvent, ReplayEvent[TestState]]) -> None:
+            received.append(event)
+
+        # Subscribe first
+        bus.subscribe([TestEventType.EVENT_A], callback=callback)
+
+        time.sleep(0.05)
+
+        # Set new initial state
+        new_state = TestState(counter=99, values=["updated"])
+        bus.set_initial_state(new_state)
+
+        time.sleep(0.1)
+
+        bus.close()
+
+        # Should have received at least 2 replay events (initial + set_initial_state)
+        replay_events = [e for e in received if isinstance(e, ReplayEvent)]
+        assert len(replay_events) >= 2
+
+        # Last replay should contain the new state
+        last_replay = replay_events[-1]
+        assert last_replay.state.counter == 99
+        assert last_replay.state.values == ["updated"]
+
+    def test_set_initial_state_increments_sequence(self):
+        """Test that set_initial_state increments the global sequence."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState(counter=0))
+
+        # Dispatch an event to advance sequence
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+
+        time.sleep(0.05)
+
+        # Set new initial state
+        new_state = TestState(counter=42)
+        bus.set_initial_state(new_state)
+
+        time.sleep(0.05)
+
+        # Dispatch another event
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+
+        time.sleep(0.05)
+
+        # Get snapshot - state should have applied the last event
+        snapshot = bus.get_snapshot()
+
+        bus.close()
+
+        # Counter should be 42 + 1 = 43
+        assert snapshot.counter == 43
+
+    def test_set_initial_state_with_multiple_subscribers(self):
+        """Test that set_initial_state notifies all subscribers."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState(counter=0))
+
+        received1 = []
+        received2 = []
+
+        def callback1(event: Union[TestEvent, ReplayEvent[TestState]]) -> None:
+            received1.append(event)
+
+        def callback2(event: Union[TestEvent, ReplayEvent[TestState]]) -> None:
+            received2.append(event)
+
+        # Subscribe two different listeners
+        bus.subscribe([TestEventType.EVENT_A], callback=callback1)
+        bus.subscribe([TestEventType.EVENT_B], callback=callback2)
+
+        time.sleep(0.05)
+
+        # Set new initial state
+        new_state = TestState(counter=77, values=["multi"])
+        bus.set_initial_state(new_state)
+
+        time.sleep(0.1)
+
+        bus.close()
+
+        # Both should receive replay events with new state
+        replay1 = [e for e in received1 if isinstance(e, ReplayEvent)]
+        replay2 = [e for e in received2 if isinstance(e, ReplayEvent)]
+
+        assert len(replay1) >= 2
+        assert len(replay2) >= 2
+
+        assert replay1[-1].state.counter == 77
+        assert replay2[-1].state.counter == 77
+
+    def test_set_initial_state_preserves_seq_field(self):
+        """Test that set_initial_state updates the seq field in the state."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState(counter=0))
+
+        # Dispatch some events to advance sequence
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+
+        time.sleep(0.05)
+
+        # Set new initial state
+        new_state = TestState(counter=100, seq=999)  # seq should be overridden
+        bus.set_initial_state(new_state)
+
+        time.sleep(0.05)
+
+        # Get snapshot
+        snapshot = bus.get_snapshot()
+
+        bus.close()
+
+        # seq should be set by the bus, not the value we passed
+        assert snapshot.seq == 3  # seq 1, 2 from events, seq 3 from set_initial_state
+        assert snapshot.counter == 100
+
+
 class TestStateApplication:
     """Test state application and replay."""
 
@@ -296,18 +449,22 @@ class TestStateApplication:
         bus.dispatch(TestEvent(event_type=TestEventType.EVENT_B, value="test"))
 
         # Wait for events to be applied
-        time.sleep(0.05)
+        time.sleep(0.2)
 
         # Subscribe to get current state
-        bus.subscribe([TestEventType.EVENT_A], callback=callback)
-        time.sleep(0.05)
+        bus.subscribe([TestEventType.EVENT_A, TestEventType.EVENT_B], callback=callback)
+        time.sleep(0.1)
 
         bus.close()
 
         # Replay should contain updated state
         assert len(snapshots) >= 1
-        assert snapshots[0].counter == 5
-        assert "test" in snapshots[0].values
+        assert (
+            snapshots[0].counter == 5
+        ), f"Expected counter=5, got {snapshots[0].counter}, state={snapshots[0]}"
+        assert (
+            "test" in snapshots[0].values
+        ), f"Expected 'test' in values, got {snapshots[0].values}"
 
     def test_replay_renumbers_sequences(self):
         """Test that per-subscription sequences start from 0."""

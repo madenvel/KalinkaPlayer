@@ -1,9 +1,7 @@
 from enum import Enum
-from typing import List
+from typing import Any, List
 
-from pydantic import BaseModel
-
-from .api import BaseEvent
+from .api import BaseEvent, BaseState
 
 from .datamodel import (
     Track,
@@ -27,34 +25,37 @@ class PlayQueueEvent(BaseEvent[PlayQueueEventType]):
     pass
 
 
-class PlayQueueState(BaseModel):
+class PlayQueueState(BaseState[PlayQueueEvent]):
     """State model for playqueue - uses Pydantic BaseModel for serialization."""
 
     playback_state: PlaybackState
     track_list: List[Track]
     playback_mode: PlaybackMode
-    seq: int = 0
 
-    def apply(self, event: PlayQueueEvent) -> None:
-        """Apply event to create a new state (mutable pattern)."""
+    def apply(self, event: PlayQueueEvent) -> "PlayQueueState":
+        """Apply event and return a new state (immutable pattern)."""
         if self.seq >= event.seq:
-            return
+            return self
+
+        updates: dict[str, Any] = {"seq": event.seq}
 
         if isinstance(event, PlaybackStateChangedEvent):
-            self.playback_state = event.state
+            updates["playback_state"] = event.state
         elif isinstance(event, TracksAddedEvent):
-            self.track_list = self.track_list + event.tracks
+            updates["track_list"] = self.track_list + event.tracks
         elif isinstance(event, TracksRemovedEvent):
             new_track_list = [
                 track
                 for i, track in enumerate(self.track_list)
                 if i not in event.indices
             ]
-            self.track_list = new_track_list
+            updates["track_list"] = new_track_list
         elif isinstance(event, PlaybackModeChangedEvent):
-            self.playback_mode = event.mode
+            updates["playback_mode"] = event.mode
+        else:
+            return self
 
-        self.seq = event.seq
+        return self.model_copy(update=updates)
 
 
 class PlaybackStateChangedEvent(PlayQueueEvent):

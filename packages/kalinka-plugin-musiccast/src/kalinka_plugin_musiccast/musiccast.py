@@ -11,6 +11,7 @@ import httpx
 from kalinka_plugin_sdk.datamodel import PlaybackState, PlayerStateEnum
 from kalinka_plugin_sdk.ext_device_events import (
     DevicePowerStateChangedEvent,
+    ExtDeviceState,
     VolumeChangedEvent,
 )
 import netifaces
@@ -347,6 +348,15 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         logger.info(f"Using UDP port {self.udp_port}")
         self.shutdown_event = asyncio.Event()
         self.ready = True
+
+        # Set initial device state after we have retrieved it from the device
+        # This must be done before any event emission tasks start
+        power_on = status["power"] == "on" and status["input"] == self.connected_input
+        initial_state = ExtDeviceState(
+            power_on=power_on,
+            volume=self.volume,
+        )
+        self.event_emitter.set_initial_state(initial_state)
 
     async def run_discovery(self):
         """Run SSDP discovery to find MusicCast device"""
@@ -761,11 +771,8 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                 if self.ready:
                     logger.info(f"Device discovery successful")
-                    # Emit power state event to notify subscribers
-                    is_on = await self.is_power_on()
-                    self.event_emitter.dispatch(
-                        DevicePowerStateChangedEvent(power_on=is_on)
-                    )
+                    # Initial state is already set by get_ready() via set_initial_state()
+                    # No need to emit additional events here
                     self._discovery_task = None
                     return
             except Exception as e:
