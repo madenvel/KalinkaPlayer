@@ -138,7 +138,7 @@ class DummyDevice(ExternalOutputDevice):
         )
 
     async def set_volume(self, volume: int) -> None:
-        logger.info("Setting volume to %d", volume)
+        logger.debug("Setting volume to %d", volume)
         if 0 <= volume <= self._max_volume:
             self._volume = volume
             self._volume_changed_event.set()
