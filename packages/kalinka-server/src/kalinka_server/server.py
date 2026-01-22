@@ -36,7 +36,7 @@ from .config_model import KalinkaConfig
 from .config_schema_processor import config_to_wire, get_field_value, set_field_value
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .multisearch import calculate_fuzzy_score
-from .player_setup import modules, setup, shutdown
+from .player_setup import modules, setup, shutdown, ModuleHealthState
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from .version import get_api_version, get_version
@@ -590,16 +590,35 @@ async def create_app(config_file, config: KalinkaConfig):
 
     @app.get("/server/config")
     def get_config():
+        # Separate successfully loaded and failed modules/devices
+        successful_input_modules = {
+            name: m.plugin_context.config
+            for name, m in modules.prepared_input_modules.items()
+            if m.health_state != ModuleHealthState.ERROR
+        }
+        failed_input_modules = {
+            name: (m.plugin_context.config, m.error_message or "Unknown error")
+            for name, m in modules.prepared_input_modules.items()
+            if m.health_state == ModuleHealthState.ERROR
+        }
+
+        successful_devices = {
+            name: d.plugin_context.config
+            for name, d in modules.prepared_devices.items()
+            if d.health_state != ModuleHealthState.ERROR
+        }
+        failed_devices = {
+            name: (d.plugin_context.config, d.error_message or "Unknown error")
+            for name, d in modules.prepared_devices.items()
+            if d.health_state == ModuleHealthState.ERROR
+        }
+
         return config_to_wire(
             base_config=config,
-            input_modules={
-                name: m.plugin_context.config
-                for name, m in modules.prepared_input_modules.items()
-            },
-            devices={
-                name: d.plugin_context.config
-                for name, d in modules.prepared_devices.items()
-            },
+            input_modules=successful_input_modules,
+            devices=successful_devices,
+            input_modules_with_errors=failed_input_modules,
+            devices_with_errors=failed_devices,
         )
 
     @app.get("/server/version")
@@ -613,6 +632,7 @@ async def create_app(config_file, config: KalinkaConfig):
 
     @app.put("/server/restart")
     def restart_server():
+        app.state.config.restart = True
         app.state.server.should_exit = True
         return {"message": "Ok"}
 

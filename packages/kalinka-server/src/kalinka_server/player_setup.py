@@ -191,6 +191,10 @@ class PreparedModuleCollection:
 
             logger.info(f"Found plugin: {plugin_name}")
             prepared_module = None
+            error_message = None
+            config = None
+            plugin_context = None
+            
             try:
                 config = self._read_or_create_module_config(
                     config_path, plugin_name, plugin_class
@@ -201,10 +205,19 @@ class PreparedModuleCollection:
                 prepared_module = await PreparedPlugin.setup(plugin_class, plugin_context)
 
             except Exception as e:
-                logger.error(f"Failed to setup plugin {plugin_name}: {e}")
-                if prepared_module is not None:
-                    prepared_module.health_state = ModuleHealthState.ERROR
-                    prepared_module.error_message = str(e)
+                logger.error(f"Failed to setup plugin {plugin_name}: {e}", exc_info=True)
+                error_message = str(e)
+                
+                # Create a PreparedPlugin with error state even if setup failed
+                if config is not None and plugin_context is not None:
+                    prepared_module = PreparedPlugin(
+                        plugin_class=plugin_class,
+                        plugin_instance=None,
+                        health_state=ModuleHealthState.ERROR,
+                        plugin_context=plugin_context,
+                        interface=None,
+                        error_message=error_message,
+                    )
 
             if prepared_module is not None:
                 yield plugin_name, prepared_module
@@ -327,15 +340,17 @@ async def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str)
     """Shutdown all modules and save their configurations."""
     for module_name, prepared_module in modules.items():
         logger.info(f"Shutting down module: {module_name}")
-        if prepared_module.plugin_instance is None:
+        
+        # Shutdown the plugin instance if it exists
+        if prepared_module.plugin_instance is not None:
+            try:
+                await prepared_module.plugin_instance.shutdown()
+            except Exception as e:
+                logger.error(f"Error shutting down module {module_name}: {e}")
+        else:
             logger.info(f"Module {module_name} was not initialized, skipping shutdown.")
-            continue
 
-        try:
-            await prepared_module.plugin_instance.shutdown()
-        except Exception as e:
-            logger.error(f"Error shutting down module {module_name}: {e}")
-
+        # Always save the configuration, regardless of whether the plugin was initialized
         config_file_path = os.path.join(config_path, f"{module_name}_config.cfg")
         # Ensure the directory exists
         config_dir = os.path.dirname(config_file_path)

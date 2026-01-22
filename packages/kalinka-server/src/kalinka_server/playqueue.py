@@ -241,7 +241,7 @@ class PlayQueueImpl(PlayQueueController):
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
             if self._prefetch_task is None:
-                self._play_next(self.current_track_id + 1)
+                await self.play(self.current_track_id + 1)
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
         elif new_state.state != AudioGraphNodeState.STREAMING:
@@ -270,9 +270,6 @@ class PlayQueueImpl(PlayQueueController):
         )
 
     async def play(self, index=None):
-        self._play_sync(index)
-
-    def _play_sync(self, index):
         if len(self.track_list) == 0:
             return
 
@@ -282,7 +279,7 @@ class PlayQueueImpl(PlayQueueController):
         if index is None:
             index = self.current_track_id
 
-        track_info = self._setup_track_to_play(index)
+        track_info = await self._setup_track_to_play(index)
         if track_info is None:
             return
 
@@ -291,9 +288,6 @@ class PlayQueueImpl(PlayQueueController):
         self.track_player.play(track_info.url, mime_to_format(track_info.format))
 
     async def play_next(self, index):
-        self._play_next(index)
-
-    def _play_next(self, index):
         if len(self.track_list) == 0:
             return
 
@@ -306,7 +300,7 @@ class PlayQueueImpl(PlayQueueController):
 
         logger.info(f"Playing next track index={index}")
 
-        track_info = self._setup_track_to_play(index)
+        track_info = await self._setup_track_to_play(index)
         if track_info is None:
             return
 
@@ -317,10 +311,10 @@ class PlayQueueImpl(PlayQueueController):
         self.track_player.pause(paused)
 
     async def next(self):
-        self._play_sync(self.current_track_id + 1)
+        await self.play(self.current_track_id + 1)
 
     async def prev(self):
-        self._play_sync(self.current_track_id - 1)
+        await self.play(self.current_track_id - 1)
 
     async def seek(self, position_ms: int) -> None:
         return self.track_player.seek(position_ms)
@@ -523,11 +517,11 @@ class PlayQueueImpl(PlayQueueController):
 
         return progress
 
-    def _setup_track_to_play(self, index):
+    async def _setup_track_to_play(self, index):
         track = self.track_list[index]
         if index not in self.prepared_tracks:
             try:
-                track_info = track.link_retriever()
+                track_info = await track.link_retriever()
             except Exception as e:
                 logger.warning("Failed to retrieve track link: %s", repr(e))
                 self.event_emitter.dispatch(

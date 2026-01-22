@@ -462,7 +462,7 @@ class LocalFilesInputModule(InputModule):
 
                 # Create a link retriever function for this track
                 def create_link_retriever(track_path, track_format):
-                    def link_retriever():
+                    async def link_retriever():
                         return TrackUrl(url=f"file://{track_path}", format=track_format)
 
                     return link_retriever

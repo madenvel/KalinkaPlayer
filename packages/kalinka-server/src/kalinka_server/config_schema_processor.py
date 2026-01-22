@@ -114,8 +114,60 @@ def config_to_wire(
     base_config: BaseModel,
     input_modules: dict[str, ModuleConfig],
     devices: dict[str, ModuleConfig],
+    input_modules_with_errors: dict[str, tuple[ModuleConfig, str]] | None = None,
+    devices_with_errors: dict[str, tuple[ModuleConfig, str]] | None = None,
 ) -> Dict[str, Any]:
-    """Convert the base configuration and input modules to a wire-compatible format."""
+    """Convert the base configuration and input modules to a wire-compatible format.
+
+    Args:
+        base_config: Base configuration
+        input_modules: Successfully configured input modules
+        devices: Successfully configured devices
+        input_modules_with_errors: Input modules that failed to setup, mapped to (config, error_message)
+        devices_with_errors: Devices that failed to setup, mapped to (config, error_message)
+    """
+    if input_modules_with_errors is None:
+        input_modules_with_errors = {}
+    if devices_with_errors is None:
+        devices_with_errors = {}
+
+    # Build input modules section with both successful and failed modules
+    input_modules_fields = {}
+    for module in input_modules.values():
+        input_modules_fields[module.name] = {
+            "type": "section",
+            "title": module.__class__.model_fields["name"].title,
+            "status": "ready",
+            "fields": process_model(module),
+        }
+
+    for module_name, (module, error_msg) in input_modules_with_errors.items():
+        input_modules_fields[module.name] = {
+            "type": "section",
+            "title": module.__class__.model_fields["name"].title,
+            "status": "error",
+            "error": error_msg,
+            "fields": process_model(module),
+        }
+
+    # Build devices section with both successful and failed devices
+    devices_fields = {}
+    for device in devices.values():
+        devices_fields[device.name] = {
+            "type": "section",
+            "title": device.__class__.model_fields["name"].title,
+            "status": "ready",
+            "fields": process_model(device),
+        }
+
+    for device_name, (device, error_msg) in devices_with_errors.items():
+        devices_fields[device.name] = {
+            "type": "section",
+            "title": device.__class__.model_fields["name"].title,
+            "status": "error",
+            "error": error_msg,
+            "fields": process_model(device),
+        }
 
     config = {
         "root": {
@@ -132,26 +184,12 @@ def config_to_wire(
                 "input_modules": {
                     "type": "section",
                     "title": "Input Modules",
-                    "fields": {
-                        module.name: {
-                            "type": "section",
-                            "title": module.__class__.model_fields["name"].title,
-                            "fields": process_model(module),
-                        }
-                        for module in input_modules.values()
-                    },
+                    "fields": input_modules_fields,
                 },
                 "devices": {
                     "type": "section",
                     "title": "Devices",
-                    "fields": {
-                        device.name: {
-                            "type": "section",
-                            "title": device.__class__.model_fields["name"].title,
-                            "fields": process_model(device),
-                        }
-                        for device in devices.values()
-                    },
+                    "fields": devices_fields,
                 },
             },
         }

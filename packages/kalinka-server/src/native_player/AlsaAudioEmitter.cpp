@@ -205,8 +205,10 @@ bool AlsaAudioEmitter::handleSeekSignal() {
   // Calculate the quantized position (what we'll actually achieve)
   auto quantizedPositionMs = framesToTimeMs(seekValue).count();
 
-  // Report PREPARING state with the quantized target position
-  setState({AudioGraphNodeState::PREPARING, quantizedPositionMs});
+  // Report PREPARING state with the quantized target position and stream info
+  auto state = getState();
+  setState(
+      {AudioGraphNodeState::PREPARING, quantizedPositionMs, state.streamInfo});
 
   spdlog::info("Request seek to {}ms ({} frames), quantized to {}ms",
                positionMs, seekValue, quantizedPositionMs);

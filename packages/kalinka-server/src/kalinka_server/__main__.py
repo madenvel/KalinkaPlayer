@@ -117,8 +117,12 @@ async def main():
             server = uvicorn.Server(uvicorn_config)
             app.state.server = server
             await server.serve()
-            if server.should_exit:
+
+            # Check if this is a restart or a normal shutdown
+            if hasattr(app.state.config, "restart") and app.state.config.restart:
                 logger.info("Server restarting ...")
+                # Reset the restart flag for the next iteration
+                app.state.config.restart = False
             else:
                 logger.info("Server shut down")
                 break
