@@ -510,26 +510,28 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         """Listen to playback state changes and call appropriate handlers"""
         try:
             logger.debug("Playback state listener started")
-            stream = self.listener.stream([PlayQueueEventType.PlaybackStateChanged])
-            async for item in stream:
-                # Skip replay events as they are just initial state
-                if isinstance(item, ReplayEvent):
-                    logger.debug(
-                        f"Received replay event with state: {item.state.playback_state}"
-                    )
-                    continue
+            async with self.listener.stream(
+                [PlayQueueEventType.PlaybackStateChanged]
+            ) as stream:  # type: ignore
+                async for item in stream:
+                    # Skip replay events as they are just initial state
+                    if isinstance(item, ReplayEvent):
+                        logger.debug(
+                            f"Received replay event with state: {item.state.playback_state}"
+                        )
+                        continue
 
-                # Handle actual playback state change events
-                if isinstance(item, PlaybackStateChangedEvent):
-                    new_state = item.state.state
-                    logger.debug(f"Playback state changed to: {new_state}")
+                    # Handle actual playback state change events
+                    if isinstance(item, PlaybackStateChangedEvent):
+                        new_state = item.state.state
+                        logger.debug(f"Playback state changed to: {new_state}")
 
-                    if new_state == PlayerStateEnum.PLAYING:
-                        logger.info("Playback started, calling _on_playing")
-                        await self._on_playing(item.state)
-                    elif new_state == PlayerStateEnum.STOPPED:
-                        logger.info("Playback stopped, calling _on_stopped")
-                        await self._on_stopped()
+                        if new_state == PlayerStateEnum.PLAYING:
+                            logger.info("Playback started, calling _on_playing")
+                            await self._on_playing(item.state)
+                        elif new_state == PlayerStateEnum.STOPPED:
+                            logger.info("Playback stopped, calling _on_stopped")
+                            await self._on_stopped()
         except asyncio.CancelledError:
             logger.debug("Playback state listener task cancelled")
             raise
