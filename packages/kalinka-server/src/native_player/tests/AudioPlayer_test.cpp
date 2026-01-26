@@ -221,6 +221,65 @@ TEST_F(AudioPlayerTest, seek_one_after_another) {
   EXPECT_EQ(i, sizeof(states) / sizeof(states[0]));
 }
 
+TEST_F(AudioPlayerTest, seek_to_end_finishes) {
+  auto monitor = audioPlayer.monitor();
+  audioPlayer.play(url3);
+
+  StreamState streamingState(AudioGraphNodeState::STOPPED);
+  while (streamingState.state != AudioGraphNodeState::STREAMING) {
+    streamingState = monitor->waitState();
+  }
+
+  ASSERT_TRUE(streamingState.streamInfo.has_value());
+  const auto &streamInfo = streamingState.streamInfo.value();
+  ASSERT_EQ(streamInfo.streamType, StreamType::FRAMES);
+  ASSERT_GT(streamInfo.format.sampleRate, 0u);
+  ASSERT_GT(streamInfo.streamSize, 0u);
+
+  const size_t durationMs = static_cast<size_t>(
+      (1000.0 * streamInfo.streamSize) / streamInfo.format.sampleRate);
+  const size_t seekTargetMs = durationMs + 1000;
+
+  audioPlayer.seek(seekTargetMs);
+
+  bool finished = false;
+  StreamState lastState = streamingState;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+
+  while (!finished && std::chrono::steady_clock::now() < deadline) {
+    if (monitor->hasData()) {
+      lastState = monitor->waitState();
+      finished = lastState.state == AudioGraphNodeState::FINISHED;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+
+  EXPECT_TRUE(finished) << "Last state: " << stateToString(lastState.state);
+
+  // Start another stream after finishing and ensure it begins streaming.
+  while (monitor->hasData()) {
+    monitor->waitState();
+  }
+
+  audioPlayer.play(url1);
+
+  bool streamedAgain = false;
+  auto restartDeadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+
+  while (!streamedAgain && std::chrono::steady_clock::now() < restartDeadline) {
+    if (monitor->hasData()) {
+      auto state = monitor->waitState();
+      streamedAgain = state.state == AudioGraphNodeState::STREAMING;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+
+  EXPECT_TRUE(streamedAgain) << "Second stream failed to reach STREAMING";
+}
+
 TEST_F(AudioPlayerTest, test_play_pause_next) {
   auto monitor = audioPlayer.monitor();
   audioPlayer.play(url1);

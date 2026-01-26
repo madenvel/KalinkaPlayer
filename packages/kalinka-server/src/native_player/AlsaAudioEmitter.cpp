@@ -165,7 +165,8 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
     case AudioGraphNodeState::FINISHED:
       setState(
           StreamState(AudioGraphNodeState::FINISHED,
-                      framesToTimeMs(currentSourceTotalFramesWritten).count()));
+                      framesToTimeMs(currentSourceTotalFramesWritten).count(),
+                      inputNodeState.streamInfo));
       break;
     case AudioGraphNodeState::ERROR:
       setState({AudioGraphNodeState::ERROR, inputNodeState.message});
