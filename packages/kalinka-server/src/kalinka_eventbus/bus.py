@@ -7,6 +7,7 @@ import time
 import uuid
 from collections import deque
 from enum import Enum
+from types import TracebackType
 from typing import (
     Callable,
     Deque,
@@ -216,7 +217,12 @@ class AsyncEventStream(Generic[S_stream, E_stream, EV_stream]):
         self._sub_id = sub.id
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
         if self._sub_id is not None:
             self._bus.unsubscribe(self._sub_id)
             self._sub_id = None
@@ -225,7 +231,7 @@ class AsyncEventStream(Generic[S_stream, E_stream, EV_stream]):
         if self._queue is not None:
             self._queue.put_nowait(StopAsyncIteration)  # type: ignore[arg-type]
 
-    def __aiter__(self):
+    def __aiter__(self) -> "AsyncEventStream[S_stream, E_stream, EV_stream]":
         return self
 
     async def __anext__(self) -> Union[EV_stream, ReplayEvent[S_stream]]:

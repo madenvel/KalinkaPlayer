@@ -12,7 +12,7 @@ from typing import Any, List, Union
 import pytest
 from pydantic import ConfigDict, Field
 
-from kalinka_plugin_sdk.api import BaseEvent, BaseState, ReplayEvent
+from kalinka_plugin_sdk.api import BaseEvent, BaseState, ReplayEvent, EventListener
 from kalinka_eventbus.bus import EventBus
 
 
@@ -617,6 +617,146 @@ class TestAsyncIteration:
         # Should only have EVENT_A types
         assert all(e.event_type == TestEventType.EVENT_A for e in test_events)
         assert len(test_events) == 2
+
+
+class TestEventListenerStreamInterface:
+    """Test EventListener.stream() interface implementation."""
+
+    def _consume_through_listener_protocol(
+        self, listener: "EventListener[TestEventType, TestEvent, TestState]"
+    ):
+        """Helper that works with EventListener protocol to verify interface."""
+        # This function signature requires EventListener protocol
+        # If EventBus doesn't properly implement it, this would fail type checking
+        return listener
+
+    @pytest.mark.asyncio
+    async def test_stream_works_through_eventlistener_protocol(self):
+        """Test that EventBus implements EventListener protocol correctly."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState())
+
+        # Pass through protocol interface - verifies EventBus implements EventListener
+        listener = self._consume_through_listener_protocol(bus)
+
+        received = []
+
+        async def consumer():
+            # Use stream through the protocol interface
+            async with listener.stream([TestEventType.EVENT_A]) as stream:  # type: ignore
+                async for event in stream:
+                    received.append(event)
+                    if isinstance(event, TestEvent) and event.increment == 1:
+                        break
+
+        consumer_task = asyncio.create_task(consumer())
+        await asyncio.sleep(0.1)
+
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+
+        await asyncio.wait_for(consumer_task, timeout=2.0)
+
+        bus.close()
+
+        # Should have received replay + event
+        assert len(received) >= 2
+        assert isinstance(received[0], ReplayEvent)
+
+    @pytest.mark.asyncio
+    async def test_stream_returns_async_context_manager(self):
+        """Test that stream() returns an object that works with async with."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState())
+        stream = bus.stream([TestEventType.EVENT_A])
+
+        # Verify stream has async context manager methods
+        assert hasattr(stream, "__aenter__")
+        assert hasattr(stream, "__aexit__")
+        assert callable(getattr(stream, "__aenter__", None))
+        assert callable(getattr(stream, "__aexit__", None))
+
+        bus.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_async_context_manager_setup_and_cleanup(self):
+        """Test that async with properly sets up and tears down the stream."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState())
+
+        received = []
+        stream_obj = None
+
+        async def consumer():
+            nonlocal stream_obj
+            async with bus.stream([TestEventType.EVENT_A]) as stream:
+                stream_obj = stream
+                # After entering, queue should be initialized
+                assert hasattr(stream, "_queue")
+                assert stream._queue is not None
+
+                async for event in stream:
+                    received.append(event)
+                    if isinstance(event, TestEvent) and event.increment == 1:
+                        break
+
+                # After exiting, we should still have the stream object
+                assert stream is not None
+
+        consumer_task = asyncio.create_task(consumer())
+        await asyncio.sleep(0.1)
+
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+
+        await asyncio.wait_for(consumer_task, timeout=2.0)
+
+        # Verify stream was properly cleaned up
+        assert stream_obj is not None
+        assert stream_obj._stopped is True
+
+        bus.close()
+
+        # Should have received replay + event
+        assert len(received) >= 2
+
+    @pytest.mark.asyncio
+    async def test_stream_multiple_async_with_blocks(self):
+        """Test that multiple independent async with blocks work correctly."""
+        bus = EventBus[TestState, TestEventType, TestEvent](TestState())
+
+        received1 = []
+        received2 = []
+
+        async def consumer1():
+            async with bus.stream([TestEventType.EVENT_A]) as stream:
+                async for event in stream:
+                    received1.append(event)
+                    if isinstance(event, TestEvent) and event.increment >= 2:
+                        break
+
+        async def consumer2():
+            async with bus.stream([TestEventType.EVENT_B]) as stream:
+                async for event in stream:
+                    received2.append(event)
+                    if isinstance(event, TestEvent) and event.value == "stop":
+                        break
+
+        task1 = asyncio.create_task(consumer1())
+        task2 = asyncio.create_task(consumer2())
+
+        await asyncio.sleep(0.1)
+
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=1))
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_B, value="first"))
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_A, increment=2))
+        bus.dispatch(TestEvent(event_type=TestEventType.EVENT_B, value="stop"))
+
+        await asyncio.wait_for(asyncio.gather(task1, task2), timeout=2.0)
+
+        bus.close()
+
+        # Each consumer should have received replay + events of their type
+        test_events1 = [e for e in received1 if isinstance(e, TestEvent)]
+        test_events2 = [e for e in received2 if isinstance(e, TestEvent)]
+
+        assert len(test_events1) == 2
+        assert len(test_events2) == 2
 
 
 class TestConcurrency:
