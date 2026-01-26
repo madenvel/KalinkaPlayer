@@ -225,7 +225,19 @@ class PlayQueueImpl(PlayQueueController):
         try:
             async for new_state in self.state_monitor:
                 logger.info(f"New state: {new_state}")
-                await self._process_state_update(new_state)
+                try:
+                    await self._process_state_update(new_state)
+                except TimeoutError as e:
+                    logger.error(
+                        f"State update processing timed out: {e}. "
+                        "Continuing to listen for state changes."
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error processing state update: {e}. "
+                        "Continuing to listen for state changes.",
+                        exc_info=True,
+                    )
         except asyncio.CancelledError:
             logger.debug("State listener cancelled")
             raise
@@ -241,7 +253,7 @@ class PlayQueueImpl(PlayQueueController):
             return
         elif new_state.state == AudioGraphNodeState.FINISHED:
             if self._prefetch_task is None:
-                await self.play(self.current_track_id + 1)
+                await self._play_unqueued(self.current_track_id + 1)
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
         elif new_state.state != AudioGraphNodeState.STREAMING:
@@ -269,7 +281,13 @@ class PlayQueueImpl(PlayQueueController):
             ),
         )
 
-    async def play(self, index=None):
+    async def play(self, index: Optional[int] = None) -> None:
+        await self._play_unqueued(index)
+
+    async def play_next(self, index: int) -> None:
+        return await self._play_next_unqueued(index)
+
+    async def _play_unqueued(self, index=None):
         if len(self.track_list) == 0:
             return
 
@@ -287,7 +305,7 @@ class PlayQueueImpl(PlayQueueController):
         self.prepared_tracks[index] = track_info
         self.track_player.play(track_info.url, mime_to_format(track_info.format))
 
-    async def play_next(self, index):
+    async def _play_next_unqueued(self, index):
         if len(self.track_list) == 0:
             return
 
@@ -311,10 +329,10 @@ class PlayQueueImpl(PlayQueueController):
         self.track_player.pause(paused)
 
     async def next(self):
-        await self.play(self.current_track_id + 1)
+        await self._play_unqueued(self.current_track_id + 1)
 
     async def prev(self):
-        await self.play(self.current_track_id - 1)
+        await self._play_unqueued(self.current_track_id - 1)
 
     async def seek(self, position_ms: int) -> None:
         return self.track_player.seek(position_ms)
