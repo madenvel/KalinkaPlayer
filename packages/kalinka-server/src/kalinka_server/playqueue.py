@@ -524,6 +524,18 @@ class PlayQueueImpl(PlayQueueController):
         self.event_emitter.dispatch(
             TracksRemovedEvent(indices=[i for i in range(list_len - 1, -1, -1)])
         )
+        # Emit a stopped state with no current track
+        self.event_emitter.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
+                    current_track=None,
+                    index=0,
+                    position=0,
+                    timestamp_ns=time.monotonic_ns(),
+                )
+            )
+        )
 
     def _estimated_progress(self, stream_state: StreamState) -> int:
         if stream_state.state != AudioGraphNodeState.STREAMING:
