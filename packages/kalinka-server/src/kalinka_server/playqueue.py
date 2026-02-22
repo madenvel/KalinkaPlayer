@@ -363,7 +363,12 @@ class PlayQueueImpl(PlayQueueController):
             self._notify_track_change()
 
     async def remove(self, tracks: list[int]):
-        if self.current_track_id in tracks:
+        removed_current_track = self.current_track_id in tracks
+        was_already_stopped = False
+        if removed_current_track:
+            was_already_stopped = (
+                self.track_player.get_state().state == AudioGraphNodeState.STOPPED
+            )
             self.track_player.stop()
 
         prev_track_id = self.current_track_id
@@ -382,7 +387,8 @@ class PlayQueueImpl(PlayQueueController):
             self.current_track_id = 0
         self.event_emitter.dispatch(TracksRemovedEvent(indices=tracks))
         if prev_track_id != self.current_track_id or prev_track_id in tracks:
-            self._notify_track_change()
+            if not (removed_current_track and not was_already_stopped):
+                self._notify_track_change()
 
     async def list(self, offset: int, limit: int) -> TrackList:
         if offset not in range(0, len(self.track_list)):
@@ -448,6 +454,9 @@ class PlayQueueImpl(PlayQueueController):
             track_info_retriever: Async callback to retrieve TrackInfo from EntityId
         """
         # Stop any current playback
+        was_already_stopped = (
+            self.track_player.get_state().state == AudioGraphNodeState.STOPPED
+        )
         self.track_player.stop()
 
         # Clear existing state
@@ -491,22 +500,22 @@ class PlayQueueImpl(PlayQueueController):
         if self.current_track_id < 0 or not self.track_list:
             self.current_track_id = 0
 
-        # Emit a stopped state with position 0
-        self.event_emitter.dispatch(
-            PlaybackStateChangedEvent(
-                state=PlaybackState(
-                    current_track=(
-                        self._get_track_info(self.current_track_id)
-                        if self.track_list
-                        else None
-                    ),
-                    index=self.current_track_id,
-                    state=PlayerStateEnum.STOPPED,
-                    position=0,
-                    timestamp_ns=time.monotonic_ns(),
+        if was_already_stopped:
+            self.event_emitter.dispatch(
+                PlaybackStateChangedEvent(
+                    state=PlaybackState(
+                        current_track=(
+                            self._get_track_info(self.current_track_id)
+                            if self.track_list
+                            else None
+                        ),
+                        index=self.current_track_id,
+                        state=PlayerStateEnum.STOPPED,
+                        position=0,
+                        timestamp_ns=time.monotonic_ns(),
+                    )
                 )
             )
-        )
 
         logger.info(
             f"Restored state: {len(self.track_list)} tracks, current_track_id={self.current_track_id}"
@@ -516,6 +525,9 @@ class PlayQueueImpl(PlayQueueController):
         self._clear()
 
     def _clear(self):
+        was_already_stopped = (
+            self.track_player.get_state().state == AudioGraphNodeState.STOPPED
+        )
         self.track_player.stop()
         self.track_urls = {}
         list_len = len(self.track_list)
@@ -524,18 +536,18 @@ class PlayQueueImpl(PlayQueueController):
         self.event_emitter.dispatch(
             TracksRemovedEvent(indices=[i for i in range(list_len - 1, -1, -1)])
         )
-        # Emit a stopped state with no current track
-        self.event_emitter.dispatch(
-            PlaybackStateChangedEvent(
-                state=PlaybackState(
-                    state=PlayerStateEnum.STOPPED,
-                    current_track=None,
-                    index=0,
-                    position=0,
-                    timestamp_ns=time.monotonic_ns(),
+        if was_already_stopped:
+            self.event_emitter.dispatch(
+                PlaybackStateChangedEvent(
+                    state=PlaybackState(
+                        state=PlayerStateEnum.STOPPED,
+                        current_track=self._get_track_info(self.current_track_id),
+                        index=self.current_track_id,
+                        position=0,
+                        timestamp_ns=time.monotonic_ns(),
+                    )
                 )
             )
-        )
 
     def _estimated_progress(self, stream_state: StreamState) -> int:
         if stream_state.state != AudioGraphNodeState.STREAMING:
