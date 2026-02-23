@@ -15,6 +15,7 @@ class PlayQueueEventType(Enum):
     RequestMoreTracks = "request_more_tracks"
     TracksAdded = "tracks_added"
     TracksRemoved = "tracks_removed"
+    TrackMoved = "track_moved"
     PlaybackError = "playback_error"
     PlaybackModeChanged = "playback_mode_changed"
 
@@ -50,6 +51,11 @@ class PlayQueueState(BaseState[PlayQueueEvent]):
                 if i not in event.indices
             ]
             updates["track_list"] = new_track_list
+        elif isinstance(event, TrackMovedEvent):
+            track_list = list(self.track_list)
+            track = track_list.pop(event.from_index)
+            track_list.insert(event.to_index, track)
+            updates["track_list"] = track_list
         elif isinstance(event, PlaybackModeChangedEvent):
             updates["playback_mode"] = event.mode
         else:
@@ -75,6 +81,12 @@ class TracksAddedEvent(PlayQueueEvent):
 class TracksRemovedEvent(PlayQueueEvent):
     event_type: PlayQueueEventType = PlayQueueEventType.TracksRemoved
     indices: List[int]
+
+
+class TrackMovedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.TrackMoved
+    from_index: int
+    to_index: int
 
 
 class PlaybackModeChangedEvent(PlayQueueEvent):

@@ -47,6 +47,12 @@ class SetPlaybackModeCommand(BaseModel):
     repeat_all: Optional[bool] = None
 
 
+class MoveCommand(BaseModel):
+    command: Literal["move"] = "move"
+    from_index: int
+    to_index: int
+
+
 # Discriminated union of all commands
 QueueCommand = Annotated[
     Union[
@@ -57,6 +63,7 @@ QueueCommand = Annotated[
         StopCommand,
         SeekCommand,
         SetPlaybackModeCommand,
+        MoveCommand,
     ],
     Field(discriminator="command"),
 ]
@@ -115,6 +122,8 @@ async def handle_websocket_connection(
                         await playqueue.set_playback_mode(
                             cmd.shuffle, cmd.repeat_single, cmd.repeat_all
                         )
+                    elif isinstance(cmd, MoveCommand):
+                        await playqueue.move(cmd.from_index, cmd.to_index)
 
                 except ValueError as e:
                     logger.error(f"Error validating command: {e}")

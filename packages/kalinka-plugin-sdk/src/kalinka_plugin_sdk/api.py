@@ -81,6 +81,10 @@ class PlayQueueController(Protocol):
         """
         ...
 
+    async def move(self, from_index: int, to_index: int) -> None:
+        """Move the track at from_index to to_index, shifting others as needed."""
+        ...
+
     async def set_playback_mode(
         self,
         shuffle: Optional[bool],

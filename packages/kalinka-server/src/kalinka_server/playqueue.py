@@ -26,6 +26,7 @@ from kalinka_plugin_sdk.events import (
     PlaybackStateChangedEvent,
     TracksAddedEvent,
     TracksRemovedEvent,
+    TrackMovedEvent,
 )
 from kalinka_plugin_sdk.inputmodule import TrackInfo
 
@@ -65,6 +66,22 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # };
 
 PREFETCH_TIME_MS = 5000
+
+
+def _remap_index(idx: int, from_index: int, to_index: int) -> int:
+    """Remap an index after moving a track from from_index to to_index.
+
+    Mirrors the effect of: list.pop(from_index); list.insert(to_index, item).
+    """
+    if idx == from_index:
+        return to_index
+    if from_index < to_index:  # track moved forward
+        if from_index < idx <= to_index:
+            return idx - 1
+    else:  # track moved backward
+        if to_index <= idx < from_index:
+            return idx + 1
+    return idx
 
 
 def get_duration_ms(stream_info: StreamInfo) -> int:
@@ -519,6 +536,48 @@ class PlayQueueImpl(PlayQueueController):
 
         logger.info(
             f"Restored state: {len(self.track_list)} tracks, current_track_id={self.current_track_id}"
+        )
+
+    async def move(self, from_index: int, to_index: int) -> None:
+        if from_index == to_index:
+            return
+        if from_index not in range(0, len(self.track_list)):
+            return
+        if to_index not in range(0, len(self.track_list)):
+            return
+
+        # Reorder the track list
+        track = self.track_list.pop(from_index)
+        self.track_list.insert(to_index, track)
+
+        # Remap current_track_id to follow its track
+        self.current_track_id = _remap_index(self.current_track_id, from_index, to_index)
+
+        # Remap all prepared_tracks keys to follow their tracks
+        new_prepared = OrderedDict()
+        for idx, stream_info in self.prepared_tracks.items():
+            new_prepared[_remap_index(idx, from_index, to_index)] = stream_info
+        self.prepared_tracks = new_prepared
+
+        # Verify the prefetched "next" track is still the correct one.
+        # If the wrong track is queued as next, remove it and re-prefetch.
+        expected_next = self.current_track_id
+        if not self.repeat_single:
+            expected_next += 1
+        if self.repeat_all and expected_next >= len(self.track_list):
+            expected_next = 0
+
+        for idx in list(self.prepared_tracks.keys()):
+            if idx == self.current_track_id:
+                continue
+            if idx != expected_next:
+                stream_info = self.prepared_tracks.pop(idx)
+                self.track_player.remove(stream_info)
+                self._cancel_prefetch_timer()
+                self._prefetch_task = asyncio.create_task(self._play_next_track_async())
+
+        self.event_emitter.dispatch(
+            TrackMovedEvent(from_index=from_index, to_index=to_index)
         )
 
     async def clear(self):

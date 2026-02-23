@@ -448,6 +448,11 @@ async def create_app(config_file, config: KalinkaConfig):
         await player_context.playqueue.remove([index])
         return {"message": "Ok"}
 
+    @app.put("/queue/move")
+    async def queue_move(from_index: int, to_index: int):
+        await player_context.playqueue.move(from_index, to_index)
+        return {"message": "Ok"}
+
     @app.get("/device/list")
     async def device_supported_functions():
         if device is None:
