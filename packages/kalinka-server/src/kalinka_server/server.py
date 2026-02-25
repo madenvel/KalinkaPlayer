@@ -678,27 +678,47 @@ async def create_app(config_file, config: KalinkaConfig):
             config = None
             logger.info(f"Setting config field {key} to {value}")
             attrs = key.split(".")
-            if not attrs or attrs[0] != "root":
+            if not attrs or attrs[0] != "root" or any(part == "" for part in attrs):
                 raise HTTPException(status_code=400, detail="Invalid config key")
 
             attrs = attrs[1:]  # Skip the 'root' part
 
+            if not attrs:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid config key: section path cannot be updated directly",
+                )
+
             if attrs[0] == "input_modules":
+                if len(attrs) < 2:
+                    raise HTTPException(status_code=400, detail="Invalid config key")
                 module_name = attrs[1]
                 if module_name in modules.prepared_input_modules:
                     config = modules.prepared_input_modules[
                         module_name
                     ].plugin_context.config
                     attrs = attrs[2:]
+                    if not attrs:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid config key: section path cannot be updated directly",
+                        )
                     if attrs[0] == "name":
                         raise HTTPException(
                             status_code=400, detail="Cannot modify 'name' field"
                         )
             elif attrs[0] == "devices":
+                if len(attrs) < 2:
+                    raise HTTPException(status_code=400, detail="Invalid config key")
                 device_name = attrs[1]
                 if device_name in modules.prepared_devices:
                     config = modules.prepared_devices[device_name].plugin_context.config
                     attrs = attrs[2:]
+                    if not attrs:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid config key: section path cannot be updated directly",
+                        )
                     if attrs[0] == "name":
                         raise HTTPException(
                             status_code=400, detail="Cannot modify 'name' field"
@@ -706,11 +726,22 @@ async def create_app(config_file, config: KalinkaConfig):
             elif attrs[0] == "base_config":
                 config = app.state.config
                 attrs = attrs[1:]
+                if not attrs:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid config key: section path cannot be updated directly",
+                    )
 
             if config is None:
                 raise HTTPException(status_code=400, detail="Invalid config key")
 
-            set_field_value(config, attrs, value)
+            try:
+                set_field_value(config, attrs, value)
+            except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                logger.warning("Invalid config key '%s': %s", key, exc)
+                raise HTTPException(
+                    status_code=400, detail="Invalid config key"
+                ) from exc
             logger.info(
                 f"Set config field {'.'.join(attrs)} to {value}, saved value: {get_field_value(config, attrs)}"
             )
