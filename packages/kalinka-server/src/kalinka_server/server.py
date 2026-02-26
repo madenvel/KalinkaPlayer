@@ -51,7 +51,7 @@ from .device_ws_handler import (
 
 def save_config(config_file: str, config: KalinkaConfig):
     """Save the configuration to a file."""
-    config_data = config.model_dump()
+    config_data = config.model_dump(mode="json")
     # Ensure the directory exists
     config_dir = os.path.dirname(config_file)
     if config_dir:  # Only create directory if path is not empty
@@ -99,8 +99,10 @@ async def lifespan(app: FastAPI):
 
         app.state.player_context.playqueue_eventbus.close()
         await save_state(app.state.player_context.playqueue_eventbus)
-        app.state.config.restart = False
-        save_config(app.state.config_file, app.state.config)
+        save_config(
+            app.state.config_file,
+            app.state.config.model_copy(update={"restart": False}),
+        )
         await app.state.player_context.playqueue.__aexit__(None, None, None)
 
 
