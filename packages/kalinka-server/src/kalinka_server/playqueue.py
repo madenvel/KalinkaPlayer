@@ -551,6 +551,7 @@ class PlayQueueImpl(PlayQueueController):
         self.track_list.insert(to_index, track)
 
         # Remap current_track_id to follow its track
+        old_current_track_id = self.current_track_id
         self.current_track_id = _remap_index(self.current_track_id, from_index, to_index)
 
         # Remap all prepared_tracks keys to follow their tracks
@@ -572,13 +573,17 @@ class PlayQueueImpl(PlayQueueController):
                 continue
             if idx != expected_next:
                 stream_info = self.prepared_tracks.pop(idx)
-                self.track_player.remove(stream_info)
+                self.track_player.remove(stream_info.url)
                 self._cancel_prefetch_timer()
                 self._prefetch_task = asyncio.create_task(self._play_next_track_async())
 
         self.event_emitter.dispatch(
             TrackMovedEvent(from_index=from_index, to_index=to_index)
         )
+        if self.current_track_id != old_current_track_id:
+            self.event_emitter.dispatch(
+                PlaybackStateChangedEvent(state=self._get_playback_state())
+            )
 
     async def clear(self):
         self._clear()

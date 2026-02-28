@@ -24,6 +24,7 @@ from .events import (
     RequestMoreTracksEvent,
     TracksAddedEvent,
     TracksRemovedEvent,
+    TrackMovedEvent,
     PlaybackModeChangedEvent,
     PlaybackErrorEvent,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "RequestMoreTracksEvent",
     "TracksAddedEvent",
     "TracksRemovedEvent",
+    "TrackMovedEvent",
     "PlaybackModeChangedEvent",
     "PlaybackErrorEvent",
     # Data Models

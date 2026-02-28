@@ -17,16 +17,12 @@ from kalinka_plugin_sdk import (
     PlaybackStateChangedEvent,
     TracksAddedEvent,
     TracksRemovedEvent,
+    TrackMovedEvent,
     RequestMoreTracksEvent,
     EventEmitter,
 )
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
-
-# These tests need to be updated for PlayQueueImpl behavior
-pytestmark = pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 
 
 def to_track_id(id: str):
@@ -151,6 +147,9 @@ def assert_has_calls(event_emitter, expected_calls):
         i += 1
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_add_remove_track(event_emitter, playqueue):
     track = TrackInfo(
@@ -189,6 +188,9 @@ async def test_add_remove_track(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_play(event_emitter, playqueue):
     track = TrackInfo(
@@ -254,6 +256,9 @@ async def test_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_switch_track(event_emitter, playqueue):
     track1 = TrackInfo(
@@ -357,6 +362,9 @@ async def test_switch_track(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_play_next(event_emitter, playqueue):
     track1 = TrackInfo(
@@ -467,6 +475,9 @@ async def test_play_next(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_play_pause_stop_play(event_emitter, playqueue):
     track = TrackInfo(
@@ -601,6 +612,9 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
+@pytest.mark.skip(
+    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
+)
 @pytest.mark.asyncio
 async def test_seek(event_emitter, playqueue):
     track = TrackInfo(
@@ -698,3 +712,190 @@ async def test_seek(event_emitter, playqueue):
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
+
+# ── Move track tests ──────────────────────────────────────────────────────────
+
+
+def make_tracks(n: int) -> list[TrackInfo]:
+    """Create n TrackInfo objects with distinct ids."""
+    return [
+        TrackInfo(
+            id=to_track_id(str(i)),
+            metadata=create_track(str(i)),
+            link_retriever=url1,
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+def dispatched_events(mock_emitter) -> list:
+    """Return the list of events passed to event_emitter.dispatch()."""
+    return [c[0][0] for c in mock_emitter.dispatch.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_move_currently_playing_track_forward(event_emitter, playqueue):
+    """Moving the current track forward updates current_track_id and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    await playqueue.move(1, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 1
+    assert events[0].to_index == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+
+
+@pytest.mark.asyncio
+async def test_move_currently_playing_track_backward(event_emitter, playqueue):
+    """Moving the current track backward updates current_track_id and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    await playqueue.move(2, 0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 2
+    assert events[0].to_index == 0
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 0
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_move_non_current_track_before_current_to_after(event_emitter, playqueue):
+    """Moving a track before the current track to after it shifts current_track_id left."""
+    # Queue: [0,1,2,3], current=2. Move 0→3: [1,2,3,0]. current should become 1.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    await playqueue.move(0, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 0
+    assert events[0].to_index == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 1
+    assert playqueue.current_track_id == 1
+
+
+@pytest.mark.asyncio
+async def test_move_non_current_track_after_current_to_before(event_emitter, playqueue):
+    """Moving a track after the current track to before it shifts current_track_id right."""
+    # Queue: [0,1,2,3], current=1. Move 3→0: [3,0,1,2]. current should become 2.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    await playqueue.move(3, 0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 3
+    assert events[0].to_index == 0
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 2
+    assert playqueue.current_track_id == 2
+
+
+@pytest.mark.asyncio
+async def test_move_unrelated_tracks_no_state_change_event(event_emitter, playqueue):
+    """Moving tracks that don't affect the current index emits only TrackMovedEvent."""
+    # Queue: [0,1,2,3], current=0. Move 2→3: current stays at 0.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    event_emitter.reset_mock()
+
+    await playqueue.move(2, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 2
+    assert events[0].to_index == 3
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_move_invalid_indices_no_events(event_emitter, playqueue):
+    """Out-of-bounds move calls are silently ignored and emit no events."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    await playqueue.move(0, 99)
+    await playqueue.move(99, 0)
+
+    event_emitter.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_move_invalidates_prefetched_next_track(event_emitter, playqueue):
+    """When a move makes the prefetched next track wrong, it is removed and re-prefetch is triggered.
+
+    Scenario: [T0,T1,T2,T3], current=1, prefetch={1:url_T1, 2:url_T2}.
+    Move T2 from 2→0 → [T2,T0,T1,T3].
+    After remap: current→2, prepared={2:url_T1, 0:url_T2}, expected_next=3.
+    Entry 0 is stale → must be evicted and re-prefetch scheduled.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[1] = TrackUrl(url="http://example.com/t1.flac", format="FLAC")
+    playqueue.prepared_tracks[2] = TrackUrl(url="http://example.com/t2.flac", format="FLAC")
+    event_emitter.reset_mock()
+
+    # move T2 (index 2) before the current track → next slot becomes wrong
+    await playqueue.move(2, 0)
+
+    # stale prefetch entry at remapped index 0 must be gone
+    assert 0 not in playqueue.prepared_tracks
+    # current track entry (remapped to 2) must be kept
+    assert 2 in playqueue.prepared_tracks
+    # a re-prefetch task must have been scheduled
+    assert playqueue._prefetch_task is not None
+
+
+@pytest.mark.asyncio
+async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
+    """When a move keeps the prefetched next track correct, it is preserved with no re-prefetch.
+
+    Scenario: [T0,T1,T2,T3], current=1, prefetch={1:url_T1, 2:url_T2}.
+    Move T3 from 3→0 → [T3,T0,T1,T2].
+    After remap: current→2, prepared={2:url_T1, 3:url_T2}, expected_next=3.
+    Entry 3 matches → keep both, no re-prefetch.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[1] = TrackUrl(url="http://example.com/t1.flac", format="FLAC")
+    playqueue.prepared_tracks[2] = TrackUrl(url="http://example.com/t2.flac", format="FLAC")
+    event_emitter.reset_mock()
+
+    # move T3 (index 3) to position 0 — an unrelated track, next slot stays correct
+    await playqueue.move(3, 0)
+
+    # both entries must survive (remapped to new indices)
+    assert 2 in playqueue.prepared_tracks   # current track (remapped 1→2)
+    assert 3 in playqueue.prepared_tracks   # next track (remapped 2→3, still correct)
+    assert len(playqueue.prepared_tracks) == 2
+    # no re-prefetch should have been triggered
+    assert playqueue._prefetch_task is None
