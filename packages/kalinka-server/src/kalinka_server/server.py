@@ -235,7 +235,7 @@ async def create_app(config_file, config: KalinkaConfig):
         return await player_context.playqueue.list(offset=offset, limit=limit)
 
     @app.post("/queue/add")
-    async def add_entity_to_queue(ids: list[str]):
+    async def add_entity_to_queue(ids: list[str], index: Optional[int] = None):
         items: list[TrackInfo] = []
         for entity_id in ids:
             entity_id_obj = EntityId.from_string(entity_id)
@@ -251,7 +251,7 @@ async def create_app(config_file, config: KalinkaConfig):
             else:
                 items.extend(await module.get_track_info([entity_id_obj.id]))
 
-        await player_context.playqueue.add(items)
+        await player_context.playqueue.add(items, index)
         return {"message": "Items added to queue", "count": len(items)}
 
     @app.put("/queue/play")

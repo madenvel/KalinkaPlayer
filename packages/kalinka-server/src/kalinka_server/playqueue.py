@@ -381,27 +381,68 @@ class PlayQueueImpl(PlayQueueController):
     async def stop(self):
         self.track_player.stop()
 
-    async def add(self, tracks: list[TrackInfo]):
-        self._add(tracks)
+    async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
+        self._add(tracks, index)
 
-    def _add(self, tracks: list[TrackInfo]):
+    def _add(self, tracks: list[TrackInfo], index: Optional[int] = None):
         if len(tracks) == 0:
             return
 
-        index = len(self.track_list)
-        self.track_list.extend(tracks)
+        # Resolve insertion position (default: append)
+        insert_at = len(self.track_list) if index is None else index
+        # Clamp to valid range
+        insert_at = max(0, min(insert_at, len(self.track_list)))
+
+        was_empty = len(self.track_list) == 0
+        old_current_track_id = self.current_track_id
+
+        # Insert tracks into the list
+        for i, track in enumerate(tracks):
+            self.track_list.insert(insert_at + i, track)
+
+        # Shift current_track_id if insertion is before or at it (and queue wasn't empty)
+        if not was_empty and insert_at <= self.current_track_id:
+            self.current_track_id += len(tracks)
+
+        # Shift all prepared_tracks keys >= insert_at up by len(tracks)
+        new_prepared = OrderedDict()
+        for idx, stream_info in self.prepared_tracks.items():
+            new_prepared[idx + len(tracks) if idx >= insert_at else idx] = stream_info
+        self.prepared_tracks = new_prepared
+
+        # Validate prefetched next track (same pattern as move())
+        expected_next = self.current_track_id
+        if not self.repeat_single:
+            expected_next += 1
+        if self.repeat_all and expected_next >= len(self.track_list):
+            expected_next = 0
+
+        for idx in list(self.prepared_tracks.keys()):
+            if idx == self.current_track_id:
+                continue
+            if idx != expected_next:
+                _, stream_id = self.prepared_tracks.pop(idx)
+                self.track_player.remove(stream_id)
+                self._cancel_prefetch_timer()
+                self._prefetch_task = asyncio.create_task(self._play_next_track_async())
+
         self.event_emitter.dispatch(
             TracksAddedEvent(
                 tracks=[
                     track_info
-                    for i in range(index, len(self.track_list))
+                    for i in range(insert_at, insert_at + len(tracks))
                     if ((track_info := self._get_track_info(i)) is not None)
-                ]
+                ],
+                index=insert_at,
             ),
         )
 
-        if index == 0:
+        if was_empty:
             self._notify_track_change()
+        elif self.current_track_id != old_current_track_id:
+            self.event_emitter.dispatch(
+                PlaybackStateChangedEvent(state=self._get_playback_state())
+            )
 
     async def remove(self, tracks: list[int]):
         removed_current_track = self.current_track_id in tracks

@@ -119,6 +119,9 @@ def assert_call_args(actual_args, expected_args, position):
             assert (
                 actual.tracks == expected.tracks
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
+            assert (
+                actual.index == expected.index
+            ), f"at position {position} actual index={actual.index} expected index={expected.index}"
         elif isinstance(expected, TracksRemovedEvent):
             # Compare TracksRemovedEvent payloads
             assert isinstance(
@@ -165,7 +168,7 @@ async def test_add_remove_track(event_emitter, playqueue):
             )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [], index=0)
         ),
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -208,7 +211,7 @@ async def test_play(event_emitter, playqueue):
             )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [], index=0)
         ),
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -284,7 +287,7 @@ async def test_switch_track(event_emitter, playqueue):
             )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track1.metadata, track2.metadata])  # type: ignore
+            TracksAddedEvent(tracks=[track1.metadata, track2.metadata], index=0)  # type: ignore
         ),
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -396,7 +399,8 @@ async def test_play_next(event_emitter, playqueue):
         ),
         call.dispatch(
             TracksAddedEvent(
-                tracks=[track1.metadata, track2.metadata, track3.metadata]  # type: ignore
+                tracks=[track1.metadata, track2.metadata, track3.metadata],  # type: ignore
+                index=0,
             )
         ),
         call.dispatch(
@@ -504,7 +508,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                 )
             )
         ),
-        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata], index=0)),  # type: ignore
         call.dispatch(
             PlaybackStateChangedEvent(
                 state=PlaybackState(
@@ -637,7 +641,7 @@ async def test_seek(event_emitter, playqueue):
                 )
             )
         ),
-        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata], index=0)),  # type: ignore
         call.dispatch(
             PlaybackStateChangedEvent(
                 state=PlaybackState(
@@ -899,3 +903,188 @@ async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
     assert len(playqueue.prepared_tracks) == 2
     # no re-prefetch should have been triggered
     assert playqueue._prefetch_task is None
+
+
+# ── Insert (add with index) tests ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_with_no_index_appends(event_emitter, playqueue):
+    """add(tracks) with no index appends; TracksAddedEvent.index == original length."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert len(playqueue.track_list) == 4
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_end_explicitly(event_emitter, playqueue):
+    """add(tracks, index=len) is identical to appending."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert len(playqueue.track_list) == 4
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_add_insert_after_current_not_at_next(event_emitter, playqueue):
+    """Inserting after current+1 emits TracksAddedEvent only; current unchanged."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    # insert at 3, which is > current+1=2
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert playqueue.current_track_id == 1
+    assert len(playqueue.track_list) == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_next_slot_invalidates_prefetch(event_emitter, playqueue):
+    """Inserting exactly at current+1 evicts stale prefetch and schedules re-prefetch."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    # Simulate a prefetched next track at index 2
+    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 42)
+    event_emitter.reset_mock()
+
+    # Insert at current+1=2 — the new track displaces the prefetched one
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=2)
+
+    # Stale prefetch (shifted to 3) must be evicted
+    assert 3 not in playqueue.prepared_tracks
+    # A re-prefetch task must have been scheduled
+    assert playqueue._prefetch_task is not None
+    assert len(playqueue.track_list) == 5
+    assert playqueue.current_track_id == 1
+
+
+@pytest.mark.asyncio
+async def test_add_insert_before_current(event_emitter, playqueue):
+    """Inserting before current shifts current_track_id right and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=1)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 1
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+    assert len(playqueue.track_list) == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_current_position(event_emitter, playqueue):
+    """Inserting at current index shifts current right (new track slides in before it)."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=2)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 2
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+
+
+@pytest.mark.asyncio
+async def test_add_insert_multiple_tracks_before_current(event_emitter, playqueue):
+    """Inserting N tracks before current shifts current_track_id by N."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_tracks = make_tracks(3)
+    await playqueue.add(new_tracks, index=0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 0
+    assert len(events[0].tracks) == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 5
+    assert playqueue.current_track_id == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_clamped(event_emitter, playqueue):
+    """Negative index is clamped to 0; index beyond len is clamped to len."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    # Negative → clamped to 0
+    await playqueue.add(make_tracks(1), index=-5)
+    events = dispatched_events(event_emitter)
+    assert events[0].index == 0
+
+    event_emitter.reset_mock()
+
+    # Beyond len → clamped to len
+    await playqueue.add(make_tracks(1), index=999)
+    events = dispatched_events(event_emitter)
+    assert events[0].index == 5  # len was 4 after previous insert
+
+
+@pytest.mark.asyncio
+async def test_add_insert_preserves_valid_prefetch(event_emitter, playqueue):
+    """Inserting after the next slot keeps a valid prefetched entry intact.
+
+    Queue: [T0,T1,T2,T3], current=1, prefetch={2: url_T2}.
+    Insert at 3 (> current+1=2) → prefetch at 2 is still expected_next → keep.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 7)
+    event_emitter.reset_mock()
+
+    await playqueue.add(make_tracks(1), index=3)
+
+    # Prefetch at 2 must still be there (insert at 3 didn't displace it)
+    assert 2 in playqueue.prepared_tracks
+    # No re-prefetch triggered
+    assert playqueue._prefetch_task is None
+    assert len(playqueue.track_list) == 5

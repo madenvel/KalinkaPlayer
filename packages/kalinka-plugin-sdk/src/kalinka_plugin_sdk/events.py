@@ -43,7 +43,10 @@ class PlayQueueState(BaseState[PlayQueueEvent]):
         if isinstance(event, PlaybackStateChangedEvent):
             updates["playback_state"] = event.state
         elif isinstance(event, TracksAddedEvent):
-            updates["track_list"] = self.track_list + event.tracks
+            track_list = list(self.track_list)
+            for i, track in enumerate(event.tracks):
+                track_list.insert(event.index + i, track)
+            updates["track_list"] = track_list
         elif isinstance(event, TracksRemovedEvent):
             new_track_list = [
                 track
@@ -76,6 +79,7 @@ class RequestMoreTracksEvent(PlayQueueEvent):
 class TracksAddedEvent(PlayQueueEvent):
     event_type: PlayQueueEventType = PlayQueueEventType.TracksAdded
     tracks: List[Track]
+    index: int  # actual list index at which tracks were inserted
 
 
 class TracksRemovedEvent(PlayQueueEvent):

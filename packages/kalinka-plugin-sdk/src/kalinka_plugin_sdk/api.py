@@ -47,8 +47,8 @@ class PlayQueueController(Protocol):
         """Stop playback."""
         ...
 
-    async def add(self, tracks: list[TrackInfo]) -> None:
-        """Add tracks to the queue."""
+    async def add(self, tracks: list[TrackInfo], index: Optional[int] = None) -> None:
+        """Add tracks to the queue. If index is given, insert at that position; otherwise append."""
         ...
 
     async def remove(self, tracks: list[int]) -> None:
