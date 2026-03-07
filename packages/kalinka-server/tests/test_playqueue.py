@@ -859,8 +859,8 @@ async def test_move_invalidates_prefetched_next_track(event_emitter, playqueue):
     await playqueue.add(make_tracks(4))
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
-    playqueue.prepared_tracks[1] = TrackUrl(url="http://example.com/t1.flac", format="FLAC")
-    playqueue.prepared_tracks[2] = TrackUrl(url="http://example.com/t2.flac", format="FLAC")
+    playqueue.prepared_tracks[1] = (TrackUrl(url="http://example.com/t1.flac", format="FLAC"), 0)
+    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 1)
     event_emitter.reset_mock()
 
     # move T2 (index 2) before the current track → next slot becomes wrong
@@ -886,8 +886,8 @@ async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
     await playqueue.add(make_tracks(4))
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
-    playqueue.prepared_tracks[1] = TrackUrl(url="http://example.com/t1.flac", format="FLAC")
-    playqueue.prepared_tracks[2] = TrackUrl(url="http://example.com/t2.flac", format="FLAC")
+    playqueue.prepared_tracks[1] = (TrackUrl(url="http://example.com/t1.flac", format="FLAC"), 0)
+    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 1)
     event_emitter.reset_mock()
 
     # move T3 (index 3) to position 0 — an unrelated track, next slot stays correct

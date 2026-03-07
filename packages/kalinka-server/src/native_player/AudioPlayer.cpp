@@ -34,10 +34,11 @@ struct StreamNodes {
   using NodeChain = std::list<std::shared_ptr<AudioGraphOutputNode>>;
   NodeChain nodeChain;
   const std::string url;
+  const StreamId id;
 
-  StreamNodes(const std::string &url, const Config &config,
+  StreamNodes(StreamId id, const std::string &url, const Config &config,
               const AudioFormat format)
-      : url(url) {
+      : url(url), id(id) {
     if (url.substr(0, 7) == "file://") {
       // Use FileInputNode for local files
       std::string filePath = url.substr(7);
@@ -82,7 +83,8 @@ struct StreamNodes {
   }
 
   StreamNodes(StreamNodes &&other)
-      : nodeChain(std::move(other.nodeChain)), url(std::move(other.url)) {}
+      : nodeChain(std::move(other.nodeChain)), url(std::move(other.url)),
+        id(other.id) {}
 
   ~StreamNodes() {
     for (NodeChain::reverse_iterator rit = nodeChain.rbegin();
@@ -107,47 +109,31 @@ AudioPlayer::AudioPlayer(const Config &config)
 
 AudioPlayer::~AudioPlayer() { stop(); }
 
-void AudioPlayer::play(const std::string &url, const AudioFormat format) {
-  for (auto it = streamNodesList.begin(); it != streamNodesList.end(); ++it) {
-    if (it->url == url &&
-        !isInvalidState(it->nodeChain.back()->getState().state)) {
-      std::list<StreamNodes> newStreamNodesList;
-      newStreamNodesList.emplace_back(std::move(*it));
-      streamNodesList.erase(it);
-      audioEmitter->connectTo(streamSwitcher);
-      disconnectAllStreams();
-      streamNodesList.swap(newStreamNodesList);
-      return;
-    }
-  }
-
-  StreamNodes newStream(url, config, format);
-  streamSwitcher->connectTo(newStream.nodeChain.back());
-  audioEmitter->connectTo(streamSwitcher);
-  disconnectAllStreams();
-  streamNodesList.emplace_back(std::move(newStream));
-}
-
-void AudioPlayer::playNext(const std::string &url, const AudioFormat format) {
-  spdlog::debug("Adding new track to play next");
-  StreamNodes newStream(url, config, format);
-  streamSwitcher->connectTo(newStream.nodeChain.back());
-  audioEmitter->connectTo(streamSwitcher);
+StreamId AudioPlayer::append(const std::string &url, const AudioFormat format) {
   cleanUpFinishedStreams();
+  StreamId id = nextStreamId++;
+  spdlog::debug("Appending stream id={} url={}", id, url);
+  StreamNodes newStream(id, url, config, format);
+  streamSwitcher->connectTo(newStream.nodeChain.back());
+  audioEmitter->connectTo(streamSwitcher);
   streamNodesList.emplace_back(std::move(newStream));
+  return id;
 }
 
-void AudioPlayer::remove(const std::string &url) {
+void AudioPlayer::remove(StreamId id) {
   auto stream = std::find_if(streamNodesList.begin(), streamNodesList.end(),
-                             [&url](const StreamNodes &streamNodes) {
-                               return streamNodes.url == url;
-                             });
+                             [id](const StreamNodes &s) { return s.id == id; });
   if (stream != streamNodesList.end()) {
     streamSwitcher->disconnect(stream->nodeChain.back());
     streamNodesList.erase(stream);
   } else {
-    spdlog::warn("Stream {} not found", url);
+    spdlog::warn("Stream id={} not found", id);
   }
+}
+
+void AudioPlayer::clearAll() {
+  disconnectAllStreams();
+  // audioEmitter stays connected to streamSwitcher — auto-start on next append()
 }
 
 void AudioPlayer::stop() {
@@ -155,7 +141,8 @@ void AudioPlayer::stop() {
   disconnectAllStreams();
 }
 
-void AudioPlayer::pause(bool paused) { audioEmitter->pause(paused); }
+void AudioPlayer::pause()  { audioEmitter->pause(true);  }
+void AudioPlayer::resume() { audioEmitter->pause(false); }
 
 size_t AudioPlayer::seek(size_t positionMs) {
   return audioEmitter->seek(positionMs);
