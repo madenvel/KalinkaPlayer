@@ -10,6 +10,7 @@ from .datamodel import (
     BrowseItemList,
     FavoriteIds,
     GenreList,
+    EmptyList,
 )
 
 
@@ -88,6 +89,23 @@ class InputModule(Protocol):
             str: A unique string identifier for this module (e.g., "spotify", "localfiles")
         """
         ...
+
+    async def ai_search(self, query: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
+        """
+        Search using natural language / AI / semantic interpretation.
+
+        Unlike search(), no content type is specified — the module decides
+        what kinds of results are relevant. Default returns an empty list.
+
+        Args:
+            query (str): A natural language query (e.g. "upbeat 90s rock for a road trip")
+            offset (int): Pagination offset. Defaults to 0.
+            limit (int): Max results to return. Defaults to 50.
+
+        Returns:
+            BrowseItemList: Matching items, possibly mixed types via .sections
+        """
+        return EmptyList(offset, limit)
 
     async def search(
         self, type: SearchType, query: str, offset=0, limit=50
