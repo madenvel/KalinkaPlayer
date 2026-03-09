@@ -44,14 +44,13 @@ cp "dist/${PLUGIN_WHEEL}" "pkgroot/opt/kalinka/wheels/"
 # Generate control file from template
 sed "s/@VERSION@/${VERSION}/g" debian/control.in > pkgroot/DEBIAN/control
 
-# Generate postinst script from template
-sed "s/@VERSION@/${VERSION}/g" debian/postinst > pkgroot/DEBIAN/postinst
+# Copy triggers file
+cp debian/triggers pkgroot/DEBIAN/triggers
 
 # Copy prerm script
 cp debian/prerm pkgroot/DEBIAN/prerm
 
 # Make scripts executable
-chmod 755 pkgroot/DEBIAN/postinst
 chmod 755 pkgroot/DEBIAN/prerm
 
 # Build the .deb package

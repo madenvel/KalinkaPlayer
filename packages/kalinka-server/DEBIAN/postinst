@@ -4,62 +4,46 @@ set -euo pipefail
 # --- Configurable paths/users ---
 USER="kalusr"
 INSTALL_DIR="/opt/kalinka"
-VENV_DIR="$INSTALL_DIR/venv"
 CONFIG_DIR="/etc/kalinka"
 UNIT_NAME="kalinka.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
-WHEELS_DIR="$INSTALL_DIR/wheels"
 
-echo "[1/6] Ensure system user exists (nologin)"
-if ! id -u "$USER" >/dev/null 2>&1; then
-  adduser --system --no-create-home --group --disabled-login "$USER"
-  usermod -aG audio "$USER" || true
-else
-  usermod -s /usr/sbin/nologin "$USER" || true
-  usermod -aG audio "$USER" || true
-fi
+case "$1" in
+  configure)
+    echo "[1/4] Ensure system user exists (nologin)"
+    if ! id -u "$USER" >/dev/null 2>&1; then
+      adduser --system --no-create-home --group --disabled-login "$USER"
+      usermod -aG audio "$USER" || true
+    else
+      usermod -s /usr/sbin/nologin "$USER" || true
+      usermod -aG audio "$USER" || true
+    fi
 
-echo "[2/6] Create install/config directories"
-install -d -m 0755 "$INSTALL_DIR"
-install -d -m 0750 -o "$USER" -g "$USER" "$CONFIG_DIR"
+    echo "[2/4] Create install/config directories"
+    install -d -m 0755 "$INSTALL_DIR"
+    install -d -m 0750 -o "$USER" -g "$USER" "$CONFIG_DIR"
 
-echo "[3/6] Create venv (root-owned, read-only to service user)"
-if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
-fi
-# Ensure code/venv stays root-owned and not group/world-writable
-chown -R root:root "$INSTALL_DIR"
-chmod -R go-w "$INSTALL_DIR"
+    echo "[3/4] Lock down config permissions"
+    chown -R "$USER:$USER" "$CONFIG_DIR"
+    # Files 0600, directories 0700
+    find "$CONFIG_DIR" -type f -exec chmod 600 {} \;
+    find "$CONFIG_DIR" -type d -exec chmod 700 {} \;
 
-echo "[4/6] Install from wheels"
-if [ ! -d "$WHEELS_DIR" ]; then
-  echo "Error: wheels dir missing: $WHEELS_DIR" >&2
-  exit 1
-fi
-shopt -s nullglob
-wheels=( "$WHEELS_DIR"/*.whl )
-if [ ${#wheels[@]} -eq 0 ]; then
-  echo "Error: no .whl files in $WHEELS_DIR" >&2
-  exit 1
-fi
-"$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install "${wheels[@]}"
+    echo "[4/4] systemd: reload; enable/start if unit exists"
+    systemctl daemon-reload
+    if [ -f "$UNIT_PATH" ]; then
+      systemctl enable "$UNIT_NAME"
+      systemctl restart "$UNIT_NAME"
+      systemctl --no-pager --full status "$UNIT_NAME" || true
+    else
+      echo "Note: $UNIT_NAME not found at $UNIT_PATH. Skipping enable/start."
+    fi
 
-echo "[5/6] Lock down config permissions"
-chown -R "$USER:$USER" "$CONFIG_DIR"
-# Files 0600, directories 0700
-find "$CONFIG_DIR" -type f -exec chmod 600 {} \;
-find "$CONFIG_DIR" -type d -exec chmod 700 {} \;
+    echo "Installation complete."
+    ;;
 
-echo "[6/6] systemd: reload; enable/start if unit exists"
-systemctl daemon-reload
-if [ -f "$UNIT_PATH" ]; then
-  systemctl enable "$UNIT_NAME"
-  systemctl restart "$UNIT_NAME"
-  systemctl --no-pager --full status "$UNIT_NAME" || true
-else
-  echo "Note: $UNIT_NAME not found at $UNIT_PATH. Skipping enable/start."
-  echo "Make sure your unit uses StateDirectory=kalinka, LogsDirectory=kalinka, RuntimeDirectory=kalinka."
-fi
-
-echo "Installation complete."
+  triggered)
+    echo "[triggered] Restarting $UNIT_NAME to pick up new wheels..."
+    systemctl restart "$UNIT_NAME" || true
+    ;;
+esac
