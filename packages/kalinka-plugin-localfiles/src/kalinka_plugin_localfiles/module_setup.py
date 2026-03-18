@@ -11,6 +11,7 @@ from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
 from . import enricher
 from . import indexer
+from . import embedder
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -24,8 +25,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def __init__(self):
         self._enricher_proc = None
         self._indexer_proc = None
+        self._embedder_proc = None
         self._enricher_queue = multiprocessing.Queue()
+        self._embedder_nudge_queue = multiprocessing.Queue()
         self._logging_queue = multiprocessing.Queue()
+        self._search_request_queue = multiprocessing.Queue()
+        self._search_response_queue = multiprocessing.Queue()
         self._log_listener = None
         self._inputmodule = None
 
@@ -42,7 +47,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         input_module_db = LocalFilesInputModuleDb(config)
 
         # The LocalFilesInputModule will use its own specialized DB
-        self._inputmodule = LocalFilesInputModule(config, input_module_db)
+        self._inputmodule = LocalFilesInputModule(
+            config,
+            input_module_db,
+            self._search_request_queue,
+            self._search_response_queue,
+        )
 
         # Forward subprocess log records into the main logging pipeline so the
         # main kalinka-server handlers (and their levels/formatters) decide what
@@ -74,9 +84,22 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         if config.enricher.enabled:
             self._enricher_proc = multiprocessing.Process(
                 target=enricher.main,
-                args=(config, self._enricher_queue, self._logging_queue),
+                args=(config, self._enricher_queue, self._logging_queue, self._embedder_nudge_queue),
             )
             self._enricher_proc.start()
+
+        if config.embedder.enabled:
+            self._embedder_proc = multiprocessing.Process(
+                target=embedder.main,
+                args=(
+                    config,
+                    self._logging_queue,
+                    self._search_request_queue,
+                    self._search_response_queue,
+                    self._embedder_nudge_queue,
+                ),
+            )
+            self._embedder_proc.start()
 
     def _shutdown_process(self, proc):
         """Shutdown a process by sending a termination signal"""
@@ -106,12 +129,19 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         self._shutdown_process(self._indexer_proc)
         self._shutdown_process(self._enricher_proc)
+        self._shutdown_process(self._embedder_proc)
 
         if self._log_listener is not None:
             self._log_listener.stop()
 
         # Ensure multiprocessing queues release their semaphores
-        for q in (self._enricher_queue, self._logging_queue):
+        for q in (
+            self._enricher_queue,
+            self._embedder_nudge_queue,
+            self._logging_queue,
+            self._search_request_queue,
+            self._search_response_queue,
+        ):
             if q is not None:
                 q.close()
                 q.join_thread()
