@@ -72,7 +72,7 @@ zip-safe = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["kalinka_server*", "native_player*"]
+include = ["kalinka_server*", "kalinka_eventbus*", "kalinka_queued*", "native_player*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 
 [tool.setuptools.exclude-package-data]

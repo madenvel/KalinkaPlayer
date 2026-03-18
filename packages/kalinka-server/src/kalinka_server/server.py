@@ -21,6 +21,7 @@ from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     Catalog,
+    EmptyList,
     EntityId,
     EntityType,
     FavoriteIds,
@@ -372,6 +373,35 @@ async def create_app(config_file, config: KalinkaConfig):
             offset=offset,
             limit=limit,
         )
+
+    @app.get("/ai_search")
+    async def ai_search(
+        query: str,
+        offset: int = 0,
+        limit: int = 10,
+        sources: Optional[str] = None,
+    ) -> BrowseItemList:
+        """Semantic / natural-language search across input modules."""
+        input_modules: List[InputModule] = extract_modules(sources)
+        for module in input_modules:
+            result = await module.ai_search(query, offset=offset, limit=limit)
+            if result.total > 0:
+                return result
+        return EmptyList(offset, limit)
+
+    @app.get("/indexer/status")
+    async def indexer_status(sources: Optional[str] = None) -> dict:
+        """Return embedding job coverage for each configured input module."""
+        input_modules: List[InputModule] = extract_modules(sources)
+        result = {}
+        for module in input_modules:
+            if hasattr(module, "get_indexer_status"):
+                try:
+                    status = await module.get_indexer_status()
+                    result[module.module_name()] = status
+                except Exception:
+                    pass
+        return result
 
     @app.get("/queue/events")
     async def stream(request: Request):
