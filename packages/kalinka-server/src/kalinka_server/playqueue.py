@@ -193,7 +193,8 @@ class AsyncStateMonitor:
         return await self.wait_state()
 
 
-@queued_class(timeout=10)
+# State restore can involve many I/O calls; run it outside the queued 10s command timeout.
+@queued_class(timeout=10, exclude=["restore_from_state"])
 class PlayQueueImpl(PlayQueueController):
     def __init__(self, config: KalinkaConfig, event_emitter: EventEmitter):
         super().__init__()
@@ -340,7 +341,9 @@ class PlayQueueImpl(PlayQueueController):
 
         # Append new stream — auto-starts. prepared_tracks is non-empty so the
         # FINISHED handler (triggered by the removals above) will not auto-play.
-        stream_id = self.track_player.append(track_info.url, mime_to_format(track_info.format))
+        stream_id = self.track_player.append(
+            track_info.url, mime_to_format(track_info.format)
+        )
         self.prepared_tracks[index] = (track_info, stream_id)
 
     async def _play_next_unqueued(self, index):
@@ -360,7 +363,9 @@ class PlayQueueImpl(PlayQueueController):
         if track_info is None:
             return
 
-        stream_id = self.track_player.append(track_info.url, mime_to_format(track_info.format))
+        stream_id = self.track_player.append(
+            track_info.url, mime_to_format(track_info.format)
+        )
         self.prepared_tracks[index] = (track_info, stream_id)
 
     async def pause(self, paused: bool):
@@ -617,7 +622,9 @@ class PlayQueueImpl(PlayQueueController):
 
         # Remap current_track_id to follow its track
         old_current_track_id = self.current_track_id
-        self.current_track_id = _remap_index(self.current_track_id, from_index, to_index)
+        self.current_track_id = _remap_index(
+            self.current_track_id, from_index, to_index
+        )
 
         # Remap all prepared_tracks keys to follow their tracks
         new_prepared = OrderedDict()
