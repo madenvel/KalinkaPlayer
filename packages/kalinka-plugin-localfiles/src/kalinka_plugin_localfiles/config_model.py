@@ -38,7 +38,7 @@ class EmbedderConfig(BaseModel):
     batch_size_clap: int = Field(default=4, title="CLAP audio embedding batch size")
     poll_interval_seconds: int = Field(default=300, title="Poll Interval (seconds)")
     model_idle_timeout_seconds: int = Field(
-        default=600,
+        default=300,
         title="Model Idle Timeout (seconds)",
         description="Unload models from memory after this many seconds of inactivity (0 = never unload)",
     )

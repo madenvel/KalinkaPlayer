@@ -24,6 +24,7 @@ Model files are auto-downloaded to config.embedder.model_dir if missing.
 from __future__ import annotations
 
 import asyncio
+import gc
 import importlib
 import importlib.util
 import json
@@ -31,6 +32,7 @@ import logging
 import logging.handlers
 import multiprocessing
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -139,10 +141,6 @@ def encode_embedding(vector) -> bytes:
     return vector.astype(np.float32).tobytes()
 
 
-def decode_embedding(blob: bytes) -> "np.ndarray":
-    return np.frombuffer(blob, dtype=np.float32)
-
-
 def normalise(v: "np.ndarray") -> "np.ndarray":
     norm = np.linalg.norm(v)
     return v / norm if norm > 0 else v
@@ -156,7 +154,7 @@ _MODEL_URLS: dict[str, str] = {
     "effnet": "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb",
     "genre": "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
     "vggish": "https://essentia.upf.edu/models/feature-extractors/vggish/audioset-vggish-3.pb",
-    "mood_mirex": "https://essentia.upf.edu/models/classification-heads/mood_mirex/mood_mirex-audioset-vggish-1.pb",
+    "mood_mirex": "https://essentia.upf.edu/models/classification-heads/moods_mirex/moods_mirex-audioset-vggish-1.pb",
     "danceability": "https://essentia.upf.edu/models/classification-heads/danceability/danceability-audioset-vggish-1.pb",
 }
 
@@ -193,16 +191,6 @@ def _ensure_model_file(
 
 
 # ---------------------------------------------------------------------------
-# Discogs-400 genre normalisation
-# ---------------------------------------------------------------------------
-
-
-def _normalise_genre_label(raw: str) -> str:
-    """'Electronic---Techno' → 'techno'"""
-    return raw.rsplit("---", 1)[-1].lower().strip()
-
-
-# ---------------------------------------------------------------------------
 # EmbeddingWorker
 # ---------------------------------------------------------------------------
 
@@ -217,84 +205,25 @@ class EmbeddingWorker:
         self._vggish = None
         self._mood_cls = None
         self._dance_cls = None
-        self._tags_available = False
+        self._tags_load_attempted_at: float = 0.0
         # CLAP model
         self._clap = None
         self._clap_available = False
+        self._clap_load_attempted_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Model loading
     # ------------------------------------------------------------------
 
-    def _load_tags_models(self):
-        if self._tags_available:
-            return
-        cfg = self.config.embedder
-        if not cfg.tags.enabled or cfg.tags.current_version == 0:
-            return
-
-        if not _ensure_package("essentia"):
-            logger.warning(
-                "essentia-tensorflow unavailable; tag prediction disabled. "
-                "Install essentia-tensorflow manually to enable genre/mood tags."
-            )
-            return
-
-        try:
-            import essentia.standard as es
-
-            model_dir = cfg.model_dir
-            paths = {
-                "effnet": _ensure_model_file("effnet", cfg.tags.effnet_path, model_dir),
-                "genre": _ensure_model_file("genre", cfg.tags.genre_path, model_dir),
-                "vggish": _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir),
-                "mood_mirex": _ensure_model_file(
-                    "mood_mirex", cfg.tags.mood_mirex_path, model_dir
-                ),
-                "danceability": _ensure_model_file(
-                    "danceability", cfg.tags.danceability_path, model_dir
-                ),
-            }
-
-            if any(p is None for p in paths.values()):
-                logger.warning(
-                    "One or more Essentia model files unavailable; tag prediction disabled"
-                )
-                return
-
-            self._effnet = es.TensorflowPredictEffnetDiscogs(
-                graphFilename=paths["effnet"], output="PartitionedCall:1"
-            )
-            self._genre_cls = es.TensorflowPredict2D(
-                graphFilename=paths["genre"],
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall:0",
-            )
-            self._vggish = es.TensorflowPredictVGGish(
-                graphFilename=paths["vggish"], output="model/vggish/embeddings"
-            )
-            self._mood_cls = es.TensorflowPredict2D(
-                graphFilename=paths["mood_mirex"],
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall:0",
-            )
-            self._dance_cls = es.TensorflowPredict2D(
-                graphFilename=paths["danceability"],
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall:0",
-            )
-            self._tags_available = True
-            logger.info("Essentia tag models loaded successfully")
-        except Exception as e:
-            logger.warning(
-                "Essentia model loading failed: %s; tag prediction disabled", e
-            )
-
     def _load_clap_model(self):
         if self._clap_available:
             return
+        self._clap_load_attempted_at = time.monotonic()
         cfg = self.config.embedder
         if cfg.clap.current_version == 0:
+            return
+
+        if not _ensure_numpy():
             return
 
         # torchvision is an implicit runtime dependency of laion-clap
@@ -324,11 +253,134 @@ class EmbeddingWorker:
         except Exception as e:
             logger.warning("CLAP model loading failed: %s; audio embedding disabled", e)
 
-    def load_models(self):
+    def _load_genre_model(self):
+        """Load EffNet-based genre classifier only."""
+        if self._effnet is not None:
+            return
+        self._tags_load_attempted_at = time.monotonic()
+        cfg = self.config.embedder
+        if not cfg.tags.enabled or cfg.tags.current_version == 0:
+            return
+
         if not _ensure_numpy():
             return
-        self._load_tags_models()
-        self._load_clap_model()
+
+        if not _ensure_package("essentia"):
+            logger.warning("essentia-tensorflow unavailable; genre prediction disabled")
+            return
+
+        try:
+            model_dir = cfg.model_dir
+            effnet_path = _ensure_model_file("effnet", cfg.tags.effnet_path, model_dir)
+            genre_path = _ensure_model_file("genre", cfg.tags.genre_path, model_dir)
+
+            if effnet_path is None or genre_path is None:
+                logger.warning(
+                    "Genre model files unavailable; genre prediction disabled"
+                )
+                return
+
+            import essentia.standard as es
+
+            self._effnet = es.TensorflowPredictEffnetDiscogs(
+                graphFilename=effnet_path, output="PartitionedCall:1"
+            )
+            self._genre_cls = es.TensorflowPredict2D(
+                graphFilename=genre_path,
+                input="serving_default_model_Placeholder",
+                output="PartitionedCall:0",
+            )
+            logger.info("Genre model (EffNet) loaded")
+        except Exception as e:
+            logger.warning("Genre model loading failed: %s", e)
+
+    def _load_mood_model(self):
+        """Load VGGish-based mood classifier only."""
+        if self._mood_cls is not None:
+            return
+        self._tags_load_attempted_at = time.monotonic()
+        cfg = self.config.embedder
+        if not cfg.tags.enabled or cfg.tags.current_version == 0:
+            return
+
+        if not _ensure_numpy():
+            return
+
+        if not _ensure_package("essentia"):
+            logger.warning("essentia-tensorflow unavailable; mood prediction disabled")
+            return
+
+        try:
+            model_dir = cfg.model_dir
+            vggish_path = _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir)
+            mood_path = _ensure_model_file(
+                "mood_mirex", cfg.tags.mood_mirex_path, model_dir
+            )
+
+            if vggish_path is None or mood_path is None:
+                logger.warning("Mood model files unavailable; mood prediction disabled")
+                return
+
+            import essentia.standard as es
+
+            if self._vggish is None:
+                self._vggish = es.TensorflowPredictVGGish(
+                    graphFilename=vggish_path, output="model/vggish/embeddings"
+                )
+            self._mood_cls = es.TensorflowPredict2D(
+                graphFilename=mood_path,
+                input="serving_default_model_Placeholder",
+                output="PartitionedCall",
+            )
+            logger.info("Mood model (VGGish) loaded")
+        except Exception as e:
+            logger.warning("Mood model loading failed: %s", e)
+
+    def _load_danceability_model(self):
+        """Load VGGish-based danceability classifier only."""
+        if self._dance_cls is not None:
+            return
+        self._tags_load_attempted_at = time.monotonic()
+        cfg = self.config.embedder
+        if not cfg.tags.enabled or cfg.tags.current_version == 0:
+            return
+
+        if not _ensure_numpy():
+            return
+
+        if not _ensure_package("essentia"):
+            logger.warning(
+                "essentia-tensorflow unavailable; danceability prediction disabled"
+            )
+            return
+
+        try:
+            model_dir = cfg.model_dir
+            vggish_path = _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir)
+            dance_path = _ensure_model_file(
+                "danceability", cfg.tags.danceability_path, model_dir
+            )
+
+            if vggish_path is None or dance_path is None:
+                logger.warning(
+                    "Danceability model files unavailable; danceability prediction disabled"
+                )
+                return
+
+            import essentia.standard as es
+
+            if self._vggish is None:
+                self._vggish = es.TensorflowPredictVGGish(
+                    graphFilename=vggish_path, output="model/vggish/embeddings"
+                )
+            self._dance_cls = es.TensorflowPredict2D(
+                graphFilename=dance_path,
+                input="model/Placeholder",
+                output="model/Softmax",
+            )
+            logger.info("Danceability model (VGGish) loaded")
+        except Exception as e:
+            logger.warning("Danceability model loading failed: %s", e)
 
     def _unload_models(self):
         self._effnet = None
@@ -336,24 +388,48 @@ class EmbeddingWorker:
         self._vggish = None
         self._mood_cls = None
         self._dance_cls = None
-        self._tags_available = False
-        self._clap = None
-        self._clap_available = False
-        import gc
+        self._tags_load_attempted_at = 0.0
         gc.collect()
-        logger.info("Models unloaded after idle timeout")
+        logger.info("Tag models unloaded after idle timeout")
+
+    def _unload_genre_model(self):
+        """Unload EffNet models only."""
+        if self._effnet is None:
+            return
+        self._effnet = None
+        self._genre_cls = None
+        gc.collect()
+        logger.info("Genre model (EffNet) unloaded")
+
+    def _unload_mood_model(self):
+        """Unload VGGish and mood classifier."""
+        if self._mood_cls is None:
+            return
+        self._vggish = None
+        self._mood_cls = None
+        gc.collect()
+        logger.info("Mood model (VGGish) unloaded")
+
+    def _unload_danceability_model(self):
+        """Unload danceability classifier."""
+        if self._dance_cls is None:
+            return
+        self._dance_cls = None
+        gc.collect()
+        logger.info("Danceability model unloaded")
 
     # ------------------------------------------------------------------
     # Inference helpers
     # ------------------------------------------------------------------
 
-    def _predict_tags(self, file_path: str) -> Optional[dict]:
-        """Run Essentia tag prediction. Returns structured dict or None."""
-        if not self._tags_available:
+    def _predict_genre(self, file_path: str) -> Optional[list]:
+        """Predict genre using EffNet. Returns list of {label, score} dicts or None."""
+        if self._effnet is None or self._genre_cls is None:
             return None
         try:
             import essentia.standard as es
 
+            t0 = time.monotonic()
             # Load audio at 16kHz mono
             loader = es.MonoLoader(filename=file_path, sampleRate=16000)
             audio = loader()
@@ -386,24 +462,50 @@ class EmbeddingWorker:
             except Exception as e:
                 logger.debug("Genre extraction error: %s", e)
 
-            # Mood + danceability via VGGish backbone
+            logger.info("Genre inference: %.3fs", time.monotonic() - t0)
+            return top_genres
+        except Exception as e:
+            logger.warning("Genre prediction failed for %s: %s", file_path, e)
+            return None
+
+    def _predict_mood(self, file_path: str) -> Optional[int]:
+        """Predict mood using VGGish. Returns mood cluster (0-4) or None."""
+        if self._vggish is None or self._mood_cls is None:
+            return None
+        try:
+            import essentia.standard as es
+
+            t0 = time.monotonic()
+            loader = es.MonoLoader(filename=file_path, sampleRate=16000)
+            audio = loader()
             vggish_embeddings = self._vggish(audio)
             mood_activations = self._mood_cls(vggish_embeddings).mean(axis=0)
-            dance_activations = self._dance_cls(vggish_embeddings).mean(axis=0)
-
             mood_cluster = int(mood_activations.argmax())
+            logger.info("Mood inference: %.3fs", time.monotonic() - t0)
+            return mood_cluster
+        except Exception as e:
+            logger.warning("Mood prediction failed for %s: %s", file_path, e)
+            return None
+
+    def _predict_danceability(self, file_path: str) -> Optional[float]:
+        """Predict danceability using VGGish. Returns danceability score or None."""
+        if self._vggish is None or self._dance_cls is None:
+            return None
+        try:
+            import essentia.standard as es
+
+            t0 = time.monotonic()
+            loader = es.MonoLoader(filename=file_path, sampleRate=16000)
+            audio = loader()
+            vggish_embeddings = self._vggish(audio)
+            dance_activations = self._dance_cls(vggish_embeddings).mean(axis=0)
             danceability = (
                 float(dance_activations[0]) if len(dance_activations) > 0 else 0.0
             )
-
-            return {
-                "genres": top_genres,
-                "mood_cluster": mood_cluster,
-                "danceability": round(danceability, 3),
-                "voice_instrumental": None,  # placeholder — future VGGish voice model
-            }
+            logger.info("Danceability inference: %.3fs", time.monotonic() - t0)
+            return round(danceability, 3)
         except Exception as e:
-            logger.warning("Tag prediction failed for %s: %s", file_path, e)
+            logger.warning("Danceability prediction failed for %s: %s", file_path, e)
             return None
 
     def _compute_clap_audio(self, file_path: str) -> Optional[bytes]:
@@ -416,6 +518,7 @@ class EmbeddingWorker:
         try:
             import numpy
 
+            t0 = time.monotonic()
             # laion-clap accepts file paths directly
             embeddings = self._clap.get_audio_embedding_from_filelist(
                 [file_path], use_tensor=False
@@ -424,6 +527,7 @@ class EmbeddingWorker:
                 return None
             vec = numpy.array(embeddings[0], dtype=numpy.float32)
             vec = normalise(vec)
+            logger.info("CLAP audio embedding: %.3fs", time.monotonic() - t0)
             return encode_embedding(vec)
         except Exception as e:
             logger.warning("CLAP embedding failed for %s: %s", file_path, e)
@@ -446,33 +550,51 @@ class EmbeddingWorker:
             logger.warning("CLAP text encoding failed: %s", e)
             return None
 
+    def _compute_clap_text(
+        self, title: str, artist_name: str, album_title: str
+    ) -> Optional[bytes]:
+        """Encode track metadata text with CLAP text encoder. Returns float32 bytes."""
+        if not self._clap_available:
+            return None
+        parts = []
+        if artist_name:
+            parts.append(artist_name)
+        if title:
+            parts.append(title)
+        text = " - ".join(parts)
+        if album_title:
+            text += f" ({album_title})"
+        if not text.strip():
+            return None
+        return self._encode_query(text)
+
     # ------------------------------------------------------------------
     # Batch processors
     # ------------------------------------------------------------------
 
-    async def _process_tags_batch(self) -> bool:
+    async def _process_genre_batch(self) -> bool:
+        """Process tags_genre jobs."""
         cfg = self.config.embedder
-        batch = await self.db.claim_batch("tags", cfg.batch_size_tags)
+        batch = await self.db.claim_batch("tags_genre", cfg.batch_size_tags)
         if not batch:
             return False
 
         completed = []
         for job in batch:
             track_id = job["entity_id"]
-            # Fetch file_path
-            async with self.db._get_connection() as conn:
-                cursor = await conn.execute(
-                    "SELECT file_path FROM tracks WHERE id = ?", (track_id,)
-                )
-                row = await cursor.fetchone()
-            if not row:
+            file_path = await self.db.get_file_path_for_track(track_id)
+            if file_path is None:
                 await self.db.fail_job(
                     job["id"], "track not found", cfg.max_job_attempts
                 )
                 continue
 
-            tag_data = self._predict_tags(row[0])
-            tags_json = json.dumps(tag_data or {})
+            genres = self._predict_genre(file_path)
+            if genres is None:
+                logger.debug("Genre model returned None for %s", track_id)
+                tags_json = json.dumps({})
+            else:
+                tags_json = json.dumps({"genres": genres})
             try:
                 await self.db.complete_tags_job(job["id"], track_id, tags_json)
                 completed.append(track_id)
@@ -480,11 +602,73 @@ class EmbeddingWorker:
                 await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
 
         if completed:
-            logger.info("Tags written for %d tracks", len(completed))
-            # Unlock clap_audio jobs for the completed tracks
-            await self.db.schedule_new_jobs(
-                cfg.tags.current_version, cfg.clap.current_version
-            )
+            logger.info("Genre tags written for %d tracks", len(completed))
+        return True
+
+    async def _process_mood_batch(self) -> bool:
+        """Process tags_mood jobs."""
+        cfg = self.config.embedder
+        batch = await self.db.claim_batch("tags_mood", cfg.batch_size_tags)
+        if not batch:
+            return False
+
+        completed = []
+        for job in batch:
+            track_id = job["entity_id"]
+            file_path = await self.db.get_file_path_for_track(track_id)
+            if file_path is None:
+                await self.db.fail_job(
+                    job["id"], "track not found", cfg.max_job_attempts
+                )
+                continue
+
+            mood = self._predict_mood(file_path)
+            if mood is None:
+                logger.debug("Mood model returned None for %s", track_id)
+                tags_json = json.dumps({})
+            else:
+                tags_json = json.dumps({"mood_cluster": mood})
+            try:
+                await self.db.complete_tags_job(job["id"], track_id, tags_json)
+                completed.append(track_id)
+            except Exception as e:
+                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
+
+        if completed:
+            logger.info("Mood tags written for %d tracks", len(completed))
+        return True
+
+    async def _process_danceability_batch(self) -> bool:
+        """Process tags_danceability jobs."""
+        cfg = self.config.embedder
+        batch = await self.db.claim_batch("tags_danceability", cfg.batch_size_tags)
+        if not batch:
+            return False
+
+        completed = []
+        for job in batch:
+            track_id = job["entity_id"]
+            file_path = await self.db.get_file_path_for_track(track_id)
+            if file_path is None:
+                await self.db.fail_job(
+                    job["id"], "track not found", cfg.max_job_attempts
+                )
+                continue
+
+            danceability = self._predict_danceability(file_path)
+            if danceability is None:
+                logger.debug("Danceability model returned None for %s", track_id)
+                tags_json = json.dumps({})
+            else:
+                tags_json = json.dumps({"danceability": danceability})
+            try:
+                await self.db.complete_tags_job(job["id"], track_id, tags_json)
+                completed.append(track_id)
+            except Exception as e:
+                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
+
+        if completed:
+            logger.info("Danceability tags written for %d tracks", len(completed))
         return True
 
     async def _process_clap_batch(self) -> bool:
@@ -496,18 +680,14 @@ class EmbeddingWorker:
         completed_track_ids = []
         for job in batch:
             track_id = job["entity_id"]
-            async with self.db._get_connection() as conn:
-                cursor = await conn.execute(
-                    "SELECT file_path FROM tracks WHERE id = ?", (track_id,)
-                )
-                row = await cursor.fetchone()
-            if not row:
+            file_path = await self.db.get_file_path_for_track(track_id)
+            if file_path is None:
                 await self.db.fail_job(
                     job["id"], "track not found", cfg.max_job_attempts
                 )
                 continue
 
-            blob = self._compute_clap_audio(row[0])
+            blob = self._compute_clap_audio(file_path)
             if blob is None:
                 await self.db.fail_job(
                     job["id"], "clap returned None", cfg.max_job_attempts
@@ -574,25 +754,123 @@ class EmbeddingWorker:
                     "Artist embedding aggregation failed for %s: %s", artist_id, e
                 )
 
+    async def _process_clap_text_batch(self) -> bool:
+        """Process clap_text jobs: embed track metadata text with CLAP."""
+        cfg = self.config.embedder
+        batch = await self.db.claim_batch("clap_text", cfg.batch_size_clap)
+        if not batch:
+            return False
+
+        completed_track_ids = []
+        for job in batch:
+            track_id = job["entity_id"]
+            meta = await self.db.get_track_metadata_for_embedding(track_id)
+            if meta is None:
+                await self.db.fail_job(
+                    job["id"], "track metadata not found", cfg.max_job_attempts
+                )
+                continue
+
+            blob = self._compute_clap_text(
+                meta["title"], meta["artist_name"], meta["album_title"]
+            )
+            if blob is None:
+                await self.db.fail_job(
+                    job["id"], "clap text returned None", cfg.max_job_attempts
+                )
+                continue
+
+            try:
+                await self.db.complete_clap_text_job(
+                    job["id"], track_id, blob, job["model_version"]
+                )
+                completed_track_ids.append(track_id)
+            except Exception as e:
+                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
+
+        if completed_track_ids:
+            logger.info(
+                "CLAP text embeddings written for %d tracks", len(completed_track_ids)
+            )
+            await self._update_aggregate_text_embeddings(completed_track_ids)
+        return True
+
+    async def _update_aggregate_text_embeddings(self, track_ids: list[str]) -> None:
+        """Embed album/artist metadata text directly (not mean-pooled)."""
+        if not self._clap_available:
+            return
+
+        album_ids: set[str] = set()
+        artist_ids: set[str] = set()
+        for tid in track_ids:
+            aid = await self.db.get_album_id_for_track(tid)
+            if aid:
+                album_ids.add(aid)
+            arid = await self.db.get_artist_id_for_track(tid)
+            if arid:
+                artist_ids.add(arid)
+
+        for album_id in album_ids:
+            meta = await self.db.get_album_metadata_for_text_embedding(album_id)
+            if meta is None:
+                continue
+            text = meta["title"]
+            if meta["artist_name"]:
+                text += f" by {meta['artist_name']}"
+            if not text.strip():
+                continue
+            blob = self._encode_query(text)
+            if blob:
+                try:
+                    await self.db.update_album_text_embedding(album_id, blob)
+                except Exception as e:
+                    logger.warning(
+                        "Album text embedding failed for %s: %s", album_id, e
+                    )
+
+        for artist_id in artist_ids:
+            name = await self.db.get_artist_name(artist_id)
+            if not name:
+                continue
+            blob = self._encode_query(name)
+            if blob:
+                try:
+                    await self.db.update_artist_text_embedding(artist_id, blob)
+                except Exception as e:
+                    logger.warning(
+                        "Artist text embedding failed for %s: %s", artist_id, e
+                    )
+
     # ------------------------------------------------------------------
     # Search (IPC from main process)
     # ------------------------------------------------------------------
 
     async def _do_search(self, query: str, limit: int) -> dict:
-        """Encode query with CLAP and run KNN on all entity tables."""
+        """Encode query with CLAP and run KNN on both audio and text vec tables,
+        then merge results using Reciprocal Rank Fusion (RRF)."""
         empty: dict = {"tracks": [], "albums": [], "artists": []}
         blob = self._encode_query(query)
         if blob is None:
             return empty
 
+        rrf_k = 60
         result: dict = {}
-        for entity_type, (vec_table, _) in [
-            ("tracks", ("vec_tracks_clap", "track_id")),
-            ("albums", ("vec_albums_clap", "album_id")),
-            ("artists", ("vec_artists_clap", "artist_id")),
+        for entity_type, audio_table, text_table in [
+            ("tracks", "vec_tracks_clap", "vec_tracks_clap_text"),
+            ("albums", "vec_albums_clap", "vec_albums_clap_text"),
+            ("artists", "vec_artists_clap", "vec_artists_clap_text"),
         ]:
-            rows = await self.db.knn_search(vec_table, blob, limit)
-            result[entity_type] = [r["id"] for r in rows]
+            audio_hits = await self.db.knn_search(audio_table, blob, limit)
+            text_hits = await self.db.knn_search(text_table, blob, limit)
+
+            scores: dict[str, float] = {}
+            for rank, r in enumerate(audio_hits):
+                scores[r["id"]] = scores.get(r["id"], 0) + 1 / (rrf_k + rank + 1)
+            for rank, r in enumerate(text_hits):
+                scores[r["id"]] = scores.get(r["id"], 0) + 1 / (rrf_k + rank + 1)
+
+            merged_ids = sorted(scores, key=lambda x: -scores[x])[:limit]
+            result[entity_type] = merged_ids
         return result
 
     async def _run_search_handler(
@@ -601,12 +879,10 @@ class EmbeddingWorker:
         search_response_queue: multiprocessing.Queue,
         shutdown_event: asyncio.Event,
     ) -> None:
-        import queue as _queue
-
         while not shutdown_event.is_set():
             try:
                 req = search_request_queue.get_nowait()
-            except _queue.Empty:
+            except queue.Empty:
                 await asyncio.sleep(0.05)
                 continue
             except Exception:
@@ -614,7 +890,16 @@ class EmbeddingWorker:
                 continue
 
             try:
+                t0 = time.monotonic()
                 result = await self._do_search(req["query"], req.get("limit", 20))
+                logger.info(
+                    "Search '%s': %d tracks, %d albums, %d artists in %.3fs",
+                    req["query"],
+                    len(result.get("tracks", [])),
+                    len(result.get("albums", [])),
+                    len(result.get("artists", [])),
+                    time.monotonic() - t0,
+                )
             except Exception as e:
                 logger.error("Search handler error: %s", e)
                 result = {"tracks": [], "albums": [], "artists": []}
@@ -625,6 +910,30 @@ class EmbeddingWorker:
     # Main loop
     # ------------------------------------------------------------------
 
+    async def _sleep_interruptible(
+        self,
+        duration: float,
+        shutdown_event: asyncio.Event,
+        nudge_queue: Optional[multiprocessing.Queue],
+    ) -> bool:
+        """Sleep for *duration* seconds, waking early on shutdown or nudge.
+        Returns True if woken by a nudge, False otherwise."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + duration
+        while not shutdown_event.is_set():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            if nudge_queue is not None:
+                try:
+                    nudge_queue.get_nowait()
+                    logger.info("Embedder woken by enricher nudge")
+                    return True
+                except queue.Empty:
+                    pass
+            await asyncio.sleep(min(1.0, remaining))
+        return False
+
     async def run(
         self,
         shutdown_event: asyncio.Event,
@@ -632,20 +941,17 @@ class EmbeddingWorker:
         search_response_queue: Optional[multiprocessing.Queue] = None,
         nudge_queue: Optional[multiprocessing.Queue] = None,
     ):
-        import queue as _queue
-
         cfg = self.config.embedder
         poll = cfg.poll_interval_seconds
         idle_timeout = cfg.model_idle_timeout_seconds
 
         logger.info("EmbeddingWorker started (Essentia + CLAP pipeline)")
 
-        # Recover stale jobs from a prior crashed session
+        # Recover stale jobs from a prior crashed session, then wait for the
+        # first nudge or poll cycle before loading any models.  This prevents
+        # TensorFlow / CLAP from being pulled into memory at system startup
+        # when the OS is still settling.
         await self.db.recover_stale_jobs()
-        # Queue any new work
-        await self.db.schedule_new_jobs(
-            cfg.tags.current_version, cfg.clap.current_version
-        )
 
         search_task = None
         if search_request_queue is not None and search_response_queue is not None:
@@ -655,51 +961,129 @@ class EmbeddingWorker:
                 )
             )
 
+        # Load CLAP eagerly so search works even when all jobs are already done.
+        # Tag models are still loaded lazily (they are not needed for search).
+        if cfg.clap.current_version > 0 and search_request_queue is not None:
+            self._load_clap_model()
+
+        logger.info(
+            "Embedder ready (poll=%ds, idle_timeout=%ds)",
+            poll,
+            idle_timeout,
+        )
+        await self._sleep_interruptible(poll, shutdown_event, nudge_queue)
+
         last_work_time = time.monotonic()
 
         while not shutdown_event.is_set():
-            # Lazy model load — also handles reload after offload
-            if not self._tags_available and not self._clap_available:
-                self.load_models()
+            # Schedule new embedding jobs for enriched tracks
+            tags_config = {
+                "genre_enabled": cfg.tags.enabled,
+                "mood_enabled": cfg.tags.enabled,
+                "danceability_enabled": cfg.tags.enabled,
+            }
+            await self.db.schedule_new_jobs(
+                cfg.tags.current_version, cfg.clap.current_version, tags_config
+            )
 
             did_work = False
-            try:
-                if self._tags_available and cfg.tags.current_version > 0:
-                    did_work |= await self._process_tags_batch()
-                if self._clap_available and cfg.clap.current_version > 0:
-                    did_work |= await self._process_clap_batch()
-            except Exception:
-                logger.exception("Unexpected error in embedding batch; will retry")
-                did_work = False
+
+            # Process tag stages sequentially with selective model loading
+            retry_gap = poll
+            tag_stages = [
+                (
+                    "tags_genre",
+                    self._load_genre_model,
+                    self._process_genre_batch,
+                    self._unload_genre_model,
+                ),
+                (
+                    "tags_mood",
+                    self._load_mood_model,
+                    self._process_mood_batch,
+                    self._unload_mood_model,
+                ),
+                (
+                    "tags_danceability",
+                    self._load_danceability_model,
+                    self._process_danceability_batch,
+                    self._unload_danceability_model,
+                ),
+            ]
+
+            for stage_name, load_fn, process_fn, unload_fn in tag_stages:
+                if not cfg.tags.enabled or cfg.tags.current_version == 0:
+                    continue
+
+                while await self.db.has_pending_jobs(stage_name):
+                    # Load model if needed
+                    if time.monotonic() - self._tags_load_attempted_at >= retry_gap:
+                        load_fn()
+
+                    # Process batches
+                    try:
+                        batch_processed = await process_fn()
+                        if batch_processed:
+                            did_work = True
+                            last_work_time = time.monotonic()
+                        else:
+                            # No batch was available, break to next stage
+                            break
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error in batch processing; will retry"
+                        )
+                        break
+
+                # Unload model after all batches for this stage
+                unload_fn()
+
+            # Process CLAP audio after all tag stages
+            if cfg.clap.current_version > 0:
+                while await self.db.has_pending_jobs("clap_audio"):
+                    if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
+                        self._load_clap_model()
+
+                    try:
+                        batch_processed = await self._process_clap_batch()
+                        if batch_processed:
+                            did_work = True
+                            last_work_time = time.monotonic()
+                        else:
+                            break
+                    except Exception:
+                        logger.exception("Unexpected error in CLAP batch; will retry")
+                        break
+
+            # Process CLAP text (metadata) embeddings — uses same CLAP model
+            if cfg.clap.current_version > 0:
+                while await self.db.has_pending_jobs("clap_text"):
+                    if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
+                        self._load_clap_model()
+
+                    try:
+                        batch_processed = await self._process_clap_text_batch()
+                        if batch_processed:
+                            did_work = True
+                            last_work_time = time.monotonic()
+                        else:
+                            break
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error in CLAP text batch; will retry"
+                        )
+                        break
 
             if did_work:
-                last_work_time = time.monotonic()
-            else:
-                # Periodically check for newly enriched tracks
-                await self.db.schedule_new_jobs(
-                    cfg.tags.current_version, cfg.clap.current_version
-                )
+                continue
 
-                # Offload models after prolonged idle
-                if idle_timeout > 0 and (self._tags_available or self._clap_available):
-                    if time.monotonic() - last_work_time >= idle_timeout:
-                        self._unload_models()
+            # --- no work done: check idle timeout and sleep ---
+            if idle_timeout > 0 and (time.monotonic() - last_work_time >= idle_timeout):
+                self._unload_models()
+                last_work_time = time.monotonic()  # reset timer after unload
 
-                logger.info("No pending embedding work; sleeping %ds", poll)
-                # Interruptible sleep: wakes on shutdown or enricher nudge
-                deadline = asyncio.get_event_loop().time() + poll
-                while not shutdown_event.is_set():
-                    remaining = deadline - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        break
-                    if nudge_queue is not None:
-                        try:
-                            nudge_queue.get_nowait()
-                            logger.info("Embedder woken by enricher nudge")
-                            break
-                        except _queue.Empty:
-                            pass
-                    await asyncio.sleep(min(1.0, remaining))
+            logger.info("No pending embedding work; sleeping %ds", poll)
+            await self._sleep_interruptible(poll, shutdown_event, nudge_queue)
 
         if search_task is not None:
             search_task.cancel()
@@ -740,7 +1124,9 @@ async def async_main(
 
     worker = EmbeddingWorker(config, db)
     try:
-        await worker.run(_shutdown_event, search_request_queue, search_response_queue, nudge_queue)
+        await worker.run(
+            _shutdown_event, search_request_queue, search_response_queue, nudge_queue
+        )
     except asyncio.CancelledError:
         logger.info("Embedder task cancelled")
     except Exception:
@@ -756,7 +1142,11 @@ def main(
 ):
     """Entry point for the embedder subprocess."""
     root = logging.getLogger()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
     root.setLevel(logging.DEBUG)
     root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
-    asyncio.run(async_main(config, search_request_queue, search_response_queue, nudge_queue))
+    asyncio.run(
+        async_main(config, search_request_queue, search_response_queue, nudge_queue)
+    )

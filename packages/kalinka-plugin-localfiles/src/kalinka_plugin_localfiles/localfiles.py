@@ -92,7 +92,7 @@ def tag_overlap_score(query_tags: dict, track_tags: dict) -> float:
 
     # Genre overlap: check if any query genre keyword appears in any predicted genre label
     q_genres = query_tags.get("genres", [])
-    t_genres = track_tags.get("genres", [])  # [{"label": ..., "score": ...}]
+    t_genres = track_tags.get("genres") or []  # [{"label": ..., "score": ...}]
     if q_genres:
         total += 1
         genre_labels = " ".join(g.get("label", "") for g in t_genres).lower()
@@ -276,7 +276,7 @@ class LocalFilesInputModule(InputModule):
         if not sections:
             return EmptyList(offset, limit)
         return BrowseItemList(
-            offset=offset, limit=limit, total=len(sections), items=sections
+            offset=offset, limit=limit, total=len(sections), items=sections[offset:offset + limit]
         )
 
     async def search(
