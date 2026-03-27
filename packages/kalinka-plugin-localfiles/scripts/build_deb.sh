@@ -6,7 +6,7 @@ PLUGIN_SLUG="kalinka-plugin-localfiles"
 echo "Building .deb package for ${PLUGIN_SLUG} using setuptools_scm for version detection"
 
 # Clean up previous build
-rm -rf pkgroot/
+rm -rf pkgroot/ dist/
 mkdir -p pkgroot/opt/kalinka/wheels
 mkdir -p pkgroot/DEBIAN
 
