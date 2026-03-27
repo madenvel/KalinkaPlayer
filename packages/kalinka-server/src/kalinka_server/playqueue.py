@@ -538,7 +538,7 @@ class PlayQueueImpl(PlayQueueController):
             ),
             index=self.current_track_id,
             position=self._estimated_progress(stream_state),
-            message=stream_state.message,
+            message=stream_state.error.message if stream_state.error else None,
             audio_info=to_audio_info(stream_state.stream_info),
             mime_type=self.current_format,
             timestamp_ns=time.monotonic_ns(),
