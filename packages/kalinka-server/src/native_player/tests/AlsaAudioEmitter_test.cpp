@@ -95,7 +95,7 @@ TEST_F(AlsaAudioEmitterTest, stream_error) {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   auto streamState = alsaAudioEmitter->getState();
   EXPECT_EQ(streamState.state, AudioGraphNodeState::ERROR);
-  EXPECT_EQ(streamState.message, "Fake error message");
+  EXPECT_EQ(streamState.error->message, "Fake error message");
   alsaAudioEmitter->disconnect(outputNode);
 }
 

@@ -6,7 +6,7 @@
 class ErrorFakeNode : public AudioGraphOutputNode {
 public:
   ErrorFakeNode() : AudioGraphOutputNode() {
-    setState(StreamState{AudioGraphNodeState::ERROR, "Fake error message"});
+    setState(StreamState{AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::NONE, "Fake error message"}});
   }
   virtual size_t read(void *data, size_t size) override { return 0; }
   virtual size_t waitForData(std::stop_token stopToken = std::stop_token(),

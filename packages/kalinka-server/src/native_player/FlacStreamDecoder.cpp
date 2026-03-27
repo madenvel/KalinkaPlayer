@@ -117,7 +117,7 @@ FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
   auto inputNodeState = inputNode->getState();
   auto inputNodeStatus = inputNodeState.state;
   if (inputNodeStatus == AudioGraphNodeState::ERROR) {
-    setState({AudioGraphNodeState::ERROR, inputNodeState.message});
+    setState({AudioGraphNodeState::ERROR, *inputNodeState.error});
     return FLAC__STREAM_DECODER_READ_STATUS_ABORT;
   }
   if (inputNodeStatus == AudioGraphNodeState::FINISHED && *bytes == 0) {
@@ -130,8 +130,9 @@ FlacStreamDecoder::read_callback(FLAC__byte buffer[], size_t *bytes) {
 void FlacStreamDecoder::error_callback(
     ::FLAC__StreamDecoderErrorStatus status) {
   setState({AudioGraphNodeState::ERROR,
-            std::string("Flac decoder error: ") +
-                FLAC__StreamDecoderErrorStatusString[status]});
+            StreamError{StreamErrorSource::DECODER,
+                        std::string("Flac decoder error: ") +
+                            FLAC__StreamDecoderErrorStatusString[status]}});
 }
 
 void FlacStreamDecoder::metadata_callback(
@@ -281,10 +282,12 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       handleSeekSignal(*seekValue);
     }
   } catch (std::exception &ex) {
-    std::string message =
-        std::string("Flac decoder thread exception: ") + ex.what();
-    spdlog::warn(message);
-    setState({AudioGraphNodeState::ERROR, message});
+    if (getState().state != AudioGraphNodeState::ERROR) {
+      std::string message =
+          std::string("Flac decoder thread exception: ") + ex.what();
+      spdlog::warn(message);
+      setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::DECODER, message}});
+    }
   }
   buffer.setEof();
   setState(StreamState{AudioGraphNodeState::STOPPED});

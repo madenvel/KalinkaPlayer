@@ -169,7 +169,7 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
                       inputNodeState.streamInfo));
       break;
     case AudioGraphNodeState::ERROR:
-      setState({AudioGraphNodeState::ERROR, inputNodeState.message});
+      setState({AudioGraphNodeState::ERROR, *inputNodeState.error});
       break;
     case AudioGraphNodeState::SOURCE_CHANGED:
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
@@ -260,7 +260,7 @@ void AlsaAudioEmitter::openDevice() {
            << snd_strerror(err) << ")";
     pcmHandle = nullptr;
     spdlog::error(stream.str());
-    setState({AudioGraphNodeState::ERROR, stream.str()});
+    setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::AUDIO_OUTPUT, stream.str()}});
 
     throw std::runtime_error(stream.str());
   }
@@ -575,7 +575,7 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
   } catch (const std::exception &ex) {
     spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
     setState({AudioGraphNodeState::ERROR,
-              "Internal error: " + std::string(ex.what())});
+              StreamError{StreamErrorSource::AUDIO_OUTPUT, "Internal error: " + std::string(ex.what())}});
   }
 
   closeDevice();

@@ -176,10 +176,12 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
       seekSignal.waitValue(token);
     }
   } catch (std::exception &ex) {
-    std::string message =
-        std::string("Mp3 decoder thread exception: ") + ex.what();
-    spdlog::error(message);
-    setState({AudioGraphNodeState::ERROR, message});
+    if (getState().state != AudioGraphNodeState::ERROR) {
+      std::string message =
+          std::string("Mp3 decoder thread exception: ") + ex.what();
+      spdlog::error(message);
+      setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::DECODER, message}});
+    }
   }
 
   mp3dec_ex_close(&mp3);
@@ -210,6 +212,12 @@ size_t Mp3StreamDecoder::readCallback(void *buf, size_t size) {
   spdlog::trace("Mp3StreamDecoder::readCallback({}) -> {}", size,
                 dataAvailable);
   if (dataAvailable == 0 || token.stop_requested()) {
+    if (dataAvailable == 0 && !token.stop_requested()) {
+      auto inputState = inputNode->getState();
+      if (inputState.state == AudioGraphNodeState::ERROR) {
+        setState({AudioGraphNodeState::ERROR, *inputState.error});
+      }
+    }
     spdlog::trace("Mp3StreamDecoder::readCallback() returning");
     return 0;
   }

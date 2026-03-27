@@ -37,6 +37,7 @@ from native_player.native_player import (
     AudioGraphNodeState,
     AudioPlayer,
     py_dict_to_config,
+    StreamErrorSource,
     StreamInfo,
     StreamState,
 )
@@ -216,6 +217,7 @@ class PlayQueueImpl(PlayQueueController):
         self.prepared_tracks: OrderedDict = OrderedDict()
         # StreamId of the stream currently being played (popped from prepared_tracks on SOURCE_CHANGED)
         self.current_stream_id: Optional[int] = None
+        self._retry_attempted: bool = False
 
         self._state_update_task = None
 
@@ -265,6 +267,7 @@ class PlayQueueImpl(PlayQueueController):
     @queued
     async def _process_state_update(self, new_state):
         if new_state.state == AudioGraphNodeState.SOURCE_CHANGED:
+            self._retry_attempted = False
             if self.prepared_tracks:
                 item = self.prepared_tracks.popitem(last=False)
                 self.current_track_id = item[0]
@@ -273,6 +276,21 @@ class PlayQueueImpl(PlayQueueController):
                 self.current_stream_id = stream_id
                 self._request_more_tracks()
             return
+        elif new_state.state == AudioGraphNodeState.ERROR:
+            if (
+                not self._retry_attempted
+                and new_state.error is not None
+                and new_state.error.source == StreamErrorSource.HTTP_STREAM
+            ):
+                self._retry_attempted = True
+                failed_position_ms = new_state.position
+                logger.info(
+                    "HTTP stream error at %d ms, retrying with fresh URL",
+                    failed_position_ms,
+                )
+                await self._retry_current_track_async(failed_position_ms)
+                return
+            self._cancel_prefetch_timer()
         elif new_state.state == AudioGraphNodeState.FINISHED:
             # Only auto-play next if no streams are already queued.
             # Non-empty prepared_tracks means a manual switch already appended
@@ -298,7 +316,7 @@ class PlayQueueImpl(PlayQueueController):
                     current_track=self._get_track_info(self.current_track_id),
                     index=self.current_track_id,
                     position=new_state.position + position_diff,
-                    message=new_state.message,
+                    message=new_state.error.message if new_state.error else None,
                     audio_info=to_audio_info(new_state.stream_info),
                     mime_type=self.current_format,
                     timestamp_ns=state_update_ts,
@@ -313,6 +331,7 @@ class PlayQueueImpl(PlayQueueController):
         return await self._play_next_unqueued(index)
 
     async def _play_unqueued(self, index=None):
+        self._retry_attempted = False
         if len(self.track_list) == 0:
             return
 
@@ -713,6 +732,38 @@ class PlayQueueImpl(PlayQueueController):
 
         # Return just the TrackUrl part of the (TrackUrl, StreamId) tuple
         return self.prepared_tracks[index][0]
+
+    async def _retry_current_track_async(self, position_ms: int) -> None:
+        """Re-fetch the URL for the current track and resume from position_ms."""
+        track_index = self.current_track_id
+        track = self.track_list[track_index]
+
+        try:
+            track_info = await track.link_retriever()
+        except Exception as e:
+            logger.warning("Retry: failed to retrieve track link: %s", repr(e))
+            self.event_emitter.dispatch(
+                PlaybackErrorEvent(message="Failed to retrieve track link on retry")
+            )
+            return
+
+        self._cancel_prefetch_timer()
+
+        if self.current_stream_id is not None:
+            self.track_player.remove(self.current_stream_id)
+            self.current_stream_id = None
+
+        for _, (_, stream_id) in list(self.prepared_tracks.items()):
+            self.track_player.remove(stream_id)
+        self.prepared_tracks.clear()
+
+        stream_id = self.track_player.append(
+            track_info.url, mime_to_format(track_info.format)
+        )
+        self.prepared_tracks[track_index] = (track_info, stream_id)
+
+        if position_ms > 0:
+            self.track_player.seek(position_ms)
 
     def _request_more_tracks(self):
         if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:
