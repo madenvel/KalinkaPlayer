@@ -102,9 +102,12 @@ class DeviceAutomationConfig(BaseModel):
         default=True,
         title="Automatically turn off device when playback stops",
     )
-    pause_timeout_seconds: int = Field(
+    auto_off_timeout_seconds: int = Field(
         default=60,
-        title="Stop playback if paused for this many seconds (0 to disable)",
+        title=(
+            "Turn off device after being paused or stopped for this many seconds "
+            "(0 to disable). Also stops playback for energy saving."
+        ),
     )
 
 
