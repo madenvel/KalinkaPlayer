@@ -22,6 +22,7 @@ from kalinka_plugin_sdk.events import (
 )
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import (
+    DevicePowerStateChangedEvent,
     ExtDeviceEvent,
     ExtDeviceEventType,
     ExtDeviceState,
@@ -67,6 +68,7 @@ class DeviceAutomation:
         self._auto_off_task: Optional[asyncio.Task] = None
         self._subscription = None
         self._stream_task: Optional[asyncio.Task] = None
+        self._device_stream_task: Optional[asyncio.Task] = None
 
         # Check device capabilities
         self._can_power_on = False
@@ -95,6 +97,45 @@ class DeviceAutomation:
 
         # Start listening to playback events
         self._stream_task = asyncio.create_task(self._event_listener())
+
+        # Start listening to device state changes (e.g. input switch)
+        self._device_stream_task = asyncio.create_task(self._device_event_listener())
+
+    async def _device_event_listener(self):
+        """Listen for external device state changes (e.g. input switched away)."""
+        try:
+            async with self.ext_device_eventbus.stream(
+                [ExtDeviceEventType.DevicePowerStateChanged]
+            ) as stream:
+                async for event in stream:
+                    if (
+                        isinstance(event, DevicePowerStateChangedEvent)
+                        and not event.power_on
+                    ):
+                        await self._on_device_power_off()
+        except asyncio.CancelledError:
+            logger.debug("Device automation device event listener cancelled")
+            raise
+        except Exception as e:
+            logger.error(
+                f"Error in device automation device event listener: {e}", exc_info=True
+            )
+
+    async def _on_device_power_off(self):
+        """Handle device power-off or input switch — stop playback so the auto-off timer fires."""
+        logger.info("Device powered off or input switched — stopping playback")
+        try:
+            current_state = await self.playqueue.get_playback_state()
+            if current_state.state in (
+                PlayerStateEnum.PLAYING,
+                PlayerStateEnum.BUFFERING,
+                PlayerStateEnum.PAUSED,
+            ):
+                await self.playqueue.stop()
+        except Exception as e:
+            logger.error(
+                f"Failed to stop playback on device power-off: {e}", exc_info=True
+            )
 
     async def _event_listener(self):
         """Listen for playback state changes."""
@@ -197,7 +238,9 @@ class DeviceAutomation:
                 try:
                     await self.playqueue.stop()
                 except Exception as e:
-                    logger.error(f"Failed to stop playback on auto-off: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to stop playback on auto-off: {e}", exc_info=True
+                    )
 
             # Power off the device
             if self.config.auto_power_off and self.device and self._can_power_off:
@@ -237,6 +280,13 @@ class DeviceAutomation:
             self._stream_task.cancel()
             try:
                 await self._stream_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._device_stream_task:
+            self._device_stream_task.cancel()
+            try:
+                await self._device_stream_task
             except asyncio.CancelledError:
                 pass
 
