@@ -1,7 +1,8 @@
 import time
 import pytest
 import asyncio
-from unittest.mock import Mock, call
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, call
 
 from kalinka_plugin_sdk.datamodel import (
     AudioInfo,
@@ -23,6 +24,7 @@ from kalinka_plugin_sdk import (
 )
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
+from native_player.native_player import AudioGraphNodeState, StreamErrorSource
 
 
 def to_track_id(id: str):
@@ -717,6 +719,7 @@ async def test_seek(event_emitter, playqueue):
     ]
     assert_has_calls(event_emitter, expected_calls)
 
+
 # ── Move track tests ──────────────────────────────────────────────────────────
 
 
@@ -820,6 +823,48 @@ async def test_move_non_current_track_after_current_to_before(event_emitter, pla
 
 
 @pytest.mark.asyncio
+async def test_retry_happens_only_for_http_stream_errors(playqueue):
+    playqueue._retry_attempted = False
+    playqueue._retry_current_track_async = AsyncMock()
+
+    http_error_state = SimpleNamespace(
+        state=AudioGraphNodeState.ERROR,
+        error=SimpleNamespace(
+            source=StreamErrorSource.HTTP_STREAM,
+            message="temporary http failure",
+        ),
+        position=1234,
+    )
+
+    await playqueue._process_state_update(http_error_state)
+
+    assert playqueue._retry_attempted is True
+    playqueue._retry_current_track_async.assert_called_once_with(1234)
+
+
+@pytest.mark.asyncio
+async def test_retry_is_skipped_for_non_http_errors(playqueue):
+    playqueue._retry_attempted = False
+    playqueue._retry_current_track_async = AsyncMock()
+
+    non_http_error_state = SimpleNamespace(
+        state=AudioGraphNodeState.ERROR,
+        error=SimpleNamespace(
+            source=StreamErrorSource.AUDIO_OUTPUT,
+            message="device output failure",
+        ),
+        position=50,
+        timestamp=time.monotonic_ns(),
+        stream_info=None,
+    )
+
+    await playqueue._process_state_update(non_http_error_state)
+
+    assert playqueue._retry_attempted is False
+    playqueue._retry_current_track_async.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_move_unrelated_tracks_no_state_change_event(event_emitter, playqueue):
     """Moving tracks that don't affect the current index emits only TrackMovedEvent."""
     # Queue: [0,1,2,3], current=0. Move 2→3: current stays at 0.
@@ -863,8 +908,14 @@ async def test_move_invalidates_prefetched_next_track(event_emitter, playqueue):
     await playqueue.add(make_tracks(4))
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
-    playqueue.prepared_tracks[1] = (TrackUrl(url="http://example.com/t1.flac", format="FLAC"), 0)
-    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 1)
+    playqueue.prepared_tracks[1] = (
+        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        0,
+    )
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        1,
+    )
     event_emitter.reset_mock()
 
     # move T2 (index 2) before the current track → next slot becomes wrong
@@ -890,16 +941,22 @@ async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
     await playqueue.add(make_tracks(4))
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
-    playqueue.prepared_tracks[1] = (TrackUrl(url="http://example.com/t1.flac", format="FLAC"), 0)
-    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 1)
+    playqueue.prepared_tracks[1] = (
+        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        0,
+    )
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        1,
+    )
     event_emitter.reset_mock()
 
     # move T3 (index 3) to position 0 — an unrelated track, next slot stays correct
     await playqueue.move(3, 0)
 
     # both entries must survive (remapped to new indices)
-    assert 2 in playqueue.prepared_tracks   # current track (remapped 1→2)
-    assert 3 in playqueue.prepared_tracks   # next track (remapped 2→3, still correct)
+    assert 2 in playqueue.prepared_tracks  # current track (remapped 1→2)
+    assert 3 in playqueue.prepared_tracks  # next track (remapped 2→3, still correct)
     assert len(playqueue.prepared_tracks) == 2
     # no re-prefetch should have been triggered
     assert playqueue._prefetch_task is None
@@ -971,7 +1028,10 @@ async def test_add_insert_at_next_slot_invalidates_prefetch(event_emitter, playq
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
     # Simulate a prefetched next track at index 2
-    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 42)
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        42,
+    )
     event_emitter.reset_mock()
 
     # Insert at current+1=2 — the new track displaces the prefetched one
@@ -1078,7 +1138,10 @@ async def test_add_insert_preserves_valid_prefetch(event_emitter, playqueue):
     await playqueue.add(make_tracks(4))
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
-    playqueue.prepared_tracks[2] = (TrackUrl(url="http://example.com/t2.flac", format="FLAC"), 7)
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        7,
+    )
     event_emitter.reset_mock()
 
     await playqueue.add(make_tracks(1), index=3)

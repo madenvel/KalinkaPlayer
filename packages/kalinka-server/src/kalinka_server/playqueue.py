@@ -218,6 +218,8 @@ class PlayQueueImpl(PlayQueueController):
         # StreamId of the stream currently being played (popped from prepared_tracks on SOURCE_CHANGED)
         self.current_stream_id: Optional[int] = None
         self._retry_attempted: bool = False
+        # Set to True when SOURCE_CHANGED is expected from a retry, to avoid resetting _retry_attempted
+        self._retry_pending: bool = False
 
         self._state_update_task = None
 
@@ -267,7 +269,11 @@ class PlayQueueImpl(PlayQueueController):
     @queued
     async def _process_state_update(self, new_state):
         if new_state.state == AudioGraphNodeState.SOURCE_CHANGED:
-            self._retry_attempted = False
+            if self._retry_pending:
+                # SOURCE_CHANGED caused by a retry — keep _retry_attempted=True so we don't retry again
+                self._retry_pending = False
+            else:
+                self._retry_attempted = False
             if self.prepared_tracks:
                 item = self.prepared_tracks.popitem(last=False)
                 self.current_track_id = item[0]
@@ -757,6 +763,7 @@ class PlayQueueImpl(PlayQueueController):
             self.track_player.remove(stream_id)
         self.prepared_tracks.clear()
 
+        self._retry_pending = True
         stream_id = self.track_player.append(
             track_info.url, mime_to_format(track_info.format)
         )

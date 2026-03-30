@@ -133,14 +133,18 @@ async def handle_websocket_connection(
         except WebSocketDisconnect:
             logger.info("WebSocket client disconnected")
 
+    send_task = asyncio.create_task(send_events())
+    receive_task = asyncio.create_task(receive_commands())
     try:
-        # Run both send and receive concurrently
-        await asyncio.gather(send_events(), receive_commands(), return_exceptions=False)
+        # Stop as soon as either side finishes (disconnect or send error)
+        await asyncio.wait({send_task, receive_task}, return_when=asyncio.FIRST_COMPLETED)
     except asyncio.CancelledError:
         logger.debug("WebSocket connection cancelled")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        raise
     finally:
+        send_task.cancel()
+        receive_task.cancel()
+        await asyncio.gather(send_task, receive_task, return_exceptions=True)
         try:
             await websocket.close()
         except Exception:
