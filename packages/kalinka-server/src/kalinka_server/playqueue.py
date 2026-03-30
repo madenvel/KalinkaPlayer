@@ -303,6 +303,20 @@ class PlayQueueImpl(PlayQueueController):
             # a new stream — SOURCE_CHANGED will handle the transition.
             if self._prefetch_task is None and not self.prepared_tracks:
                 await self._play_unqueued(self.current_track_id + 1)
+        elif new_state.state == AudioGraphNodeState.STOPPED:
+            # The prefetch may have completed and appended a stream just as the
+            # native player ran out of time and stopped.  If a stream is already
+            # queued and the player is still stopped (i.e. play_next hasn't
+            # restarted it yet), do a full _play_unqueued so the remove+append
+            # cycle kicks the player back into motion.
+            if (
+                self.prepared_tracks
+                and self.track_player.get_state().state == AudioGraphNodeState.STOPPED
+            ):
+                next_idx = next(iter(self.prepared_tracks))
+                await self._play_unqueued(next_idx)
+                return  # new playback started; its own state events will follow
+            self._cancel_prefetch_timer()
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
         elif new_state.state != AudioGraphNodeState.STREAMING:
@@ -392,6 +406,11 @@ class PlayQueueImpl(PlayQueueController):
             track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
+
+        # If the player stopped before the prefetch completed (slow URL fetch),
+        # fall back to a full _play_unqueued so the remove+append cycle restarts it.
+        if self.track_player.get_state().state == AudioGraphNodeState.STOPPED:
+            await self._play_unqueued(index)
 
     async def pause(self, paused: bool):
         if paused:
