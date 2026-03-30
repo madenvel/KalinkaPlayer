@@ -44,21 +44,21 @@ def create_track(id: str):
     )
 
 
-def url1():
+async def url1():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-3.flac",
         format="FLAC",
     )
 
 
-def url2():
+async def url2():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-4.flac",
         format="FLAC",
     )
 
 
-def url3():
+async def url3():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-2.flac",
         format="FLAC",
@@ -152,9 +152,6 @@ def assert_has_calls(event_emitter, expected_calls):
         i += 1
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_add_remove_track(event_emitter, playqueue):
     track = TrackInfo(
@@ -193,9 +190,6 @@ async def test_add_remove_track(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_play(event_emitter, playqueue):
     track = TrackInfo(
@@ -261,9 +255,6 @@ async def test_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_switch_track(event_emitter, playqueue):
     track1 = TrackInfo(
@@ -367,9 +358,6 @@ async def test_switch_track(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_play_next(event_emitter, playqueue):
     track1 = TrackInfo(
@@ -481,9 +469,6 @@ async def test_play_next(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_play_pause_stop_play(event_emitter, playqueue):
     track = TrackInfo(
@@ -618,9 +603,6 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-@pytest.mark.skip(
-    reason="Tests need to be updated for PlayQueueImpl - event emission order and behavior has changed"
-)
 @pytest.mark.asyncio
 async def test_seek(event_emitter, playqueue):
     track = TrackInfo(
@@ -1125,7 +1107,7 @@ async def test_add_insert_clamped(event_emitter, playqueue):
     # Beyond len → clamped to len
     await playqueue.add(make_tracks(1), index=999)
     events = dispatched_events(event_emitter)
-    assert events[0].index == 5  # len was 4 after previous insert
+    assert events[0].index == 4  # len was 4 after previous insert
 
 
 @pytest.mark.asyncio
