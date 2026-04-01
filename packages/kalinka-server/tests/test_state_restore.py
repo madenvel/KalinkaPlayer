@@ -106,6 +106,8 @@ async def test_restore_state_batches_track_info_requests(tmp_path, monkeypatch):
 
 
 def test_restore_from_state_is_not_queue_wrapped():
-    # queued_class wraps async methods into a sync wrapper; restore should stay async.
+    # serialised keeps async methods async; restore should stay undecorated.
     assert inspect.iscoroutinefunction(PlayQueueImpl.restore_from_state)
-    assert not inspect.iscoroutinefunction(PlayQueueImpl.add)
+    assert inspect.iscoroutinefunction(PlayQueueImpl.add)
+    assert not hasattr(PlayQueueImpl.restore_from_state, "__wrapped__")
+    assert hasattr(PlayQueueImpl.add, "__wrapped__")

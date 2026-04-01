@@ -143,13 +143,93 @@ def assert_call_args(actual_args, expected_args, position):
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
 
 
+def _extract_event_sequence(calls):
+    events = []
+    for event_call in calls:
+        if not event_call[0] == "dispatch":
+            continue
+        if not event_call[1]:
+            continue
+        event = event_call[1][0]
+        state_name = "-"
+        if isinstance(event, PlaybackStateChangedEvent):
+            state = event.state.state
+            if isinstance(state, PlayerStateEnum):
+                state_name = state.name
+        events.append((type(event).__name__, state_name))
+    return events
+
+
+def _format_state_diff_table(expected_events, actual_events):
+    max_len = max(len(expected_events), len(actual_events), 1)
+    idx_width = max(3, len(str(max_len - 1)))
+    expected_type_width = max(
+        13, max((len(event_type) for event_type, _ in expected_events), default=0)
+    )
+    expected_state_width = max(
+        14, max((len(state) for _, state in expected_events), default=0)
+    )
+    actual_type_width = max(
+        11, max((len(event_type) for event_type, _ in actual_events), default=0)
+    )
+    actual_state_width = max(
+        12, max((len(state) for _, state in actual_events), default=0)
+    )
+
+    header = (
+        f"{'idx':<{idx_width}} | "
+        f"{'expected event':<{expected_type_width}} | "
+        f"{'expected state':<{expected_state_width}} | "
+        f"{'actual event':<{actual_type_width}} | "
+        f"{'actual state':<{actual_state_width}} | match"
+    )
+    sep = (
+        f"{'-' * idx_width}-+-"
+        f"{'-' * expected_type_width}-+-"
+        f"{'-' * expected_state_width}-+-"
+        f"{'-' * actual_type_width}-+-"
+        f"{'-' * actual_state_width}-+------"
+    )
+    rows = [header, sep]
+
+    for i in range(max_len):
+        expected_type, expected_state = (
+            expected_events[i] if i < len(expected_events) else ("-", "-")
+        )
+        actual_type, actual_state = (
+            actual_events[i] if i < len(actual_events) else ("-", "-")
+        )
+        match = (
+            "yes"
+            if (expected_type, expected_state) == (actual_type, actual_state)
+            else "no"
+        )
+        rows.append(
+            f"{i:<{idx_width}} | "
+            f"{expected_type:<{expected_type_width}} | "
+            f"{expected_state:<{expected_state_width}} | "
+            f"{actual_type:<{actual_type_width}} | "
+            f"{actual_state:<{actual_state_width}} | {match}"
+        )
+
+    return "\n".join(rows)
+
+
 def assert_has_calls(event_emitter, expected_calls):
     i = 0
-    assert len(event_emitter.mock_calls) == len(expected_calls)
-    for actual_call, expected_call in zip(event_emitter.mock_calls, expected_calls):
-        assert actual_call[0] == expected_call[0]
-        assert_call_args(actual_call[1], expected_call[1], i)
-        i += 1
+    try:
+        assert len(event_emitter.mock_calls) == len(expected_calls)
+        for actual_call, expected_call in zip(event_emitter.mock_calls, expected_calls):
+            assert actual_call[0] == expected_call[0]
+            assert_call_args(actual_call[1], expected_call[1], i)
+            i += 1
+    except AssertionError:
+        expected_events = _extract_event_sequence(expected_calls)
+        actual_events = _extract_event_sequence(event_emitter.mock_calls)
+        table = _format_state_diff_table(expected_events, actual_events)
+        print("\nPlayback state mutations (expected vs actual):")
+        print(table)
+        raise
 
 
 @pytest.mark.asyncio
@@ -675,6 +755,12 @@ async def test_seek(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
