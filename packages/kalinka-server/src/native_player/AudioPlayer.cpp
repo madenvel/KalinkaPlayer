@@ -131,17 +131,14 @@ void AudioPlayer::remove(StreamId id) {
   }
 }
 
-void AudioPlayer::clearAll() {
-  disconnectAllStreams();
-  // audioEmitter stays connected to streamSwitcher — auto-start on next append()
-}
+void AudioPlayer::clearAll() { disconnectAllStreams(); }
 
 void AudioPlayer::stop() {
   audioEmitter->disconnect(streamSwitcher);
   disconnectAllStreams();
 }
 
-void AudioPlayer::pause()  { audioEmitter->pause(true);  }
+void AudioPlayer::pause() { audioEmitter->pause(true); }
 void AudioPlayer::resume() { audioEmitter->pause(false); }
 
 size_t AudioPlayer::seek(size_t positionMs) {
@@ -164,6 +161,9 @@ void AudioPlayer::disconnectAllStreams() {
 void AudioPlayer::cleanUpFinishedStreams() {
   for (auto it = streamNodesList.begin(); it != streamNodesList.end();) {
     if (isInvalidState(it->nodeChain.back()->getState().state)) {
+      // Keep switcher state in sync: removing the stream from our bookkeeping
+      // alone is not enough, it must be disconnected from the switcher too.
+      streamSwitcher->disconnect(it->nodeChain.back());
       it = streamNodesList.erase(it);
     } else {
       ++it;
