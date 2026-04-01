@@ -260,7 +260,8 @@ void AlsaAudioEmitter::openDevice() {
            << snd_strerror(err) << ")";
     pcmHandle = nullptr;
     spdlog::error(stream.str());
-    setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::AUDIO_OUTPUT, stream.str()}});
+    setState({AudioGraphNodeState::ERROR,
+              StreamError{StreamErrorSource::AUDIO_OUTPUT, stream.str()}});
 
     throw std::runtime_error(stream.str());
   }
@@ -459,8 +460,12 @@ size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
 
 std::chrono::milliseconds
 AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
-  return std::chrono::milliseconds(1000 * frames /
-                                   currentStreamAudioFormat.sampleRate);
+  const auto sampleRate = currentStreamAudioFormat.sampleRate;
+  if (sampleRate == 0) {
+    spdlog::warn("framesToTimeMs called with sampleRate=0; returning 0ms");
+    return std::chrono::milliseconds(0);
+  }
+  return std::chrono::milliseconds(1000 * frames / sampleRate);
 }
 
 void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
@@ -575,7 +580,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
   } catch (const std::exception &ex) {
     spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
     setState({AudioGraphNodeState::ERROR,
-              StreamError{StreamErrorSource::AUDIO_OUTPUT, "Internal error: " + std::string(ex.what())}});
+              StreamError{StreamErrorSource::AUDIO_OUTPUT,
+                          "Internal error: " + std::string(ex.what())}});
   }
 
   closeDevice();
@@ -603,6 +609,9 @@ void AlsaAudioEmitter::setupAudioFormat(
   }
 
   unsigned sampleRate = streamAudioFormat.sampleRate;
+  if (sampleRate == 0) {
+    throw std::runtime_error("Invalid stream sample rate: 0");
+  }
   bufferSize = requestedBufferSize;
   periodSize = requestedPeriodSize;
 
