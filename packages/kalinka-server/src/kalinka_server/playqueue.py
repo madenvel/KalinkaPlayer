@@ -5,9 +5,11 @@ from collections import OrderedDict
 from collections.abc import Awaitable
 from typing import Callable, Optional
 
+from kalinka_serialized.serial_executor import interrupt
+
 from .config_model import KalinkaConfig
 
-from kalinka_queued import queued, queued_class
+from kalinka_serialized import SerialExecutor, serialised, with_serial_executor
 
 from kalinka_plugin_sdk.datamodel import (
     EntityId,
@@ -194,8 +196,9 @@ class AsyncStateMonitor:
         return await self.wait_state()
 
 
-# State restore can involve many I/O calls; run it outside the queued 10s command timeout.
-@queued_class(timeout=10, exclude=["restore_from_state"])
+# State restore can involve many I/O calls; keep it outside the serial executor
+# so startup restore does not block the command lane.
+@with_serial_executor
 class PlayQueueImpl(PlayQueueController):
     def __init__(self, config: KalinkaConfig, event_emitter: EventEmitter):
         super().__init__()
@@ -229,6 +232,7 @@ class PlayQueueImpl(PlayQueueController):
         self._state_update_task = asyncio.create_task(
             self._state_update_listener_async()
         )
+        return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Stop the play queue and cleanup resources."""
@@ -266,7 +270,7 @@ class PlayQueueImpl(PlayQueueController):
             logger.debug("State listener cancelled")
             raise
 
-    @queued
+    @interrupt
     async def _process_state_update(self, new_state):
         if new_state.state == AudioGraphNodeState.SOURCE_CHANGED:
             if self._retry_pending:
@@ -344,9 +348,11 @@ class PlayQueueImpl(PlayQueueController):
             ),
         )
 
+    @serialised
     async def play(self, index: Optional[int] = None) -> None:
         await self._play_unqueued(index)
 
+    @serialised
     async def play_next(self, index: int) -> None:
         return await self._play_next_unqueued(index)
 
@@ -367,12 +373,6 @@ class PlayQueueImpl(PlayQueueController):
 
         self._cancel_prefetch_timer()
 
-        # Remove the currently playing stream (tracked separately since it was
-        # popped from prepared_tracks on SOURCE_CHANGED).
-        if self.current_stream_id is not None:
-            self.track_player.remove(self.current_stream_id)
-            self.current_stream_id = None
-
         # Remove any prefetched streams.
         for _, (_, stream_id) in list(self.prepared_tracks.items()):
             self.track_player.remove(stream_id)
@@ -384,6 +384,10 @@ class PlayQueueImpl(PlayQueueController):
             track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
+
+        if self.current_stream_id is not None:
+            self.track_player.remove(self.current_stream_id)
+            self.current_stream_id = None
 
     async def _play_next_unqueued(self, index):
         if len(self.track_list) == 0:
@@ -412,24 +416,30 @@ class PlayQueueImpl(PlayQueueController):
         if self.track_player.get_state().state == AudioGraphNodeState.STOPPED:
             await self._play_unqueued(index)
 
+    @serialised
     async def pause(self, paused: bool):
         if paused:
             self.track_player.pause()
         else:
             self.track_player.resume()
 
+    @serialised
     async def next(self):
         await self._play_unqueued(self.current_track_id + 1)
 
+    @serialised
     async def prev(self):
         await self._play_unqueued(self.current_track_id - 1)
 
+    @serialised
     async def seek(self, position_ms: int) -> None:
         return self.track_player.seek(position_ms)
 
+    @serialised
     async def stop(self):
         self.track_player.stop()
 
+    @serialised
     async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
         self._add(tracks, index)
 
@@ -493,8 +503,8 @@ class PlayQueueImpl(PlayQueueController):
                 PlaybackStateChangedEvent(state=self._get_playback_state())
             )
 
+    @serialised
     async def remove(self, tracks: list[int]):
-        removed_current_track = self.current_track_id in tracks
         prev_track_id = self.current_track_id
 
         tracks.sort(reverse=True)
@@ -520,6 +530,7 @@ class PlayQueueImpl(PlayQueueController):
         if prev_track_id != self.current_track_id or prev_track_id in tracks:
             self._notify_track_change()
 
+    @serialised
     async def list(self, offset: int, limit: int) -> TrackList:
         if offset not in range(0, len(self.track_list)):
             return TrackList(
@@ -536,10 +547,11 @@ class PlayQueueImpl(PlayQueueController):
             items=[
                 track_info
                 for i in range(offset, min(offset + limit, len(self.track_list)))
-                if ((track_info := await self.get_track_info(i)) is not None)
+                if ((track_info := self._get_track_info(i)) is not None)
             ],
         )
 
+    @serialised
     async def get_track_info(self, index: int) -> Optional[Track]:
         return self._get_track_info(index)
 
@@ -549,6 +561,7 @@ class PlayQueueImpl(PlayQueueController):
         track_info: TrackInfo = self.track_list[index]
         return track_info.metadata
 
+    @serialised
     async def get_playback_state(self) -> PlaybackState:
         return self._get_playback_state()
 
@@ -652,6 +665,7 @@ class PlayQueueImpl(PlayQueueController):
             f"Restored state: {len(self.track_list)} tracks, current_track_id={self.current_track_id}"
         )
 
+    @serialised
     async def move(self, from_index: int, to_index: int) -> None:
         if from_index == to_index:
             return
@@ -701,6 +715,7 @@ class PlayQueueImpl(PlayQueueController):
                 PlaybackStateChangedEvent(state=self._get_playback_state())
             )
 
+    @serialised
     async def clear(self):
         self._clear()
 
@@ -851,6 +866,7 @@ class PlayQueueImpl(PlayQueueController):
             ),
         )
 
+    @serialised
     async def set_playback_mode(
         self,
         shuffle: Optional[bool],
@@ -892,6 +908,7 @@ class PlayQueueImpl(PlayQueueController):
             repeat_all=self.repeat_all,
         )
 
+    @serialised
     async def get_playback_mode(self) -> PlaybackMode:
         return PlaybackMode(
             shuffle=self.shuffle,
