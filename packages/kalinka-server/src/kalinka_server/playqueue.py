@@ -108,6 +108,7 @@ def to_state_name(state: AudioGraphNodeState) -> Optional[PlayerStateEnum]:
         return PlayerStateEnum.PLAYING
     elif state == AudioGraphNodeState.PAUSED:
         return PlayerStateEnum.PAUSED
+    return None
 
 
 def flatten_dict(d, parent_key="", sep="."):
@@ -172,7 +173,7 @@ class PlayQueue(AsyncExecutor):
                 self.play_next(self.current_track_id + 1)
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
-        elif new_state.state != AudioGraphNodeState.STREAMING:
+        else:
             self._cancel_prefetch_timer()
 
         state_update_ts = time.monotonic_ns()
@@ -224,11 +225,7 @@ class PlayQueue(AsyncExecutor):
         if len(self.track_list) == 0:
             return
 
-        if (
-            index is not None
-            and index not in range(0, len(self.track_list))
-            or index in self.prepared_tracks
-        ):
+        if index not in range(0, len(self.track_list)) or index in self.prepared_tracks:
             return
 
         logger.info(f"Playing next track index={index}")
@@ -296,6 +293,15 @@ class PlayQueue(AsyncExecutor):
                 self.current_track_id -= 1
 
             del self.track_list[track]
+
+        # Re-map prepared_tracks keys: each key shifts down by the number of
+        # removed indices that were below it.
+        new_prepared = OrderedDict()
+        for key, value in self.prepared_tracks.items():
+            shift = sum(1 for t in tracks if t < key)
+            new_prepared[key - shift] = value
+        self.prepared_tracks = new_prepared
+
         self.current_track_id = min(self.current_track_id, len(self.track_list) - 1)
         if self.current_track_id < 0:
             self.current_track_id = 0
@@ -375,7 +381,6 @@ class PlayQueue(AsyncExecutor):
 
     def _clear(self):
         self.track_player.stop()
-        self.track_urls = {}
         list_len = len(self.track_list)
         self.track_list = []
         self.current_track_id = 0
@@ -399,7 +404,7 @@ class PlayQueue(AsyncExecutor):
             try:
                 track_info = track.link_retriever()
             except Exception as e:
-                logger.warn("Failed to retrieve track link:", repr(e))
+                logger.warning("Failed to retrieve track link: %s", repr(e))
                 self.event_emitter.dispatch(
                     NetworkErrorEvent(message="Failed to retrieve track link")
                 )
@@ -413,7 +418,7 @@ class PlayQueue(AsyncExecutor):
         if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:
             self.event_emitter.dispatch(RequestMoreTracksEvent())
 
-    def _setup_prefetch_timer(self, state: StreamInfo):
+    def _setup_prefetch_timer(self, state: StreamState):
         self._cancel_prefetch_timer()
 
         stream_info = state.stream_info
@@ -436,6 +441,7 @@ class PlayQueue(AsyncExecutor):
         )
         self.timer_thread.start()
 
+    @enqueue
     def _play_next_track_timer(self):
         next_track_id = self.current_track_id
         if not self.repeat_single:
@@ -479,9 +485,9 @@ class PlayQueue(AsyncExecutor):
         )
         self.repeat_all = repeat_all if repeat_all is not None else self.repeat_all
         if (
-            self.shuffle is not None
-            or self.repeat_all is not None
-            or self.repeat_single is not None
+            shuffle is not None
+            or repeat_all is not None
+            or repeat_single is not None
         ):
             self.event_emitter.dispatch(
                 PlaybackModeChangedEvent(
