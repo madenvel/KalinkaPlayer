@@ -324,7 +324,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         self.volume_step_to_db = config.volume_step_to_db
         self.auto_volume = config.auto_volume_correction
         self.discovery_timeout = config.discovery_timeout
-        self.session = httpx.Client(timeout=5)
+        self.session = httpx.AsyncClient(timeout=5)
         self.ready = False
 
         self.config = config
@@ -430,7 +430,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         # Close HTTP session
         if hasattr(self, "session"):
-            self.session.close()
+            await self.session.aclose()
 
     def __del__(self):
         """Ensure clean shutdown when object is destroyed"""
@@ -584,35 +584,28 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                         f"Listening for MusicCast events on 0.0.0.0:{self.udp_port}"
                     )
 
+                    loop = asyncio.get_event_loop()
                     device_addr = urllib.parse.urlparse(self.base_url).hostname
 
                     while not self.shutdown_event.is_set():
                         try:
-                            # Use asyncio to wait for socket data
-                            await asyncio.sleep(0.1)
-                            # Receive data from the client with larger buffer
-                            data, client_address = udp_socket.recvfrom(4096)
-
-                            # Validate that the event came from the expected device
-                            if client_address[0] != device_addr:
-                                logger.warning(
-                                    f"Received event from unexpected address: {client_address[0]}"
-                                )
-                                continue
-
-                            try:
-                                event_json = json.loads(data.decode("utf-8"))
-                                await self._handle_event(event_json)
-                            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                                logger.warning(f"Failed to decode event data: {e}")
-                                continue
-
-                        except BlockingIOError:
-                            # No data available yet, continue
-                            continue
-                        except socket.error as e:
+                            data, client_address = await loop.sock_recvfrom(udp_socket, 4096)
+                        except OSError as e:
                             logger.error(f"Socket error in event loop: {e}")
                             break
+
+                        # Validate that the event came from the expected device
+                        if client_address[0] != device_addr:
+                            logger.warning(
+                                f"Received event from unexpected address: {client_address[0]}"
+                            )
+                            continue
+
+                        try:
+                            event_json = json.loads(data.decode("utf-8"))
+                            await self._handle_event(event_json)
+                        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                            logger.warning(f"Failed to decode event data: {e}")
 
                 except socket.error as e:
                     logger.error(f"Failed to create/bind UDP socket: {e}")
@@ -726,7 +719,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             if self.base_url is None:
                 raise Exception("MusicCast device not initialized")
 
-            response = self.session.get(
+            response = await self.session.get(
                 safe_urljoin(self.base_url, endpoint),
                 headers=headers,
                 timeout=5,
