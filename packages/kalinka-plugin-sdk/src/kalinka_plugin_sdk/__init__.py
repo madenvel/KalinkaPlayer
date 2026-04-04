@@ -10,18 +10,25 @@ except ImportError:
     __version__ = "1.0.0"
 
 from .api import (
-    PlayQueueAPI,
-    EventEmitterAPI,
-    EventListenerAPI,
+    PlayQueueController,
+    EventEmitter,
+    EventListener,
     LoggerAPI,
-    PluginContext,
     API_VERSION,
 )
 from .events import (
-    EventType,
-    FavoriteAddedEvent,
-    FavoriteRemovedEvent,
+    PlayQueueEventType,
+    PlayQueueEvent,
+    PlayQueueState,
+    PlaybackStateChangedEvent,
+    RequestMoreTracksEvent,
+    TracksAddedEvent,
+    TracksRemovedEvent,
+    TrackMovedEvent,
+    PlaybackModeChangedEvent,
+    PlaybackErrorEvent,
 )
+
 from .datamodel import (
     EntityType,
     EntityId,
@@ -37,21 +44,33 @@ from .ext_device import (
     ExternalOutputDevice,
     SupportedFunction,
 )
+from .plugin import (
+    InputPluginContext,
+    OutputDevicePluginContext,
+)
 from .module_config import ModuleConfig
 
 __all__ = [
     "API_VERSION",
     "__version__",
     # APIs
-    "PlayQueueAPI",
-    "EventEmitterAPI",
-    "EventListenerAPI",
+    "PlayQueueController",
+    "EventEmitter",
+    "EventListener",
     "LoggerAPI",
-    "PluginContext",
+    "InputPluginContext",
+    "OutputDevicePluginContext",
     # Events and States
-    "EventType",
-    "FavoriteAddedEvent",
-    "FavoriteRemovedEvent",
+    "PlayQueueEventType",
+    "PlayQueueEvent",
+    "PlayQueueState",
+    "PlaybackStateChangedEvent",
+    "RequestMoreTracksEvent",
+    "TracksAddedEvent",
+    "TracksRemovedEvent",
+    "TrackMovedEvent",
+    "PlaybackModeChangedEvent",
+    "PlaybackErrorEvent",
     # Data Models
     "EntityType",
     "EntityId",

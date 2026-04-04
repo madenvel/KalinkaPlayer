@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Protocol, runtime_checkable
 from .datamodel import DeviceVolume
 
 
@@ -18,10 +18,11 @@ class SupportedFunction(Enum):
     POWER_OFF = "power_off"
 
 
-class ExternalOutputDevice(ABC):
-    """Abstract base class for external output devices.
+@runtime_checkable
+class ExternalOutputDevice(Protocol):
+    """Protocol for external output devices.
 
-    This interface defines the contract for external audio output devices
+    This protocol defines the contract for external audio output devices
     that can be controlled by the Kalinka player. Implementing classes
     should provide device-specific implementations for volume control,
     power management, and capability reporting.
@@ -31,8 +32,7 @@ class ExternalOutputDevice(ABC):
     controlled programmatically.
     """
 
-    @abstractmethod
-    def get_volume(self) -> DeviceVolume:
+    async def get_volume(self) -> DeviceVolume:
         """Get the current volume level of the device.
 
         Returns:
@@ -43,10 +43,9 @@ class ExternalOutputDevice(ABC):
             NotImplementedError: If the device doesn't support volume retrieval.
             ConnectionError: If unable to communicate with the device.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def set_volume(self, volume: int) -> None:
+    async def set_volume(self, volume: int) -> None:
         """Set the volume level of the device.
 
         Args:
@@ -59,10 +58,9 @@ class ExternalOutputDevice(ABC):
             ValueError: If the volume value is outside the valid range.
             ConnectionError: If unable to communicate with the device.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def power_on(self) -> None:
+    async def power_on(self) -> None:
         """Turn on the external output device.
 
         This method should initiate the power-on sequence for the device.
@@ -74,10 +72,9 @@ class ExternalOutputDevice(ABC):
             ConnectionError: If unable to communicate with the device.
             RuntimeError: If the device fails to power on.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def is_power_on(self) -> bool:
+    async def is_power_on(self) -> bool:
         """Check if the device is currently powered on.
 
         Returns:
@@ -88,10 +85,9 @@ class ExternalOutputDevice(ABC):
             NotImplementedError: If the device doesn't support power status queries.
             ConnectionError: If unable to communicate with the device.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def power_off(self) -> None:
+    async def power_off(self) -> None:
         """Turn off the external output device.
 
         This method should initiate the power-off sequence for the device.
@@ -103,9 +99,8 @@ class ExternalOutputDevice(ABC):
             ConnectionError: If unable to communicate with the device.
             RuntimeError: If the device fails to power off properly.
         """
-        pass
+        ...
 
-    @abstractmethod
     def supported_functions(self) -> list[SupportedFunction]:
         """Get a list of functions supported by this device.
 
@@ -128,4 +123,4 @@ class ExternalOutputDevice(ABC):
                 SupportedFunction.IS_POWER_ON
             ]
         """
-        pass
+        ...

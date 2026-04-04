@@ -60,17 +60,32 @@ PYBIND11_MODULE(native_player, m) {
       .def(pybind11::self == pybind11::self)
       .def(pybind11::self != pybind11::self);
 
+  py::enum_<StreamErrorSource>(m, "StreamErrorSource")
+      .value("NONE", StreamErrorSource::NONE)
+      .value("HTTP_STREAM", StreamErrorSource::HTTP_STREAM)
+      .value("AUDIO_OUTPUT", StreamErrorSource::AUDIO_OUTPUT)
+      .value("DECODER", StreamErrorSource::DECODER)
+      .export_values();
+
+  py::class_<StreamError>(m, "StreamError")
+      .def(py::init<StreamErrorSource, std::string>(),
+           py::arg("source"), py::arg("message"))
+      .def_readwrite("source", &StreamError::source)
+      .def_readwrite("message", &StreamError::message)
+      .def(pybind11::self == pybind11::self)
+      .def(pybind11::self != pybind11::self);
+
   py::class_<StreamState>(m, "StreamState")
       .def(py::init<AudioGraphNodeState, long, std::optional<StreamInfo>>(),
            py::arg("state"), py::arg("position"), py::arg("stream_info"))
-      .def(py::init<AudioGraphNodeState, std::optional<std::string>>(),
-           py::arg("state"), py::arg("message"))
+      .def(py::init<AudioGraphNodeState, StreamError>(),
+           py::arg("state"), py::arg("error"))
       .def(py::init<AudioGraphNodeState>(), py::arg("state"))
       .def(py::init<AudioGraphNodeState, long>(), py::arg("state"),
            py::arg("position"))
       .def_readwrite("state", &StreamState::state)
       .def_readwrite("position", &StreamState::position)
-      .def_readwrite("message", &StreamState::message)
+      .def_readwrite("error", &StreamState::error)
       .def_readwrite("stream_info", &StreamState::streamInfo)
       .def_readwrite("timestamp", &StreamState::timestamp)
       .def("__repr__", [](const StreamState &s) { return s.toString(); })
@@ -90,12 +105,12 @@ PYBIND11_MODULE(native_player, m) {
 
   py::class_<AudioPlayer>(m, "AudioPlayer")
       .def(py::init<const Config &>(), py::arg("config"))
-      .def("play", &AudioPlayer::play, py::arg("url"), py::arg("format"))
-      .def("play_next", &AudioPlayer::playNext, py::arg("url"),
-           py::arg("format"))
-      .def("remove", &AudioPlayer::remove, py::arg("url"))
+      .def("append", &AudioPlayer::append, py::arg("url"), py::arg("format"))
+      .def("remove", &AudioPlayer::remove, py::arg("stream_id"))
+      .def("clear_all", &AudioPlayer::clearAll)
       .def("stop", &AudioPlayer::stop)
-      .def("pause", &AudioPlayer::pause, py::arg("paused"))
+      .def("pause", &AudioPlayer::pause)
+      .def("resume", &AudioPlayer::resume)
       .def("seek", &AudioPlayer::seek, py::arg("position_ms"))
       .def("get_state", &AudioPlayer::getState)
       .def("monitor", &AudioPlayer::monitor);

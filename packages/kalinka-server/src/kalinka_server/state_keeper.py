@@ -1,10 +1,17 @@
+import asyncio
 import json
 import logging
 import os
+from collections import defaultdict
 
-from kalinka_plugin_sdk.datamodel import EntityId
+from kalinka_eventbus.bus import EventBus
+from kalinka_plugin_sdk.events import (
+    PlayQueueEvent,
+    PlayQueueEventType,
+    PlayQueueState,
+)
 from kalinka_plugin_sdk.inputmodule import InputModule, TrackInfo
-from .playqueue import PlayQueue
+from kalinka_plugin_sdk.api import PlayQueueController
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -16,49 +23,91 @@ def set_state_file(file_path: str):
     STATE_FILE = file_path
 
 
-def save_state(playqueue: PlayQueue):
+async def save_state(
+    playqueue_eventbus: EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent],
+):
     # Ensure the directory exists
     state_dir = os.path.dirname(STATE_FILE)
     if state_dir:  # Only create directory if path is not empty
         os.makedirs(state_dir, exist_ok=True)
     with open(STATE_FILE, "w") as f:
+        snapshot = playqueue_eventbus.get_snapshot()
         json.dump(
-            {
-                "current_track_id": playqueue.current_track_id,
-                "track_list": [track.id.model_dump() for track in playqueue.track_list],
-            },
+            snapshot.model_dump(),
             f,
         )
     logger.info("State saved")
 
 
-def add_items_to_playqueue(
-    playqueue: PlayQueue, ids: list[str], modules: dict[str, InputModule]
+async def restore_state(
+    playqueue: PlayQueueController, modules: dict[str, InputModule]
 ):
-    items: list[TrackInfo] = []
-    for entity_id in ids:
-        entity_id_obj = EntityId.from_string(entity_id)
-        module = modules.get(entity_id_obj.source, None)
-
-        if module is None:
-            logger.warning(f"Module {entity_id_obj.source} is not found")
-            continue
-
-        items.extend(module.get_track_info([entity_id_obj.id]))
-
-    playqueue.add(items)
-
-
-def restore_state(playqueue: PlayQueue, modules: dict[str, InputModule]):
     try:
         with open(STATE_FILE, "r") as f:
-            state = json.load(f)
+            state = PlayQueueState.model_validate_json(f.read())
 
-        if "current_track_id" not in state or "track_list" not in state:
-            return
+        track_info_cache: dict[str, TrackInfo] = {}
+        track_ids_by_source: dict[str, list[str]] = defaultdict(list)
 
-        add_items_to_playqueue(playqueue, state["track_list"], modules)
-        playqueue.current_track_id = state["current_track_id"]
+        for track in state.track_list:
+            track_ids_by_source[track.id.source].append(track.id.id)
+
+        async def fetch_source_track_infos(source: str, track_ids: list[str]) -> None:
+            module = modules.get(source)
+            if module is None:
+                logger.warning(
+                    "Skipping restore for source '%s': module is not available",
+                    source,
+                )
+                return
+
+            # De-duplicate to avoid repeated module calls for duplicated queue entries.
+            unique_track_ids = list(dict.fromkeys(track_ids))
+
+            try:
+                track_infos = await module.get_track_info(unique_track_ids)
+            except Exception as e:
+                logger.warning(
+                    "Failed to retrieve track infos from source '%s': %s",
+                    source,
+                    e,
+                )
+                return
+
+            for track_info in track_infos:
+                track_info_cache[track_info.id.to_string] = track_info
+
+            missing_count = sum(
+                1
+                for track_id in unique_track_ids
+                if f"kalinka:{source}:track:{track_id}" not in track_info_cache
+            )
+            if missing_count:
+                logger.warning(
+                    "Source '%s' did not return %d/%d track infos during restore",
+                    source,
+                    missing_count,
+                    len(unique_track_ids),
+                )
+
+        awaitables = [
+            fetch_source_track_infos(source, track_ids)
+            for source, track_ids in track_ids_by_source.items()
+        ]
+        if awaitables:
+            await asyncio.gather(*awaitables)
+
+        async def track_info_retriever(entity_id) -> TrackInfo:
+            """Retrieve TrackInfo from pre-fetched restore cache."""
+            track_info = track_info_cache.get(entity_id.to_string)
+            if track_info is None:
+                raise ValueError(
+                    f"Track {entity_id.id} not found in module {entity_id.source}"
+                )
+
+            return track_info
+
+        await playqueue.restore_from_state(state, track_info_retriever)
         logger.info("State restored")
     except FileNotFoundError:
         logger.info("No state file found")

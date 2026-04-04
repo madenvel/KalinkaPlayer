@@ -3,7 +3,6 @@ import os
 import sys
 import io
 import time
-import json
 import logging
 import asyncio
 import mimetypes
@@ -18,7 +17,12 @@ from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
-from watchfiles import awatch, Change
+try:
+    from inotify_simple import INotify, flags
+
+    HAS_INOTIFY = True
+except ImportError:
+    HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
 from .id_generator import (
@@ -27,6 +31,9 @@ from .id_generator import (
     generate_track_id,
 )
 from .indexer_db import AsyncIndexerDb
+
+
+SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
 
 
 # Configure logger for watchfiles.main only to WARNING level
@@ -63,6 +70,12 @@ async def trigger_enricher_update(data):
     await loop.run_in_executor(
         None, lambda: _enricher_queue.put(data, block=True, timeout=30.0)
     )
+
+
+def is_supported_audio_file(filename: str) -> bool:
+    """Check if the file is a supported audio format."""
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in SUPPORTED_AUDIO_EXTENSIONS
 
 
 class FileIndexer:
@@ -134,8 +147,8 @@ class FileIndexer:
         # as there might be old files pending enrichment
         await trigger_enricher_update("enrich")
 
-    async def handle_incremental_changes(self, changes: Set[Tuple[Change, str]]):
-        """Process file changes detected by watchfiles"""
+    async def handle_incremental_changes(self, changes: Set[Tuple[str, str]]):
+        """Process file changes detected by inotify (CLOSE_WRITE/MOVED_TO events)"""
         changed_items: Dict[str, Set[str]] = {
             "artists": set(),
             "albums": set(),
@@ -144,35 +157,11 @@ class FileIndexer:
 
         processed_dirs = set()
         processed_files = set()
-        dir_additions = set()
-        all_files = set()
 
         for change_type, file_path in changes:
-            if os.path.isdir(file_path) and change_type == Change.added:
-                dir_additions.add(file_path)
-            elif not os.path.isdir(file_path):
-                all_files.add(file_path)
+            logger.debug(f"Change detected: {change_type} - {file_path}")
 
-        files_in_added_dirs = set()
-        for file_path in all_files:
-            for dir_path in dir_additions:
-                if file_path.startswith(dir_path + os.sep):
-                    files_in_added_dirs.add(file_path)
-                    break
-
-        sorted_changes = []
-        for change_type, file_path in changes:
-            if os.path.isdir(file_path) and change_type == Change.added:
-                sorted_changes.append((change_type, file_path))
-
-        for change_type, file_path in changes:
-            if not os.path.isdir(file_path) and file_path not in files_in_added_dirs:
-                sorted_changes.append((change_type, file_path))
-
-        for change_type, file_path in sorted_changes:
-            logger.debug(f"Change detected: {change_type.name} - {file_path}")
-
-            if os.path.isdir(file_path) and change_type == Change.added:
+            if change_type == "dir_added":
                 logger.info(f"New directory detected: {file_path}")
                 try:
                     await self.scan_folder(file_path, changed_items)
@@ -183,9 +172,6 @@ class FileIndexer:
                         f"Error scanning new directory {file_path}: {str(e)}"
                     )
                     continue
-
-            if os.path.isdir(file_path):
-                continue
 
             if file_path in processed_files:
                 continue
@@ -204,7 +190,8 @@ class FileIndexer:
             if not self._is_supported_audio_file(file_path):
                 continue
 
-            if change_type in (Change.added, Change.modified):
+            if change_type in ("file_closed", "file_moved"):
+                # File was closed after write or moved (atomic rename) - safe to process
                 try:
                     logger.info(f"Processing changed file: {file_path}")
                     result_changes = await self.process_file(file_path)
@@ -216,17 +203,6 @@ class FileIndexer:
                 except Exception as e:
                     logger.exception(
                         f"Error processing changed file {file_path}: {str(e)}"
-                    )
-
-            elif change_type == Change.deleted:
-                try:
-                    track = await self.db_manager.get_track_by_path(file_path)
-                    if track:
-                        logger.info(f"Removing deleted file from database: {file_path}")
-                        await self.db_manager.delete_track(track["id"])
-                except Exception as e:
-                    logger.exception(
-                        f"Error processing deleted file {file_path}: {str(e)}"
                     )
 
         await self.cleanup_stale_tracks()
@@ -254,9 +230,8 @@ class FileIndexer:
                         logger.exception(f"Error processing file {file_path}: {str(e)}")
 
     def _is_supported_audio_file(self, filename: str) -> bool:
-        """Check if the file is a supported audio format"""
-        ext = os.path.splitext(filename.lower())[1]
-        return ext in [".mp3", ".flac"]
+        """Check if the file is a supported audio format."""
+        return is_supported_audio_file(filename)
 
     async def process_file(self, file_path: str) -> Optional[Dict[str, Optional[str]]]:
         """Process a music file and update the database. Returns changed items IDs."""
@@ -619,8 +594,15 @@ async def _indexer_worker(config: LocalFilesConfig, db_manager: AsyncIndexerDb):
 
 
 async def _file_watcher_worker(config: LocalFilesConfig):
-    """Background worker task for real-time filesystem monitoring"""
+    """Background worker task for real-time filesystem monitoring using inotify CLOSE_WRITE events"""
     global _indexer_queue, _file_watcher_stop_event
+
+    if not HAS_INOTIFY:
+        logger.warning(
+            "inotify_simple not available, file watcher disabled. "
+            "Install with: pip install inotify_simple"
+        )
+        return
 
     try:
         music_folders = [
@@ -629,23 +611,105 @@ async def _file_watcher_worker(config: LocalFilesConfig):
         logger.info(f"Starting file watcher for folders: {music_folders}")
 
         try:
-            async for changes in awatch(
-                *music_folders, watch_filter=None, stop_event=_file_watcher_stop_event
-            ):
-                if changes:
-                    logger.info(f"File watcher detected {len(changes)} changes.")
-                    await _indexer_queue.put({"incremental_changes": changes})
-                    logger.info("Changes added to indexer queue for processing.")
+            inotify = INotify()
+            watched_dirs = {}
+
+            # Watch mask: CLOSE_WRITE (file closed after write), MOVED_TO (atomic renames),
+            # CREATE (for new dirs), DELETE_SELF (dir removed), UNMOUNT (fs unmounted)
+            watch_mask = (
+                flags.CLOSE_WRITE
+                | flags.MOVED_TO
+                | flags.CREATE
+                | flags.DELETE_SELF
+                | flags.UNMOUNT
+            )
+
+            def _add_watches(path: str):
+                """Recursively add watches to all directories."""
+                try:
+                    wd = inotify.add_watch(path, watch_mask)
+                    watched_dirs[wd] = path
+                    logger.debug(f"Watching directory: {path}")
+                    for entry in os.listdir(path):
+                        subpath = os.path.join(path, entry)
+                        if os.path.isdir(subpath) and not os.path.islink(subpath):
+                            _add_watches(subpath)
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Could not watch {path}: {e}")
+
+            for folder in music_folders:
+                _add_watches(folder)
+
+            logger.info(
+                f"File watcher initialized with {len(watched_dirs)} directories"
+            )
+
+            while not _file_watcher_stop_event.is_set():
+                try:
+                    events = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: inotify.read(timeout=1)
+                    )
+                    if not events:
+                        continue
+
+                    relevant_changes: Set[Tuple[str, str]] = set()  # (event_type, path)
+
+                    for event in events:
+                        dir_path = watched_dirs.get(event.wd, "")
+                        if not dir_path:
+                            continue
+
+                        file_path = (
+                            os.path.join(dir_path, event.name)
+                            if event.name
+                            else dir_path
+                        )
+
+                        # Handle new directory creation
+                        if event.mask & flags.CREATE and os.path.isdir(file_path):
+                            relevant_changes.add(("dir_added", file_path))
+                            _add_watches(file_path)
+                            logger.debug(f"New directory detected: {file_path}")
+
+                        # Handle file close after write (primary trigger for files)
+                        elif event.mask & flags.CLOSE_WRITE:
+                            if is_supported_audio_file(file_path):
+                                relevant_changes.add(("file_closed", file_path))
+                                logger.debug(f"File closed after write: {file_path}")
+
+                        # Handle atomic renames (uploaded as .tmp then renamed to .mp3/.flac)
+                        elif event.mask & flags.MOVED_TO:
+                            if is_supported_audio_file(file_path):
+                                relevant_changes.add(("file_moved", file_path))
+                                logger.debug(f"File moved (atomic rename): {file_path}")
+
+                        # Handle directory removal
+                        elif event.mask & flags.DELETE_SELF:
+                            if event.wd in watched_dirs:
+                                del watched_dirs[event.wd]
+                                logger.debug(f"Directory removed: {dir_path}")
+
+                    if relevant_changes:
+                        logger.info(
+                            f"File watcher detected {len(relevant_changes)} relevant events (CLOSE_WRITE/MOVED_TO)."
+                        )
+                        await _indexer_queue.put(
+                            {"incremental_changes": relevant_changes}
+                        )
+                        logger.info("Changes added to indexer queue for processing.")
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.exception(f"Error reading inotify events: {e}")
+                    await asyncio.sleep(1)
+
         except asyncio.CancelledError:
             logger.info("File watcher worker cancelled.")
-        except Exception as e:
-            logger.exception(f"Error in file watcher awatch loop: {str(e)}")
-            raise
         finally:
             logger.info("File watcher task exited")
     except Exception as e:
         logger.exception(f"Fatal error in file watcher worker: {str(e)}")
-        # Re-raise to ensure the task failure is visible
         raise
 
 
@@ -832,6 +896,8 @@ def main(config: LocalFilesConfig, enricher_queue, logger_queue):
         root = logging.getLogger()
         for handler in root.handlers[:]:
             root.removeHandler(handler)
+        # Set root logger level to DEBUG to allow all logs through to the queue
+        root.setLevel(logging.DEBUG)
         root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
         asyncio.run(async_main(config))

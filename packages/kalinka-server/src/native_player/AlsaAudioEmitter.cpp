@@ -165,10 +165,11 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
     case AudioGraphNodeState::FINISHED:
       setState(
           StreamState(AudioGraphNodeState::FINISHED,
-                      framesToTimeMs(currentSourceTotalFramesWritten).count()));
+                      framesToTimeMs(currentSourceTotalFramesWritten).count(),
+                      inputNodeState.streamInfo));
       break;
     case AudioGraphNodeState::ERROR:
-      setState({AudioGraphNodeState::ERROR, inputNodeState.message});
+      setState({AudioGraphNodeState::ERROR, *inputNodeState.error});
       break;
     case AudioGraphNodeState::SOURCE_CHANGED:
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
@@ -199,19 +200,19 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
 }
 
 bool AlsaAudioEmitter::handleSeekSignal() {
-  snd_pcm_sframes_t delay = 0;
-  int err = snd_pcm_delay(pcmHandle, &delay);
-  if (err < 0) {
-    spdlog::error("Error when calling snd_pcm_delay: {}", snd_strerror(err));
-    return false;
-  }
-
-  setState({AudioGraphNodeState::PREPARING,
-            framesToTimeMs(currentSourceTotalFramesWritten - delay).count()});
-
   auto positionMs = *seekRequestSignal.getValue();
   auto seekValue = positionMs * currentStreamAudioFormat.sampleRate / 1000;
-  spdlog::info("Request seek to {}ms ({} frames)", positionMs, seekValue);
+
+  // Calculate the quantized position (what we'll actually achieve)
+  auto quantizedPositionMs = framesToTimeMs(seekValue).count();
+
+  // Report PREPARING state with the quantized target position and stream info
+  auto state = getState();
+  setState(
+      {AudioGraphNodeState::PREPARING, quantizedPositionMs, state.streamInfo});
+
+  spdlog::info("Request seek to {}ms ({} frames), quantized to {}ms",
+               positionMs, seekValue, quantizedPositionMs);
   auto retVal = inputNode->seekTo(seekValue);
   if (retVal == -1U) {
     spdlog::warn("Seek request failed: requested={}", seekValue);
@@ -259,7 +260,8 @@ void AlsaAudioEmitter::openDevice() {
            << snd_strerror(err) << ")";
     pcmHandle = nullptr;
     spdlog::error(stream.str());
-    setState({AudioGraphNodeState::ERROR, stream.str()});
+    setState({AudioGraphNodeState::ERROR,
+              StreamError{StreamErrorSource::AUDIO_OUTPUT, stream.str()}});
 
     throw std::runtime_error(stream.str());
   }
@@ -458,8 +460,12 @@ size_t AlsaAudioEmitter::waitForInputData(std::stop_token stopToken,
 
 std::chrono::milliseconds
 AlsaAudioEmitter::framesToTimeMs(snd_pcm_sframes_t frames) {
-  return std::chrono::milliseconds(1000 * frames /
-                                   currentStreamAudioFormat.sampleRate);
+  const auto sampleRate = currentStreamAudioFormat.sampleRate;
+  if (sampleRate == 0) {
+    spdlog::warn("framesToTimeMs called with sampleRate=0; returning 0ms");
+    return std::chrono::milliseconds(0);
+  }
+  return std::chrono::milliseconds(1000 * frames / sampleRate);
 }
 
 void AlsaAudioEmitter::startPcmStream(const StreamInfo &streamInfo,
@@ -574,7 +580,8 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
   } catch (const std::exception &ex) {
     spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
     setState({AudioGraphNodeState::ERROR,
-              "Internal error: " + std::string(ex.what())});
+              StreamError{StreamErrorSource::AUDIO_OUTPUT,
+                          "Internal error: " + std::string(ex.what())}});
   }
 
   closeDevice();
@@ -602,6 +609,9 @@ void AlsaAudioEmitter::setupAudioFormat(
   }
 
   unsigned sampleRate = streamAudioFormat.sampleRate;
+  if (sampleRate == 0) {
+    throw std::runtime_error("Invalid stream sample rate: 0");
+  }
   bufferSize = requestedBufferSize;
   periodSize = requestedPeriodSize;
 

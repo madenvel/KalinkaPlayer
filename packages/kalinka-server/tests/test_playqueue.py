@@ -1,20 +1,30 @@
 import time
 import pytest
-from unittest.mock import Mock, call
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, call
 
-from kalinka_plugin_sdk.datamodel import AudioInfo, PlayerState
-from kalinka_server.config_model import KalinkaConfig
-from kalinka_plugin_sdk.events import (
-    EventType,
-    StateChangedEvent,
-    TracksAddedEvent,
-    TracksRemovedEvent,
-    RequestMoreTracksEvent,
+from kalinka_plugin_sdk.datamodel import (
+    AudioInfo,
+    PlaybackState,
+    PlayerStateEnum,
+    Album,
+    EntityId,
+    EntityType,
 )
 from kalinka_plugin_sdk.inputmodule import TrackInfo, Track, TrackUrl
-from kalinka_plugin_sdk.datamodel import Album, EntityId, EntityType
-from kalinka_server.playqueue import PlayQueue
-from kalinka_server.async_common import EventEmitter
+from kalinka_plugin_sdk import (
+    PlayQueueEventType,
+    PlaybackStateChangedEvent,
+    TracksAddedEvent,
+    TracksRemovedEvent,
+    TrackMovedEvent,
+    RequestMoreTracksEvent,
+    EventEmitter,
+)
+from kalinka_server.config_model import KalinkaConfig
+from kalinka_server.playqueue import PlayQueueImpl
+from native_player.native_player import AudioGraphNodeState, StreamErrorSource
 
 
 def to_track_id(id: str):
@@ -34,21 +44,21 @@ def create_track(id: str):
     )
 
 
-def url1():
+async def url1():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-3.flac",
         format="FLAC",
     )
 
 
-def url2():
+async def url2():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-4.flac",
         format="FLAC",
     )
 
 
-def url3():
+async def url3():
     return TrackUrl(
         url="https://getsamplefiles.com/download/flac/sample-2.flac",
         format="FLAC",
@@ -56,8 +66,8 @@ def url3():
 
 
 def player_state_converter(*args, **kwargs):
-    if args[0] == EventType.StateChanged:
-        return PlayerState(**args[1])
+    if args[0] == PlayQueueEventType.PlaybackStateChanged:
+        return PlaybackState(**args[1])
     return args[1]
 
 
@@ -73,27 +83,28 @@ def config():
 
 
 @pytest.fixture
-def playqueue(config, event_emitter):
-    pq = PlayQueue(config, event_emitter)
+async def playqueue(config, event_emitter):
+    pq = PlayQueueImpl(config, event_emitter)
+    await pq.__aenter__()
 
     yield pq
 
-    pq.terminate()
+    await pq.__aexit__(None, None, None)
 
     del pq
 
 
 def assert_call_args(actual_args, expected_args, position):
     for actual, expected in zip(actual_args, expected_args):
-        if isinstance(expected, StateChangedEvent):
-            # Compare StateChangedEvent payloads
+        if isinstance(expected, PlaybackStateChangedEvent):
+            # Compare PlaybackStateChangedEvent payloads
             assert isinstance(
-                actual, StateChangedEvent
-            ), f"at position {position} expected StateChangedEvent but got {type(actual)}"
+                actual, PlaybackStateChangedEvent
+            ), f"at position {position} expected PlaybackStateChangedEvent but got {type(actual)}"
             actual_state = actual.state
             expected_state = expected.state
-            # ignore timestamp and position for PlayerState comparisons
-            actual_state.timestamp = expected_state.timestamp
+            # ignore timestamp and position for PlaybackState comparisons
+            actual_state.timestamp_ns = expected_state.timestamp_ns
             if (
                 actual_state.position is not None
                 and expected_state.position is not None
@@ -110,6 +121,9 @@ def assert_call_args(actual_args, expected_args, position):
             assert (
                 actual.tracks == expected.tracks
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
+            assert (
+                actual.index == expected.index
+            ), f"at position {position} actual index={actual.index} expected index={expected.index}"
         elif isinstance(expected, TracksRemovedEvent):
             # Compare TracksRemovedEvent payloads
             assert isinstance(
@@ -129,33 +143,116 @@ def assert_call_args(actual_args, expected_args, position):
             ), f"at position {position} actual: {actual_args}\nexpected: {expected_args}"
 
 
+def _extract_event_sequence(calls):
+    events = []
+    for event_call in calls:
+        if not event_call[0] == "dispatch":
+            continue
+        if not event_call[1]:
+            continue
+        event = event_call[1][0]
+        state_name = "-"
+        if isinstance(event, PlaybackStateChangedEvent):
+            state = event.state.state
+            if isinstance(state, PlayerStateEnum):
+                state_name = state.name
+        events.append((type(event).__name__, state_name))
+    return events
+
+
+def _format_state_diff_table(expected_events, actual_events):
+    max_len = max(len(expected_events), len(actual_events), 1)
+    idx_width = max(3, len(str(max_len - 1)))
+    expected_type_width = max(
+        13, max((len(event_type) for event_type, _ in expected_events), default=0)
+    )
+    expected_state_width = max(
+        14, max((len(state) for _, state in expected_events), default=0)
+    )
+    actual_type_width = max(
+        11, max((len(event_type) for event_type, _ in actual_events), default=0)
+    )
+    actual_state_width = max(
+        12, max((len(state) for _, state in actual_events), default=0)
+    )
+
+    header = (
+        f"{'idx':<{idx_width}} | "
+        f"{'expected event':<{expected_type_width}} | "
+        f"{'expected state':<{expected_state_width}} | "
+        f"{'actual event':<{actual_type_width}} | "
+        f"{'actual state':<{actual_state_width}} | match"
+    )
+    sep = (
+        f"{'-' * idx_width}-+-"
+        f"{'-' * expected_type_width}-+-"
+        f"{'-' * expected_state_width}-+-"
+        f"{'-' * actual_type_width}-+-"
+        f"{'-' * actual_state_width}-+------"
+    )
+    rows = [header, sep]
+
+    for i in range(max_len):
+        expected_type, expected_state = (
+            expected_events[i] if i < len(expected_events) else ("-", "-")
+        )
+        actual_type, actual_state = (
+            actual_events[i] if i < len(actual_events) else ("-", "-")
+        )
+        match = (
+            "yes"
+            if (expected_type, expected_state) == (actual_type, actual_state)
+            else "no"
+        )
+        rows.append(
+            f"{i:<{idx_width}} | "
+            f"{expected_type:<{expected_type_width}} | "
+            f"{expected_state:<{expected_state_width}} | "
+            f"{actual_type:<{actual_type_width}} | "
+            f"{actual_state:<{actual_state_width}} | {match}"
+        )
+
+    return "\n".join(rows)
+
+
 def assert_has_calls(event_emitter, expected_calls):
     i = 0
-    assert len(event_emitter.mock_calls) == len(expected_calls)
-    for actual_call, expected_call in zip(event_emitter.mock_calls, expected_calls):
-        assert actual_call[0] == expected_call[0]
-        assert_call_args(actual_call[1], expected_call[1], i)
-        i += 1
+    try:
+        assert len(event_emitter.mock_calls) == len(expected_calls)
+        for actual_call, expected_call in zip(event_emitter.mock_calls, expected_calls):
+            assert actual_call[0] == expected_call[0]
+            assert_call_args(actual_call[1], expected_call[1], i)
+            i += 1
+    except AssertionError:
+        expected_events = _extract_event_sequence(expected_calls)
+        actual_events = _extract_event_sequence(event_emitter.mock_calls)
+        table = _format_state_diff_table(expected_events, actual_events)
+        print("\nPlayback state mutations (expected vs actual):")
+        print(table)
+        raise
 
 
-def test_add_remove_track(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_add_remove_track(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    playqueue.add([track])
-    playqueue.remove([0])
-    time.sleep(1)
+    await playqueue.add([track])
+    await playqueue.remove([0])
+    await asyncio.sleep(1)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(state=PlayerState(state="STOPPED", index=0, position=0))
+            PlaybackStateChangedEvent(
+                state=PlaybackState(state=PlayerStateEnum.STOPPED, index=0, position=0)
+            )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [], index=0)
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track.metadata,
@@ -164,57 +261,62 @@ def test_add_remove_track(event_emitter, playqueue):
         ),
         call.dispatch(TracksRemovedEvent(indices=[0])),
         call.dispatch(
-            StateChangedEvent(state=PlayerState(state="STOPPED", index=0, position=0))
+            PlaybackStateChangedEvent(
+                state=PlaybackState(state=PlayerStateEnum.STOPPED, index=0, position=0)
+            )
         ),
     ]
 
     assert_has_calls(event_emitter, expected_calls)
 
 
-def test_play(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_play(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    playqueue.add([track])
-    playqueue.play()
-    time.sleep(4)
+    await playqueue.add([track])
+    await playqueue.play()
+    await asyncio.sleep(4)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(state="STOPPED", index=0, position=0, timestamp=1)
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED, index=0, position=0, timestamp_ns=1
+                )
             )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [])
+            TracksAddedEvent(tracks=[track.metadata] if track.metadata else [], index=0)
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
@@ -225,7 +327,7 @@ def test_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -233,59 +335,60 @@ def test_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-def test_switch_track(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_switch_track(event_emitter, playqueue):
     track1 = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
     track2 = TrackInfo(
         id=to_track_id("2"), metadata=create_track("2"), link_retriever=url2
     )
-    playqueue.add([track1, track2])
-    playqueue.play(0)
-    time.sleep(4)
-    playqueue.play(1)
-    time.sleep(4)
+    await playqueue.add([track1, track2])
+    await playqueue.play(0)
+    await asyncio.sleep(4)
+    await playqueue.play(1)
+    await asyncio.sleep(4)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            TracksAddedEvent(tracks=[track1.metadata, track2.metadata])  # type: ignore
+            TracksAddedEvent(tracks=[track1.metadata, track2.metadata], index=0)  # type: ignore
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
@@ -296,27 +399,27 @@ def test_switch_track(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=1,
                     position=0,
                     current_track=track2.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=1,
                     position=0,
                     current_track=track2.metadata,
@@ -327,7 +430,7 @@ def test_switch_track(event_emitter, playqueue):
                         duration_ms=14814,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -335,7 +438,8 @@ def test_switch_track(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-def test_play_next(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_play_next(event_emitter, playqueue):
     track1 = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
@@ -345,56 +449,57 @@ def test_play_next(event_emitter, playqueue):
     track3 = TrackInfo(
         id=to_track_id("3"), metadata=create_track("3"), link_retriever=url3
     )
-    playqueue.add([track1, track2, track3])
-    playqueue.play(0)
-    time.sleep(4)
-    playqueue.play_next(1)
-    time.sleep(2)
-    playqueue.play(2)
-    time.sleep(4)
+    await playqueue.add([track1, track2, track3])
+    await playqueue.play(0)
+    await asyncio.sleep(4)
+    await playqueue.play_next(1)
+    await asyncio.sleep(2)
+    await playqueue.play(2)
+    await asyncio.sleep(4)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
             TracksAddedEvent(
-                tracks=[track1.metadata, track2.metadata, track3.metadata]  # type: ignore
+                tracks=[track1.metadata, track2.metadata, track3.metadata],  # type: ignore
+                index=0,
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=0,
                     position=0,
                     current_track=track1.metadata,
@@ -405,27 +510,27 @@ def test_play_next(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=2,
                     position=0,
                     current_track=track3.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=2,
                     position=0,
                     current_track=track3.metadata,
@@ -436,7 +541,7 @@ def test_play_next(event_emitter, playqueue):
                         duration_ms=90632,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -444,121 +549,61 @@ def test_play_next(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-def test_play_pause_stop_play(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_play_pause_stop_play(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    time.sleep(1)
-    playqueue.add([track])
-    playqueue.play()
-    time.sleep(4)
-    playqueue.pause(True)
-    time.sleep(2)
-    playqueue.stop()
-    time.sleep(2)
-    playqueue.play()
-    time.sleep(4)
+    await asyncio.sleep(1)
+    await playqueue.add([track])
+    await playqueue.play()
+    await asyncio.sleep(4)
+    await playqueue.pause(True)
+    await asyncio.sleep(2)
+    await playqueue.stop()
+    await asyncio.sleep(2)
+    await playqueue.play()
+    await asyncio.sleep(4)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
-        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata], index=0)),  # type: ignore
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
-                )
-            )
-        ),
-        call.dispatch(RequestMoreTracksEvent()),
-        call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
-                    index=0,
-                    position=0,
-                    current_track=track.metadata,
-                    mime_type="FLAC",
-                    timestamp=1,
-                )
-            )
-        ),
-        call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
-                    index=0,
-                    position=0,
-                    current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
-                    ),
-                    mime_type="FLAC",
-                    timestamp=1,
-                )
-            )
-        ),
-        call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PAUSED",
-                    index=0,
-                    position=0,
-                    current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
-                    ),
-                    mime_type="FLAC",
-                    timestamp=1,
-                )
-            )
-        ),
-        call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
-                    index=0,
-                    position=0,
-                    current_track=track.metadata,
-                    mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
@@ -569,7 +614,68 @@ def test_play_pause_stop_play(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
+                )
+            )
+        ),
+        call.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PAUSED,
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp_ns=1,
+                )
+            )
+        ),
+        call.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp_ns=1,
+                )
+            )
+        ),
+        call.dispatch(RequestMoreTracksEvent()),
+        call.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    mime_type="FLAC",
+                    timestamp_ns=1,
+                )
+            )
+        ),
+        call.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp_ns=1,
                 )
             )
         ),
@@ -577,56 +683,57 @@ def test_play_pause_stop_play(event_emitter, playqueue):
     assert_has_calls(event_emitter, expected_calls)
 
 
-def test_seek(event_emitter, playqueue):
+@pytest.mark.asyncio
+async def test_seek(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    time.sleep(1)
-    playqueue.add([track])
-    playqueue.play()
-    time.sleep(4)
-    playqueue.seek(3000)
-    time.sleep(4)
+    await asyncio.sleep(1)
+    await playqueue.add([track])
+    await playqueue.play()
+    await asyncio.sleep(4)
+    await playqueue.seek(3000)
+    await asyncio.sleep(4)
     expected_calls = [
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
-        call.dispatch(TracksAddedEvent(tracks=[track.metadata])),  # type: ignore
+        call.dispatch(TracksAddedEvent(tracks=[track.metadata], index=0)),  # type: ignore
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="STOPPED",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.STOPPED,
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(RequestMoreTracksEvent()),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
                     index=0,
                     position=3000,
                     current_track=track.metadata,
@@ -637,26 +744,14 @@ def test_seek(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
                 )
             )
         ),
         call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="BUFFERING",
-                    index=0,
-                    position=0,
-                    current_track=track.metadata,
-                    mime_type="FLAC",
-                    timestamp=1,
-                )
-            )
-        ),
-        call.dispatch(
-            StateChangedEvent(
-                state=PlayerState(
-                    state="PLAYING",
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.BUFFERING,
                     index=0,
                     position=0,
                     current_track=track.metadata,
@@ -667,9 +762,460 @@ def test_seek(event_emitter, playqueue):
                         duration_ms=13839,
                     ),
                     mime_type="FLAC",
-                    timestamp=1,
+                    timestamp_ns=1,
+                )
+            )
+        ),
+        call.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(
+                    state=PlayerStateEnum.PLAYING,
+                    index=0,
+                    position=0,
+                    current_track=track.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=32000,
+                        bits_per_sample=24,
+                        channels=2,
+                        duration_ms=13839,
+                    ),
+                    mime_type="FLAC",
+                    timestamp_ns=1,
                 )
             )
         ),
     ]
     assert_has_calls(event_emitter, expected_calls)
+
+
+# ── Move track tests ──────────────────────────────────────────────────────────
+
+
+def make_tracks(n: int) -> list[TrackInfo]:
+    """Create n TrackInfo objects with distinct ids."""
+    return [
+        TrackInfo(
+            id=to_track_id(str(i)),
+            metadata=create_track(str(i)),
+            link_retriever=url1,
+        )
+        for i in range(1, n + 1)
+    ]
+
+
+def dispatched_events(mock_emitter) -> list:
+    """Return the list of events passed to event_emitter.dispatch()."""
+    return [c[0][0] for c in mock_emitter.dispatch.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_move_currently_playing_track_forward(event_emitter, playqueue):
+    """Moving the current track forward updates current_track_id and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    await playqueue.move(1, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 1
+    assert events[0].to_index == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+
+
+@pytest.mark.asyncio
+async def test_move_currently_playing_track_backward(event_emitter, playqueue):
+    """Moving the current track backward updates current_track_id and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    await playqueue.move(2, 0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 2
+    assert events[0].to_index == 0
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 0
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_move_non_current_track_before_current_to_after(event_emitter, playqueue):
+    """Moving a track before the current track to after it shifts current_track_id left."""
+    # Queue: [0,1,2,3], current=2. Move 0→3: [1,2,3,0]. current should become 1.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    await playqueue.move(0, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 0
+    assert events[0].to_index == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 1
+    assert playqueue.current_track_id == 1
+
+
+@pytest.mark.asyncio
+async def test_move_non_current_track_after_current_to_before(event_emitter, playqueue):
+    """Moving a track after the current track to before it shifts current_track_id right."""
+    # Queue: [0,1,2,3], current=1. Move 3→0: [3,0,1,2]. current should become 2.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    await playqueue.move(3, 0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 3
+    assert events[0].to_index == 0
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 2
+    assert playqueue.current_track_id == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_happens_only_for_http_stream_errors(playqueue):
+    playqueue._retry_attempted = False
+    playqueue._retry_current_track_async = AsyncMock()
+
+    http_error_state = SimpleNamespace(
+        state=AudioGraphNodeState.ERROR,
+        error=SimpleNamespace(
+            source=StreamErrorSource.HTTP_STREAM,
+            message="temporary http failure",
+        ),
+        position=1234,
+    )
+
+    await playqueue._process_state_update(http_error_state)
+
+    assert playqueue._retry_attempted is True
+    playqueue._retry_current_track_async.assert_called_once_with(1234)
+
+
+@pytest.mark.asyncio
+async def test_retry_is_skipped_for_non_http_errors(playqueue):
+    playqueue._retry_attempted = False
+    playqueue._retry_current_track_async = AsyncMock()
+
+    non_http_error_state = SimpleNamespace(
+        state=AudioGraphNodeState.ERROR,
+        error=SimpleNamespace(
+            source=StreamErrorSource.AUDIO_OUTPUT,
+            message="device output failure",
+        ),
+        position=50,
+        timestamp=time.monotonic_ns(),
+        stream_info=None,
+    )
+
+    await playqueue._process_state_update(non_http_error_state)
+
+    assert playqueue._retry_attempted is False
+    playqueue._retry_current_track_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_move_unrelated_tracks_no_state_change_event(event_emitter, playqueue):
+    """Moving tracks that don't affect the current index emits only TrackMovedEvent."""
+    # Queue: [0,1,2,3], current=0. Move 2→3: current stays at 0.
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    event_emitter.reset_mock()
+
+    await playqueue.move(2, 3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TrackMovedEvent)
+    assert events[0].from_index == 2
+    assert events[0].to_index == 3
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_move_invalid_indices_no_events(event_emitter, playqueue):
+    """Out-of-bounds move calls are silently ignored and emit no events."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    await playqueue.move(0, 99)
+    await playqueue.move(99, 0)
+
+    event_emitter.dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_move_invalidates_prefetched_next_track(event_emitter, playqueue):
+    """When a move makes the prefetched next track wrong, it is removed and re-prefetch is triggered.
+
+    Scenario: [T0,T1,T2,T3], current=1, prefetch={1:url_T1, 2:url_T2}.
+    Move T2 from 2→0 → [T2,T0,T1,T3].
+    After remap: current→2, prepared={2:url_T1, 0:url_T2}, expected_next=3.
+    Entry 0 is stale → must be evicted and re-prefetch scheduled.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[1] = (
+        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        0,
+    )
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        1,
+    )
+    event_emitter.reset_mock()
+
+    # move T2 (index 2) before the current track → next slot becomes wrong
+    await playqueue.move(2, 0)
+
+    # stale prefetch entry at remapped index 0 must be gone
+    assert 0 not in playqueue.prepared_tracks
+    # current track entry (remapped to 2) must be kept
+    assert 2 in playqueue.prepared_tracks
+    # a re-prefetch task must have been scheduled
+    assert playqueue._prefetch_task is not None
+
+
+@pytest.mark.asyncio
+async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
+    """When a move keeps the prefetched next track correct, it is preserved with no re-prefetch.
+
+    Scenario: [T0,T1,T2,T3], current=1, prefetch={1:url_T1, 2:url_T2}.
+    Move T3 from 3→0 → [T3,T0,T1,T2].
+    After remap: current→2, prepared={2:url_T1, 3:url_T2}, expected_next=3.
+    Entry 3 matches → keep both, no re-prefetch.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[1] = (
+        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        0,
+    )
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        1,
+    )
+    event_emitter.reset_mock()
+
+    # move T3 (index 3) to position 0 — an unrelated track, next slot stays correct
+    await playqueue.move(3, 0)
+
+    # both entries must survive (remapped to new indices)
+    assert 2 in playqueue.prepared_tracks  # current track (remapped 1→2)
+    assert 3 in playqueue.prepared_tracks  # next track (remapped 2→3, still correct)
+    assert len(playqueue.prepared_tracks) == 2
+    # no re-prefetch should have been triggered
+    assert playqueue._prefetch_task is None
+
+
+# ── Insert (add with index) tests ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_with_no_index_appends(event_emitter, playqueue):
+    """add(tracks) with no index appends; TracksAddedEvent.index == original length."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert len(playqueue.track_list) == 4
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_end_explicitly(event_emitter, playqueue):
+    """add(tracks, index=len) is identical to appending."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert len(playqueue.track_list) == 4
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_add_insert_after_current_not_at_next(event_emitter, playqueue):
+    """Inserting after current+1 emits TracksAddedEvent only; current unchanged."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    event_emitter.reset_mock()
+
+    # insert at 3, which is > current+1=2
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=3)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 1
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 3
+    assert playqueue.current_track_id == 1
+    assert len(playqueue.track_list) == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_next_slot_invalidates_prefetch(event_emitter, playqueue):
+    """Inserting exactly at current+1 evicts stale prefetch and schedules re-prefetch."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    # Simulate a prefetched next track at index 2
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        42,
+    )
+    event_emitter.reset_mock()
+
+    # Insert at current+1=2 — the new track displaces the prefetched one
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=2)
+
+    # Stale prefetch (shifted to 3) must be evicted
+    assert 3 not in playqueue.prepared_tracks
+    # A re-prefetch task must have been scheduled
+    assert playqueue._prefetch_task is not None
+    assert len(playqueue.track_list) == 5
+    assert playqueue.current_track_id == 1
+
+
+@pytest.mark.asyncio
+async def test_add_insert_before_current(event_emitter, playqueue):
+    """Inserting before current shifts current_track_id right and emits PlaybackStateChangedEvent."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=1)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 1
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+    assert len(playqueue.track_list) == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_at_current_position(event_emitter, playqueue):
+    """Inserting at current index shifts current right (new track slides in before it)."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_track = make_tracks(1)
+    await playqueue.add(new_track, index=2)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 2
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 3
+    assert playqueue.current_track_id == 3
+
+
+@pytest.mark.asyncio
+async def test_add_insert_multiple_tracks_before_current(event_emitter, playqueue):
+    """Inserting N tracks before current shifts current_track_id by N."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 2
+    event_emitter.reset_mock()
+
+    new_tracks = make_tracks(3)
+    await playqueue.add(new_tracks, index=0)
+
+    events = dispatched_events(event_emitter)
+    assert len(events) == 2
+    assert isinstance(events[0], TracksAddedEvent)
+    assert events[0].index == 0
+    assert len(events[0].tracks) == 3
+    assert isinstance(events[1], PlaybackStateChangedEvent)
+    assert events[1].state.index == 5
+    assert playqueue.current_track_id == 5
+
+
+@pytest.mark.asyncio
+async def test_add_insert_clamped(event_emitter, playqueue):
+    """Negative index is clamped to 0; index beyond len is clamped to len."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    # Negative → clamped to 0
+    await playqueue.add(make_tracks(1), index=-5)
+    events = dispatched_events(event_emitter)
+    assert events[0].index == 0
+
+    event_emitter.reset_mock()
+
+    # Beyond len → clamped to len
+    await playqueue.add(make_tracks(1), index=999)
+    events = dispatched_events(event_emitter)
+    assert events[0].index == 4  # len was 4 after previous insert
+
+
+@pytest.mark.asyncio
+async def test_add_insert_preserves_valid_prefetch(event_emitter, playqueue):
+    """Inserting after the next slot keeps a valid prefetched entry intact.
+
+    Queue: [T0,T1,T2,T3], current=1, prefetch={2: url_T2}.
+    Insert at 3 (> current+1=2) → prefetch at 2 is still expected_next → keep.
+    """
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 1
+    playqueue.prepared_tracks[2] = (
+        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        7,
+    )
+    event_emitter.reset_mock()
+
+    await playqueue.add(make_tracks(1), index=3)
+
+    # Prefetch at 2 must still be there (insert at 3 didn't displace it)
+    assert 2 in playqueue.prepared_tracks
+    # No re-prefetch triggered
+    assert playqueue._prefetch_task is None
+    assert len(playqueue.track_list) == 5

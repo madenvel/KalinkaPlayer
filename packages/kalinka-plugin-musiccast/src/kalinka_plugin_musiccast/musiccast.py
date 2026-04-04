@@ -1,23 +1,25 @@
+import asyncio
 import json
 import logging
 import random
 import socket
-import threading
 import time
 import urllib.parse
 from typing import Any, Dict, Optional
 
 import httpx
-from kalinka_plugin_sdk.datamodel import PlayerState, PlayerStateEnum
+from kalinka_plugin_sdk.datamodel import PlaybackState, PlayerStateEnum
+from kalinka_plugin_sdk.ext_device_events import (
+    DevicePowerStateChangedEvent,
+    ExtDeviceState,
+    VolumeChangedEvent,
+)
 import netifaces
 from ssdpy import SSDPClient
 
-from kalinka_plugin_sdk.api import PlayQueueAPI, EventEmitterAPI
-from kalinka_plugin_sdk.events import (
-    VolumeChangedEvent,
-    StateChangedEvent,
-    AnyEventPayload,
-)
+from kalinka_plugin_sdk.api import EventEmitter, EventListener, ReplayEvent
+from kalinka_plugin_sdk.events import PlayQueueEvent, PlayQueueEventType, PlayQueueState
+from kalinka_plugin_sdk.events import PlaybackStateChangedEvent
 from kalinka_plugin_sdk.ext_device import (
     DeviceVolume,
     ExternalOutputDevice,
@@ -312,35 +314,27 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
     def __init__(
         self,
         config: KalinkaPluginMusiccastConfig,
-        playqueue: PlayQueueAPI,
-        event_emitter: EventEmitterAPI,
+        event_emitter: EventEmitter,
+        listener: EventListener[PlayQueueEventType, PlayQueueEvent, PlayQueueState],
     ):
-        self.playqueue = playqueue
         self.event_emitter = event_emitter
+        self.listener = listener
         self.connected_input = config.connected_input
         self.zone_name = config.zone_name
         self.volume_step_to_db = config.volume_step_to_db
         self.auto_volume = config.auto_volume_correction
         self.discovery_timeout = config.discovery_timeout
-        self.session = httpx.Client(timeout=5)
+        self.session = httpx.AsyncClient(timeout=5)
         self.ready = False
 
-        if config.device_addr and config.device_addr.strip():
-            # Use configured address
-            device_addr = config.device_addr
-            device_port = config.device_port
-            yxc_control_url = "/YamahaExtendedControl/v1/"
-            logger.info(
-                f"Using configured MusicCast device: {device_addr}:{device_port}"
-            )
-            self.base_url = f"http://{device_addr}:{device_port}{yxc_control_url}"
-            self.get_ready()
-        else:
-            self.run_discovery()
+        self.config = config
+        self.base_url = None
+        self.tasks = []
+        self._discovery_task = None
 
-    def get_ready(self):
+    async def get_ready(self):
         # Test connection and get initial status
-        status = self._get_status()
+        status = await self._get_status()
         self.volume = DeviceVolume(
             max_volume=status["max_volume"],
             current_volume=status["volume"],
@@ -352,30 +346,20 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if self.udp_port is None:
             raise Exception("Could not find available UDP port")
         logger.info(f"Using UDP port {self.udp_port}")
-        self.terminate = False
+        self.shutdown_event = asyncio.Event()
         self.ready = True
-        self.event_loop_thread = threading.Thread(
-            target=self._event_loop, name="MusicCastEventLoopThread", daemon=True
-        )
-        self.event_loop_thread.start()
-        self.timer_thread = threading.Thread(
-            target=self._timer_loop, name="MusicCastTimerThread", daemon=True
-        )
-        self.timer_thread.start()
-        self.volume_changed_event = threading.Event()
-        threading.Thread(
-            target=self._event_sender, name="MusicCastEventSenderThread", daemon=True
-        ).start()
 
-    def run_discovery(self):
-        self.discovery_thread = threading.Thread(
-            target=self._run_discovery_thread,
-            name="MusicCastDiscoveryThread",
-            daemon=True,
+        # Set initial device state after we have retrieved it from the device
+        # This must be done before any event emission tasks start
+        power_on = status["power"] == "on" and status["input"] == self.connected_input
+        initial_state = ExtDeviceState(
+            power_on=power_on,
+            volume=self.volume,
         )
-        self.discovery_thread.start()
+        self.event_emitter.set_initial_state(initial_state)
 
-    def _run_discovery_thread(self):
+    async def run_discovery(self):
+        """Run SSDP discovery to find MusicCast device"""
         interfaces = get_network_interfaces()
         if not interfaces:
             logger.error("No network interfaces found for discovery")
@@ -384,112 +368,231 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         for iface_name, iface_ip in interfaces:
             logger.info(f"Running discovery on interface {iface_name} ({iface_ip})")
             device_info = discover_musiccast_devices(
-                iface=iface_name, timeout_seconds=self.discovery_timeout
+                iface=iface_name, timeout_seconds=self.config.discovery_timeout
             )
             if device_info:
                 logger.info(f"Device control URL: {device_info['api_base_url']}")
                 self.base_url = device_info["api_base_url"]
-                self.get_ready()
+                await self.get_ready()
                 return
 
         logger.error("MusicCast device discovery failed on all interfaces")
 
-    def __del__(self):
-        """Ensure clean shutdown when object is destroyed"""
-        self.shutdown()
+    async def start(self):
+        """Start the MusicCast device and initialize tasks"""
+        logger.info("Starting MusicCast device...")
 
-    def shutdown(self):
-        """Gracefully shutdown all threads and close connections"""
-        logger.info("Shutting down MusicCast device...")
-        self.terminate = True
-        if not self.ready:
-            return
+        # Initialize device connection
+        if self.config.device_addr and self.config.device_addr.strip():
+            # Use configured address
+            device_addr = self.config.device_addr
+            device_port = self.config.device_port
+            yxc_control_url = "/YamahaExtendedControl/v1/"
+            logger.info(
+                f"Using configured MusicCast device: {device_addr}:{device_port}"
+            )
+            self.base_url = f"http://{device_addr}:{device_port}{yxc_control_url}"
+            await self.get_ready()
+        else:
+            # Run discovery with retries as a task
+            self._discovery_task = asyncio.create_task(
+                self._discovery_worker(max_retries=3)
+            )
 
-        # Wait for threads to finish (with timeout)
-        if hasattr(self, "event_loop_thread") and self.event_loop_thread.is_alive():
-            self.event_loop_thread.join(timeout=2)
-        if hasattr(self, "timer_thread") and self.timer_thread.is_alive():
-            self.timer_thread.join(timeout=2)
+        # Create and start asyncio tasks
+        self.tasks.append(asyncio.create_task(self._event_loop()))
+        self.tasks.append(asyncio.create_task(self._timer_loop()))
+        self.tasks.append(asyncio.create_task(self._event_sender()))
+        self.tasks.append(asyncio.create_task(self._playback_state_listener()))
+
+    async def terminate(self):
+        """Gracefully shutdown all tasks and close connections"""
+        logger.info("Terminating MusicCast device...")
+        if self.ready:
+            self.shutdown_event.set()
+
+        # Cancel discovery task if running
+        if self._discovery_task and not self._discovery_task.done():
+            self._discovery_task.cancel()
+            try:
+                await self._discovery_task
+            except asyncio.CancelledError:
+                pass
+
+        # Cancel all tasks
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for all tasks to complete
+        if self.tasks:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
 
         # Close HTTP session
         if hasattr(self, "session"):
-            self.session.close()
+            await self.session.aclose()
+
+    def __del__(self):
+        """Ensure clean shutdown when object is destroyed"""
+        # Note: Cannot call async methods in __del__, cleanup should be handled explicitly
 
     def _db_to_device_units(self, db):
         return round(db / self.volume_step_to_db)
 
-    # This event sender runs in its own thread
+    # This event sender runs in its own task
     # and used to throttle volume change notifications to once per second
-    def _event_sender(self):
+    async def _event_sender(self):
         last_sent_volume = None
         last_sent_at = 0.0
         debounce_sec = 0.10
         min_interval_sec = 0.00  # set to 0.10 to cap at 10 Hz
+        volume_changed = asyncio.Event()
+        self._volume_changed_event = volume_changed
 
-        while not self.terminate:
-            self.volume_changed_event.wait()
-            self.volume_changed_event.clear()
+        try:
+            while not self.shutdown_event.is_set():
+                try:
+                    # Wait for volume change with timeout to allow checking shutdown_event
+                    await asyncio.wait_for(volume_changed.wait(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
 
-            logger.info(f"Volume changed event received: {self.volume.current_volume}")
-            # Debounce: wait for quiet
-            while self.volume_changed_event.wait(timeout=debounce_sec):
-                self.volume_changed_event.clear()
+                volume_changed.clear()
 
-            target = self.volume.current_volume
+                logger.info(
+                    f"Volume changed event received: {self.volume.current_volume}"
+                )
+                # Debounce: wait for quiet
+                try:
+                    while True:
+                        await asyncio.wait_for(
+                            volume_changed.wait(), timeout=debounce_sec
+                        )
+                        volume_changed.clear()
+                except asyncio.TimeoutError:
+                    pass
 
-            # Throttle: ensure at least min_interval between sends
-            if min_interval_sec > 0:
-                now = time.monotonic()
-                remaining = (last_sent_at + min_interval_sec) - now
-                if remaining > 0:
-                    # During throttle wait, keep coalescing new changes
-                    if self.volume_changed_event.wait(timeout=remaining):
-                        # new change arrived; restart loop to re-debounce
-                        self.volume_changed_event.clear()
+                target = self.volume.current_volume
+
+                # Throttle: ensure at least min_interval between sends
+                if min_interval_sec > 0:
+                    now = time.monotonic()
+                    remaining = (last_sent_at + min_interval_sec) - now
+                    if remaining > 0:
+                        # During throttle wait, keep coalescing new changes
+                        try:
+                            await asyncio.wait_for(
+                                volume_changed.wait(), timeout=remaining
+                            )
+                            # new change arrived; restart loop to re-debounce
+                            volume_changed.clear()
+                            continue
+                        except asyncio.TimeoutError:
+                            pass
+
+                if target != last_sent_volume:
+                    self.event_emitter.dispatch(
+                        VolumeChangedEvent(
+                            volume=DeviceVolume(
+                                max_volume=self.volume.max_volume,
+                                current_volume=target,
+                                volume_gain=self.volume.volume_gain,
+                            )
+                        )
+                    )
+                    last_sent_volume = target
+                    last_sent_at = time.monotonic()
+        except asyncio.CancelledError:
+            logger.debug("Event sender task cancelled")
+            raise
+
+    async def _playback_state_listener(self):
+        """Listen to playback state changes and call appropriate handlers"""
+        try:
+            logger.debug("Playback state listener started")
+            async with self.listener.stream(
+                [PlayQueueEventType.PlaybackStateChanged]
+            ) as stream:  # type: ignore
+                async for item in stream:
+                    # Skip replay events as they are just initial state
+                    if isinstance(item, ReplayEvent):
+                        logger.debug(
+                            f"Received replay event with state: {item.state.playback_state}"
+                        )
                         continue
 
-            if target != last_sent_volume:
-                self.event_emitter.dispatch(VolumeChangedEvent(volume=target))
-                last_sent_volume = target
-                last_sent_at = time.monotonic()
+                    # Handle actual playback state change events
+                    if isinstance(item, PlaybackStateChangedEvent):
+                        new_state = item.state.state
+                        logger.debug(f"Playback state changed to: {new_state}")
 
-    def _timer_loop(self):
+                        if new_state == PlayerStateEnum.PLAYING:
+                            logger.info("Playback started, calling _on_playing")
+                            await self._on_playing(item.state)
+                        elif new_state == PlayerStateEnum.STOPPED:
+                            logger.info("Playback stopped, calling _on_stopped")
+                            await self._on_stopped()
+        except asyncio.CancelledError:
+            logger.debug("Playback state listener task cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in playback state listener: {e}")
+            raise
+
+    async def _timer_loop(self):
+        """Timer loop that periodically polls device status"""
         # Recommended poll time for main zone is 5 seconds
         # But we do not poll and instead rely on events
-        while self.terminate is False:
-            try:
-                self._get_status(
-                    headers={
-                        "X-AppName": "MusicCast/1.0(Linux)",
-                        "X-AppPort": str(self.udp_port),
-                    }
-                )
+        try:
+            while not self.shutdown_event.is_set():
+                try:
+                    await self._get_status(
+                        headers={
+                            "X-AppName": "MusicCast/1.0(Linux)",
+                            "X-AppPort": str(self.udp_port),
+                        }
+                    )
 
-                time.sleep(300)
-            except Exception as e:
-                logger.error(e)
-                time.sleep(10)
+                    await asyncio.sleep(300)
+                except (httpx.ConnectError, httpx.TimeoutException, ConnectionError):
+                    # Network error - trigger rediscovery and retry sooner
+                    logger.warning(
+                        "Network error in timer loop, triggering rediscovery"
+                    )
+                    await self.rediscover_device()
+                    await asyncio.sleep(10)
+                except Exception as e:
+                    logger.error(f"Timer loop error: {e}")
+                    await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            logger.debug("Timer loop task cancelled")
+            raise
 
-    def _event_loop(self):
-        while self.terminate is False:
-            udp_socket = None
-            try:
-                udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                # Set socket timeout to allow periodic checking of terminate flag
-                udp_socket.settimeout(5.0)
+    async def _event_loop(self):
+        """Event loop that listens for UDP events from MusicCast device"""
+        try:
+            while not self.shutdown_event.is_set():
+                udp_socket = None
+                try:
+                    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    # Set socket non-blocking for async operation
+                    udp_socket.setblocking(False)
 
-                # Bind to local interface, not remote device address
-                udp_socket.bind(("", self.udp_port))
-                logger.info(
-                    f"Listening for MusicCast events on 0.0.0.0:{self.udp_port}"
-                )
+                    # Bind to local interface, not remote device address
+                    udp_socket.bind(("", self.udp_port))
+                    logger.info(
+                        f"Listening for MusicCast events on 0.0.0.0:{self.udp_port}"
+                    )
 
-                device_addr = urllib.parse.urlparse(self.base_url).hostname
+                    loop = asyncio.get_event_loop()
+                    device_addr = urllib.parse.urlparse(self.base_url).hostname
 
-                while self.terminate is False:
-                    try:
-                        # Receive data from the client with larger buffer
-                        data, client_address = udp_socket.recvfrom(4096)
+                    while not self.shutdown_event.is_set():
+                        try:
+                            data, client_address = await loop.sock_recvfrom(udp_socket, 4096)
+                        except OSError as e:
+                            logger.error(f"Socket error in event loop: {e}")
+                            break
 
                         # Validate that the event came from the expected device
                         if client_address[0] != device_addr:
@@ -500,32 +603,28 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                         try:
                             event_json = json.loads(data.decode("utf-8"))
-                            self._handle_event(event_json)
+                            await self._handle_event(event_json)
                         except (json.JSONDecodeError, UnicodeDecodeError) as e:
                             logger.warning(f"Failed to decode event data: {e}")
-                            continue
 
-                    except socket.timeout:
-                        # Timeout is expected, just continue to check terminate flag
-                        continue
-                    except socket.error as e:
-                        logger.error(f"Socket error in event loop: {e}")
-                        break
+                except socket.error as e:
+                    logger.error(f"Failed to create/bind UDP socket: {e}")
+                    await asyncio.sleep(10)
+                except Exception as e:
+                    logger.error(f"Unexpected exception in event loop: {e}")
+                    await asyncio.sleep(10)
+                finally:
+                    if udp_socket is not None:
+                        try:
+                            udp_socket.close()
+                        except:
+                            pass
+        except asyncio.CancelledError:
+            logger.debug("Event loop task cancelled")
+            raise
 
-            except socket.error as e:
-                logger.error(f"Failed to create/bind UDP socket: {e}")
-                time.sleep(10)
-            except Exception as e:
-                logger.error(f"Unexpected exception in event loop: {e}")
-                time.sleep(10)
-            finally:
-                if udp_socket is not None:
-                    try:
-                        udp_socket.close()
-                    except:
-                        pass
-
-    def _handle_event(self, event_json):
+    async def _handle_event(self, event_json):
+        """Handle incoming MusicCast events from the device"""
         # MusicCast events can contain multiple zones (main, zone2, zone3, etc.)
         # Each zone can have different event data
         logger.debug(f"Received MusicCast event: {event_json}")
@@ -541,7 +640,8 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             new_volume = zone_state["volume"]
             if isinstance(new_volume, int) and new_volume != self.volume.current_volume:
                 self.volume.current_volume = new_volume
-                self.volume_changed_event.set()
+                if hasattr(self, "_volume_changed_event"):
+                    self._volume_changed_event.set()
                 logger.debug(f"Volume changed to: {new_volume}")
 
         # Handle power state changes
@@ -550,12 +650,12 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         if power_state == "standby":
             logger.info("Device entered standby mode")
-            self.playqueue.stop()
+            self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
             return
 
         if input_state is not None and input_state != self.connected_input:
             logger.info(f"Input changed from {self.connected_input} to {input_state}")
-            self.playqueue.stop()
+            self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
             return
 
         # Handle mute state if needed
@@ -572,49 +672,13 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if zone_state.get("status_updated", False):
             logger.debug("Status update event received")
 
-    def _on_state_changed(self, event: AnyEventPayload):
-        if not isinstance(event, StateChangedEvent):
-            logger.warning("Expected StateChangedEvent, got %s", type(event))
-            return
-        # Don't process state changes if device is not ready yet
-        if not self.ready:
-            return
-        state = event.state
-
-        if state.state == PlayerStateEnum.PLAYING:
-            self._on_playing(state)
-        elif (
-            state.state == PlayerStateEnum.PAUSED
-            or state.state == PlayerStateEnum.STOPPED
-        ):
-            self._on_paused_or_stopped(state.state == PlayerStateEnum.STOPPED)
-
-    def _on_paused_or_stopped(self, stopped: bool):
-        if self.poweroff_timer is not None:
-            self.poweroff_timer.cancel()
-            self.poweroff_timer = None
-
-        self.poweroff_timer = threading.Timer(60.0, self._self_power_off)
-        # Make sure the timer does not prevent the program from exiting
-        self.poweroff_timer.daemon = True
-        self.poweroff_timer.start()
-
+    async def _on_stopped(self):
         # ReplayGain
-        if stopped is True and self.volume.volume_gain != 0:
-            self.set_volume(self.volume.current_volume - self.volume.volume_gain)
+        if self.volume.volume_gain != 0:
+            await self.set_volume(self.volume.current_volume - self.volume.volume_gain)
             self.volume.volume_gain = 0
 
-    def _self_power_off(self):
-        status = self._get_status()
-        if status["input"] == self.connected_input:
-            self.power_off()
-
-    def _on_playing(self, state: PlayerState):
-        if self.poweroff_timer is not None:
-            self.poweroff_timer.cancel()
-            self.poweroff_timer = None
-        self.power_on()
-
+    async def _on_playing(self, state: PlaybackState):
         # ReplayGain
         if (
             self.auto_volume is True
@@ -631,11 +695,11 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                 self.volume.current_volume - self.volume.volume_gain + device_gain_units
             )
             self.volume.volume_gain = device_gain_units
-            self.set_volume(new_volume)
+            await self.set_volume(new_volume)
             logger.info(f"Loudness correction applied: {device_gain_units}")
 
-    def _get_status(self, headers=None):
-        response = self._request_musiccast(
+    async def _get_status(self, headers=None):
+        response = await self._request_musiccast(
             f"/{self.zone_name}/getStatus", headers=headers
         )
         if response["response_code"] != 0:
@@ -645,14 +709,17 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         return response
 
-    def _set_input(self):
-        self._request_musiccast(
+    async def _set_input(self):
+        await self._request_musiccast(
             f"/{self.zone_name}/setInput?input={self.connected_input}"
         )
 
-    def _request_musiccast(self, endpoint, headers=None):
+    async def _request_musiccast(self, endpoint, headers=None):
         try:
-            response = self.session.get(
+            if self.base_url is None:
+                raise Exception("MusicCast device not initialized")
+
+            response = await self.session.get(
                 safe_urljoin(self.base_url, endpoint),
                 headers=headers,
                 timeout=5,
@@ -661,22 +728,60 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                 raise Exception(f"MusicCast returned {response.status_code}")
 
             return response.json()
+        except (httpx.ConnectError, httpx.TimeoutException, ConnectionError) as e:
+            logger.error(f"Network error accessing MusicCast device: {e}")
+            # Trigger rediscovery on network errors
+            await self.rediscover_device()
+            raise
         except Exception as e:
             logger.error(f"MusicCast request failed for {endpoint}: {e}")
-            # If the device is unreachable, we could trigger rediscovery here
-            # For now, just re-raise the exception
             raise
 
-    def rediscover_device(self):
+    async def rediscover_device(self):
         """
         Re-discover MusicCast device using SSDP if the current one becomes unavailable.
-        Returns True if a new device was found, False otherwise.
+        This runs in the background and doesn't block the caller.
         """
         logger.info("Current device unreachable, attempting SSDP rediscovery...")
         self.ready = False
-        self.run_discovery()
 
-    def get_volume(self) -> DeviceVolume:
+        # Cancel any existing discovery/rediscovery task
+        if self._discovery_task and not self._discovery_task.done():
+            self._discovery_task.cancel()
+
+        # Start a new discovery task with retries
+        self._discovery_task = asyncio.create_task(
+            self._discovery_worker(max_retries=3)
+        )
+
+    async def _discovery_worker(self, max_retries: int):
+        """Unified discovery worker for both initial discovery and rediscovery with retries."""
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"Discovery attempt {attempt}/{max_retries}")
+                # Create discovery as a task and wait for it
+                discovery_task = asyncio.create_task(self.run_discovery())
+                await discovery_task
+
+                if self.ready:
+                    logger.info(f"Device discovery successful")
+                    # Initial state is already set by get_ready() via set_initial_state()
+                    # No need to emit additional events here
+                    self._discovery_task = None
+                    return
+            except Exception as e:
+                logger.error(f"Discovery attempt {attempt} failed: {e}")
+                if attempt < max_retries:
+                    # Exponential backoff: 2s, 5s, 10s
+                    wait_time = 2**attempt
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+
+        logger.error(f"Failed discovery device after {max_retries} attempts")
+        self._discovery_task = None
+
+    async def get_volume(self) -> DeviceVolume:
         if not self.ready:
             return DeviceVolume(
                 max_volume=0, current_volume=0, volume_gain=0, supported=False
@@ -684,32 +789,32 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         return self.volume
 
-    def set_volume(self, volume: int) -> None:
+    async def set_volume(self, volume: int) -> None:
         if not self.ready:
             return
 
         volume = max(0, min(volume, self.volume.max_volume))
-        self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
+        await self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
 
-    def power_on(self) -> None:
+    async def power_on(self) -> None:
         if not self.ready:
             return
 
-        if self.is_power_on():
+        if await self.is_power_on():
             return
-        self._request_musiccast(f"/{self.zone_name}/setPower?power=on")
-        self._set_input()
+        await self._request_musiccast(f"/{self.zone_name}/setPower?power=on")
+        await self._set_input()
 
-    def power_off(self) -> None:
+    async def power_off(self) -> None:
         if not self.ready:
             return
-        self._request_musiccast(f"/{self.zone_name}/setPower?power=standby")
+        await self._request_musiccast(f"/{self.zone_name}/setPower?power=standby")
 
-    def is_power_on(self) -> bool:
+    async def is_power_on(self) -> bool:
         if not self.ready:
             return False
 
-        status = self._get_status()
+        status = await self._get_status()
 
         return status["power"] == "on" and status["input"] == self.connected_input
 

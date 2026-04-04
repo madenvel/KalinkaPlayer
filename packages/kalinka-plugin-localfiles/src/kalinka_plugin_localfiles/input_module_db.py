@@ -177,7 +177,7 @@ class LocalFilesInputModuleDb:
             conn.close()
 
     def get_tracks_by_ids(self, track_ids: List[str]) -> List[Dict]:
-        """Get track information by IDs"""
+        """Get track information by IDs, preserving the order of track_ids."""
         if not track_ids:
             return []
 
@@ -187,7 +187,7 @@ class LocalFilesInputModuleDb:
             placeholders = ", ".join("?" for _ in track_ids)
             cursor.execute(
                 f"""
-                SELECT t.*, a.title as album_title, ar.name as artist_name 
+                SELECT t.*, a.title as album_title, ar.name as artist_name
                 FROM tracks t
                 LEFT JOIN albums a ON t.album_id = a.id
                 LEFT JOIN artists ar ON t.artist_id = ar.id
@@ -195,7 +195,67 @@ class LocalFilesInputModuleDb:
             """,
                 track_ids,
             )
-            return [dict(row) for row in cursor.fetchall()]
+            rows_by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
+            return [rows_by_id[tid] for tid in track_ids if tid in rows_by_id]
+        finally:
+            conn.close()
+
+    def get_albums_by_ids(self, album_ids: List[str]) -> List[Dict]:
+        """Get album information by IDs, preserving the order of album_ids."""
+        if not album_ids:
+            return []
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            placeholders = ", ".join("?" for _ in album_ids)
+            cursor.execute(
+                f"""
+                SELECT a.*, ar.name as artist_name
+                FROM albums a
+                LEFT JOIN artists ar ON a.artist_id = ar.id
+                WHERE a.id IN ({placeholders})
+                """,
+                album_ids,
+            )
+            rows_by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
+            return [rows_by_id[aid] for aid in album_ids if aid in rows_by_id]
+        finally:
+            conn.close()
+
+    def get_artists_by_ids(self, artist_ids: List[str]) -> List[Dict]:
+        """Get artist information by IDs, preserving the order of artist_ids."""
+        if not artist_ids:
+            return []
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            placeholders = ", ".join("?" for _ in artist_ids)
+            cursor.execute(
+                f"SELECT * FROM artists WHERE id IN ({placeholders})",
+                artist_ids,
+            )
+            rows_by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
+            return [rows_by_id[aid] for aid in artist_ids if aid in rows_by_id]
+        finally:
+            conn.close()
+
+    def get_playlists_by_ids(self, playlist_ids: List[str]) -> List[Dict]:
+        """Get playlist information by IDs, preserving the order of playlist_ids."""
+        if not playlist_ids:
+            return []
+
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            placeholders = ", ".join("?" for _ in playlist_ids)
+            cursor.execute(
+                f"SELECT * FROM playlists WHERE id IN ({placeholders})",
+                playlist_ids,
+            )
+            rows_by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
+            return [rows_by_id[pid] for pid in playlist_ids if pid in rows_by_id]
         finally:
             conn.close()
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Main entry point for the Kalinka server when run as a module."""
 import argparse
+import asyncio
 import json
 import logging
 from asyncio import CancelledError
@@ -74,7 +75,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+async def main():
     """Main entry point for the Kalinka server."""
     args = parse_args()
     logging.basicConfig(
@@ -104,7 +105,7 @@ def main():
             host = get_ip_address(config.server.interface)
             port = config.server.port
             logger.info(f"Starting server on {host}:{port}")
-            app = create_app(args.config, config)
+            app = await create_app(args.config, config)
             uvicorn_config = uvicorn.Config(
                 app,
                 host=host,
@@ -115,9 +116,13 @@ def main():
             )
             server = uvicorn.Server(uvicorn_config)
             app.state.server = server
-            server.run()
-            if server.should_exit:
+            await server.serve()
+
+            # Check if this is a restart or a normal shutdown
+            if hasattr(app.state.config, "restart") and app.state.config.restart:
                 logger.info("Server restarting ...")
+                # Reset the restart flag for the next iteration
+                app.state.config.restart = False
             else:
                 logger.info("Server shut down")
                 break
@@ -131,5 +136,9 @@ def main():
         raise
 
 
+def run():
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
-    main()
+    run()

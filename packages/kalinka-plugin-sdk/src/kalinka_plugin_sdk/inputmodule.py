@@ -1,7 +1,6 @@
-from abc import ABC, abstractmethod
-from pydantic import BaseModel, PositiveInt
+from pydantic import BaseModel, PositiveInt, ConfigDict
 from enum import Enum
-from typing import Callable, List, Optional
+from typing import Awaitable, Callable, List, Optional, Protocol, runtime_checkable
 
 from .datamodel import (
     BrowseItem,
@@ -11,6 +10,7 @@ from .datamodel import (
     BrowseItemList,
     FavoriteIds,
     GenreList,
+    EmptyList,
 )
 
 
@@ -36,12 +36,14 @@ class TrackInfo(BaseModel):
 
     Attributes:
         id (EntityId): Unique identifier for the track
-        link_retriever (Callable[[], TrackUrl]): Function that returns the track's streaming URL
+        link_retriever: Callable[[], TrackUrl] | Callable[[], Awaitable[TrackUrl]]: Function that returns the track's streaming URL
         metadata (Optional[Track]): Track metadata (title, artist, album, etc.)
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: EntityId
-    link_retriever: Callable[[], TrackUrl]
+    link_retriever: Callable[[], TrackUrl] | Callable[[], Awaitable[TrackUrl]]
     metadata: Optional[Track]
 
 
@@ -62,11 +64,12 @@ class SearchType(str, Enum):
     artist = "artist"
 
 
-class InputModule(ABC):
+@runtime_checkable
+class InputModule(Protocol):
     """
-    Abstract base class for Kalinka audio input modules.
+    Protocol for Kalinka audio input modules.
 
-    This class defines the interface that all input modules must implement to provide
+    This protocol defines the interface that all input modules must implement to provide
     audio content to the Kalinka player system. Input modules can represent various
     audio sources such as streaming services, local files, radio stations, etc.
 
@@ -78,7 +81,6 @@ class InputModule(ABC):
     - Managing genres and categorization
     """
 
-    @abstractmethod
     def module_name(self) -> str:
         """
         Return the unique name identifier for this input module.
@@ -86,10 +88,26 @@ class InputModule(ABC):
         Returns:
             str: A unique string identifier for this module (e.g., "spotify", "localfiles")
         """
-        pass
+        ...
 
-    @abstractmethod
-    def search(
+    async def ai_search(self, query: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
+        """
+        Search using natural language / AI / semantic interpretation.
+
+        Unlike search(), no content type is specified — the module decides
+        what kinds of results are relevant. Default returns an empty list.
+
+        Args:
+            query (str): A natural language query (e.g. "upbeat 90s rock for a road trip")
+            offset (int): Pagination offset. Defaults to 0.
+            limit (int): Max results to return. Defaults to 50.
+
+        Returns:
+            BrowseItemList: Matching items, possibly mixed types via .sections
+        """
+        return EmptyList(offset, limit)
+
+    async def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:
         """
@@ -104,10 +122,9 @@ class InputModule(ABC):
         Returns:
             BrowseItemList: A list of matching items found by the search
         """
-        pass
+        ...
 
-    @abstractmethod
-    def browse(
+    async def browse(
         self,
         entity_id: EntityId,
         offset: PositiveInt = 0,
@@ -127,10 +144,9 @@ class InputModule(ABC):
         Returns:
             BrowseItemList: A list of items contained within the specified entity
         """
-        pass
+        ...
 
-    @abstractmethod
-    def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
+    async def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         """
         Retrieve detailed track information including playback URLs.
 
@@ -144,10 +160,9 @@ class InputModule(ABC):
             List[TrackInfo]: List of track information objects containing
                      metadata and URL retrievers for each requested track, suitable to insert into the play queue.
         """
-        pass
+        ...
 
-    @abstractmethod
-    def list_favorite(
+    async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """
@@ -162,40 +177,36 @@ class InputModule(ABC):
         Returns:
             BrowseItemList: A list of the user's favorite items of the specified type
         """
-        pass
+        ...
 
-    @abstractmethod
-    def get_favorite_ids(self) -> FavoriteIds:
+    async def get_favorite_ids(self) -> FavoriteIds:
         """
         Retrieve all favorite item IDs for the current user.
 
         Returns:
             FavoriteIds: Object containing collections of favorite IDs grouped by type
         """
-        pass
+        ...
 
-    @abstractmethod
-    def add_to_favorite(self, id: str):
+    async def add_to_favorite(self, id: str):
         """
         Add an item to the user's favorites.
 
         Args:
             id (str): The ID of the item to add to favorites
         """
-        pass
+        ...
 
-    @abstractmethod
-    def remove_from_favorite(self, id: str):
+    async def remove_from_favorite(self, id: str):
         """
         Remove an item from the user's favorites.
 
         Args:
             id (str): The ID of the item to remove from favorites
         """
-        pass
+        ...
 
-    @abstractmethod
-    def list_genre(self, offset: int, limit: int) -> GenreList:
+    async def list_genre(self, offset: int, limit: int) -> GenreList:
         """
         List available genres in this input module.
 
@@ -206,10 +217,9 @@ class InputModule(ABC):
         Returns:
             GenreList: A list of available genres
         """
-        pass
+        ...
 
-    @abstractmethod
-    def get(self, entity_id: EntityId) -> BrowseItem:
+    async def get(self, entity_id: EntityId) -> BrowseItem:
         """
         Get detailed information about a specific entity.
 
@@ -219,10 +229,11 @@ class InputModule(ABC):
         Returns:
             BrowseItem: Detailed information about the requested entity
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
+    async def playlist_user_list(
+        self, offset: int = 0, limit: int = 25
+    ) -> BrowseItemList:
         """
         List user-created playlists.
 
@@ -233,10 +244,9 @@ class InputModule(ABC):
         Returns:
             BrowseItemList: A list of user-created playlists
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_create(self, name: str, description: str) -> Playlist:
+    async def playlist_create(self, name: str, description: str) -> Playlist:
         """
         Create a new playlist.
 
@@ -247,10 +257,9 @@ class InputModule(ABC):
         Returns:
             Playlist: The newly created playlist object
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_update(
+    async def playlist_update(
         self, id: str, name: Optional[str], description: Optional[str]
     ) -> Playlist:
         """
@@ -264,20 +273,18 @@ class InputModule(ABC):
         Returns:
             Playlist: The updated playlist object
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_delete(self, id: str):
+    async def playlist_delete(self, id: str):
         """
         Delete a playlist.
 
         Args:
             id (str): The ID of the playlist to delete
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_add_tracks(
+    async def playlist_add_tracks(
         self, id: str, track_ids: List[str], allow_duplicates: bool
     ) -> Playlist:
         """
@@ -291,10 +298,9 @@ class InputModule(ABC):
         Returns:
             Playlist: The updated playlist object with new tracks added
         """
-        pass
+        ...
 
-    @abstractmethod
-    def playlist_remove_tracks(
+    async def playlist_remove_tracks(
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
         """
@@ -308,10 +314,9 @@ class InputModule(ABC):
         Returns:
             Playlist: The updated playlist object with tracks removed
         """
-        pass
+        ...
 
-    @abstractmethod
-    def get_resource_path(self, id: str) -> str | None:
+    async def get_resource_path(self, id: str) -> str | None:
         """
         Get the file system path for a local resource.
 
@@ -324,4 +329,4 @@ class InputModule(ABC):
         Returns:
             str | None: The file system path to the resource, or None if not available
         """
-        pass
+        ...

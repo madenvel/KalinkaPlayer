@@ -3,7 +3,7 @@ import logging.handlers
 import multiprocessing
 from typing import Optional
 
-from kalinka_plugin_sdk.api import PluginContext, InputModulePlugin
+from kalinka_plugin_sdk.plugin import InputPluginContext, InputModulePlugin
 from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .config_model import LocalFilesConfig
@@ -11,6 +11,7 @@ from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
 from . import enricher
 from . import indexer
+from . import embedder
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -24,8 +25,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def __init__(self):
         self._enricher_proc = None
         self._indexer_proc = None
+        self._embedder_proc = None
         self._enricher_queue = multiprocessing.Queue()
+        self._embedder_nudge_queue = multiprocessing.Queue()
         self._logging_queue = multiprocessing.Queue()
+        self._search_request_queue = multiprocessing.Queue()
+        self._search_response_queue = multiprocessing.Queue()
         self._log_listener = None
         self._inputmodule = None
 
@@ -35,7 +40,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def get_interface(self) -> Optional[InputModule]:
         return self._inputmodule
 
-    def setup(self, context: PluginContext) -> None:
+    async def setup(self, context: InputPluginContext) -> None:
         config = LocalFilesConfig(**context.config.model_dump())
         logger.info("Setting up localfiles input module")
 
@@ -43,24 +48,29 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         # The LocalFilesInputModule will use its own specialized DB
         self._inputmodule = LocalFilesInputModule(
-            config, input_module_db, context.event_emitter
+            config,
+            input_module_db,
+            self._search_request_queue,
+            self._search_response_queue,
         )
 
-        handler = logging.StreamHandler()
-        handler.setLevel(logger.level)
-        # Use the same formatter as the parent process root logger
-        root_logger = logging.getLogger()
-        if root_logger.handlers and root_logger.handlers[0].formatter:
-            handler.setFormatter(root_logger.handlers[0].formatter)
-        else:
-            # Fallback to a reasonable default format if no formatter is found
-            formatter = logging.Formatter(
-                "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-            handler.setFormatter(formatter)
+        # Forward subprocess log records into the main logging pipeline so the
+        # main kalinka-server handlers (and their levels/formatters) decide what
+        # to emit. This avoids a parallel StreamHandler that would bypass the
+        # server's log level filtering.
+        class SubprocessForwardingHandler(logging.Handler):
+            def emit(self, record):
+                target = logging.getLogger(record.name)
+                if target.isEnabledFor(record.levelno):
+                    target.handle(record)
+
+        handler = SubprocessForwardingHandler()
+
+        # In Python 3.14, respect_handler_level defaults to True; we keep it
+        # False for backward compatibility and to let the target logger handle
+        # level filtering.
         self._log_listener = logging.handlers.QueueListener(
-            self._logging_queue, handler
+            self._logging_queue, handler, respect_handler_level=False
         )
         self._log_listener.start()
 
@@ -74,9 +84,22 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         if config.enricher.enabled:
             self._enricher_proc = multiprocessing.Process(
                 target=enricher.main,
-                args=(config, self._enricher_queue, self._logging_queue),
+                args=(config, self._enricher_queue, self._logging_queue, self._embedder_nudge_queue),
             )
             self._enricher_proc.start()
+
+        if config.embedder.enabled:
+            self._embedder_proc = multiprocessing.Process(
+                target=embedder.main,
+                args=(
+                    config,
+                    self._logging_queue,
+                    self._search_request_queue,
+                    self._search_response_queue,
+                    self._embedder_nudge_queue,
+                ),
+            )
+            self._embedder_proc.start()
 
     def _shutdown_process(self, proc):
         """Shutdown a process by sending a termination signal"""
@@ -101,17 +124,24 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         except Exception as e:
             logger.error(f"Error shutting down process {proc.pid}: {e}")
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         logger.info("Shutting down localfiles input module")
 
         self._shutdown_process(self._indexer_proc)
         self._shutdown_process(self._enricher_proc)
+        self._shutdown_process(self._embedder_proc)
 
         if self._log_listener is not None:
             self._log_listener.stop()
 
         # Ensure multiprocessing queues release their semaphores
-        for q in (self._enricher_queue, self._logging_queue):
+        for q in (
+            self._enricher_queue,
+            self._embedder_nudge_queue,
+            self._logging_queue,
+            self._search_request_queue,
+            self._search_response_queue,
+        ):
             if q is not None:
                 q.close()
                 q.join_thread()

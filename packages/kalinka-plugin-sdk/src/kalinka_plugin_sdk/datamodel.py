@@ -622,7 +622,7 @@ class PlayerStateEnum(str, Enum):
     ERROR = "ERROR"
 
 
-class PlayerState(BaseModel):
+class PlaybackState(BaseModel):
     """
     Complete state information for the audio player.
 
@@ -637,7 +637,7 @@ class PlayerState(BaseModel):
         message (Optional[str]): Status message or error information
         audio_info (Optional[AudioInfo]): Technical details about the audio stream
         mime_type (Optional[str]): MIME type of the audio stream
-        timestamp (PositiveInt): Timestamp when this state was captured
+        timestamp_ns (NonNegativeInt): Timestamp when this state was captured
     """
 
     state: Optional[PlayerStateEnum] = None
@@ -647,7 +647,23 @@ class PlayerState(BaseModel):
     message: Optional[str] = None
     audio_info: Optional[AudioInfo] = None
     mime_type: Optional[str] = None
-    timestamp: PositiveInt = 0
+    timestamp_ns: NonNegativeInt = 0
+
+
+class DeviceState(BaseModel):
+    """
+    State information for an audio output device.
+
+    Attributes:
+        name (str): Human-readable device name
+        volume (DeviceVolume): Volume control information for the device
+        capabilities (List[str]): List of supported device capabilities
+    """
+
+    name: str
+    volume: DeviceVolume
+    power_on: bool
+    capabilities: List[str] = []
 
 
 class TrackList(BaseModel):

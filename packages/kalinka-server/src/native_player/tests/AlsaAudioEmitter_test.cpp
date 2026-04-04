@@ -95,7 +95,7 @@ TEST_F(AlsaAudioEmitterTest, stream_error) {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   auto streamState = alsaAudioEmitter->getState();
   EXPECT_EQ(streamState.state, AudioGraphNodeState::ERROR);
-  EXPECT_EQ(streamState.message, "Fake error message");
+  EXPECT_EQ(streamState.error->message, "Fake error message");
   alsaAudioEmitter->disconnect(outputNode);
 }
 
@@ -208,4 +208,34 @@ TEST_F(AlsaAudioEmitterTest, test_seekToEndAndBack) {
   auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
   EXPECT_EQ(state.position, 0);
   EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+}
+
+TEST_F(AlsaAudioEmitterTest, test_play_after_finished) {
+  const auto totalDuration = 1000;
+
+  auto firstNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(firstNode);
+  EXPECT_EQ(
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING).state,
+      AudioGraphNodeState::STREAMING);
+
+  EXPECT_EQ(alsaAudioEmitter->seek(totalDuration + 200), totalDuration);
+  EXPECT_EQ(waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED,
+                          std::chrono::milliseconds(1000))
+                .state,
+            AudioGraphNodeState::FINISHED);
+
+  alsaAudioEmitter->disconnect(firstNode);
+
+  auto secondNode = std::make_shared<SineWaveNode>(440, totalDuration);
+  alsaAudioEmitter->connectTo(secondNode);
+
+  auto state = waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING,
+                             std::chrono::milliseconds(1000));
+  EXPECT_EQ(state.state, AudioGraphNodeState::STREAMING);
+
+  EXPECT_EQ(waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::FINISHED,
+                          std::chrono::milliseconds(1500))
+                .state,
+            AudioGraphNodeState::FINISHED);
 }

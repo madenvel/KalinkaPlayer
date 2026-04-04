@@ -28,6 +28,21 @@ enum class AudioGraphNodeState {
   SOURCE_CHANGED
 };
 
+enum class StreamErrorSource {
+  NONE,
+  HTTP_STREAM,
+  AUDIO_OUTPUT,
+  DECODER
+};
+
+struct StreamError {
+  StreamErrorSource source;
+  std::string message;
+
+  bool operator==(const StreamError &other) const = default;
+  bool operator!=(const StreamError &other) const = default;
+};
+
 extern std::ostream &operator<<(std::ostream &os, AudioGraphNodeState state);
 extern std::string stateToString(AudioGraphNodeState state);
 
@@ -39,7 +54,7 @@ struct StreamState {
   AudioGraphNodeState state;
   long position;
   std::optional<StreamInfo> streamInfo;
-  std::optional<std::string> message;
+  std::optional<StreamError> error;
   unsigned long long timestamp;
 
   StreamState(AudioGraphNodeState state, long position,
@@ -47,8 +62,8 @@ struct StreamState {
       : state(state), position(position), streamInfo(streamInfo),
         timestamp(getTimestampNs()) {}
 
-  StreamState(AudioGraphNodeState state, std::optional<std::string> message)
-      : state(state), position(0), message(message),
+  StreamState(AudioGraphNodeState state, StreamError error)
+      : state(state), position(0), error(error),
         timestamp(getTimestampNs()) {}
 
   explicit StreamState(AudioGraphNodeState state)
@@ -61,9 +76,14 @@ struct StreamState {
   bool operator!=(const StreamState &other) const = default;
 
   std::string toString() const {
+    std::string errorStr = "null";
+    if (error.has_value()) {
+      errorStr = "{source=" + std::to_string(static_cast<int>(error->source)) +
+                 ", message=" + error->message + "}";
+    }
     return "<StreamState state=" + stateToString(state) +
            ", position=" + std::to_string(position) +
-           ", message=" + message.value_or("null") + ", streamInfo=" +
+           ", error=" + errorStr + ", streamInfo=" +
            (streamInfo.has_value() ? streamInfo.value().toString() : "null") +
            ", timestamp=" + std::to_string(timestamp) + ">";
   }

@@ -57,6 +57,8 @@ mkdir -p "$TARGET_DIR/opt/kalinka/wheels"
 mkdir -p "$TARGET_DIR/etc/systemd/system/"
 
 cp "$WHEEL_PATH" "$TARGET_DIR/opt/kalinka/wheels/"
+cp scripts/bootstrap.sh "$TARGET_DIR/opt/kalinka/bootstrap.sh"
+chmod 755 "$TARGET_DIR/opt/kalinka/bootstrap.sh"
 cp scripts/kalinka.service "$TARGET_DIR/etc/systemd/system/"
 cp ../../README.md "$TARGET_DIR/opt/kalinka/"
 cp LICENSE "$TARGET_DIR/opt/kalinka/"

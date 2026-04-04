@@ -1,126 +1,103 @@
 from enum import Enum
-from typing import List, Union
-from abc import ABC, abstractmethod
+from typing import Any, List
 
-from pydantic import BaseModel
+from .api import BaseEvent, BaseState
 
-from .datamodel import EntityId, Track, PlayerState, PlaybackMode, TrackList
+from .datamodel import (
+    Track,
+    PlaybackState,
+    PlaybackMode,
+)
 
 
-class EventType(Enum):
-    StateChanged = "state_changed"
+class PlayQueueEventType(Enum):
+    PlaybackStateChanged = "state_changed"
     RequestMoreTracks = "request_more_tracks"
     TracksAdded = "tracks_added"
     TracksRemoved = "tracks_removed"
-    NetworkError = "network_error"
-    FavoriteAdded = "favorite_added"
-    FavoriteRemoved = "favorite_removed"
-    VolumeChanged = "volume_changed"
-    StateReplay = "state_replay"
+    TrackMoved = "track_moved"
+    PlaybackError = "playback_error"
     PlaybackModeChanged = "playback_mode_changed"
 
 
-class BaseEventPayload(BaseModel, ABC):
-    # Sequence number assigned by the dispatcher to preserve ordering across threads.
-    sequence: int = 0
+class PlayQueueEvent(BaseEvent[PlayQueueEventType]):
+    """Base class for all play queue events."""
 
-    @property
-    @abstractmethod
-    def event_type(self) -> EventType: ...
+    pass
 
 
-class FavoriteAddedEvent(BaseEventPayload):
-    id: EntityId
+class PlayQueueState(BaseState[PlayQueueEvent]):
+    """State model for playqueue - uses Pydantic BaseModel for serialization."""
 
-    @property
-    def event_type(self) -> EventType:
-        return EventType.FavoriteAdded
-
-
-class FavoriteRemovedEvent(BaseEventPayload):
-    id: EntityId
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.FavoriteRemoved
-
-
-class VolumeChangedEvent(BaseEventPayload):
-    volume: int
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.VolumeChanged
-
-
-class TracksAddedEvent(BaseEventPayload):
-    tracks: List[Track]
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.TracksAdded
-
-
-class TracksRemovedEvent(BaseEventPayload):
-    indices: List[int]
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.TracksRemoved
-
-
-class StateChangedEvent(BaseEventPayload):
-    state: PlayerState
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.StateChanged
-
-
-class StateReplayEvent(BaseEventPayload):
-    state: PlayerState
-    track_list: TrackList
+    playback_state: PlaybackState
+    track_list: List[Track]
     playback_mode: PlaybackMode
 
-    @property
-    def event_type(self) -> EventType:
-        return EventType.StateReplay
+    def apply(self, event: PlayQueueEvent) -> "PlayQueueState":
+        """Apply event and return a new state (immutable pattern)."""
+        if self.seq >= event.seq:
+            return self
+
+        updates: dict[str, Any] = {"seq": event.seq}
+
+        if isinstance(event, PlaybackStateChangedEvent):
+            updates["playback_state"] = event.state
+        elif isinstance(event, TracksAddedEvent):
+            track_list = list(self.track_list)
+            for i, track in enumerate(event.tracks):
+                track_list.insert(event.index + i, track)
+            updates["track_list"] = track_list
+        elif isinstance(event, TracksRemovedEvent):
+            new_track_list = [
+                track
+                for i, track in enumerate(self.track_list)
+                if i not in event.indices
+            ]
+            updates["track_list"] = new_track_list
+        elif isinstance(event, TrackMovedEvent):
+            track_list = list(self.track_list)
+            track = track_list.pop(event.from_index)
+            track_list.insert(event.to_index, track)
+            updates["track_list"] = track_list
+        elif isinstance(event, PlaybackModeChangedEvent):
+            updates["playback_mode"] = event.mode
+        else:
+            return self
+
+        return self.model_copy(update=updates)
 
 
-class PlaybackModeChangedEvent(BaseEventPayload):
+class PlaybackStateChangedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.PlaybackStateChanged
+    state: PlaybackState
+
+
+class RequestMoreTracksEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.RequestMoreTracks
+
+
+class TracksAddedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.TracksAdded
+    tracks: List[Track]
+    index: int  # actual list index at which tracks were inserted
+
+
+class TracksRemovedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.TracksRemoved
+    indices: List[int]
+
+
+class TrackMovedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.TrackMoved
+    from_index: int
+    to_index: int
+
+
+class PlaybackModeChangedEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.PlaybackModeChanged
     mode: PlaybackMode
 
-    @property
-    def event_type(self) -> EventType:
-        return EventType.PlaybackModeChanged
 
-
-class NetworkErrorEvent(BaseEventPayload):
+class PlaybackErrorEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.PlaybackError
     message: str
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.NetworkError
-
-
-class RequestMoreTracksEvent(BaseEventPayload):
-    """Event with no payload data."""
-
-    @property
-    def event_type(self) -> EventType:
-        return EventType.RequestMoreTracks
-
-
-# Union type of all possible event payloads
-AnyEventPayload = Union[
-    FavoriteAddedEvent,
-    FavoriteRemovedEvent,
-    VolumeChangedEvent,
-    TracksAddedEvent,
-    TracksRemovedEvent,
-    StateChangedEvent,
-    StateReplayEvent,
-    PlaybackModeChangedEvent,
-    NetworkErrorEvent,
-    RequestMoreTracksEvent,
-]

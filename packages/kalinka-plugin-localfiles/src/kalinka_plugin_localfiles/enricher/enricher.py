@@ -41,6 +41,7 @@ TRACK_REQUIRED_FIELDS = [
 # Global variables to manage enricher state
 _enricher_task: Optional[asyncio.Task] = None
 _enricher_queue: Optional[multiprocessing.Queue] = None
+_embedder_nudge_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
@@ -433,6 +434,11 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                 elif command == "enrich":
                     logger.info("Manual enrichment triggered")
                     await enricher_instance.start()
+                    if _embedder_nudge_queue is not None:
+                        try:
+                            _embedder_nudge_queue.put_nowait("nudge")
+                        except Exception:
+                            pass
 
             except queue.Empty:
                 # No command received in 30 seconds, run periodic enrichment check
@@ -553,18 +559,22 @@ def main(
     config: LocalFilesConfig,
     enricher_queue: multiprocessing.Queue,
     logger_queue: multiprocessing.Queue,
+    embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
 ):
     """Main entry point for the enricher daemon."""
 
-    global _enricher_queue
+    global _enricher_queue, _embedder_nudge_queue
 
     _enricher_queue = enricher_queue
+    _embedder_nudge_queue = embedder_nudge_queue
     try:
         import logging.handlers
 
         root = logging.getLogger()
         for handler in root.handlers[:]:
             root.removeHandler(handler)
+        # Set root logger level to DEBUG to allow all logs through to the queue
+        root.setLevel(logging.DEBUG)
         root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
         asyncio.run(async_main(config))

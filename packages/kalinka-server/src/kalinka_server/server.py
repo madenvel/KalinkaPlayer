@@ -15,38 +15,44 @@ from fastapi import (
     Request,
     WebSocket,
 )
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     Catalog,
+    EmptyList,
     EntityId,
     EntityType,
     FavoriteIds,
     GenreList,
-    PlayerState,
+    PlaybackState,
 )
 from kalinka_plugin_sdk.ext_device import DeviceVolume, ExternalOutputDevice
+from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
-from kalinka_server.state_manager import StateManager
+from kalinka_plugin_sdk.events import PlayQueueEventType
 
 from .config_model import KalinkaConfig
 from .config_schema_processor import config_to_wire, get_field_value, set_field_value
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .multisearch import calculate_fuzzy_score
-from .player_setup import modules, setup, shutdown
-from .rest_event_proxy import EventStream, WireEvent
+from .player_setup import modules, setup, shutdown, ModuleHealthState
+from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from .version import get_api_version, get_version
 from .state_keeper import save_state, restore_state
-from .ws_handler import handle_websocket_connection
+from .queue_ws_handler import (
+    handle_websocket_connection as handle_queue_websocket_connection,
+)
+from .device_ws_handler import (
+    handle_websocket_connection as handle_device_websocket_connection,
+)
 
 
 def save_config(config_file: str, config: KalinkaConfig):
     """Save the configuration to a file."""
-    config_data = config.model_dump()
+    config_data = config.model_dump(mode="json")
     # Ensure the directory exists
     config_dir = os.path.dirname(config_file)
     if config_dir:  # Only create directory if path is not empty
@@ -62,8 +68,12 @@ async def lifespan(app: FastAPI):
     try:
         sd = ServiceDiscovery(app.state.config)
         await sd.register_service()
-        restore_state(
-            app.state.playqueue,
+
+        # Initialize internal modules (device automation, etc.)
+        await internal_modules.initialize(app.state.config, app.state.player_context)
+
+        await restore_state(
+            app.state.player_context.playqueue,
             {
                 name: module.interface
                 for name, module in modules.prepared_input_modules.items()
@@ -71,6 +81,7 @@ async def lifespan(app: FastAPI):
                 and isinstance(module.interface, InputModule)
             },
         )
+        await app.state.player_context.playqueue.__aenter__()
         yield
 
     except Exception as e:
@@ -80,12 +91,20 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down...")
         if sd is not None:
             await sd.unregister_service()
-        shutdown(os.path.dirname(app.state.config_file))
-        app.state.event_listener.terminate()
-        save_state(app.state.playqueue)
-        app.state.config.restart = False
-        save_config(app.state.config_file, app.state.config)
-        app.state.playqueue.terminate()
+
+        # Shutdown internal modules first
+        await internal_modules.shutdown()
+
+        # Then shutdown plugins
+        await shutdown(os.path.dirname(app.state.config_file))
+
+        app.state.player_context.playqueue_eventbus.close()
+        await save_state(app.state.player_context.playqueue_eventbus)
+        save_config(
+            app.state.config_file,
+            app.state.config.model_copy(update={"restart": False}),
+        )
+        await app.state.player_context.playqueue.__aexit__(None, None, None)
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -192,16 +211,13 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
     return input_modules
 
 
-def create_app(config_file, config: KalinkaConfig):
+async def create_app(config_file, config: KalinkaConfig):
     app = FastAPI(lifespan=lifespan)
     app.state.config = config
     app.state.config_file = config_file
-    playqueue, event_listener = setup(os.path.dirname(config_file), config)
-    state_manager = StateManager(event_listener)
+    player_context = await setup(os.path.dirname(config_file), config)
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
-    app.state.playqueue = playqueue
-    app.state.event_listener = event_listener
-    app.state.state_manager = state_manager
+    app.state.player_context = player_context
     first_enabled_device_name = next(iter(modules.enabled_devices), None)
     prepared_device = (
         modules.prepared_devices[first_enabled_device_name]
@@ -216,57 +232,57 @@ def create_app(config_file, config: KalinkaConfig):
     )
 
     @app.get("/queue/list")
-    def read_queue_list(offset: int = 0, limit: int = 10):
-        return playqueue.list(offset=offset, limit=limit)
+    async def read_queue_list(offset: int = 0, limit: int = 10):
+        return await player_context.playqueue.list(offset=offset, limit=limit)
 
     @app.post("/queue/add")
-    def add_entity_to_queue(ids: list[str]):
+    async def add_entity_to_queue(ids: list[str], index: Optional[int] = None):
         items: list[TrackInfo] = []
         for entity_id in ids:
             entity_id_obj = EntityId.from_string(entity_id)
             module = input_module_from_id(entity_id)
             if entity_id_obj.type != EntityType.TRACK:
-                browse_list = module.browse(entity_id_obj, offset=0, limit=5000)
+                browse_list = await module.browse(entity_id_obj, offset=0, limit=5000)
                 track_ids = [
                     item.id.id
                     for item in browse_list.items
                     if item.id.type == EntityType.TRACK
                 ]
-                items.extend(module.get_track_info(track_ids))
+                items.extend(await module.get_track_info(track_ids))
             else:
-                items.extend(module.get_track_info([entity_id_obj.id]))
+                items.extend(await module.get_track_info([entity_id_obj.id]))
 
-        playqueue.add(items)
+        await player_context.playqueue.add(items, index)
         return {"message": "Items added to queue", "count": len(items)}
 
     @app.put("/queue/play")
     async def queue_play(index: Union[int, None] = None):
-        playqueue.play(index)
+        await player_context.playqueue.play(index)
         return {"message": "Ok"}
 
     @app.put("/queue/pause")
     async def queue_pause(paused: bool = True):
-        playqueue.pause(paused)
+        await player_context.playqueue.pause(paused)
         return {"message": "Ok"}
 
     @app.put("/queue/next")
     async def queue_next():
-        playqueue.next()
+        await player_context.playqueue.next()
         return {"message": "Ok"}
 
     @app.put("/queue/prev")
     async def queue_prev():
-        playqueue.prev()
+        await player_context.playqueue.prev()
         return {"message": "Ok"}
 
     @app.put("/queue/stop")
     async def queue_stop():
-        playqueue.stop()
+        await player_context.playqueue.stop()
         return {"message": "Ok"}
 
     @app.put("/queue/current_track/seek")
     async def queue_seek(position_ms: int):
-        value = playqueue.seek(position_ms).get()
+        value = await player_context.playqueue.seek(position_ms)
         return {"message": "Ok", "position_ms": value}
 
     @app.get("/browse")
@@ -307,7 +323,7 @@ def create_app(config_file, config: KalinkaConfig):
         return result.model_dump(exclude_unset=True)
 
     @app.get("/browse/{id}")
-    def browse_entity(
+    async def browse_entity(
         id: str,
         offset: int = 0,
         limit: int = 10,
@@ -327,7 +343,7 @@ def create_app(config_file, config: KalinkaConfig):
                 genre_ids_obj.append(genre_id_obj)
 
             input_module = input_module_from_id(entity_id)
-            result = input_module.browse(
+            result = await input_module.browse(
                 entity_id, offset=offset, limit=limit, genre_ids=genre_ids_obj
             )
             return result.model_dump(exclude_unset=True)
@@ -358,35 +374,90 @@ def create_app(config_file, config: KalinkaConfig):
             limit=limit,
         )
 
+    @app.get("/ai_search")
+    async def ai_search(
+        query: str,
+        offset: int = 0,
+        limit: int = 10,
+        sources: Optional[str] = None,
+    ) -> BrowseItemList:
+        """Semantic / natural-language search across input modules."""
+        input_modules: List[InputModule] = extract_modules(sources)
+        for module in input_modules:
+            result = await module.ai_search(query, offset=offset, limit=limit)
+            if result.total > 0:
+                return result
+        return EmptyList(offset, limit)
+
+    @app.get("/indexer/status")
+    async def indexer_status(sources: Optional[str] = None) -> dict:
+        """Return embedding job coverage for each configured input module."""
+        input_modules: List[InputModule] = extract_modules(sources)
+        result = {}
+        for module in input_modules:
+            if hasattr(module, "get_indexer_status"):
+                try:
+                    status = await module.get_indexer_status()
+                    result[module.module_name()] = status
+                except Exception:
+                    pass
+        return result
+
     @app.get("/queue/events")
     async def stream(request: Request):
         async def process_events():
-            event_stream = EventStream(event_listener, state_manager)
-            try:
-                while True:
-                    if await request.is_disconnected():
-                        break
-                    event: Optional[WireEvent] = await event_stream.get_last_event()
-                    if event is not None:
-                        yield event.model_dump_json() + "\n"
-            except asyncio.CancelledError:
-                logger.debug("Event stream cancelled")
-                return
-            except Exception as e:
-                logger.error(f"Error processing events: {e}")
-                yield json.dumps({"error": str(e)}) + "\n"
-            finally:
-                event_stream.close()
+            async with player_context.playqueue_eventbus.stream(
+                list(PlayQueueEventType)
+            ) as stream:
+                try:
+                    async for event in stream:
+                        if await request.is_disconnected():
+                            break
+
+                        if event is not None:
+                            yield event.model_dump_json() + "\n"
+
+                except asyncio.CancelledError:
+                    logger.debug("Event stream cancelled")
+                    return
+                except Exception as e:
+                    logger.error(f"Error processing events: {e}")
+                    yield json.dumps({"error": str(e)}) + "\n"
 
         return StreamingResponse(process_events(), media_type="text/event-stream")
 
+    @app.get("/device/events")
+    async def device_stream(request: Request):
+        async def process_device_events():
+            async with player_context.ext_device_eventbus.stream(
+                list(ExtDeviceEventType)
+            ) as stream:
+                try:
+                    async for event in stream:
+                        if await request.is_disconnected():
+                            break
+
+                        if event is not None:
+                            yield event.model_dump_json() + "\n"
+
+                except asyncio.CancelledError:
+                    logger.debug("Device event stream cancelled")
+                    return
+                except Exception as e:
+                    logger.error(f"Error processing device events: {e}")
+                    yield json.dumps({"error": str(e)}) + "\n"
+
+        return StreamingResponse(
+            process_device_events(), media_type="text/event-stream"
+        )
+
     @app.get("/queue/state")
-    async def state() -> PlayerState:
-        return playqueue.get_state()
+    async def state() -> PlaybackState:
+        return await player_context.playqueue.get_playback_state()
 
     @app.get("/queue/mode")
     async def mode():
-        return playqueue.get_playback_mode()
+        return await player_context.playqueue.get_playback_mode()
 
     @app.put("/queue/mode")
     async def set_mode(
@@ -394,17 +465,24 @@ def create_app(config_file, config: KalinkaConfig):
         repeat_single: Optional[bool] = None,
         repeat_all: Optional[bool] = None,
     ):
-        playqueue.set_playback_mode(shuffle, repeat_single, repeat_all)
+        await player_context.playqueue.set_playback_mode(
+            shuffle, repeat_single, repeat_all
+        )
         return {"message": "Ok"}
 
     @app.put("/queue/clear")
     async def clear():
-        playqueue.clear()
+        await player_context.playqueue.clear()
         return {"message": "Ok"}
 
     @app.post("/queue/remove")
     async def remove(index: int):
-        playqueue.remove([index])
+        await player_context.playqueue.remove([index])
+        return {"message": "Ok"}
+
+    @app.put("/queue/move")
+    async def queue_move(from_index: int, to_index: int):
+        await player_context.playqueue.move(from_index, to_index)
         return {"message": "Ok"}
 
     @app.get("/device/list")
@@ -415,18 +493,18 @@ def create_app(config_file, config: KalinkaConfig):
         return device.supported_functions()
 
     @app.get("/device/get_volume")
-    def get_volume() -> DeviceVolume:
+    async def get_volume() -> DeviceVolume:
         if device is None:
             return DeviceVolume(supported=False)
 
-        return device.get_volume()
+        return await device.get_volume()
 
     @app.put("/device/set_volume")
-    def set_volume(volume: int):
+    async def set_volume(volume: int):
         if device is None:
             return {"message": "No device configured"}
 
-        device.set_volume(volume)
+        await device.set_volume(volume)
         return {"message": "Ok"}
 
     @app.get("/favorite/list/{type}")
@@ -448,13 +526,13 @@ def create_app(config_file, config: KalinkaConfig):
         )
 
     @app.put("/favorite/add/{id}")
-    def add_favorite(id: str):
-        input_module_from_id(id).add_to_favorite(id)
+    async def add_favorite(id: str):
+        await input_module_from_id(id).add_to_favorite(id)
         return {"message": "Ok"}
 
     @app.delete("/favorite/remove/{id}")
-    def remove_favorite(id: str):
-        input_module_from_id(id).remove_from_favorite(id)
+    async def remove_favorite(id: str):
+        await input_module_from_id(id).remove_from_favorite(id)
         return {"message": "Ok"}
 
     @app.get("/favorite/ids")
@@ -473,21 +551,19 @@ def create_app(config_file, config: KalinkaConfig):
                 continue
             module = modules.prepared_input_modules[module_name]
             if isinstance(module.interface, InputModule):
-                result = module.interface.list_genre(offset=offset, limit=limit)
+                result = await module.interface.list_genre(offset=offset, limit=limit)
                 genre_list.items.extend(result.items)
                 genre_list.total += result.total
         return genre_list
 
     @app.get("/get/{entity_id}")
-    def entity_get(entity_id: str):
+    async def entity_get(entity_id: str):
         try:
             entity_id_obj = EntityId.from_string(entity_id)
 
             return (
-                input_module_from_id(entity_id)
-                .get(entity_id_obj)
-                .model_dump(exclude_unset=True)
-            )
+                await input_module_from_id(entity_id).get(entity_id_obj)
+            ).model_dump(exclude_unset=True)
 
         except (ValueError, Exception) as e:
             logger.error(f"Failed to parse entity ID '{entity_id}': {str(e)}")
@@ -496,39 +572,37 @@ def create_app(config_file, config: KalinkaConfig):
             )
 
     @app.post("/playlist/create")
-    def playlist_create(name: str, description: str, source: str = "localfiles"):
+    async def playlist_create(name: str, description: str, source: str = "localfiles"):
         return (
-            input_module(source)
-            .playlist_create(name, description)
-            .model_dump(exclude_unset=True)
-        )
+            await input_module(source).playlist_create(name, description)
+        ).model_dump(exclude_unset=True)
 
     @app.put("/playlist/update")
-    def playlist_update(
+    async def playlist_update(
         playlist_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
     ):
         return (
-            input_module_from_id(playlist_id)
-            .playlist_update(playlist_id, name, description)
-            .model_dump(exclude_unset=True)
-        )
+            await input_module_from_id(playlist_id).playlist_update(
+                playlist_id, name, description
+            )
+        ).model_dump(exclude_unset=True)
 
     @app.delete("/playlist/delete")
-    def playlist_delete(playlist_id: str):
-        input_module_from_id(playlist_id).playlist_delete(playlist_id)
+    async def playlist_delete(playlist_id: str):
+        await input_module_from_id(playlist_id).playlist_delete(playlist_id)
         return {"message": "Ok"}
 
     @app.post("/playlist/add_tracks")
-    def playlist_add_tracks(
+    async def playlist_add_tracks(
         playlist_id: str, track_ids: List[str], allow_duplicates: bool = True
     ):
         return (
-            input_module_from_id(playlist_id)
-            .playlist_add_tracks(playlist_id, track_ids, allow_duplicates)
-            .model_dump(exclude_unset=True)
-        )
+            await input_module_from_id(playlist_id).playlist_add_tracks(
+                playlist_id, track_ids, allow_duplicates
+            )
+        ).model_dump(exclude_unset=True)
 
     @app.get("/playlist/list")
     async def playlist_user_list(
@@ -544,25 +618,44 @@ def create_app(config_file, config: KalinkaConfig):
         )
 
     @app.delete("/playlist/remove_tracks")
-    def playlist_remove_tracks(playlist_id: str, playlist_track_ids: List[str]):
+    async def playlist_remove_tracks(playlist_id: str, playlist_track_ids: List[str]):
         return (
-            input_module_from_id(playlist_id)
-            .playlist_remove_tracks(playlist_id, playlist_track_ids)
-            .model_dump(exclude_unset=True)
-        )
+            await input_module_from_id(playlist_id).playlist_remove_tracks(
+                playlist_id, playlist_track_ids
+            )
+        ).model_dump(exclude_unset=True)
 
     @app.get("/server/config")
     def get_config():
+        # Separate successfully loaded and failed modules/devices
+        successful_input_modules = {
+            name: m.plugin_context.config
+            for name, m in modules.prepared_input_modules.items()
+            if m.health_state != ModuleHealthState.ERROR
+        }
+        failed_input_modules = {
+            name: (m.plugin_context.config, m.error_message or "Unknown error")
+            for name, m in modules.prepared_input_modules.items()
+            if m.health_state == ModuleHealthState.ERROR
+        }
+
+        successful_devices = {
+            name: d.plugin_context.config
+            for name, d in modules.prepared_devices.items()
+            if d.health_state != ModuleHealthState.ERROR
+        }
+        failed_devices = {
+            name: (d.plugin_context.config, d.error_message or "Unknown error")
+            for name, d in modules.prepared_devices.items()
+            if d.health_state == ModuleHealthState.ERROR
+        }
+
         return config_to_wire(
             base_config=config,
-            input_modules={
-                name: m.plugin_context.config
-                for name, m in modules.prepared_input_modules.items()
-            },
-            devices={
-                name: d.plugin_context.config
-                for name, d in modules.prepared_devices.items()
-            },
+            input_modules=successful_input_modules,
+            devices=successful_devices,
+            input_modules_with_errors=failed_input_modules,
+            devices_with_errors=failed_devices,
         )
 
     @app.get("/server/version")
@@ -576,6 +669,7 @@ def create_app(config_file, config: KalinkaConfig):
 
     @app.put("/server/restart")
     def restart_server():
+        app.state.config.restart = True
         app.state.server.should_exit = True
         return {"message": "Ok"}
 
@@ -616,27 +710,47 @@ def create_app(config_file, config: KalinkaConfig):
             config = None
             logger.info(f"Setting config field {key} to {value}")
             attrs = key.split(".")
-            if not attrs or attrs[0] != "root":
+            if not attrs or attrs[0] != "root" or any(part == "" for part in attrs):
                 raise HTTPException(status_code=400, detail="Invalid config key")
 
             attrs = attrs[1:]  # Skip the 'root' part
 
+            if not attrs:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid config key: section path cannot be updated directly",
+                )
+
             if attrs[0] == "input_modules":
+                if len(attrs) < 2:
+                    raise HTTPException(status_code=400, detail="Invalid config key")
                 module_name = attrs[1]
                 if module_name in modules.prepared_input_modules:
                     config = modules.prepared_input_modules[
                         module_name
                     ].plugin_context.config
                     attrs = attrs[2:]
+                    if not attrs:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid config key: section path cannot be updated directly",
+                        )
                     if attrs[0] == "name":
                         raise HTTPException(
                             status_code=400, detail="Cannot modify 'name' field"
                         )
             elif attrs[0] == "devices":
+                if len(attrs) < 2:
+                    raise HTTPException(status_code=400, detail="Invalid config key")
                 device_name = attrs[1]
                 if device_name in modules.prepared_devices:
                     config = modules.prepared_devices[device_name].plugin_context.config
                     attrs = attrs[2:]
+                    if not attrs:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid config key: section path cannot be updated directly",
+                        )
                     if attrs[0] == "name":
                         raise HTTPException(
                             status_code=400, detail="Cannot modify 'name' field"
@@ -644,11 +758,22 @@ def create_app(config_file, config: KalinkaConfig):
             elif attrs[0] == "base_config":
                 config = app.state.config
                 attrs = attrs[1:]
+                if not attrs:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid config key: section path cannot be updated directly",
+                    )
 
             if config is None:
                 raise HTTPException(status_code=400, detail="Invalid config key")
 
-            set_field_value(config, attrs, value)
+            try:
+                set_field_value(config, attrs, value)
+            except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                logger.warning("Invalid config key '%s': %s", key, exc)
+                raise HTTPException(
+                    status_code=400, detail="Invalid config key"
+                ) from exc
             logger.info(
                 f"Set config field {'.'.join(attrs)} to {value}, saved value: {get_field_value(config, attrs)}"
             )
@@ -659,7 +784,7 @@ def create_app(config_file, config: KalinkaConfig):
     async def get_resource(file_name: str):
         file_path = None
         for module_name in modules.enabled_input_modules:
-            file_path = input_module(module_name).get_resource_path(file_name)
+            file_path = await input_module(module_name).get_resource_path(file_name)
             if file_path:
                 resolved_path = Path(file_path).resolve()
                 if resolved_path.is_file():
@@ -677,11 +802,24 @@ def create_app(config_file, config: KalinkaConfig):
 
         return FileResponse(resolved_path, media_type=mime_type)
 
-    @app.websocket("/ws")
-    async def websocket_endpoint(websocket: WebSocket):
+    @app.websocket("/queue/ws")
+    async def queue_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for real-time playback control and event streaming."""
-        await handle_websocket_connection(
-            websocket, event_listener, playqueue, state_manager, device
+        await handle_queue_websocket_connection(
+            websocket, player_context.playqueue_eventbus, player_context.playqueue
+        )
+
+    @app.websocket("/device/ws")
+    async def device_websocket_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for device control and event streaming."""
+        if device is None:
+            await websocket.accept()
+            await websocket.send_json({"error": "No device configured"})
+            await websocket.close()
+            return
+
+        await handle_device_websocket_connection(
+            websocket, player_context.ext_device_eventbus, device
         )
 
     return app

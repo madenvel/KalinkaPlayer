@@ -140,11 +140,11 @@ void AudioGraphHttpStream::reader(std::stop_token stopToken) {
     if (!stopToken.stop_requested()) {
       std::string message = std::string("Libcurl exception: ") + ex.what();
       spdlog::error(message);
-      setState({AudioGraphNodeState::ERROR, message});
+      setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::HTTP_STREAM, message}});
     }
   } catch (std::runtime_error &ex) {
     spdlog::error(ex.what());
-    setState({AudioGraphNodeState::ERROR, ex.what()});
+    setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::HTTP_STREAM, ex.what()}});
   }
   buffer.setEof();
   spdlog::debug("Reader thread is finished");

@@ -64,7 +64,7 @@ Issues = "https://github.com/madenvel/KalinkaPlayer/issues"
 Documentation = "https://github.com/madenvel/KalinkaPlayer/blob/main/README.md"
 
 [project.scripts]
-kalinka-server = "kalinka_server.__main__:main"
+kalinka-server = "kalinka_server.__main__:run"
 
 [tool.setuptools]
 include-package-data = false
@@ -72,7 +72,7 @@ zip-safe = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["kalinka_server*", "native_player*"]
+include = ["kalinka_server*", "kalinka_eventbus*", "kalinka_queued*", "kalinka_serialized*", "native_player*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 
 [tool.setuptools.exclude-package-data]

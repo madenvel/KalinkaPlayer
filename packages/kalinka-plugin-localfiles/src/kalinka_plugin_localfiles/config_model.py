@@ -2,6 +2,56 @@ from pydantic import BaseModel, Field
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
+class EmbedderTagsConfig(BaseModel):
+    enabled: bool = Field(default=True, title="Enable Tag Prediction")
+    min_confidence: float = Field(default=0.3, ge=0.0, le=1.0, title="Minimum Tag Confidence")
+    top_genres: int = Field(default=5, title="Max genres stored per track")
+    effnet_path: str = Field(default="", title="EffNet-Discogs backbone path (auto-downloaded if empty)")
+    genre_path: str = Field(default="", title="Genre Discogs400 classifier path (auto-downloaded if empty)")
+    vggish_path: str = Field(default="", title="VGGish backbone path (auto-downloaded if empty)")
+    mood_mirex_path: str = Field(default="", title="Mood MIREX classifier path (auto-downloaded if empty)")
+    danceability_path: str = Field(default="", title="Danceability classifier path (auto-downloaded if empty)")
+    current_version: int = Field(default=1, title="Model version — increment to force re-tagging")
+
+
+class EmbedderClapConfig(BaseModel):
+    model_name: str = Field(default="laion/clap-htsat-unfused", title="CLAP model name (HuggingFace)")
+    ckpt_path: str = Field(default="", title="Override checkpoint path (auto-downloaded if empty)")
+    dimensions: int = Field(default=512, frozen=True, title="Embedding dimensions")
+    current_version: int = Field(default=1, title="Model version — increment to force re-embedding")
+
+
+class AiSearchConfig(BaseModel):
+    weight_clap_similarity: float = Field(default=0.75, ge=0.0, le=1.0, title="CLAP similarity weight")
+    weight_tag_boost: float = Field(default=0.15, ge=0.0, le=1.0, title="Tag overlap boost weight")
+    weight_popularity: float = Field(default=0.10, ge=0.0, le=1.0, title="Popularity weight")
+    max_results: int = Field(default=20, title="Max results per entity type")
+    knn_candidates: int = Field(default=50, title="KNN candidates before re-ranking")
+    fallback_coverage_threshold: float = Field(
+        default=10.0, title="Warn if CLAP coverage % is below this threshold"
+    )
+
+
+class EmbedderConfig(BaseModel):
+    enabled: bool = Field(default=False, title="Enable Embedder")
+    batch_size_tags: int = Field(default=8, title="Tag prediction batch size")
+    batch_size_clap: int = Field(default=4, title="CLAP audio embedding batch size")
+    poll_interval_seconds: int = Field(default=300, title="Poll Interval (seconds)")
+    model_idle_timeout_seconds: int = Field(
+        default=300,
+        title="Model Idle Timeout (seconds)",
+        description="Unload models from memory after this many seconds of inactivity (0 = never unload)",
+    )
+    max_job_attempts: int = Field(default=3, title="Max attempts per embedding job before marking failed")
+    model_dir: str = Field(
+        default="/var/lib/kalinka/models",
+        title="Directory for auto-downloaded model files",
+    )
+    tags: EmbedderTagsConfig = Field(default_factory=EmbedderTagsConfig, title="Tag Prediction Settings")
+    clap: EmbedderClapConfig = Field(default_factory=EmbedderClapConfig, title="CLAP Audio Embedding Settings")
+    ai_search: AiSearchConfig = Field(default_factory=AiSearchConfig, title="AI Search Settings")
+
+
 class MusicBrainzConfig(BaseModel):
     enabled: bool = Field(default=True, title="Enable MusicBrainz")
     artist_threshold: int = Field(
@@ -73,4 +123,7 @@ class LocalFilesConfig(ModuleConfig):
     )
     rescan_on_startup: bool = Field(
         default=False, title="Purge database and rescan after restart"
+    )
+    embedder: EmbedderConfig = Field(
+        default_factory=EmbedderConfig, title="Embedder Settings"
     )

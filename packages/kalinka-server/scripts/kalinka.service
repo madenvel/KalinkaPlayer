@@ -16,6 +16,7 @@ RuntimeDirectoryMode=0755
 CacheDirectory=kalinka
 CacheDirectoryMode=0755
 
+ExecStartPre=+/opt/kalinka/bootstrap.sh
 ExecStart=/opt/kalinka/venv/bin/kalinka-server \
   --config /etc/kalinka/kalinka_conf.cfg \
   --state  /var/lib/kalinka/kalinka_state.json

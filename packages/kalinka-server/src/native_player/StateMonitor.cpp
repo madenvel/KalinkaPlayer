@@ -57,23 +57,29 @@ StateChangeWaitLock::StateChangeWaitLock(
     std::stop_token token, AudioGraphNode &node, AudioGraphNodeState nextState,
     std::optional<std::chrono::milliseconds> timeout)
     : lastState(AudioGraphNodeState::STOPPED) {
-  std::unique_lock lock(mutex);
   int subscriptionId = node.onStateChange(
       [this, nextState](AudioGraphNode *node, StreamState state) -> bool {
+        std::lock_guard lock(mutex);
         lastState = state;
+        cv.notify_all();
         if (state.state == nextState) {
-          cv.notify_all();
           return false;
         }
         return true;
       });
-  if (timeout.has_value()) {
-    cv.wait_for(lock, token, timeout.value(),
-                [this, nextState] { return lastState.state == nextState; });
-  } else {
-    cv.wait(lock, token,
-            [this, nextState] { return lastState.state == nextState; });
+  {
+    std::unique_lock lock(mutex);
+    if (timeout.has_value()) {
+      cv.wait_for(lock, token, timeout.value(),
+                  [this, nextState] { return lastState.state == nextState; });
+    } else {
+      cv.wait(lock, token,
+              [this, nextState] { return lastState.state == nextState; });
+    }
   }
+
+  // Do not hold StateChangeWaitLock::mutex while touching AudioGraphNode
+  // callback registry: callbacks run under AudioGraphNode::mutex.
   node.removeStateChangeCallback(subscriptionId);
 }
 
@@ -88,13 +94,18 @@ StateChangeWaitLock::StateChangeWaitLock(
         cv.notify_all();
         return state.timestamp > timestamp;
       });
-  std::unique_lock lock(mutex);
-  if (timeout.has_value()) {
-    cv.wait_for(lock, token, timeout.value(),
-                [this, timestamp] { return lastState.timestamp > timestamp; });
-  } else {
-    cv.wait(lock, token,
-            [this, timestamp] { return lastState.timestamp > timestamp; });
+  {
+    std::unique_lock lock(mutex);
+    if (timeout.has_value()) {
+      cv.wait_for(lock, token, timeout.value(), [this, timestamp] {
+        return lastState.timestamp > timestamp;
+      });
+    } else {
+      cv.wait(lock, token,
+              [this, timestamp] { return lastState.timestamp > timestamp; });
+    }
   }
+
+  // Avoid lock-order inversion with AudioGraphNode::setState callbacks.
   node.removeStateChangeCallback(subscriptionId);
 }
