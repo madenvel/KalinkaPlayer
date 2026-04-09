@@ -36,14 +36,14 @@ class TrackInfo(BaseModel):
 
     Attributes:
         id (EntityId): Unique identifier for the track
-        link_retriever: Callable[[], TrackUrl] | Callable[[], Awaitable[TrackUrl]]: Function that returns the track's streaming URL
+        link_retriever: Callable[[], Awaitable[TrackUrl]]: Function that returns the track's streaming URL
         metadata (Optional[Track]): Track metadata (title, artist, album, etc.)
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: EntityId
-    link_retriever: Callable[[], TrackUrl] | Callable[[], Awaitable[TrackUrl]]
+    link_retriever: Callable[[], Awaitable[TrackUrl]]
     metadata: Optional[Track]
 
 
