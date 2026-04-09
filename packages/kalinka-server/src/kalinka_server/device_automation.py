@@ -69,6 +69,9 @@ class DeviceAutomation:
         self._subscription = None
         self._stream_task: Optional[asyncio.Task] = None
         self._device_stream_task: Optional[asyncio.Task] = None
+        # Set when device powers off externally; suppresses the auto-off timer until
+        # the device is known to be on again.
+        self._device_externally_off: bool = False
 
         # Check device capabilities
         self._can_power_on = False
@@ -109,11 +112,11 @@ class DeviceAutomation:
                     [ExtDeviceEventType.DevicePowerStateChanged]
                 ) as stream:
                     async for event in stream:
-                        if (
-                            isinstance(event, DevicePowerStateChangedEvent)
-                            and not event.power_on
-                        ):
-                            await self._on_device_power_off()
+                        if isinstance(event, DevicePowerStateChangedEvent):
+                            if not event.power_on:
+                                await self._on_device_power_off()
+                            else:
+                                self._device_externally_off = False
             except asyncio.CancelledError:
                 logger.debug("Device automation device event listener cancelled")
                 raise
@@ -125,8 +128,10 @@ class DeviceAutomation:
                 await asyncio.sleep(1)
 
     async def _on_device_power_off(self):
-        """Handle device power-off or input switch — stop playback so the auto-off timer fires."""
+        """Handle device power-off or input switch — stop playback immediately."""
         logger.info("Device powered off or input switched — stopping playback")
+        self._device_externally_off = True
+        self._cancel_auto_off_timer()
         try:
             current_state = await self.playqueue.get_playback_state()
             if current_state.state in (
@@ -180,6 +185,7 @@ class DeviceAutomation:
 
     async def _on_active(self):
         """Handle transition to an active state (buffering or playing)."""
+        self._device_externally_off = False
         if not self.config.auto_power_on:
             return
 
@@ -208,6 +214,10 @@ class DeviceAutomation:
         timeout = self.config.auto_off_timeout_seconds
         if timeout <= 0:
             logger.debug("Auto-off timeout disabled")
+            return
+
+        if self._device_externally_off:
+            logger.debug("Skipping auto-off timer: device already externally powered off")
             return
 
         # Don't restart the timer if it's already running (e.g. paused → stopped)

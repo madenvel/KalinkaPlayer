@@ -297,3 +297,86 @@ async def test_listener_restarts_after_error(
             mock_playqueue.stop.assert_called_once()
         finally:
             await automation.shutdown()
+
+
+async def test_power_off_event_does_not_start_auto_off_timer(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    """After external power-off, the STOPPED event must NOT start the auto-off timer."""
+    mock_playqueue.get_playback_state.return_value = PlaybackState(state=PlayerStateEnum.PLAYING)
+    mock_device.is_power_on.return_value = True
+    automation = await make_automation(config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device)
+    try:
+        ext_device_eventbus.dispatch(DevicePowerStateChangedEvent(power_on=False))
+        await asyncio.sleep(0.1)
+        mock_playqueue.stop.assert_called_once()
+
+        # Simulate the STOPPED event that playqueue.stop() would emit
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
+        )
+        await asyncio.sleep(0.1)
+
+        # Timer must not have been created — device is already off
+        assert automation._auto_off_task is None or automation._auto_off_task.done()
+        mock_device.power_off.assert_not_called()
+    finally:
+        await automation.shutdown()
+
+
+async def test_power_off_event_cancels_running_auto_off_timer(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    """If the auto-off timer is already running when a power-off event arrives, it is cancelled."""
+    mock_device.is_power_on.return_value = True
+    automation = await make_automation(config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device)
+    try:
+        # Start the timer via a STOPPED playback event
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
+        )
+        await asyncio.sleep(0.05)
+        assert automation._auto_off_task is not None and not automation._auto_off_task.done()
+
+        # Now the device powers off externally — timer should be cancelled immediately
+        ext_device_eventbus.dispatch(DevicePowerStateChangedEvent(power_on=False))
+        await asyncio.sleep(0.05)
+        assert automation._auto_off_task is None or automation._auto_off_task.done()
+
+        # Wait past the original timeout — still no power_off call
+        await asyncio.sleep(1.2)
+        mock_device.power_off.assert_not_called()
+    finally:
+        await automation.shutdown()
+
+
+async def test_auto_off_resumes_after_device_powers_back_on(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    """After a power-on event clears the flag, the normal auto-off flow resumes."""
+    mock_device.is_power_on.return_value = True
+    automation = await make_automation(config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device)
+    try:
+        # Device powers off externally
+        ext_device_eventbus.dispatch(DevicePowerStateChangedEvent(power_on=False))
+        await asyncio.sleep(0.1)
+        assert automation._device_externally_off is True
+
+        # Device powers back on
+        ext_device_eventbus.dispatch(DevicePowerStateChangedEvent(power_on=True))
+        await asyncio.sleep(0.05)
+        assert automation._device_externally_off is False
+
+        # Now a normal STOPPED event should start the auto-off timer
+        mock_playqueue.get_playback_state.return_value = PlaybackState(state=PlayerStateEnum.STOPPED)
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
+        )
+        await asyncio.sleep(0.05)
+        assert automation._auto_off_task is not None and not automation._auto_off_task.done()
+
+        # And the device gets powered off after the timeout
+        await asyncio.sleep(1.2)
+        mock_device.power_off.assert_called_once()
+    finally:
+        await automation.shutdown()
