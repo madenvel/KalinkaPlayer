@@ -1,7 +1,10 @@
 # What is it?
+Kalinka is an experimental open-source music system.
+"Kalinka" is a working project name and may be subject to trademark registration.
+
 KalinkaPlayer is a lightweight backend service for music playback on Linux systems (including Raspberry Pi 4+) exposing a REST API for control, library discovery and queue management.
 
-The current focus and most advanced functionality is LOCAL FILE PLAYBACK. A flexible indexing & enrichment pipeline builds and maintains a rich local music library. Track / album / artist metadata can be augmented using external services (AcoustID fingerprinting, MusicBrainz, Wikidata and others) with a fallback strategy to keep the library usable even when some lookups fail.
+The current focus and most advanced functionality is local file playback. A flexible indexing & enrichment pipeline builds and maintains a rich local music library. Track / album / artist metadata can be augmented using external services (AcoustID fingerprinting, MusicBrainz, Wikidata and others) with a fallback strategy to keep the library usable even when some lookups fail.
 
 The target audience: DIY HiFi enthusiasts comfortable with Linux and the command line who want a controllable, efficient audio backend.
 
