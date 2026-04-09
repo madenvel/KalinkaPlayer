@@ -1,5 +1,5 @@
 # kalinka_plugin_sdk/api.py
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from enum import Enum
 from typing import Any, Generic, Literal, Optional, Protocol, TypeVar, Union
 
@@ -17,84 +17,84 @@ class PlayQueueController(Protocol):
     All methods should be implemented by the play queue provider.
     """
 
-    async def play(self, index: Optional[int] = None) -> None:
+    def play(self, index: Optional[int] = None) -> Coroutine[Any, Any, None]:
         """Start playback at the given index, or resume if index is None."""
         ...
 
-    async def play_next(self, index: int) -> None:
+    def play_next(self, index: int) -> Coroutine[Any, Any, None]:
         """Play the track at the given index next."""
         ...
 
-    async def pause(self, paused: bool) -> None:
+    def pause(self, paused: bool) -> Coroutine[Any, Any, None]:
         """Pause or resume playback.
         If paused is True, pause playback; if False, resume playback.
         """
         ...
 
-    async def next(self) -> None:
+    def next(self) -> Coroutine[Any, Any, None]:
         """Skip to the next track."""
         ...
 
-    async def prev(self) -> None:
+    def prev(self) -> Coroutine[Any, Any, None]:
         """Go back to the previous track."""
         ...
 
-    async def seek(self, position_ms: int) -> None:
+    def seek(self, position_ms: int) -> Coroutine[Any, Any, None]:
         """Seek to the given position in milliseconds."""
         ...
 
-    async def stop(self) -> None:
+    def stop(self) -> Coroutine[Any, Any, None]:
         """Stop playback."""
         ...
 
-    async def add(self, tracks: list[TrackInfo], index: Optional[int] = None) -> None:
+    def add(self, tracks: list[TrackInfo], index: Optional[int] = None) -> Coroutine[Any, Any, None]:
         """Add tracks to the queue. If index is given, insert at that position; otherwise append."""
         ...
 
-    async def remove(self, tracks: list[int]) -> None:
+    def remove(self, tracks: list[int]) -> Coroutine[Any, Any, None]:
         """Remove tracks by their indices."""
         ...
 
-    async def list(self, offset: int, limit: int) -> TrackList:
+    def list(self, offset: int, limit: int) -> Coroutine[Any, Any, TrackList]:
         """List tracks in the queue with pagination."""
         ...
 
-    async def get_track_info(self, index: int) -> Optional[Track]:
+    def get_track_info(self, index: int) -> Coroutine[Any, Any, Optional[Track]]:
         """Get info for the track at the given index."""
         ...
 
-    async def get_playback_state(self) -> PlaybackState:
+    def get_playback_state(self) -> Coroutine[Any, Any, PlaybackState]:
         """Get the current playback state."""
         ...
 
-    async def restore_from_state(
+    def restore_from_state(
         self,
         state: Any,
         track_info_retriever: Callable[[EntityId], Awaitable[TrackInfo]],
-    ) -> None:
+    ) -> Coroutine[Any, Any, None]:
         """Restore the playback state from a saved state."""
         ...
 
-    async def clear(self):
+    def clear(self) -> Coroutine[Any, Any, None]:
         """Clear the play queue.
         Stops the playback if it is active.
         """
         ...
 
-    async def move(self, from_index: int, to_index: int) -> None:
+    def move(self, from_index: int, to_index: int) -> Coroutine[Any, Any, None]:
         """Move the track at from_index to to_index, shifting others as needed."""
         ...
 
-    async def set_playback_mode(
+    def set_playback_mode(
         self,
         shuffle: Optional[bool],
         repeat_single: Optional[bool],
         repeat_all: Optional[bool],
-    ) -> PlaybackMode:
+    ) -> Coroutine[Any, Any, PlaybackMode]:
         """Set playback modes: shuffle, repeat single, repeat all."""
         ...
 
-    async def get_playback_mode(self) -> PlaybackMode:
+    def get_playback_mode(self) -> Coroutine[Any, Any, PlaybackMode]:
         """Get the current playback mode."""
         ...
 
