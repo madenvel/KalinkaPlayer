@@ -42,6 +42,7 @@ from native_player.native_player import (
     StreamErrorSource,
     StreamInfo,
     StreamState,
+    StreamType,
 )
 
 
@@ -88,7 +89,15 @@ def _remap_index(idx: int, from_index: int, to_index: int) -> int:
 
 
 def get_duration_ms(stream_info: StreamInfo) -> int:
-    return int(stream_info.stream_size / stream_info.format.sample_rate * 1000)
+    sample_rate = stream_info.format.sample_rate
+    if sample_rate == 0:
+        return 0
+    if stream_info.stream_type == StreamType.BYTES:
+        bytes_per_frame = stream_info.format.channels * stream_info.format.bits_per_sample // 8
+        if bytes_per_frame == 0:
+            return 0
+        return int(stream_info.stream_size / bytes_per_frame / sample_rate * 1000)
+    return int(stream_info.stream_size / sample_rate * 1000)
 
 
 def to_audio_info(stream_info: StreamInfo):
@@ -399,19 +408,26 @@ class PlayQueueImpl(PlayQueueController):
 
         logger.info(f"Playing next track index={index}")
 
+        # If the player is already stopped, skip straight to _play_unqueued to
+        # avoid a wasteful append+remove cycle.
+        if self.track_player.get_state().state == AudioGraphNodeState.STOPPED:
+            await self._play_unqueued(index)
+            return
+
         track_info = await self._setup_track_to_play(index)
         if track_info is None:
+            return
+
+        # If the player stopped while we were awaiting the URL, fall back to a
+        # full _play_unqueued so the remove+append cycle restarts it.
+        if self.track_player.get_state().state == AudioGraphNodeState.STOPPED:
+            await self._play_unqueued(index)
             return
 
         stream_id = self.track_player.append(
             track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
-
-        # If the player stopped before the prefetch completed (slow URL fetch),
-        # fall back to a full _play_unqueued so the remove+append cycle restarts it.
-        if self.track_player.get_state().state == AudioGraphNodeState.STOPPED:
-            await self._play_unqueued(index)
 
     @serialised
     async def pause(self, paused: bool):
@@ -515,6 +531,7 @@ class PlayQueueImpl(PlayQueueController):
                 _, stream_id = self.prepared_tracks[track]
                 self.track_player.remove(stream_id)
                 del self.prepared_tracks[track]
+                self._cancel_prefetch_timer()
 
             if track < self.current_track_id:
                 self.current_track_id -= 1
@@ -622,6 +639,14 @@ class PlayQueueImpl(PlayQueueController):
             target_index = state.playback_state.index
         self.current_track_id = target_index
 
+        # Restore playback mode fields before _add so that expected_next
+        # computation inside _add uses the correct repeat settings, and so that
+        # any events dispatched during _add reflect the final mode.
+        if state.playback_mode:
+            self.shuffle = state.playback_mode.shuffle
+            self.repeat_single = state.playback_mode.repeat_single
+            self.repeat_all = state.playback_mode.repeat_all
+
         # Restore track list
         if state.track_list:
             track_infos = []
@@ -644,12 +669,8 @@ class PlayQueueImpl(PlayQueueController):
         else:
             self.current_track_id = 0
 
-        # Restore playback mode
+        # Emit mode event after _add so clients see track state and mode together
         if state.playback_mode:
-            self.shuffle = state.playback_mode.shuffle
-            self.repeat_single = state.playback_mode.repeat_single
-            self.repeat_all = state.playback_mode.repeat_all
-
             self.event_emitter.dispatch(
                 PlaybackModeChangedEvent(mode=state.playback_mode)
             )
@@ -732,6 +753,7 @@ class PlayQueueImpl(PlayQueueController):
         was_already_stopped = (
             self.track_player.get_state().state == AudioGraphNodeState.STOPPED
         )
+        self._cancel_prefetch_timer()
         self.track_player.clear_all()
         self.current_stream_id = None
         self.prepared_tracks.clear()
@@ -905,12 +927,15 @@ class PlayQueueImpl(PlayQueueController):
                 ),
             )
             if repeat_single_updated:
-                if self.prepared_tracks:
-                    _, (_, stream_id) = self.prepared_tracks.popitem(last=False)
-                    self.track_player.remove(stream_id)
-                    self._prefetch_task = asyncio.create_task(
-                        self._play_next_track_async()
-                    )
+                for idx in list(self.prepared_tracks.keys()):
+                    if idx != self.current_track_id:
+                        _, stream_id = self.prepared_tracks.pop(idx)
+                        self.track_player.remove(stream_id)
+                        self._cancel_prefetch_timer()
+                        self._prefetch_task = asyncio.create_task(
+                            self._play_next_track_async()
+                        )
+                        break
         return PlaybackMode(
             shuffle=self.shuffle,
             repeat_single=self.repeat_single,

@@ -103,23 +103,26 @@ class DeviceAutomation:
 
     async def _device_event_listener(self):
         """Listen for external device state changes (e.g. input switched away)."""
-        try:
-            async with self.ext_device_eventbus.stream(
-                [ExtDeviceEventType.DevicePowerStateChanged]
-            ) as stream:
-                async for event in stream:
-                    if (
-                        isinstance(event, DevicePowerStateChangedEvent)
-                        and not event.power_on
-                    ):
-                        await self._on_device_power_off()
-        except asyncio.CancelledError:
-            logger.debug("Device automation device event listener cancelled")
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error in device automation device event listener: {e}", exc_info=True
-            )
+        while True:
+            try:
+                async with self.ext_device_eventbus.stream(
+                    [ExtDeviceEventType.DevicePowerStateChanged]
+                ) as stream:
+                    async for event in stream:
+                        if (
+                            isinstance(event, DevicePowerStateChangedEvent)
+                            and not event.power_on
+                        ):
+                            await self._on_device_power_off()
+            except asyncio.CancelledError:
+                logger.debug("Device automation device event listener cancelled")
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Error in device automation device event listener: {e}",
+                    exc_info=True,
+                )
+                await asyncio.sleep(1)
 
     async def _on_device_power_off(self):
         """Handle device power-off or input switch — stop playback so the auto-off timer fires."""
@@ -139,20 +142,22 @@ class DeviceAutomation:
 
     async def _event_listener(self):
         """Listen for playback state changes."""
-        try:
-            async with self.playqueue_eventbus.stream(
-                [PlayQueueEventType.PlaybackStateChanged]
-            ) as stream:
-                async for event in stream:
-                    if isinstance(event, PlaybackStateChangedEvent):
-                        await self._handle_playback_state_change(event.state)
-        except asyncio.CancelledError:
-            logger.debug("Device automation event listener cancelled")
-            raise
-        except Exception as e:
-            logger.error(
-                f"Error in device automation event listener: {e}", exc_info=True
-            )
+        while True:
+            try:
+                async with self.playqueue_eventbus.stream(
+                    [PlayQueueEventType.PlaybackStateChanged]
+                ) as stream:
+                    async for event in stream:
+                        if isinstance(event, PlaybackStateChangedEvent):
+                            await self._handle_playback_state_change(event.state)
+            except asyncio.CancelledError:
+                logger.debug("Device automation event listener cancelled")
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Error in device automation event listener: {e}", exc_info=True
+                )
+                await asyncio.sleep(1)
 
     async def _handle_playback_state_change(self, state: PlaybackState):
         """

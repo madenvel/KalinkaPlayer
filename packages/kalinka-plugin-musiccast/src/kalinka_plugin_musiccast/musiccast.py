@@ -349,11 +349,15 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         self.shutdown_event = asyncio.Event()
         self.ready = True
 
+        # Track "effective on" state: device powered on AND correct input selected
+        self._device_power_on: bool = (
+            status["power"] == "on" and status["input"] == self.connected_input
+        )
+
         # Set initial device state after we have retrieved it from the device
         # This must be done before any event emission tasks start
-        power_on = status["power"] == "on" and status["input"] == self.connected_input
         initial_state = ExtDeviceState(
-            power_on=power_on,
+            power_on=self._device_power_on,
             volume=self.volume,
         )
         self.event_emitter.set_initial_state(initial_state)
@@ -650,13 +654,25 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         if power_state == "standby":
             logger.info("Device entered standby mode")
-            self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
+            if self._device_power_on:
+                self._device_power_on = False
+                self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
             return
 
         if input_state is not None and input_state != self.connected_input:
             logger.info(f"Input changed from {self.connected_input} to {input_state}")
-            self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
+            if self._device_power_on:
+                self._device_power_on = False
+                self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=False))
             return
+
+        # Device is on and input matches (or input not reported) — track effective-on state
+        if power_state == "on" and (
+            input_state is None or input_state == self.connected_input
+        ):
+            if not self._device_power_on:
+                self._device_power_on = True
+                self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=True))
 
         # Handle mute state if needed
         if "mute" in zone_state:
@@ -804,6 +820,9 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             return
         await self._request_musiccast(f"/{self.zone_name}/setPower?power=on")
         await self._set_input()
+        if not self._device_power_on:
+            self._device_power_on = True
+            self.event_emitter.dispatch(DevicePowerStateChangedEvent(power_on=True))
 
     async def power_off(self) -> None:
         if not self.ready:
