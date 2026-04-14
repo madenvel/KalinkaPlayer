@@ -201,10 +201,10 @@ class SearchWorker:
     # Model loading / unloading
     # ------------------------------------------------------------------
 
-    def _load_genre_model(self):
-        """Load EffNet-based genre classifier."""
+    def _load_tag_models(self):
+        """Load all tag prediction models (EffNet + VGGish + classifiers)."""
         if self._effnet is not None:
-            return
+            return  # already loaded
         self._tags_load_attempted_at = time.monotonic()
         cfg = self.config.searcher
         if not cfg.tags.enabled or cfg.tags.current_version == 0:
@@ -212,110 +212,64 @@ class SearchWorker:
         if not _ensure_numpy():
             return
         if not _ensure_package("essentia"):
-            logger.warning("essentia-tensorflow unavailable; genre prediction disabled")
+            logger.warning("essentia-tensorflow unavailable; tag prediction disabled")
             return
         try:
             model_dir = cfg.model_dir
             effnet_path = _ensure_model_file("effnet", cfg.tags.effnet_path, model_dir)
             genre_path = _ensure_model_file("genre", cfg.tags.genre_path, model_dir)
-            if effnet_path is None or genre_path is None:
-                logger.warning(
-                    "Genre model files unavailable; genre prediction disabled"
-                )
-                return
-            import essentia.standard as es
-
-            self._effnet = es.TensorflowPredictEffnetDiscogs(
-                graphFilename=effnet_path, output="PartitionedCall:1"
-            )
-            self._genre_cls = es.TensorflowPredict2D(
-                graphFilename=genre_path,
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall:0",
-            )
-            logger.info("Genre model (EffNet) loaded")
-        except Exception as e:
-            logger.warning("Genre model loading failed: %s", e)
-
-    def _load_mood_model(self):
-        """Load VGGish-based mood classifier."""
-        if self._mood_cls is not None:
-            return
-        self._tags_load_attempted_at = time.monotonic()
-        cfg = self.config.searcher
-        if not cfg.tags.enabled or cfg.tags.current_version == 0:
-            return
-        if not _ensure_numpy():
-            return
-        if not _ensure_package("essentia"):
-            logger.warning("essentia-tensorflow unavailable; mood prediction disabled")
-            return
-        try:
-            model_dir = cfg.model_dir
             vggish_path = _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir)
             mood_path = _ensure_model_file(
                 "mood_mirex", cfg.tags.mood_mirex_path, model_dir
             )
-            if vggish_path is None or mood_path is None:
-                logger.warning("Mood model files unavailable; mood prediction disabled")
-                return
-            import essentia.standard as es
-
-            if self._vggish is None:
-                self._vggish = es.TensorflowPredictVGGish(
-                    graphFilename=vggish_path, output="model/vggish/embeddings"
-                )
-            self._mood_cls = es.TensorflowPredict2D(
-                graphFilename=mood_path,
-                input="serving_default_model_Placeholder",
-                output="PartitionedCall",
-            )
-            logger.info("Mood model (VGGish) loaded")
-        except Exception as e:
-            logger.warning("Mood model loading failed: %s", e)
-
-    def _load_danceability_model(self):
-        """Load VGGish-based danceability classifier."""
-        if self._dance_cls is not None:
-            return
-        self._tags_load_attempted_at = time.monotonic()
-        cfg = self.config.searcher
-        if not cfg.tags.enabled or cfg.tags.current_version == 0:
-            return
-        if not _ensure_numpy():
-            return
-        if not _ensure_package("essentia"):
-            logger.warning(
-                "essentia-tensorflow unavailable; danceability prediction disabled"
-            )
-            return
-        try:
-            model_dir = cfg.model_dir
-            vggish_path = _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir)
             dance_path = _ensure_model_file(
                 "danceability", cfg.tags.danceability_path, model_dir
             )
-            if vggish_path is None or dance_path is None:
-                logger.warning(
-                    "Danceability model files unavailable; danceability prediction disabled"
-                )
-                return
             import essentia.standard as es
 
-            if self._vggish is None:
+            if effnet_path and genre_path:
+                self._effnet = es.TensorflowPredictEffnetDiscogs(
+                    graphFilename=effnet_path, output="PartitionedCall:1"
+                )
+                self._genre_cls = es.TensorflowPredict2D(
+                    graphFilename=genre_path,
+                    input="serving_default_model_Placeholder",
+                    output="PartitionedCall:0",
+                )
+                logger.info("Genre model (EffNet) loaded")
+            else:
+                logger.warning("Genre model files unavailable; genre prediction disabled")
+
+            if vggish_path:
                 self._vggish = es.TensorflowPredictVGGish(
                     graphFilename=vggish_path, output="model/vggish/embeddings"
                 )
-            self._dance_cls = es.TensorflowPredict2D(
-                graphFilename=dance_path,
-                input="model/Placeholder",
-                output="model/Softmax",
-            )
-            logger.info("Danceability model (VGGish) loaded")
+                if mood_path:
+                    self._mood_cls = es.TensorflowPredict2D(
+                        graphFilename=mood_path,
+                        input="serving_default_model_Placeholder",
+                        output="PartitionedCall",
+                    )
+                    logger.info("Mood model (VGGish) loaded")
+                else:
+                    logger.warning("Mood model file unavailable; mood disabled")
+                if dance_path:
+                    self._dance_cls = es.TensorflowPredict2D(
+                        graphFilename=dance_path,
+                        input="model/Placeholder",
+                        output="model/Softmax",
+                    )
+                    logger.info("Danceability model (VGGish) loaded")
+                else:
+                    logger.warning("Danceability model file unavailable")
+            else:
+                logger.warning("VGGish model unavailable; mood/danceability disabled")
         except Exception as e:
-            logger.warning("Danceability model loading failed: %s", e)
+            logger.warning("Tag model loading failed: %s", e)
 
     def _unload_models(self):
+        if self._effnet is None and self._vggish is None:
+            return
         self._effnet = None
         self._genre_cls = None
         self._vggish = None
@@ -323,7 +277,7 @@ class SearchWorker:
         self._dance_cls = None
         self._tags_load_attempted_at = 0.0
         gc.collect()
-        logger.info("Tag models unloaded after idle timeout")
+        logger.info("Tag models unloaded")
 
     # ------------------------------------------------------------------
     # CLAP text encoding via IPC (served by embedder process)
@@ -344,117 +298,102 @@ class SearchWorker:
             logger.warning("CLAP text encoding IPC failed: %s", e)
             return None
 
-    def _unload_genre_model(self):
-        if self._effnet is None:
-            return
-        self._effnet = None
-        self._genre_cls = None
-        gc.collect()
-        logger.info("Genre model (EffNet) unloaded")
-
-    def _unload_mood_model(self):
-        if self._mood_cls is None:
-            return
-        self._vggish = None
-        self._mood_cls = None
-        gc.collect()
-        logger.info("Mood model (VGGish) unloaded")
-
-    def _unload_danceability_model(self):
-        if self._dance_cls is None:
-            return
-        self._dance_cls = None
-        gc.collect()
-        logger.info("Danceability model unloaded")
-
     # ------------------------------------------------------------------
     # Inference helpers
     # ------------------------------------------------------------------
 
-    def _predict_genre(self, file_path: str) -> Optional[list]:
-        """Predict genre using EffNet. Returns list of {label, score} dicts or None."""
-        if self._effnet is None or self._genre_cls is None:
-            return None
+    def _predict_all_tags(self, file_path: str) -> dict:
+        """Predict genre, mood, and danceability in a single pass.
+
+        Decodes audio once.  Runs EffNet for genre, then VGGish once and
+        passes its embeddings to both the mood and danceability classifiers.
+        Returns a dict with keys: genres, mood_cluster, danceability.
+        Missing keys indicate that the corresponding model was unavailable.
+        """
+        result: dict = {}
         try:
             import essentia.standard as es
 
             t0 = time.monotonic()
             loader = es.MonoLoader(filename=file_path, sampleRate=16000)
             audio = loader()
-            effnet_embeddings = self._effnet(audio)
-            genre_activations = self._genre_cls(effnet_embeddings)
-            genre_mean = genre_activations.mean(axis=0)
 
-            cfg = self.config.searcher.tags
-            top_genres = []
-            try:
-                sorted_indices = genre_mean.argsort()[::-1]
-                for idx in sorted_indices:
-                    score = float(genre_mean[idx])
-                    if score < cfg.min_confidence:
-                        break
-                    if len(top_genres) >= cfg.top_genres:
-                        break
-                    top_genres.append(
-                        {"label": f"discogs_{idx}", "score": round(score, 3)}
-                    )
-            except Exception as e:
-                logger.debug("Genre extraction error: %s", e)
+            # --- Genre (EffNet backbone) ---
+            if self._effnet is not None and self._genre_cls is not None:
+                try:
+                    effnet_embeddings = self._effnet(audio)
+                    genre_activations = self._genre_cls(effnet_embeddings)
+                    genre_mean = genre_activations.mean(axis=0)
+                    cfg = self.config.searcher.tags
+                    top_genres = []
+                    sorted_indices = genre_mean.argsort()[::-1]
+                    for idx in sorted_indices:
+                        score = float(genre_mean[idx])
+                        if score < cfg.min_confidence:
+                            break
+                        if len(top_genres) >= cfg.top_genres:
+                            break
+                        top_genres.append(
+                            {"label": f"discogs_{idx}", "score": round(score, 3)}
+                        )
+                    result["genres"] = top_genres
+                except Exception as e:
+                    logger.debug("Genre extraction error: %s", e)
 
-            logger.info("Genre inference: %.3fs", time.monotonic() - t0)
-            return top_genres
-        except Exception as e:
-            logger.warning("Genre prediction failed for %s: %s", file_path, e)
-            return None
+            # --- VGGish embeddings (shared by mood + danceability) ---
+            if self._vggish is not None:
+                try:
+                    vggish_embeddings = self._vggish(audio)
 
-    def _predict_mood(self, file_path: str) -> Optional[int]:
-        """Predict mood using VGGish. Returns mood cluster (0-4) or None."""
-        if self._vggish is None or self._mood_cls is None:
-            return None
-        try:
-            import essentia.standard as es
+                    if self._mood_cls is not None:
+                        try:
+                            mood_activations = self._mood_cls(
+                                vggish_embeddings
+                            ).mean(axis=0)
+                            result["mood_cluster"] = int(mood_activations.argmax())
+                        except Exception as e:
+                            logger.debug("Mood prediction error: %s", e)
 
-            t0 = time.monotonic()
-            loader = es.MonoLoader(filename=file_path, sampleRate=16000)
-            audio = loader()
-            vggish_embeddings = self._vggish(audio)
-            mood_activations = self._mood_cls(vggish_embeddings).mean(axis=0)
-            mood_cluster = int(mood_activations.argmax())
-            logger.info("Mood inference: %.3fs", time.monotonic() - t0)
-            return mood_cluster
-        except Exception as e:
-            logger.warning("Mood prediction failed for %s: %s", file_path, e)
-            return None
+                    if self._dance_cls is not None:
+                        try:
+                            dance_activations = self._dance_cls(
+                                vggish_embeddings
+                            ).mean(axis=0)
+                            result["danceability"] = round(
+                                float(dance_activations[0])
+                                if len(dance_activations) > 0
+                                else 0.0,
+                                3,
+                            )
+                        except Exception as e:
+                            logger.debug("Danceability prediction error: %s", e)
+                except Exception as e:
+                    logger.debug("VGGish inference error: %s", e)
 
-    def _predict_danceability(self, file_path: str) -> Optional[float]:
-        """Predict danceability using VGGish. Returns score 0–1 or None."""
-        if self._vggish is None or self._dance_cls is None:
-            return None
-        try:
-            import essentia.standard as es
-
-            t0 = time.monotonic()
-            loader = es.MonoLoader(filename=file_path, sampleRate=16000)
-            audio = loader()
-            vggish_embeddings = self._vggish(audio)
-            dance_activations = self._dance_cls(vggish_embeddings).mean(axis=0)
-            danceability = (
-                float(dance_activations[0]) if len(dance_activations) > 0 else 0.0
+            logger.info(
+                "Tag inference: %.3fs (genre=%s mood=%s dance=%s)",
+                time.monotonic() - t0,
+                "genres" in result,
+                "mood_cluster" in result,
+                "danceability" in result,
             )
-            logger.info("Danceability inference: %.3fs", time.monotonic() - t0)
-            return round(danceability, 3)
         except Exception as e:
-            logger.warning("Danceability prediction failed for %s: %s", file_path, e)
-            return None
+            logger.warning("Tag prediction failed for %s: %s", file_path, e)
+
+        return result
 
     # ------------------------------------------------------------------
-    # Tag batch processors
+    # Tag batch processor
     # ------------------------------------------------------------------
 
-    async def _process_genre_batch(self) -> bool:
-        """Process tags_genre jobs."""
+    async def _process_tags_batch(self) -> bool:
+        """Process a batch of unified tag jobs (genre + mood + danceability).
+
+        Each track is decoded once; VGGish embeddings are computed once and
+        shared between mood and danceability classifiers.
+        """
         cfg = self.config.searcher
-        batch = await self.db.claim_batch("tags_genre", cfg.batch_size_tags)
+        batch = await self.db.claim_batch("tags", cfg.batch_size_tags)
         if not batch:
             return False
 
@@ -468,12 +407,8 @@ class SearchWorker:
                 )
                 continue
 
-            genres = self._predict_genre(file_path)
-            if genres is None:
-                logger.debug("Genre model returned None for %s", track_id)
-                tags_json = json.dumps({})
-            else:
-                tags_json = json.dumps({"genres": genres})
+            tags = self._predict_all_tags(file_path)
+            tags_json = json.dumps(tags) if tags else json.dumps({})
             try:
                 await self.db.complete_tags_job(job["id"], track_id, tags_json)
                 completed.append(track_id)
@@ -481,73 +416,7 @@ class SearchWorker:
                 await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
 
         if completed:
-            logger.info("Genre tags written for %d tracks", len(completed))
-        return True
-
-    async def _process_mood_batch(self) -> bool:
-        """Process tags_mood jobs."""
-        cfg = self.config.searcher
-        batch = await self.db.claim_batch("tags_mood", cfg.batch_size_tags)
-        if not batch:
-            return False
-
-        completed = []
-        for job in batch:
-            track_id = job["entity_id"]
-            file_path = await self.db.get_file_path_for_track(track_id)
-            if file_path is None:
-                await self.db.fail_job(
-                    job["id"], "track not found", cfg.max_job_attempts
-                )
-                continue
-
-            mood = self._predict_mood(file_path)
-            if mood is None:
-                logger.debug("Mood model returned None for %s", track_id)
-                tags_json = json.dumps({})
-            else:
-                tags_json = json.dumps({"mood_cluster": mood})
-            try:
-                await self.db.complete_tags_job(job["id"], track_id, tags_json)
-                completed.append(track_id)
-            except Exception as e:
-                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
-
-        if completed:
-            logger.info("Mood tags written for %d tracks", len(completed))
-        return True
-
-    async def _process_danceability_batch(self) -> bool:
-        """Process tags_danceability jobs."""
-        cfg = self.config.searcher
-        batch = await self.db.claim_batch("tags_danceability", cfg.batch_size_tags)
-        if not batch:
-            return False
-
-        completed = []
-        for job in batch:
-            track_id = job["entity_id"]
-            file_path = await self.db.get_file_path_for_track(track_id)
-            if file_path is None:
-                await self.db.fail_job(
-                    job["id"], "track not found", cfg.max_job_attempts
-                )
-                continue
-
-            danceability = self._predict_danceability(file_path)
-            if danceability is None:
-                logger.debug("Danceability model returned None for %s", track_id)
-                tags_json = json.dumps({})
-            else:
-                tags_json = json.dumps({"danceability": danceability})
-            try:
-                await self.db.complete_tags_job(job["id"], track_id, tags_json)
-                completed.append(track_id)
-            except Exception as e:
-                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
-
-        if completed:
-            logger.info("Danceability tags written for %d tracks", len(completed))
+            logger.info("Tags written for %d tracks", len(completed))
         return True
 
     # ------------------------------------------------------------------
@@ -963,48 +832,20 @@ class SearchWorker:
 
         while not shutdown_event.is_set():
             # Schedule new tag jobs for enriched tracks
-            tags_config = {
-                "genre_enabled": cfg.tags.enabled,
-                "mood_enabled": cfg.tags.enabled,
-                "danceability_enabled": cfg.tags.enabled,
-            }
-            await self.db.schedule_new_tag_jobs(cfg.tags.current_version, tags_config)
+            if cfg.tags.enabled and cfg.tags.current_version > 0:
+                await self.db.schedule_new_tag_jobs(cfg.tags.current_version)
 
             did_work = False
             retry_gap = poll
 
-            # Process tag stages sequentially with selective model loading
-            tag_stages = [
-                (
-                    "tags_genre",
-                    self._load_genre_model,
-                    self._process_genre_batch,
-                    self._unload_genre_model,
-                ),
-                (
-                    "tags_mood",
-                    self._load_mood_model,
-                    self._process_mood_batch,
-                    self._unload_mood_model,
-                ),
-                (
-                    "tags_danceability",
-                    self._load_danceability_model,
-                    self._process_danceability_batch,
-                    self._unload_danceability_model,
-                ),
-            ]
-
-            for stage_name, load_fn, process_fn, unload_fn in tag_stages:
-                if not cfg.tags.enabled or cfg.tags.current_version == 0:
-                    continue
-
-                while await self.db.has_pending_jobs(stage_name):
+            # Process unified tag jobs (single audio decode per track)
+            if cfg.tags.enabled and cfg.tags.current_version > 0:
+                while await self.db.has_pending_jobs("tags"):
                     if time.monotonic() - self._tags_load_attempted_at >= retry_gap:
-                        load_fn()
+                        self._load_tag_models()
 
                     try:
-                        batch_processed = await process_fn()
+                        batch_processed = await self._process_tags_batch()
                         if batch_processed:
                             did_work = True
                             last_work_time = time.monotonic()
@@ -1012,12 +853,9 @@ class SearchWorker:
                             break
                     except Exception:
                         logger.exception(
-                            "Unexpected error in %s batch processing; will retry",
-                            stage_name,
+                            "Unexpected error in tag batch processing; will retry"
                         )
                         break
-
-                unload_fn()
 
             # After tag processing, nudge the embedder so it can schedule
             # CLAP jobs for tracks that now have completed tags.

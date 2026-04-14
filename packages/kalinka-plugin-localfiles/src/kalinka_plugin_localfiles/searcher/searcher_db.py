@@ -244,40 +244,29 @@ class AsyncSearcherDb:
                 UPDATE embedding_jobs
                 SET status = 'pending', updated_at = CURRENT_TIMESTAMP
                 WHERE status = 'in_progress'
-                  AND stage IN ('tags_genre', 'tags_mood', 'tags_danceability')
+                  AND stage = 'tags'
                 """
             )
             await conn.commit()
         logger.info("Stale in_progress tag jobs reset to pending")
 
-    async def schedule_new_tag_jobs(self, tags_version: int, tags_config: dict) -> int:
+    async def schedule_new_tag_jobs(self, tags_version: int) -> int:
         """
-        Queue tag jobs for enriched tracks that don't have one yet.
+        Queue unified tag jobs for enriched tracks that don't have one yet.
         Returns total jobs inserted.
         """
-        inserted = 0
         async with self._get_connection() as conn:
-            tag_stages = []
-            if tags_config.get("genre_enabled", True):
-                tag_stages.append("tags_genre")
-            if tags_config.get("mood_enabled", True):
-                tag_stages.append("tags_mood")
-            if tags_config.get("danceability_enabled", True):
-                tag_stages.append("tags_danceability")
-
-            for stage in tag_stages:
-                cursor = await conn.execute(
-                    """
-                    INSERT OR IGNORE INTO embedding_jobs
-                        (entity_type, entity_id, stage, model_version)
-                    SELECT 'track', t.id, ?, ?
-                    FROM tracks t
-                    WHERE t.enriched IN (1, 2)
-                    """,
-                    (stage, tags_version),
-                )
-                inserted += cursor.rowcount
-
+            cursor = await conn.execute(
+                """
+                INSERT OR IGNORE INTO embedding_jobs
+                    (entity_type, entity_id, stage, model_version)
+                SELECT 'track', t.id, 'tags', ?
+                FROM tracks t
+                WHERE t.enriched IN (1, 2)
+                """,
+                (tags_version,),
+            )
+            inserted = cursor.rowcount
             await conn.commit()
         if inserted:
             logger.info("Scheduled %d new tag jobs", inserted)

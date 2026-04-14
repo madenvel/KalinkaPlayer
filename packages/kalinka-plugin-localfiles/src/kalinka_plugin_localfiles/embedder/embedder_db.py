@@ -229,9 +229,9 @@ class AsyncEmbedderDb:
         """
         Queue CLAP jobs for enriched tracks.
 
-        clap_audio is only scheduled for tracks whose tag stages
-        (managed by the searcher) are all 'done'.  clap_text is
-        independent — only needs enriched metadata.
+        clap_audio is only scheduled for tracks whose unified tag job
+        (managed by the searcher) is 'done'.  clap_text is independent
+        — only needs enriched metadata.
 
         Returns total jobs inserted.
         """
@@ -239,13 +239,11 @@ class AsyncEmbedderDb:
             return 0
 
         inserted = 0
-        tag_stages = ("tags_genre", "tags_mood", "tags_danceability")
-        placeholders = ",".join("?" * len(tag_stages))
 
         async with self._get_connection() as conn:
-            # CLAP audio: wait for all tag stages to be done
+            # CLAP audio: wait for the unified tag stage to be done
             cursor = await conn.execute(
-                f"""
+                """
                 INSERT OR IGNORE INTO embedding_jobs
                     (entity_type, entity_id, stage, model_version)
                 SELECT 'track', t.id, 'clap_audio', ?
@@ -254,7 +252,7 @@ class AsyncEmbedderDb:
                   AND NOT EXISTS (
                     SELECT 1 FROM embedding_jobs j
                     WHERE j.entity_id = t.id
-                      AND j.stage IN ({placeholders})
+                      AND j.stage = 'tags'
                       AND j.status != 'done'
                   )
                   AND NOT EXISTS (
@@ -264,7 +262,7 @@ class AsyncEmbedderDb:
                       AND j.model_version = ?
                   )
                 """,
-                (clap_version, *tag_stages, clap_version),
+                (clap_version, clap_version),
             )
             inserted += cursor.rowcount
 
