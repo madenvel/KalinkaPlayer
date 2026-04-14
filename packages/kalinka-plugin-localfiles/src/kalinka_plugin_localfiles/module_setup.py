@@ -12,6 +12,7 @@ from .localfiles import LocalFilesInputModule
 from . import enricher
 from . import indexer
 from . import embedder
+from . import searcher
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -25,12 +26,16 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def __init__(self):
         self._enricher_proc = None
         self._indexer_proc = None
+        self._searcher_proc = None
         self._embedder_proc = None
         self._enricher_queue = multiprocessing.Queue()
+        self._searcher_nudge_queue = multiprocessing.Queue()
         self._embedder_nudge_queue = multiprocessing.Queue()
         self._logging_queue = multiprocessing.Queue()
         self._search_request_queue = multiprocessing.Queue()
         self._search_response_queue = multiprocessing.Queue()
+        self._text_encode_request_queue = multiprocessing.Queue()
+        self._text_encode_response_queue = multiprocessing.Queue()
         self._log_listener = None
         self._inputmodule = None
 
@@ -45,6 +50,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         logger.info("Setting up localfiles input module")
 
         input_module_db = LocalFilesInputModuleDb(config)
+
+        # If rescan_on_startup was set, LocalFilesInputModuleDb will have reset
+        # it to False on the local copy. Propagate that back to context.config
+        # so the change is persisted to disk when the server saves config on shutdown.
+        if context.config.rescan_on_startup and not config.rescan_on_startup:
+            context.config.rescan_on_startup = False
+            logger.info("rescan_on_startup reset to False after purge")
 
         # The LocalFilesInputModule will use its own specialized DB
         self._inputmodule = LocalFilesInputModule(
@@ -82,21 +94,60 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         self._indexer_proc.start()
 
         if config.enricher.enabled:
+            # Enricher nudges the searcher (not the embedder directly)
             self._enricher_proc = multiprocessing.Process(
                 target=enricher.main,
-                args=(config, self._enricher_queue, self._logging_queue, self._embedder_nudge_queue),
+                args=(
+                    config,
+                    self._enricher_queue,
+                    self._logging_queue,
+                    self._searcher_nudge_queue,
+                ),
             )
             self._enricher_proc.start()
 
-        if config.embedder.enabled:
-            self._embedder_proc = multiprocessing.Process(
-                target=embedder.main,
+        # The embedder process must run when:
+        # 1. embedder.enabled — to compute CLAP audio/text embeddings, or
+        # 2. searcher needs KNN — to serve text-encode requests for search.
+        clap_version = config.embedder.clap.current_version
+        need_embedder = config.embedder.enabled or (
+            config.searcher.enabled and clap_version > 0
+        )
+
+        if config.searcher.enabled:
+            # Searcher owns tags + FTS + search; nudges embedder when tags are done.
+            # Text-encode queues let the searcher request CLAP encoding from
+            # the embedder process instead of loading the ~600 MB model itself.
+            text_encode_queues = (
+                (self._text_encode_request_queue, self._text_encode_response_queue)
+                if need_embedder
+                else (None, None)
+            )
+            self._searcher_proc = multiprocessing.Process(
+                target=searcher.main,
                 args=(
                     config,
                     self._logging_queue,
                     self._search_request_queue,
                     self._search_response_queue,
+                    self._searcher_nudge_queue,
                     self._embedder_nudge_queue,
+                    *text_encode_queues,
+                ),
+            )
+            self._searcher_proc.start()
+
+        if need_embedder:
+            # Embedder is CLAP-only; also serves text-encode requests for
+            # the searcher so only one process loads the CLAP model.
+            self._embedder_proc = multiprocessing.Process(
+                target=embedder.main,
+                args=(
+                    config,
+                    self._logging_queue,
+                    self._embedder_nudge_queue,
+                    self._text_encode_request_queue,
+                    self._text_encode_response_queue,
                 ),
             )
             self._embedder_proc.start()
@@ -129,6 +180,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         self._shutdown_process(self._indexer_proc)
         self._shutdown_process(self._enricher_proc)
+        self._shutdown_process(self._searcher_proc)
         self._shutdown_process(self._embedder_proc)
 
         if self._log_listener is not None:
@@ -137,10 +189,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         # Ensure multiprocessing queues release their semaphores
         for q in (
             self._enricher_queue,
+            self._searcher_nudge_queue,
             self._embedder_nudge_queue,
             self._logging_queue,
             self._search_request_queue,
             self._search_response_queue,
+            self._text_encode_request_queue,
+            self._text_encode_response_queue,
         ):
             if q is not None:
                 q.close()

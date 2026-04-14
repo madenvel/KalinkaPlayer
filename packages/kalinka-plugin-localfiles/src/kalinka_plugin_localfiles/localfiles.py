@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import multiprocessing
 import os
@@ -35,85 +34,6 @@ from .utils.image_utils import create_playlist_cover_collage
 from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
-
-
-# ---------------------------------------------------------------------------
-# AI search re-ranking helpers
-# ---------------------------------------------------------------------------
-
-# Representative keywords for mood clusters (index = mood_mirex cluster id 0-4)
-_MOOD_CLUSTER_KEYWORDS: list[list[str]] = [
-    ["happy", "joyful", "upbeat", "energetic", "fun"],        # 0
-    ["angry", "aggressive", "intense", "heavy", "powerful"],  # 1
-    ["calm", "peaceful", "relaxing", "ambient", "soft"],      # 2
-    ["melancholic", "sad", "emotional", "dark", "nostalgic"], # 3
-    ["romantic", "tender", "sentimental", "warm"],            # 4
-]
-
-# Genre vocabulary (subset of normalised Discogs labels for keyword matching)
-_GENRE_KEYWORDS: list[str] = [
-    "jazz", "blues", "soul", "funk", "gospel",
-    "rock", "punk", "metal", "indie", "alternative",
-    "pop", "dance", "electronic", "techno", "house", "trance", "edm",
-    "hip hop", "hip-hop", "rap", "r&b", "rnb",
-    "classical", "opera", "orchestral", "chamber",
-    "folk", "country", "americana", "bluegrass",
-    "reggae", "ska", "latin", "bossa nova", "samba",
-    "ambient", "new age", "meditation",
-    "instrumental", "acoustic",
-]
-
-
-def extract_query_tags(query: str) -> dict:
-    """
-    Extract genre and mood hints from a natural-language query by keyword matching.
-    Returns {"genres": [str,...], "mood_clusters": [int,...]}.
-    """
-    q = query.lower()
-    genres = [g for g in _GENRE_KEYWORDS if g in q]
-    mood_clusters = [
-        i for i, kws in enumerate(_MOOD_CLUSTER_KEYWORDS)
-        if any(kw in q for kw in kws)
-    ]
-    return {"genres": genres, "mood_clusters": mood_clusters}
-
-
-def tag_overlap_score(query_tags: dict, track_tags: dict) -> float:
-    """
-    Score 0–1 based on overlap between extracted query tags and track's tags_predicted JSON.
-    Higher is more relevant.
-    """
-    if not track_tags:
-        return 0.0
-
-    score = 0.0
-    hits = 0
-    total = 0
-
-    # Genre overlap: check if any query genre keyword appears in any predicted genre label
-    q_genres = query_tags.get("genres", [])
-    t_genres = track_tags.get("genres") or []  # [{"label": ..., "score": ...}]
-    if q_genres:
-        total += 1
-        genre_labels = " ".join(g.get("label", "") for g in t_genres).lower()
-        if any(qg in genre_labels for qg in q_genres):
-            score += 1.0
-            hits += 1
-
-    # Mood cluster overlap
-    q_moods = query_tags.get("mood_clusters", [])
-    t_mood = track_tags.get("mood_cluster")
-    if q_moods and t_mood is not None:
-        total += 1
-        if t_mood in q_moods:
-            score += 1.0
-            hits += 1
-
-    # Danceability hint: if query mentions dancing/dance-floor boost high-danceability tracks
-    # (this is a simple proxy; no separate weight needed)
-    _ = hits  # reserved for future use
-
-    return score / total if total > 0 else 0.0
 
 
 def artist_id(id: str) -> EntityId:
@@ -182,13 +102,14 @@ class LocalFilesInputModule(InputModule):
     async def ai_search(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """Semantic search via the embedder subprocess (CLAP KNN + tag re-ranking)."""
+        """Semantic search via the searcher subprocess (hybrid FTS + CLAP KNN + tags)."""
         if self._search_request_queue is None or self._search_response_queue is None:
             return EmptyList(offset, limit)
 
         ai_cfg = self.config.embedder.ai_search
         knn_limit = ai_cfg.knn_candidates
 
+        logger.info("ai_search: sending query %r (limit=%d)", query, knn_limit)
         async with self._search_lock:
             self._search_request_queue.put({"query": query, "limit": knn_limit})
             try:
@@ -197,31 +118,14 @@ class LocalFilesInputModule(InputModule):
                     lambda: self._search_response_queue.get(timeout=30),
                 )
             except Exception:
-                logger.warning("ai_search: timed out waiting for embedder response")
+                logger.warning("ai_search: timed out waiting for searcher response")
                 return EmptyList(offset, limit)
-
-        # Re-rank tracks using tag overlap
-        query_tags = extract_query_tags(query)
-        track_ids = ids.get("tracks", [])
-        if track_ids and (query_tags["genres"] or query_tags["mood_clusters"]):
-            raw_tracks = self.db_manager.get_tracks_by_ids(track_ids)
-            scored: list[tuple[float, dict]] = []
-            for i, t in enumerate(raw_tracks):
-                clap_sim = 1.0 - (i / max(len(raw_tracks), 1))
-                try:
-                    t_tags = json.loads(t.get("tags_predicted") or "{}")
-                except Exception:
-                    t_tags = {}
-                boost = tag_overlap_score(query_tags, t_tags)
-                score = (
-                    ai_cfg.weight_clap_similarity * clap_sim
-                    + ai_cfg.weight_tag_boost * boost
-                )
-                scored.append((score, t))
-            scored.sort(key=lambda x: -x[0])
-            track_ids = [t["id"] for _, t in scored[: ai_cfg.max_results]]
-            ids = dict(ids)
-            ids["tracks"] = track_ids
+        logger.info(
+            "ai_search: response — %d tracks, %d albums, %d artists",
+            len(ids.get("tracks", [])),
+            len(ids.get("albums", [])),
+            len(ids.get("artists", [])),
+        )
 
         sections: List[BrowseItem] = []
         for entity_type, fetch_fn, create_fn, name, preview_content in [
@@ -276,7 +180,10 @@ class LocalFilesInputModule(InputModule):
         if not sections:
             return EmptyList(offset, limit)
         return BrowseItemList(
-            offset=offset, limit=limit, total=len(sections), items=sections[offset:offset + limit]
+            offset=offset,
+            limit=limit,
+            total=len(sections),
+            items=sections[offset : offset + limit],
         )
 
     async def search(

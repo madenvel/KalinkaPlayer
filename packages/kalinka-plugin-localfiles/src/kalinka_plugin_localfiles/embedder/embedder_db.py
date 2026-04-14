@@ -1,8 +1,11 @@
 """
-Database layer for the CLAP + Essentia embedding pipeline.
+Database layer for the CLAP embedding pipeline.
 
 Uses a job queue table (embedding_jobs) for atomic claim/complete/fail
 semantics, and sqlite-vec virtual tables for 512-dim KNN search.
+
+Tag prediction jobs (tags_genre, tags_mood, tags_danceability) are
+managed by the searcher process via searcher_db.
 """
 
 import logging
@@ -209,109 +212,78 @@ class AsyncEmbedderDb:
     # ------------------------------------------------------------------
 
     async def recover_stale_jobs(self) -> None:
-        """Reset in_progress jobs left over from a crashed session."""
+        """Reset in_progress CLAP jobs left over from a crashed session."""
         async with self._get_connection() as conn:
             await conn.execute(
                 """
                 UPDATE embedding_jobs
                 SET status = 'pending', updated_at = CURRENT_TIMESTAMP
                 WHERE status = 'in_progress'
+                  AND stage IN ('clap_audio', 'clap_text')
                 """
             )
             await conn.commit()
-        logger.info("Stale in_progress jobs reset to pending")
+        logger.info("Stale in_progress CLAP jobs reset to pending")
 
-    async def schedule_new_jobs(
-        self, tags_version: int, clap_version: int, tags_config: dict
-    ) -> int:
+    async def schedule_new_jobs(self, clap_version: int) -> int:
         """
-        Queue tags jobs for enriched tracks without one, and clap_audio jobs
-        for tracks whose tags job is 'done'. Returns total jobs inserted.
+        Queue CLAP jobs for enriched tracks.
+
+        clap_audio is only scheduled for tracks whose tag stages
+        (managed by the searcher) are all 'done'.  clap_text is
+        independent — only needs enriched metadata.
+
+        Returns total jobs inserted.
         """
+        if clap_version <= 0:
+            return 0
+
         inserted = 0
+        tag_stages = ("tags_genre", "tags_mood", "tags_danceability")
+        placeholders = ",".join("?" * len(tag_stages))
+
         async with self._get_connection() as conn:
-            # Create separate job records for enabled tag types
-            tag_stages = []
-            if tags_config.get("genre_enabled", True):
-                tag_stages.append("tags_genre")
-            if tags_config.get("mood_enabled", True):
-                tag_stages.append("tags_mood")
-            if tags_config.get("danceability_enabled", True):
-                tag_stages.append("tags_danceability")
+            # CLAP audio: wait for all tag stages to be done
+            cursor = await conn.execute(
+                f"""
+                INSERT OR IGNORE INTO embedding_jobs
+                    (entity_type, entity_id, stage, model_version)
+                SELECT 'track', t.id, 'clap_audio', ?
+                FROM tracks t
+                WHERE t.enriched IN (1, 2)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM embedding_jobs j
+                    WHERE j.entity_id = t.id
+                      AND j.stage IN ({placeholders})
+                      AND j.status != 'done'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM embedding_jobs j
+                    WHERE j.entity_id = t.id
+                      AND j.stage = 'clap_audio'
+                      AND j.model_version = ?
+                  )
+                """,
+                (clap_version, *tag_stages, clap_version),
+            )
+            inserted += cursor.rowcount
 
-            # Insert tag jobs for each enabled stage
-            for stage in tag_stages:
-                cursor = await conn.execute(
-                    """
-                    INSERT OR IGNORE INTO embedding_jobs
-                        (entity_type, entity_id, stage, model_version)
-                    SELECT 'track', t.id, ?, ?
-                    FROM tracks t
-                    WHERE t.enriched IN (1, 2)
-                    """,
-                    (stage, tags_version),
-                )
-                inserted += cursor.rowcount
-            # CLAP audio jobs: tracks with all tag stages done for this version
-            if tag_stages:
-                # All tag stages must be done
-                placeholders = ",".join("?" * len(tag_stages))
-                cursor = await conn.execute(
-                    f"""
-                    INSERT OR IGNORE INTO embedding_jobs
-                        (entity_type, entity_id, stage, model_version)
-                    SELECT 'track', t.id, 'clap_audio', ?
-                    FROM tracks t
-                    WHERE t.enriched IN (1, 2)
-                      AND NOT EXISTS (
-                        SELECT 1 FROM embedding_jobs j
-                        WHERE j.entity_id = t.id
-                          AND j.stage IN ({placeholders})
-                          AND j.model_version = ?
-                          AND j.status != 'done'
-                      )
-                      AND NOT EXISTS (
-                        SELECT 1 FROM embedding_jobs j
-                        WHERE j.entity_id = t.id
-                          AND j.stage = 'clap_audio'
-                          AND j.model_version = ?
-                      )
-                    """,
-                    (clap_version, *tag_stages, tags_version, clap_version),
-                )
-                inserted += cursor.rowcount
-            else:
-                # No tag stages enabled, go straight to CLAP if configured
-                if clap_version > 0:
-                    cursor = await conn.execute(
-                        """
-                        INSERT OR IGNORE INTO embedding_jobs
-                            (entity_type, entity_id, stage, model_version)
-                        SELECT 'track', t.id, 'clap_audio', ?
-                        FROM tracks t
-                        WHERE t.enriched IN (1, 2)
-                        """,
-                        (clap_version,),
-                    )
-                    inserted += cursor.rowcount
-
-            # CLAP text jobs: independent of audio — only needs enriched metadata
-            if clap_version > 0:
-                cursor = await conn.execute(
-                    """
-                    INSERT OR IGNORE INTO embedding_jobs
-                        (entity_type, entity_id, stage, model_version)
-                    SELECT 'track', t.id, 'clap_text', ?
-                    FROM tracks t
-                    WHERE t.enriched IN (1, 2)
-                    """,
-                    (clap_version,),
-                )
-                inserted += cursor.rowcount
+            # CLAP text: independent of audio — only needs enriched metadata
+            cursor = await conn.execute(
+                """
+                INSERT OR IGNORE INTO embedding_jobs
+                    (entity_type, entity_id, stage, model_version)
+                SELECT 'track', t.id, 'clap_text', ?
+                FROM tracks t
+                WHERE t.enriched IN (1, 2)
+                """,
+                (clap_version,),
+            )
+            inserted += cursor.rowcount
 
             await conn.commit()
         if inserted:
-            logger.info("Scheduled %d new embedding jobs", inserted)
+            logger.info("Scheduled %d new CLAP jobs", inserted)
         return inserted
 
     async def has_pending_jobs(self, stage: Optional[str] = None) -> bool:
