@@ -483,26 +483,49 @@ class AsyncSearcherDb:
     # FTS5 search
     # ------------------------------------------------------------------
 
-    async def fts_search(self, query: str, limit: int = 100) -> list[dict]:
+    async def fts_search(
+        self, query: str, limit: int = 100, fallback_threshold: int = 5
+    ) -> list[dict]:
         """
         Full-text search on the FTS5 table.
         Returns [{"track_id": str, "rank": float}] sorted by relevance.
+
+        Uses AND joining by default for precision.  Falls back to OR if
+        AND returns fewer than *fallback_threshold* results.
         """
         if not query.strip():
             return []
 
-        fts_query = _build_fts_query(query)
+        fts_query = _build_fts_query(query, join="AND")
         logger.info("fts_search: raw=%r built=%r", query, fts_query)
         if not fts_query:
             logger.info("fts_search: query built to empty string — no results")
             return []
 
+        rows = await self._run_fts_query(fts_query, limit)
+
+        # Fall back to OR if AND returns too few results
+        if len(rows) < fallback_threshold:
+            or_query = _build_fts_query(query, join="OR")
+            if or_query and or_query != fts_query:
+                logger.info(
+                    "fts_search: AND returned %d results (< %d); trying OR",
+                    len(rows),
+                    fallback_threshold,
+                )
+                rows = await self._run_fts_query(or_query, limit)
+
+        logger.info("fts_search: %d results", len(rows))
+        return rows
+
+    async def _run_fts_query(self, fts_query: str, limit: int) -> list[dict]:
+        """Execute an FTS5 MATCH query and return results."""
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             try:
                 cursor = await conn.execute(
                     """
-                    SELECT track_id, rank
+                    SELECT track_id, bm25(fts_tracks, 0.0, 10.0, 5.0, 3.0, 2.0) AS rank
                     FROM fts_tracks
                     WHERE fts_tracks MATCH ?
                     ORDER BY rank
@@ -514,8 +537,6 @@ class AsyncSearcherDb:
             except Exception as e:
                 logger.warning("FTS search failed for query %r: %s", fts_query, e)
                 return []
-
-        logger.info("fts_search: %d results for built query %r", len(rows), fts_query)
         return [{"track_id": row["track_id"], "rank": row["rank"]} for row in rows]
 
     # ------------------------------------------------------------------
@@ -569,6 +590,21 @@ class AsyncSearcherDb:
         if row is None:
             return None
         return {"album_id": row[0], "artist_id": row[1]}
+
+    async def get_tracks_album_artist_bulk(
+        self, track_ids: list[str]
+    ) -> dict[str, dict]:
+        """Return {track_id: {album_id, artist_id}} for a list of track IDs."""
+        if not track_ids:
+            return {}
+        async with self._get_connection() as conn:
+            placeholders = ",".join("?" * len(track_ids))
+            cursor = await conn.execute(
+                f"SELECT id, album_id, artist_id FROM tracks WHERE id IN ({placeholders})",
+                track_ids,
+            )
+            rows = await cursor.fetchall()
+        return {row[0]: {"album_id": row[1], "artist_id": row[2]} for row in rows}
 
     async def get_similar_tracks_by_tags(
         self, genres: list[str], limit: int = 100
@@ -636,8 +672,12 @@ def _extract_genre_text(tags_predicted_json: str | None) -> str:
     return " ".join(labels)
 
 
-def _build_fts_query(text: str) -> str:
-    """Build an FTS5 query string from user text."""
+def _build_fts_query(text: str, join: str = "AND") -> str:
+    """Build an FTS5 query string from user text.
+
+    *join* controls how tokens are combined: "AND" (default, precise)
+    or "OR" (broad recall).
+    """
     cleaned = (
         text.replace('"', " ").replace("*", " ").replace("(", " ").replace(")", " ")
     )
@@ -647,4 +687,4 @@ def _build_fts_query(text: str) -> str:
     parts = [f'"{t}"' for t in tokens if len(t) >= 2]
     if not parts:
         return ""
-    return " OR ".join(parts)
+    return f" {join} ".join(parts)

@@ -386,16 +386,15 @@ class SearchWorker:
         fts_rank_norm: float,
         knn_norm: float,
         track_tags: dict | None,
+        has_fts_hits: bool = True,
+        has_knn_hits: bool = True,
     ) -> float:
         """
         Compute a combined relevance score for a single track.
 
-        Components (all in 0–1 range):
-          - fts_rank_norm: normalised FTS5 rank (1.0 = best match)
-          - knn_norm: normalised CLAP KNN similarity (1.0 = closest)
-          - genre_match: fraction of query genres found in track's predicted genres
-          - mood_match: 1.0 if track's mood cluster is in query's mood clusters
-          - dance_match: 1.0 if track's danceability falls in query's range
+        Weights are dynamically normalised based on which search legs
+        actually contributed results, so scores always use the full 0–1
+        range regardless of CLAP availability.
         """
         cfg = self.config.searcher
 
@@ -436,17 +435,21 @@ class SearchWorker:
                 ):
                     dance_score = 1.0
 
-        if parsed.has_tag_constraints:
-            score = (
-                cfg.weight_fts * fts_rank_norm
-                + cfg.weight_knn * knn_norm
-                + cfg.weight_genre * genre_score
-                + cfg.weight_mood * mood_score
-                + cfg.weight_danceability * dance_score
-            )
-        else:
-            score = cfg.weight_fts * fts_rank_norm + cfg.weight_knn * knn_norm
+        # Build weighted sum only from active components
+        components: list[tuple[float, float]] = []
+        if has_fts_hits:
+            components.append((cfg.weight_fts, fts_rank_norm))
+        if has_knn_hits:
+            components.append((cfg.weight_knn, knn_norm))
+        if parsed.genres:
+            components.append((cfg.weight_genre, genre_score))
+        if parsed.mood_clusters:
+            components.append((cfg.weight_mood, mood_score))
+        if parsed.min_danceability is not None or parsed.max_danceability is not None:
+            components.append((cfg.weight_danceability, dance_score))
 
+        total_weight = sum(w for w, _ in components) or 1.0
+        score = sum(w * v for w, v in components) / total_weight
         return score
 
     def _derive_album_artist_results(
@@ -556,18 +559,23 @@ class SearchWorker:
         )
 
         tags_map = await self.db.get_tracks_tags_bulk(all_track_ids)
-
-        for tid in all_track_ids:
-            meta = await self.db.get_track_album_artist(tid)
-            if meta:
-                self._track_meta_cache[tid] = meta
+        self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(
+            all_track_ids
+        )
 
         scored: list[tuple[float, str]] = []
         for tid in all_track_ids:
             fts_norm = fts_map.get(tid, 0.0)
             knn_norm = knn_map.get(tid, 0.0)
             track_tags = tags_map.get(tid)
-            score = self._score_track(parsed, fts_norm, knn_norm, track_tags)
+            score = self._score_track(
+                parsed,
+                fts_norm,
+                knn_norm,
+                track_tags,
+                has_fts_hits=bool(fts_hits),
+                has_knn_hits=bool(knn_hits),
+            )
             scored.append((score, tid))
 
         scored.sort(key=lambda x: -x[0])
@@ -661,16 +669,20 @@ class SearchWorker:
             return empty
 
         tags_map = await self.db.get_tracks_tags_bulk(all_ids)
-        for tid in all_ids:
-            meta = await self.db.get_track_album_artist(tid)
-            if meta:
-                self._track_meta_cache[tid] = meta
+        self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(all_ids)
 
         scored: list[tuple[float, str]] = []
         for tid in all_ids:
             track_tags = tags_map.get(tid)
             knn_norm = knn_map.get(tid, 0.0)
-            score = self._score_track(synth, 0.0, knn_norm, track_tags)
+            score = self._score_track(
+                synth,
+                0.0,
+                knn_norm,
+                track_tags,
+                has_fts_hits=False,
+                has_knn_hits=bool(knn_map),
+            )
             scored.append((score, tid))
 
         scored.sort(key=lambda x: -x[0])
@@ -696,14 +708,16 @@ class SearchWorker:
         shutdown_event: asyncio.Event,
     ) -> None:
         """Poll the request queue and dispatch searches."""
+        loop = asyncio.get_running_loop()
         while not shutdown_event.is_set():
             try:
-                req = search_request_queue.get_nowait()
+                req = await loop.run_in_executor(
+                    None, lambda: search_request_queue.get(timeout=1.0)
+                )
             except queue.Empty:
-                await asyncio.sleep(0.05)
                 continue
             except Exception:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.1)
                 continue
 
             try:
