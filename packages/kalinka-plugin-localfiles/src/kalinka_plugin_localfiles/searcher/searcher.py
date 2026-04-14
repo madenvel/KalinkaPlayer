@@ -42,6 +42,7 @@ from collections import defaultdict
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
+from .genre_labels import label_for_index
 from .query_parser import ParsedQuery, parse_query
 from .searcher_db import AsyncSearcherDb
 
@@ -334,7 +335,7 @@ class SearchWorker:
                         if len(top_genres) >= cfg.top_genres:
                             break
                         top_genres.append(
-                            {"label": f"discogs_{idx}", "score": round(score, 3)}
+                            {"label": label_for_index(idx), "score": round(score, 3)}
                         )
                     result["genres"] = top_genres
                 except Exception as e:
