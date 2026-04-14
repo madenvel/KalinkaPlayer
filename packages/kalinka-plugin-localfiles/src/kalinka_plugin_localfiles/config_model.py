@@ -2,7 +2,9 @@ from pydantic import BaseModel, Field
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
-class EmbedderTagsConfig(BaseModel):
+class TagsConfig(BaseModel):
+    """Shared tag prediction settings (used by both searcher and embedder)."""
+
     enabled: bool = Field(default=True, title="Enable Tag Prediction")
     min_confidence: float = Field(
         default=0.3, ge=0.0, le=1.0, title="Minimum Tag Confidence"
@@ -58,36 +60,10 @@ class AiSearchConfig(BaseModel):
     )
 
 
-class SearcherTagsConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable Tag Prediction")
-    min_confidence: float = Field(
-        default=0.3, ge=0.0, le=1.0, title="Minimum Tag Confidence"
-    )
-    top_genres: int = Field(default=5, title="Max genres stored per track")
-    effnet_path: str = Field(
-        default="", title="EffNet-Discogs backbone path (auto-downloaded if empty)"
-    )
-    genre_path: str = Field(
-        default="", title="Genre Discogs400 classifier path (auto-downloaded if empty)"
-    )
-    vggish_path: str = Field(
-        default="", title="VGGish backbone path (auto-downloaded if empty)"
-    )
-    mood_mirex_path: str = Field(
-        default="", title="Mood MIREX classifier path (auto-downloaded if empty)"
-    )
-    danceability_path: str = Field(
-        default="", title="Danceability classifier path (auto-downloaded if empty)"
-    )
-    current_version: int = Field(
-        default=1, title="Model version — increment to force re-tagging"
-    )
-
-
 class SearcherConfig(BaseModel):
     enabled: bool = Field(default=True, title="Enable Searcher")
-    tags: SearcherTagsConfig = Field(
-        default_factory=SearcherTagsConfig, title="Tag Prediction Settings"
+    tags: TagsConfig = Field(
+        default_factory=TagsConfig, title="Tag Prediction Settings"
     )
     batch_size_tags: int = Field(default=8, title="Tag prediction batch size")
     poll_interval_seconds: int = Field(default=300, title="Poll Interval (seconds)")
@@ -140,8 +116,8 @@ class EmbedderConfig(BaseModel):
         default="/var/lib/kalinka/models",
         title="Directory for auto-downloaded model files",
     )
-    tags: EmbedderTagsConfig = Field(
-        default_factory=EmbedderTagsConfig, title="Tag Prediction Settings"
+    tags: TagsConfig = Field(
+        default_factory=TagsConfig, title="Tag Prediction Settings"
     )
     clap: EmbedderClapConfig = Field(
         default_factory=EmbedderClapConfig, title="CLAP Audio Embedding Settings"

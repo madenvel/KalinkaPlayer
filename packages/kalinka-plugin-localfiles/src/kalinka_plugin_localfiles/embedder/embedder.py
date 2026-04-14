@@ -20,28 +20,26 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import importlib
-import importlib.util
-import json
 import logging
 import logging.handlers
 import multiprocessing
-import os
 import queue
 import signal
-import subprocess
 import sys
 import time
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
+from ..embedding_utils import encode_embedding, normalise
+from ..pip_utils import ensure_package
+from ..worker_utils import sleep_interruptible
 from .embedder_db import AsyncEmbedderDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
 # ---------------------------------------------------------------------------
-# On-demand pip install
+# On-demand pip install (process-local config)
 # ---------------------------------------------------------------------------
 
 _PIP_SPECS: dict[str, str] = {
@@ -51,54 +49,9 @@ _PIP_SPECS: dict[str, str] = {
     "sqlite_vec": "sqlite-vec",
 }
 
-_IMPORT_NAME_ALIASES: dict[str, str] = {}
-
-_install_failed: set[str] = set()
-
-
-def _resolve_probe_name(import_name: str) -> str:
-    return _IMPORT_NAME_ALIASES.get(import_name, import_name)
-
-
-def _is_import_available(import_name: str) -> bool:
-    return importlib.util.find_spec(_resolve_probe_name(import_name)) is not None
-
 
 def _ensure_package(import_name: str) -> bool:
-    probe_name = _resolve_probe_name(import_name)
-    if _is_import_available(import_name):
-        return True
-    if import_name in _install_failed:
-        return False
-    pip_spec = _PIP_SPECS.get(import_name, import_name)
-    logger.info("Installing missing dependency '%s' via pip …", pip_spec)
-    t0 = time.monotonic()
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", pip_spec],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error(
-            "pip install %s failed (%.1fs) — will not retry this session:\n%s",
-            pip_spec,
-            time.monotonic() - t0,
-            e.stderr.strip(),
-        )
-        _install_failed.add(import_name)
-        return False
-    importlib.invalidate_caches()
-    available = _is_import_available(import_name)
-    if not available:
-        logger.error("'%s' still not importable after pip install", probe_name)
-        _install_failed.add(import_name)
-    else:
-        logger.info(
-            "pip install %s completed in %.1fs", pip_spec, time.monotonic() - t0
-        )
-    return available
+    return ensure_package(import_name, _PIP_SPECS)
 
 
 # ---------------------------------------------------------------------------
@@ -119,13 +72,6 @@ def _ensure_numpy() -> bool:
 
     np = numpy
     return True
-
-
-# ---------------------------------------------------------------------------
-# Vector utilities
-# ---------------------------------------------------------------------------
-
-from ..embedding_utils import encode_embedding, normalise
 
 
 # ---------------------------------------------------------------------------
@@ -457,34 +403,6 @@ class EmbeddingWorker:
                 response_queue.put({"blob": None})
 
     # ------------------------------------------------------------------
-    # Interruptible sleep
-    # ------------------------------------------------------------------
-
-    async def _sleep_interruptible(
-        self,
-        duration: float,
-        shutdown_event: asyncio.Event,
-        nudge_queue: Optional[multiprocessing.Queue],
-    ) -> bool:
-        """Sleep for *duration* seconds, waking early on shutdown or nudge.
-        Returns True if woken by a nudge, False otherwise."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + duration
-        while not shutdown_event.is_set():
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            if nudge_queue is not None:
-                try:
-                    nudge_queue.get_nowait()
-                    logger.info("Embedder woken by nudge")
-                    return True
-                except queue.Empty:
-                    pass
-            await asyncio.sleep(min(1.0, remaining))
-        return False
-
-    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
@@ -536,7 +454,7 @@ class EmbeddingWorker:
 
         # Wait for the first nudge or poll cycle before loading models
         logger.info("Embedder ready (poll=%ds, idle_timeout=%ds)", poll, idle_timeout)
-        await self._sleep_interruptible(poll, shutdown_event, nudge_queue)
+        await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 
         self._last_work_time = time.monotonic()
 
@@ -594,7 +512,7 @@ class EmbeddingWorker:
                 self._last_work_time = time.monotonic()
 
             logger.info("No pending embedding work; sleeping %ds", poll)
-            await self._sleep_interruptible(poll, shutdown_event, nudge_queue)
+            await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 
         # Clean shutdown
         if encode_task:
