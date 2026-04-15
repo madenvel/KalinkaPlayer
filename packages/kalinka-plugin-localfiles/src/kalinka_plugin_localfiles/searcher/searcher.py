@@ -274,12 +274,32 @@ class SearchWorker:
             t0 = time.monotonic()
             loader = es.MonoLoader(filename=file_path, sampleRate=16000)
             audio = loader()
+            # Truncate to first 60s — diminishing returns for genre/mood
+            # classification beyond that, and inference cost scales linearly.
+            max_samples = 60 * 16000
+            if len(audio) > max_samples:
+                audio = audio[:max_samples]
+            t_decode = time.monotonic() - t0
+            logger.info(
+                "  audio decode: %.3fs (%d samples, %.1fs duration)",
+                t_decode,
+                len(audio),
+                len(audio) / 16000,
+            )
 
             # --- Genre (EffNet backbone) ---
             if self._effnet is not None and self._genre_cls is not None:
                 try:
+                    t1 = time.monotonic()
                     effnet_embeddings = self._effnet(audio)
+                    t_effnet = time.monotonic() - t1
+                    logger.info("  effnet backbone: %.3fs", t_effnet)
+
+                    t1 = time.monotonic()
                     genre_activations = self._genre_cls(effnet_embeddings)
+                    t_genre_cls = time.monotonic() - t1
+                    logger.info("  genre classifier: %.3fs", t_genre_cls)
+
                     genre_mean = genre_activations.mean(axis=0)
                     cfg = self.config.searcher.tags
                     top_genres = []
@@ -300,22 +320,33 @@ class SearchWorker:
             # --- VGGish embeddings (shared by mood + danceability) ---
             if self._vggish is not None:
                 try:
+                    t1 = time.monotonic()
                     vggish_embeddings = self._vggish(audio)
+                    t_vggish = time.monotonic() - t1
+                    logger.info("  vggish backbone: %.3fs", t_vggish)
 
                     if self._mood_cls is not None:
                         try:
+                            t1 = time.monotonic()
                             mood_activations = self._mood_cls(
                                 vggish_embeddings
                             ).mean(axis=0)
+                            logger.info(
+                                "  mood classifier: %.3fs", time.monotonic() - t1
+                            )
                             result["mood_cluster"] = int(mood_activations.argmax())
                         except Exception as e:
                             logger.debug("Mood prediction error: %s", e)
 
                     if self._dance_cls is not None:
                         try:
+                            t1 = time.monotonic()
                             dance_activations = self._dance_cls(
                                 vggish_embeddings
                             ).mean(axis=0)
+                            logger.info(
+                                "  dance classifier: %.3fs", time.monotonic() - t1
+                            )
                             result["danceability"] = round(
                                 float(dance_activations[0])
                                 if len(dance_activations) > 0
@@ -328,7 +359,7 @@ class SearchWorker:
                     logger.debug("VGGish inference error: %s", e)
 
             logger.info(
-                "Tag inference: %.3fs (genre=%s mood=%s dance=%s)",
+                "Tag inference total: %.3fs (genre=%s mood=%s dance=%s)",
                 time.monotonic() - t0,
                 "genres" in result,
                 "mood_cluster" in result,
