@@ -5,18 +5,18 @@ import kalinka_plugin_localfiles.embedder.embedder as embedder
 
 
 def test_ensure_package_resolves_known_pip_spec(monkeypatch):
-    """Embedder knows how to resolve laion_clap → laion-clap."""
+    """Embedder knows how to resolve onnxruntime from pip specs."""
     pip_utils._install_failed.clear()
 
     def fake_find_spec(name: str):
-        return object() if name == "laion_clap" else None
+        return object() if name == "onnxruntime" else None
 
     monkeypatch.setattr(pip_utils.importlib.util, "find_spec", fake_find_spec)
 
     run_mock = Mock()
     monkeypatch.setattr(pip_utils.subprocess, "run", run_mock)
 
-    assert embedder._ensure_package("laion_clap") is True
+    assert embedder._ensure_package("onnxruntime") is True
     run_mock.assert_not_called()
 
 

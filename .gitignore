@@ -80,3 +80,6 @@ ENV/
 env/
 pkgroot/
 debs/
+
+# ONNX model files (downloaded from GitHub Releases)
+models/

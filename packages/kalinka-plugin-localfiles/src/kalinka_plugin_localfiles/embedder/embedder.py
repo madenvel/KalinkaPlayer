@@ -1,5 +1,5 @@
 """
-Embedding worker — CLAP-only pipeline.
+Embedding worker — CLAP-only pipeline (ONNX Runtime backend).
 
 Runs as a separate long-lived subprocess. Uses a job queue table
 (embedding_jobs) for atomic claim/complete/fail semantics.
@@ -43,8 +43,9 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # ---------------------------------------------------------------------------
 
 _PIP_SPECS: dict[str, str] = {
-    "laion_clap": "laion-clap",
-    "torchvision": "torchvision",
+    "onnxruntime": "onnxruntime",
+    "librosa": "librosa",
+    "tokenizers": "tokenizers",
     "numpy": "numpy",
     "sqlite_vec": "sqlite-vec",
 }
@@ -102,33 +103,32 @@ class EmbeddingWorker:
         if not _ensure_numpy():
             return
 
-        for pkg in ("torchvision", "laion_clap"):
+        for pkg in ("onnxruntime", "librosa", "tokenizers"):
             if not _ensure_package(pkg):
                 logger.warning(
-                    "%s unavailable; CLAP audio embedding disabled. "
-                    "Install laion-clap and torchvision manually to enable semantic search.",
+                    "%s unavailable; CLAP audio embedding disabled.",
                     pkg,
                 )
                 return
 
         try:
-            import laion_clap
+            from .clap_onnx import ClapOnnxModel
 
-            self._clap = laion_clap.CLAP_Module(enable_fusion=False)
-            if cfg.clap.ckpt_path:
-                self._clap.load_ckpt(cfg.clap.ckpt_path)
-                logger.info("CLAP model loaded from: %s", cfg.clap.ckpt_path)
-            else:
-                logger.info("Downloading CLAP checkpoint from HuggingFace …")
-                self._clap.load_ckpt()
-                logger.info("CLAP model loaded (%s)", cfg.clap.model_name)
+            self._clap = ClapOnnxModel(
+                model_dir=cfg.model_dir,
+                ckpt_path=cfg.clap.ckpt_path,
+            )
+            self._clap.load()
             self._clap_available = True
+            logger.info("CLAP ONNX model loaded from: %s", cfg.model_dir)
         except Exception as e:
             logger.warning("CLAP model loading failed: %s; audio embedding disabled", e)
 
     def _unload_clap_model(self):
         if not self._clap_available:
             return
+        if self._clap is not None:
+            self._clap.unload()
         self._clap = None
         self._clap_available = False
         self._clap_load_attempted_at = 0.0
@@ -144,15 +144,10 @@ class EmbeddingWorker:
         if not self._clap_available:
             return None
         try:
-            import numpy
-
             t0 = time.monotonic()
-            embeddings = self._clap.get_audio_embedding_from_filelist(
-                [file_path], use_tensor=False
-            )
-            if embeddings is None or len(embeddings) == 0:
+            vec = self._clap.get_audio_embedding(file_path)
+            if vec is None:
                 return None
-            vec = numpy.array(embeddings[0], dtype=numpy.float32)
             vec = normalise(vec)
             logger.info("CLAP audio embedding: %.3fs", time.monotonic() - t0)
             return encode_embedding(vec)
@@ -165,12 +160,9 @@ class EmbeddingWorker:
         if not self._clap_available:
             return None
         try:
-            import numpy
-
-            embeddings = self._clap.get_text_embedding([query], use_tensor=False)
-            if embeddings is None or len(embeddings) == 0:
+            vec = self._clap.get_text_embedding(query)
+            if vec is None:
                 return None
-            vec = numpy.array(embeddings[0], dtype=numpy.float32)
             vec = normalise(vec)
             return encode_embedding(vec)
         except Exception as e:

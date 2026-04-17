@@ -35,7 +35,10 @@ class EmbedderClapConfig(BaseModel):
         default="laion/clap-htsat-unfused", title="CLAP model name (HuggingFace)"
     )
     ckpt_path: str = Field(
-        default="", title="Override checkpoint path (auto-downloaded if empty)"
+        default="",
+        title="Override model path",
+        description="Directory containing ONNX model files (clap_audio_encoder.onnx, "
+        "clap_text_encoder.onnx, clap_tokenizer.json). Uses model_dir if empty.",
     )
     dimensions: int = Field(default=512, frozen=True, title="Embedding dimensions")
     current_version: int = Field(
