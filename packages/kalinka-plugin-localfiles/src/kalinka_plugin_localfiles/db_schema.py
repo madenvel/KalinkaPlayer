@@ -41,6 +41,8 @@ async def init_db(db_path: str) -> None:
         os.makedirs(db_dir, exist_ok=True)
 
     async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
         cursor = await conn.cursor()
 
         # ---------------------------------------------------------------

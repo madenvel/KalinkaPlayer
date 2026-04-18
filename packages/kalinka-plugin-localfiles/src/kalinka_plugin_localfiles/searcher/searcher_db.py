@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import aiosqlite
@@ -37,7 +38,14 @@ class AsyncSearcherDb:
         self._vec_available = False
 
     def _get_connection(self):
-        return aiosqlite.connect(self.db_path)
+        return aiosqlite.connect(self.db_path, timeout=5.0)
+
+    @asynccontextmanager
+    async def _open(self):
+        async with self._get_connection() as conn:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            yield conn
 
     # ------------------------------------------------------------------
     # Schema initialisation
@@ -50,7 +58,7 @@ class AsyncSearcherDb:
         try:
             import sqlite_vec
 
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await conn.enable_load_extension(True)
                 await conn.load_extension(sqlite_vec.loadable_path())
                 await conn.enable_load_extension(False)
@@ -80,7 +88,7 @@ class AsyncSearcherDb:
         if not self._vec_available:
             return []
         try:
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await self._load_vec(conn)
                 cursor = await conn.execute(
                     "SELECT track_id, distance FROM vec_tracks_clap_text"
@@ -101,7 +109,7 @@ class AsyncSearcherDb:
         if not self._vec_available:
             return []
         try:
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await self._load_vec(conn)
                 cursor = await conn.execute(
                     "SELECT track_id, distance FROM vec_tracks_clap"
@@ -119,7 +127,7 @@ class AsyncSearcherDb:
         if not self._vec_available:
             return None
         try:
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await self._load_vec(conn)
                 cursor = await conn.execute(
                     "SELECT embedding FROM vec_tracks_clap WHERE track_id = ?",
@@ -137,7 +145,7 @@ class AsyncSearcherDb:
 
     async def recover_stale_jobs(self) -> None:
         """Reset in_progress tag jobs left over from a crashed session."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             await conn.execute(
                 """
                 UPDATE embedding_jobs
@@ -154,7 +162,7 @@ class AsyncSearcherDb:
         Queue unified tag jobs for enriched tracks that don't have one yet.
         Returns total jobs inserted.
         """
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 INSERT OR IGNORE INTO embedding_jobs
@@ -173,7 +181,7 @@ class AsyncSearcherDb:
 
     async def has_pending_jobs(self, stage: str) -> bool:
         """Return True if any pending jobs exist for the given stage."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT 1 FROM embedding_jobs WHERE status = 'pending' AND stage = ? LIMIT 1",
                 (stage,),
@@ -185,7 +193,7 @@ class AsyncSearcherDb:
         Atomically claim up to *limit* pending jobs for *stage*.
         Returns the claimed jobs as dicts.
         """
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
 
@@ -224,7 +232,7 @@ class AsyncSearcherDb:
     ) -> None:
         """Mark tag job done, merge tags into tracks.tags_predicted, and
         reset search_indexed_at so the track gets re-indexed in FTS."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             await conn.execute(
                 """
                 UPDATE tracks
@@ -246,7 +254,7 @@ class AsyncSearcherDb:
 
     async def fail_job(self, job_id: int, error: str, max_attempts: int) -> None:
         """Mark job 'failed' if at/above max_attempts, otherwise reset to 'pending'."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT attempts FROM embedding_jobs WHERE id = ?", (job_id,)
             )
@@ -264,7 +272,7 @@ class AsyncSearcherDb:
             await conn.commit()
 
     async def get_file_path_for_track(self, track_id: str) -> str | None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT file_path FROM tracks WHERE id = ?", (track_id,)
             )
@@ -277,7 +285,7 @@ class AsyncSearcherDb:
 
     async def count_unindexed_tracks(self) -> int:
         """Return the number of tracks that need FTS indexing."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 SELECT COUNT(*) FROM tracks
@@ -293,7 +301,7 @@ class AsyncSearcherDb:
         Index a batch of un-indexed tracks into the FTS5 table.
         Returns the number of tracks indexed (0 means no work left).
         """
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.execute(
                 """
@@ -345,7 +353,7 @@ class AsyncSearcherDb:
 
     async def reconcile_deleted_tracks(self) -> int:
         """Remove FTS entries for tracks that no longer exist."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 DELETE FROM fts_tracks
@@ -360,7 +368,7 @@ class AsyncSearcherDb:
 
     async def invalidate_stale_indexes(self) -> int:
         """Reset search_indexed_at for tracks whose metadata changed."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 UPDATE tracks
@@ -419,7 +427,7 @@ class AsyncSearcherDb:
 
     async def _run_fts_query(self, fts_query: str, limit: int) -> list[dict]:
         """Execute an FTS5 MATCH query and return results."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             try:
                 cursor = await conn.execute(
@@ -444,7 +452,7 @@ class AsyncSearcherDb:
 
     async def get_track_tags(self, track_id: str) -> dict | None:
         """Return parsed tags_predicted JSON for a track, or None."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT tags_predicted FROM tracks WHERE id = ?",
                 (track_id,),
@@ -461,7 +469,7 @@ class AsyncSearcherDb:
         """Return {track_id: tags_dict} for a list of track IDs."""
         if not track_ids:
             return {}
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             placeholders = ",".join("?" * len(track_ids))
             cursor = await conn.execute(
                 f"SELECT id, tags_predicted FROM tracks WHERE id IN ({placeholders})",
@@ -480,7 +488,7 @@ class AsyncSearcherDb:
 
     async def get_track_album_artist(self, track_id: str) -> dict | None:
         """Return album_id and artist_id for a track."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT album_id, artist_id FROM tracks WHERE id = ?",
                 (track_id,),
@@ -496,7 +504,7 @@ class AsyncSearcherDb:
         """Return {track_id: {album_id, artist_id}} for a list of track IDs."""
         if not track_ids:
             return {}
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             placeholders = ",".join("?" * len(track_ids))
             cursor = await conn.execute(
                 f"SELECT id, album_id, artist_id FROM tracks WHERE id IN ({placeholders})",
@@ -521,7 +529,7 @@ class AsyncSearcherDb:
         where = " OR ".join(conditions)
         params.append(str(limit))
 
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 f"""
                 SELECT t.id FROM tracks t
@@ -537,7 +545,7 @@ class AsyncSearcherDb:
 
     async def get_tag_coverage_ratio(self) -> float:
         """Return the fraction of enriched tracks that have tags_predicted."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 SELECT

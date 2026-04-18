@@ -11,6 +11,7 @@ managed by the searcher process via searcher_db.
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import aiosqlite
@@ -43,7 +44,14 @@ class AsyncEmbedderDb:
         self._vec_available = False
 
     def _get_connection(self):
-        return aiosqlite.connect(self.db_path)
+        return aiosqlite.connect(self.db_path, timeout=5.0)
+
+    @asynccontextmanager
+    async def _open(self):
+        async with self._get_connection() as conn:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            yield conn
 
     async def _check_vec_available(self) -> None:
         """Lazily detect whether sqlite-vec is available."""
@@ -52,7 +60,7 @@ class AsyncEmbedderDb:
         try:
             import sqlite_vec
 
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await conn.enable_load_extension(True)
                 await conn.load_extension(sqlite_vec.loadable_path())
                 await conn.enable_load_extension(False)
@@ -102,7 +110,7 @@ class AsyncEmbedderDb:
 
     async def recover_stale_jobs(self) -> None:
         """Reset in_progress CLAP jobs left over from a crashed session."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             await conn.execute(
                 """
                 UPDATE embedding_jobs
@@ -129,7 +137,7 @@ class AsyncEmbedderDb:
 
         inserted = 0
 
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             # CLAP audio: wait for the unified tag stage to be done
             cursor = await conn.execute(
                 """
@@ -181,7 +189,7 @@ class AsyncEmbedderDb:
             query += " AND stage = ?"
             params = (stage,)
         query += " LIMIT 1"
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(query, params)
             return await cursor.fetchone() is not None
 
@@ -190,7 +198,7 @@ class AsyncEmbedderDb:
         Atomically claim up to *limit* pending/failed jobs for *stage*.
         Returns the claimed jobs as dicts.
         """
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
 
@@ -229,7 +237,7 @@ class AsyncEmbedderDb:
         self, job_id: int, track_id: str, tags_json: str
     ) -> None:
         """Mark tags job done and write tags_predicted to the track."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             await conn.execute(
                 """
                 UPDATE tracks
@@ -252,7 +260,7 @@ class AsyncEmbedderDb:
         self, job_id: int, track_id: str, blob: bytes, version: int
     ) -> None:
         """Mark CLAP job done and write blob to tracks + vec table."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -292,7 +300,7 @@ class AsyncEmbedderDb:
 
     async def fail_job(self, job_id: int, error: str, max_attempts: int) -> None:
         """Mark job 'failed' if at/above max_attempts, otherwise reset to 'pending' for retry."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT attempts FROM embedding_jobs WHERE id = ?", (job_id,)
             )
@@ -315,7 +323,7 @@ class AsyncEmbedderDb:
 
     async def get_track_embeddings_for_album(self, album_id: str) -> list[bytes]:
         """Return all non-null CLAP blobs for tracks in the album."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT embedding_clap_audio FROM tracks WHERE album_id = ? AND embedding_clap_audio IS NOT NULL",
                 (album_id,),
@@ -325,7 +333,7 @@ class AsyncEmbedderDb:
 
     async def get_track_embeddings_for_artist(self, artist_id: str) -> list[bytes]:
         """Return all non-null CLAP blobs for tracks by the artist."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT embedding_clap_audio FROM tracks WHERE artist_id = ? AND embedding_clap_audio IS NOT NULL",
                 (artist_id,),
@@ -334,7 +342,7 @@ class AsyncEmbedderDb:
         return [r[0] for r in rows]
 
     async def update_album_embedding(self, album_id: str, blob: bytes) -> None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -357,7 +365,7 @@ class AsyncEmbedderDb:
             await conn.commit()
 
     async def update_artist_embedding(self, artist_id: str, blob: bytes) -> None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -385,7 +393,7 @@ class AsyncEmbedderDb:
 
     async def get_track_metadata_for_embedding(self, track_id: str) -> dict | None:
         """Return title, artist_name, album_title for a track via JOINs."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 SELECT t.title, ar.name AS artist_name, al.title AS album_title
@@ -409,7 +417,7 @@ class AsyncEmbedderDb:
         self, job_id: int, track_id: str, blob: bytes, version: int
     ) -> None:
         """Mark clap_text job done and write text-embedding blob to tracks + vec table."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -447,7 +455,7 @@ class AsyncEmbedderDb:
 
     async def get_album_metadata_for_text_embedding(self, album_id: str) -> dict | None:
         """Return album title and artist name for text embedding."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 SELECT al.title, ar.name
@@ -464,7 +472,7 @@ class AsyncEmbedderDb:
 
     async def get_artist_name(self, artist_id: str) -> str | None:
         """Return artist name."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT name FROM artists WHERE id = ?", (artist_id,)
             )
@@ -473,7 +481,7 @@ class AsyncEmbedderDb:
 
     async def update_album_text_embedding(self, album_id: str, blob: bytes) -> None:
         """Write CLAP text embedding for an album."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -497,7 +505,7 @@ class AsyncEmbedderDb:
 
     async def update_artist_text_embedding(self, artist_id: str, blob: bytes) -> None:
         """Write CLAP text embedding for an artist."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             if self._vec_available:
                 try:
                     await self._load_vec(conn)
@@ -520,7 +528,7 @@ class AsyncEmbedderDb:
             await conn.commit()
 
     async def get_file_path_for_track(self, track_id: str) -> str | None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT file_path FROM tracks WHERE id = ?", (track_id,)
             )
@@ -528,7 +536,7 @@ class AsyncEmbedderDb:
         return row[0] if row else None
 
     async def get_album_id_for_track(self, track_id: str) -> str | None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT album_id FROM tracks WHERE id = ?", (track_id,)
             )
@@ -536,7 +544,7 @@ class AsyncEmbedderDb:
         return row[0] if row else None
 
     async def get_artist_id_for_track(self, track_id: str) -> str | None:
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT artist_id FROM tracks WHERE id = ?", (track_id,)
             )
@@ -564,7 +572,7 @@ class AsyncEmbedderDb:
             return []
 
         try:
-            async with self._get_connection() as conn:
+            async with self._open() as conn:
                 await self._load_vec(conn)
 
                 t0 = time.monotonic()
@@ -593,7 +601,7 @@ class AsyncEmbedderDb:
 
     async def get_embedding_coverage(self) -> dict:
         """Return job counts and coverage percentages."""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.execute(
                 """
                 SELECT stage, status, COUNT(*) AS cnt

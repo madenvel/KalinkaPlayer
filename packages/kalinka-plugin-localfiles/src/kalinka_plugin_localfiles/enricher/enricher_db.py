@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 import aiosqlite
 import logging
@@ -30,13 +31,18 @@ class AsyncEnricherDb:
 
     def _get_connection(self):
         """Get a database connection with row factory"""
-        conn = aiosqlite.connect(self.db_path)
+        return aiosqlite.connect(self.db_path, timeout=5.0)
 
-        return conn
+    @asynccontextmanager
+    async def _open(self):
+        async with self._get_connection() as conn:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            yield conn
 
     async def get_track_by_id(self, track_id: str) -> Optional[Dict]:
         """Get track information by ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -57,7 +63,7 @@ class AsyncEnricherDb:
         if not track_ids:
             return []
 
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             placeholders = ", ".join("?" for _ in track_ids)
@@ -76,7 +82,7 @@ class AsyncEnricherDb:
 
     async def get_artist_by_id(self, artist_id: str) -> Optional[Dict]:
         """Get artist information by ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute("SELECT * FROM artists WHERE id = ?", (artist_id,))
@@ -85,7 +91,7 @@ class AsyncEnricherDb:
 
     async def get_artist_by_mbid(self, mbid: str) -> Optional[Dict]:
         """Get artist information by MusicBrainz ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -96,7 +102,7 @@ class AsyncEnricherDb:
 
     async def get_album_by_id(self, album_id: str) -> Optional[Dict]:
         """Get album information by ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -113,7 +119,7 @@ class AsyncEnricherDb:
 
     async def get_album_by_mbid(self, mbid: str) -> Optional[Dict]:
         """Get album information by MusicBrainz ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -132,7 +138,7 @@ class AsyncEnricherDb:
         self, title: str, artist_id: str
     ) -> Optional[Dict]:
         """Get album information by title and artist ID"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -149,7 +155,7 @@ class AsyncEnricherDb:
 
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -165,7 +171,7 @@ class AsyncEnricherDb:
 
     async def get_non_enriched_albums(self, limit: int = 50) -> List[Dict]:
         """Get albums that haven't been enriched yet"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -183,7 +189,7 @@ class AsyncEnricherDb:
 
     async def get_non_enriched_tracks(self, limit: int = 50) -> List[Dict]:
         """Get tracks that haven't been enriched yet"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             await cursor.execute(
@@ -204,7 +210,7 @@ class AsyncEnricherDb:
         self, query: str, limit: int = 50
     ) -> Tuple[List[Dict], int]:
         """Search artists by query"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
             search_term = f"%{query}%"
@@ -232,7 +238,7 @@ class AsyncEnricherDb:
 
     async def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
         """Update artist information"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
 
@@ -271,7 +277,7 @@ class AsyncEnricherDb:
 
     async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
         """Update album information"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
 
@@ -310,7 +316,7 @@ class AsyncEnricherDb:
 
     async def update_track(self, track_id: str, data: Dict[str, Any]) -> None:
         """Update track information"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cursor = await conn.cursor()
 
@@ -349,7 +355,7 @@ class AsyncEnricherDb:
 
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration)"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
                 """
@@ -364,7 +370,7 @@ class AsyncEnricherDb:
 
     async def insert_artist(self, data: Dict[str, Any]) -> None:
         """Insert a new artist"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.cursor()
 
             # Build the query
@@ -378,7 +384,7 @@ class AsyncEnricherDb:
 
     async def insert_album(self, data: Dict[str, Any]) -> None:
         """Insert a new album"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.cursor()
 
             # Build the query
@@ -392,7 +398,7 @@ class AsyncEnricherDb:
 
     async def insert_track(self, data: Dict[str, Any]) -> None:
         """Insert a new track"""
-        async with self._get_connection() as conn:
+        async with self._open() as conn:
             cursor = await conn.cursor()
 
             # Build the query
