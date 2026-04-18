@@ -845,12 +845,6 @@ async def async_main(config: LocalFilesConfig):
     global _indexer_task, _file_watcher_task, _shutdown_event
 
     db_manager = AsyncIndexerDb(config)
-    try:
-        await db_manager.init_db()
-        logger.info("Database initialized successfully.")
-    except Exception as e:
-        logger.exception(f"Fatal: Error initializing database: {str(e)}")
-        sys.exit(1)
 
     loop = asyncio.get_running_loop()
 

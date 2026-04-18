@@ -25,7 +25,6 @@ import logging.handlers
 import multiprocessing
 import queue
 import signal
-import sys
 import time
 from typing import Optional
 
@@ -413,6 +412,7 @@ class EmbeddingWorker:
         logger.info("EmbeddingWorker started (CLAP-only pipeline)")
 
         if embedding_enabled:
+            await self.db._check_vec_available()
             await self.db.recover_stale_jobs()
 
         # Start text-encode handler for searcher KNN queries (always runs)
@@ -534,12 +534,6 @@ async def async_main(
     _shutdown_event = asyncio.Event()
 
     db = AsyncEmbedderDb(config)
-    if config.embedder.enabled:
-        try:
-            await db.init_db_embeddings()
-        except Exception:
-            logger.exception("Fatal: failed to initialise embedding schema")
-            sys.exit(1)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

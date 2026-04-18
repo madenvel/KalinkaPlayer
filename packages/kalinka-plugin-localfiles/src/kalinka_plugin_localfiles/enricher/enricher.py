@@ -5,7 +5,6 @@ import enum
 import logging
 import queue
 import signal
-import sys
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
@@ -524,12 +523,6 @@ async def async_main(config: LocalFilesConfig):
     global _enricher_task, _shutdown_event
 
     db_manager = AsyncEnricherDb(config)
-    try:
-        await db_manager.init_db()
-        logger.info("Database initialized successfully.")
-    except Exception as e:
-        logger.exception(f"Fatal: Error initializing database: {str(e)}")
-        sys.exit(1)
 
     loop = asyncio.get_running_loop()
 

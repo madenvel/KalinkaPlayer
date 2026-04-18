@@ -32,9 +32,6 @@ _VEC_TEXT_TABLES = {
     "artists": ("vec_artists_clap_text", "artist_id"),
 }
 
-_CLAP_DIMS = 512
-
-
 class AsyncEmbedderDb:
     """
     Database manager for the CLAP + Essentia embedding pipeline.
@@ -48,104 +45,10 @@ class AsyncEmbedderDb:
     def _get_connection(self):
         return aiosqlite.connect(self.db_path)
 
-    async def init_db_embeddings(self):
-        """
-        Create/migrate embedding schema. Safe to call on every startup.
-        ALTER TABLEs are wrapped in try/except for idempotency.
-        """
-        new_columns = [
-            # Track columns
-            ("tracks", "tags_predicted", "TEXT"),
-            ("tracks", "embedding_clap_audio", "BLOB"),
-            ("tracks", "embedding_version", "INTEGER DEFAULT 0"),
-            ("tracks", "embedded_at", "TIMESTAMP"),
-            # Album / artist CLAP aggregate columns
-            ("albums", "embedding_clap", "BLOB"),
-            ("artists", "embedding_clap", "BLOB"),
-            # CLAP text (metadata) embeddings
-            ("tracks", "embedding_clap_text", "BLOB"),
-            ("albums", "embedding_clap_text", "BLOB"),
-            ("artists", "embedding_clap_text", "BLOB"),
-        ]
-
-        async with self._get_connection() as conn:
-            cursor = await conn.cursor()
-
-            for table, column, col_type in new_columns:
-                try:
-                    await cursor.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
-                    )
-                    logger.debug("Added column %s.%s", table, column)
-                except Exception:
-                    pass  # column already exists
-
-            # Job queue table
-            await cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_jobs (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type   TEXT NOT NULL,
-                    entity_id     TEXT NOT NULL,
-                    stage         TEXT NOT NULL,
-                    status        TEXT NOT NULL DEFAULT 'pending',
-                    model_version INTEGER NOT NULL DEFAULT 1,
-                    attempts      INTEGER NOT NULL DEFAULT 0,
-                    error         TEXT,
-                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(entity_type, entity_id, stage, model_version)
-                )
-                """
-            )
-            await cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_jobs_pending
-                    ON embedding_jobs(status, stage)
-                    WHERE status IN ('pending', 'failed')
-                """
-            )
-
-            # Model version registry
-            await cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_model_versions (
-                    model_name TEXT PRIMARY KEY,
-                    version    INTEGER NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            for model_name in ("tags", "clap_audio", "clap_text"):
-                await cursor.execute(
-                    "INSERT OR IGNORE INTO embedding_model_versions VALUES (?, 1, CURRENT_TIMESTAMP)",
-                    (model_name,),
-                )
-
-            await conn.commit()
-
-        await self._init_vec_tables()
-
-    async def _init_vec_tables(self):
-        """Try to load sqlite-vec and create 512-dim virtual tables."""
-        import importlib
-        import importlib.util
-        import subprocess
-        import sys
-
-        if importlib.util.find_spec("sqlite_vec") is None:
-            logger.info("Installing missing dependency 'sqlite-vec' via pip …")
-            try:
-                subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "sqlite-vec"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                importlib.invalidate_caches()
-            except subprocess.CalledProcessError as e:
-                logger.warning("pip install sqlite-vec failed: %s", e.stderr)
-
+    async def _check_vec_available(self) -> None:
+        """Lazily detect whether sqlite-vec is available."""
+        if self._vec_available:
+            return
         try:
             import sqlite_vec
 
@@ -154,24 +57,10 @@ class AsyncEmbedderDb:
                 await conn.load_extension(sqlite_vec.loadable_path())
                 await conn.enable_load_extension(False)
 
-                cursor = await conn.cursor()
-                for vec_table, pk_col in (
-                    *_VEC_TABLES.values(),
-                    *_VEC_TEXT_TABLES.values(),
-                ):
-                    await cursor.execute(
-                        f"""
-                        CREATE VIRTUAL TABLE IF NOT EXISTS {vec_table}
-                        USING vec0({pk_col} TEXT PRIMARY KEY, embedding float[{_CLAP_DIMS}])
-                        """
-                    )
-                await conn.commit()
-
             self._vec_available = True
-            logger.info("sqlite-vec extension loaded; CLAP vector tables ready")
+            logger.info("sqlite-vec loaded; vector tables ready")
         except Exception as e:
-            logger.warning("sqlite-vec not available (%s); KNN search disabled", e)
-            self._vec_available = False
+            logger.warning("sqlite-vec not available (%s); KNN disabled", e)
 
     async def _load_vec(self, conn):
         """Load sqlite-vec extension into an open connection."""

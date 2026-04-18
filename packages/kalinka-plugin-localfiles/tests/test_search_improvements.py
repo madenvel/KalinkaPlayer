@@ -7,6 +7,7 @@ import aiosqlite
 import pytest
 
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+from kalinka_plugin_localfiles.db_schema import init_db
 from kalinka_plugin_localfiles.searcher.searcher_db import AsyncSearcherDb, _build_fts_query
 from kalinka_plugin_localfiles.searcher.searcher import SearchWorker
 from kalinka_plugin_localfiles.searcher.query_parser import parse_query
@@ -22,27 +23,11 @@ def _make_config(**overrides) -> LocalFilesConfig:
 
 
 async def _setup_db(db_path: str) -> AsyncSearcherDb:
-    """Create minimal schema + test data and return an AsyncSearcherDb."""
+    """Create full schema + test data and return an AsyncSearcherDb."""
     config = _make_config(db_path=db_path)
+    await init_db(db_path)
+
     async with aiosqlite.connect(db_path) as conn:
-        await conn.execute("""
-            CREATE TABLE tracks (
-                id TEXT PRIMARY KEY,
-                enriched INTEGER DEFAULT 0,
-                search_indexed_at TIMESTAMP,
-                tags_predicted TEXT,
-                file_path TEXT,
-                modified_time TIMESTAMP,
-                album_id TEXT,
-                artist_id TEXT
-            )
-        """)
-        await conn.execute("""
-            CREATE TABLE artists (id TEXT PRIMARY KEY, name TEXT)
-        """)
-        await conn.execute("""
-            CREATE TABLE albums (id TEXT PRIMARY KEY, title TEXT, artist_id TEXT)
-        """)
         # Test data
         await conn.execute(
             "INSERT INTO artists (id, name) VALUES ('ar1', 'Miles Davis')"
@@ -52,14 +37,13 @@ async def _setup_db(db_path: str) -> AsyncSearcherDb:
         )
         for i in range(5):
             await conn.execute(
-                "INSERT INTO tracks (id, enriched, album_id, artist_id) VALUES (?, 1, 'al1', 'ar1')",
+                "INSERT INTO tracks (id, title, file_path, format, enriched, album_id, artist_id) "
+                "VALUES (?, 'track', 'f', 'mp3', 1, 'al1', 'ar1')",
                 (f"t{i}",),
             )
         await conn.commit()
 
-    db = AsyncSearcherDb(config)
-    await db.init_db_search()
-    return db
+    return AsyncSearcherDb(config)
 
 
 # ---------------------------------------------------------------------------

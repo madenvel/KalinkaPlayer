@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+from kalinka_plugin_localfiles.db_schema import init_db
 from kalinka_plugin_localfiles.searcher.searcher import SearchWorker
 from kalinka_plugin_localfiles.searcher.searcher_db import AsyncSearcherDb
 
@@ -181,37 +182,21 @@ class TestScheduleNewTagJobs:
         db_path = os.path.join(tempfile.mkdtemp(), "test.db")
         config = _make_config(db_path=db_path)
 
-        # Create minimal schema
+        await init_db(db_path)
+
         async with aiosqlite.connect(db_path) as conn:
-            await conn.execute("""
-                CREATE TABLE tracks (
-                    id TEXT PRIMARY KEY,
-                    enriched INTEGER DEFAULT 0,
-                    search_indexed_at TIMESTAMP,
-                    tags_predicted TEXT,
-                    file_path TEXT,
-                    modified_time TIMESTAMP
-                )
-            """)
-            await conn.execute("""
-                CREATE TABLE artists (id TEXT PRIMARY KEY, name TEXT)
-            """)
-            await conn.execute("""
-                CREATE TABLE albums (id TEXT PRIMARY KEY, title TEXT, artist_id TEXT)
-            """)
             await conn.execute(
-                "INSERT INTO tracks (id, enriched) VALUES ('t1', 1)"
+                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t1', 't', 'f', 'mp3', 1)"
             )
             await conn.execute(
-                "INSERT INTO tracks (id, enriched) VALUES ('t2', 2)"
+                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t2', 't', 'f', 'mp3', 2)"
             )
             await conn.execute(
-                "INSERT INTO tracks (id, enriched) VALUES ('t3', 0)"
+                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t3', 't', 'f', 'mp3', 0)"
             )
             await conn.commit()
 
         db = AsyncSearcherDb(config)
-        await db.init_db_search()
 
         inserted = await db.schedule_new_tag_jobs(1)
         assert inserted == 2  # t1 and t2 (enriched), not t3

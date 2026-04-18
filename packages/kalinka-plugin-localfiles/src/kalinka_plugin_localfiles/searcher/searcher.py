@@ -32,7 +32,6 @@ import multiprocessing
 import os
 import queue
 import signal
-import sys
 import time
 import urllib.request
 from collections import defaultdict
@@ -786,6 +785,8 @@ class SearchWorker:
 
         logger.info("SearchWorker started (tags + FTS5 + ranking)")
 
+        await self.db._check_vec_available()
+
         # Recover stale tag jobs from a prior crashed session
         await self.db.recover_stale_jobs()
 
@@ -902,11 +903,6 @@ async def async_main(
     _shutdown_event = asyncio.Event()
 
     db = AsyncSearcherDb(config)
-    try:
-        await db.init_db_search()
-    except Exception:
-        logger.exception("Fatal: failed to initialise search schema")
-        sys.exit(1)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

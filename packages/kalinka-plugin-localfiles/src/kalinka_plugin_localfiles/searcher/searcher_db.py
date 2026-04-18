@@ -43,110 +43,10 @@ class AsyncSearcherDb:
     # Schema initialisation
     # ------------------------------------------------------------------
 
-    async def init_db_search(self) -> None:
-        """
-        Create / migrate search-related schema.  Safe to call on every startup.
-        """
-        async with self._get_connection() as conn:
-            cursor = await conn.cursor()
-
-            # Tracking column on tracks — NULL means "needs (re-)indexing".
-            try:
-                await cursor.execute(
-                    "ALTER TABLE tracks ADD COLUMN search_indexed_at TIMESTAMP"
-                )
-                logger.debug("Added column tracks.search_indexed_at")
-            except Exception:
-                pass  # already exists
-
-            # tags_predicted column (shared with embedder)
-            try:
-                await cursor.execute(
-                    "ALTER TABLE tracks ADD COLUMN tags_predicted TEXT"
-                )
-                logger.debug("Added column tracks.tags_predicted")
-            except Exception:
-                pass
-
-            # Job queue table (shared with embedder — created here if first)
-            await cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_jobs (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    entity_type   TEXT NOT NULL,
-                    entity_id     TEXT NOT NULL,
-                    stage         TEXT NOT NULL,
-                    status        TEXT NOT NULL DEFAULT 'pending',
-                    model_version INTEGER NOT NULL DEFAULT 1,
-                    attempts      INTEGER NOT NULL DEFAULT 0,
-                    error         TEXT,
-                    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(entity_type, entity_id, stage, model_version)
-                )
-                """
-            )
-            await cursor.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_jobs_pending
-                    ON embedding_jobs(status, stage)
-                    WHERE status IN ('pending', 'failed')
-                """
-            )
-
-            # Model version registry (shared with embedder)
-            await cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS embedding_model_versions (
-                    model_name TEXT PRIMARY KEY,
-                    version    INTEGER NOT NULL DEFAULT 1,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            for model_name in ("tags", "clap_audio", "clap_text"):
-                await cursor.execute(
-                    "INSERT OR IGNORE INTO embedding_model_versions VALUES (?, 1, CURRENT_TIMESTAMP)",
-                    (model_name,),
-                )
-
-            # Migrate: if fts_tracks was created as a contentless table
-            # (content=''), column values including track_id are not stored and
-            # can never be retrieved.  Drop it and reset search_indexed_at so
-            # all tracks get re-indexed into the corrected table.
-            row = await cursor.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_tracks'"
-            )
-            existing_sql = await row.fetchone()
-            if existing_sql and "content=''" in (existing_sql[0] or ""):
-                logger.warning(
-                    "Detected contentless fts_tracks table — dropping and rebuilding"
-                )
-                await cursor.execute("DROP TABLE IF EXISTS fts_tracks")
-                await cursor.execute("UPDATE tracks SET search_indexed_at = NULL")
-
-            # FTS5 virtual table — stores all column values so track_id is
-            # retrievable on SELECT (required for search result mapping).
-            await cursor.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS fts_tracks USING fts5(
-                    track_id UNINDEXED,
-                    title,
-                    artist_name,
-                    album_title,
-                    genre_tags,
-                    tokenize='porter unicode61'
-                )
-                """
-            )
-
-            await conn.commit()
-        logger.info("Search schema ready (embedding_jobs + FTS5)")
-
-        await self._init_vec()
-
-    async def _init_vec(self) -> None:
-        """Try to load sqlite-vec for KNN search on CLAP vector tables."""
+    async def _check_vec_available(self) -> None:
+        """Lazily detect whether sqlite-vec is available."""
+        if self._vec_available:
+            return
         try:
             import sqlite_vec
 
@@ -159,7 +59,6 @@ class AsyncSearcherDb:
             logger.info("sqlite-vec loaded; KNN search enabled")
         except Exception as e:
             logger.warning("sqlite-vec not available (%s); KNN search disabled", e)
-            self._vec_available = False
 
     async def _load_vec(self, conn: aiosqlite.Connection) -> None:
         """Load sqlite-vec extension into an open connection."""

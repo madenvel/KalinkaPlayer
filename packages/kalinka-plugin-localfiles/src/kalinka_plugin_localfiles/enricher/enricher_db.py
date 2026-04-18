@@ -34,29 +34,6 @@ class AsyncEnricherDb:
 
         return conn
 
-    async def init_db(self):
-        """Initialize the database schema if it doesn't exist.
-        This should already be initialized by the indexer, but we double-check here."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            try:
-                cursor = await conn.cursor()
-
-                # Check if tables exist
-                await cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='artists'"
-                )
-                if not await cursor.fetchone():
-                    logger.warning(
-                        "Database not initialized. Please run the indexer first."
-                    )
-
-                logger.info("Database check completed")
-            except Exception as e:
-                logger.error(f"Error initializing database: {str(e)}")
-                await conn.rollback()
-                raise
-
     async def get_track_by_id(self, track_id: str) -> Optional[Dict]:
         """Get track information by ID"""
         async with self._get_connection() as conn:

@@ -7,6 +7,7 @@ from kalinka_plugin_sdk.plugin import InputPluginContext, InputModulePlugin
 from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .config_model import LocalFilesConfig
+from .db_schema import init_db
 from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
 from . import enricher
@@ -85,6 +86,10 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             self._logging_queue, handler, respect_handler_level=False
         )
         self._log_listener.start()
+
+        # Centralised schema init — runs once in the main process before
+        # any subprocess starts, so there is no lock contention.
+        await init_db(config.db_path)
 
         self._indexer_proc = multiprocessing.Process(
             target=indexer.main,
