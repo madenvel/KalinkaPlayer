@@ -196,6 +196,7 @@ class EmbeddingWorker:
         if not batch:
             return False
 
+        loop = asyncio.get_running_loop()
         completed_track_ids = []
         for job in batch:
             track_id = job["entity_id"]
@@ -206,7 +207,9 @@ class EmbeddingWorker:
                 )
                 continue
 
-            blob = self._compute_clap_audio(file_path)
+            blob = await loop.run_in_executor(
+                None, self._compute_clap_audio, file_path
+            )
             if blob is None:
                 await self.db.fail_job(
                     job["id"], "clap returned None", cfg.max_job_attempts
@@ -280,6 +283,7 @@ class EmbeddingWorker:
         if not batch:
             return False
 
+        loop = asyncio.get_running_loop()
         completed_track_ids = []
         for job in batch:
             track_id = job["entity_id"]
@@ -290,8 +294,12 @@ class EmbeddingWorker:
                 )
                 continue
 
-            blob = self._compute_clap_text(
-                meta["title"], meta["artist_name"], meta["album_title"]
+            blob = await loop.run_in_executor(
+                None,
+                self._compute_clap_text,
+                meta["title"],
+                meta["artist_name"],
+                meta["album_title"],
             )
             if blob is None:
                 await self.db.fail_job(
@@ -386,7 +394,7 @@ class EmbeddingWorker:
             query = req.get("query", "")
             try:
                 self._load_clap_model()
-                blob = self._encode_query(query)
+                blob = await loop.run_in_executor(None, self._encode_query, query)
                 self._last_work_time = time.monotonic()
                 response_queue.put({"blob": blob})
             except Exception as e:
