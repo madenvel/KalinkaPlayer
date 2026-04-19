@@ -25,6 +25,7 @@ from kalinka_plugin_sdk.datamodel import (
     EmptyList,
     Playlist,
     Catalog,
+    CatalogRole,
     FavoriteIds,
     GenreList,
     Owner,
@@ -323,6 +324,7 @@ class LocalFilesInputModule(InputModule):
                 can_genre_filter=False,
                 description="Recently added tracks",
                 preview_config=preview,
+                role=CatalogRole.LIBRARY,
             )
 
             recent_section = BrowseItem(
@@ -352,6 +354,7 @@ class LocalFilesInputModule(InputModule):
                 can_genre_filter=False,
                 description="Browse your album collection",
                 preview_config=preview,
+                role=CatalogRole.LIBRARY,
             )
 
             album_section = BrowseItem(
@@ -381,6 +384,7 @@ class LocalFilesInputModule(InputModule):
                 can_genre_filter=False,
                 description="Browse your artist collection",
                 preview_config=preview,
+                role=CatalogRole.LIBRARY,
             )
 
             artist_section = BrowseItem(
@@ -410,6 +414,7 @@ class LocalFilesInputModule(InputModule):
                 can_genre_filter=False,
                 description="Browse your playlists",
                 preview_config=preview,
+                role=CatalogRole.LIBRARY,
             )
 
             playlist_section = BrowseItem(

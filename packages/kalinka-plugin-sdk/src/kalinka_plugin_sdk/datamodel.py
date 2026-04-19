@@ -194,6 +194,30 @@ class CardSize(str, Enum):
     LARGE = "large"
 
 
+class CatalogRole(str, Enum):
+    """
+    UI hint describing a catalog's role on discovery/home surfaces.
+
+    Advisory only — frontends may combine the role with other signals or
+    fall back to a generic shelf rendering when the role is unset or
+    unrecognized. The enum lets plugins express intent ("this is a small
+    editorial pick" / "this is a navigation index" / "do not surface on
+    home") without the frontend hardcoding catalog IDs.
+    """
+
+    # Small curated set with editorial weight; UI may use larger tiles.
+    FEATURED = "featured"
+    # Generic catalog of discoverable content (albums/playlists/etc.).
+    DISCOVERY = "discovery"
+    # User's own content on this backend (library shelves).
+    LIBRARY = "library"
+    # Catalog whose children are themselves catalogs; UI may auto-descend
+    # one level and surface grandchildren as shelves.
+    INDEX = "index"
+    # Too broad or otherwise unsuited to home; reachable via drill-down only.
+    HIDE_ON_HOME = "hide_on_home"
+
+
 class CoverImage(BaseModel):
     """
     Container for cover art images in different sizes.
@@ -380,6 +404,8 @@ class Catalog(BaseModel):
         can_genre_filter (bool): Whether genre filtering is available
         description (Optional[str]): Description of the catalog content
         preview_config (Optional[Preview]): Configuration for preview display
+        role (Optional[CatalogRole]): Hint for how home/discovery surfaces
+            should treat this catalog. Advisory; UI may ignore.
     """
 
     id: EntityId
@@ -388,6 +414,7 @@ class Catalog(BaseModel):
     can_genre_filter: bool = False
     description: Optional[str] = ""
     preview_config: Optional[Preview] = None
+    role: Optional[CatalogRole] = None
 
 
 class BrowseItem(BaseModel):
