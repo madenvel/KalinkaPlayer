@@ -170,6 +170,8 @@ class AsyncSearcherDb:
                 SELECT 'track', t.id, 'tags', ?
                 FROM tracks t
                 WHERE t.enriched IN (1, 2)
+                  AND t.album_id != 'unknown_album'
+                  AND t.artist_id != 'unknown_artist'
                 """,
                 (tags_version,),
             )
