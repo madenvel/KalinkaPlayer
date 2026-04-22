@@ -302,17 +302,23 @@ async def create_app(config_file, config: KalinkaConfig):
                 entity_id = EntityId(
                     id="root", type=EntityType.CATALOG, source=module_name
                 )
+                # Match the display title used by /server/modules — reads the
+                # Pydantic `title` declared on the config's `name` field, so the
+                # browse root agrees with source badges shown elsewhere.
+                config = module.plugin_context.config
+                display_title = (
+                    config.__class__.model_fields["name"].title or config.name
+                )
                 result.items.append(
                     BrowseItem(
                         id=entity_id,
-                        name=module.plugin_context.config.name.title() or module_name,
+                        name=display_title,
                         url=f"/browse/{entity_id.to_string}",
                         can_browse=True,
                         can_add=False,
                         catalog=Catalog(
                             id=entity_id,
-                            title=module.plugin_context.config.name.title()
-                            or module_name,
+                            title=display_title,
                             image=None,  # Placeholder for catalog image
                             can_genre_filter=False,
                             description="Kalinka Input Module",
