@@ -34,7 +34,12 @@ from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 
 from .config_model import KalinkaConfig
-from .config_schema_processor import config_to_wire, get_field_value, set_field_value
+from .config_schema_processor import (
+    build_presentation,
+    build_values,
+    get_field_value,
+    set_field_value,
+)
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .multisearch import calculate_fuzzy_score
 from .player_setup import modules, setup, shutdown, ModuleHealthState
@@ -631,9 +636,7 @@ async def create_app(config_file, config: KalinkaConfig):
             )
         ).model_dump(exclude_unset=True)
 
-    @app.get("/server/config")
-    def get_config():
-        # Separate successfully loaded and failed modules/devices
+    def _partition_modules_and_devices():
         successful_input_modules = {
             name: m.plugin_context.config
             for name, m in modules.prepared_input_modules.items()
@@ -644,7 +647,6 @@ async def create_app(config_file, config: KalinkaConfig):
             for name, m in modules.prepared_input_modules.items()
             if m.health_state == ModuleHealthState.ERROR
         }
-
         successful_devices = {
             name: d.plugin_context.config
             for name, d in modules.prepared_devices.items()
@@ -655,14 +657,46 @@ async def create_app(config_file, config: KalinkaConfig):
             for name, d in modules.prepared_devices.items()
             if d.health_state == ModuleHealthState.ERROR
         }
-
-        return config_to_wire(
-            base_config=config,
-            input_modules=successful_input_modules,
-            devices=successful_devices,
-            input_modules_with_errors=failed_input_modules,
-            devices_with_errors=failed_devices,
+        return (
+            successful_input_modules,
+            failed_input_modules,
+            successful_devices,
+            failed_devices,
         )
+
+    def _current_schema_version() -> str:
+        ok_in, err_in, ok_dev, err_dev = _partition_modules_and_devices()
+        return build_presentation(
+            base_config=config,
+            input_modules=ok_in,
+            devices=ok_dev,
+            input_modules_with_errors=err_in,
+            devices_with_errors=err_dev,
+        ).schema_version
+
+    @app.get("/server/config/schema")
+    def get_config_schema():
+        ok_in, err_in, ok_dev, err_dev = _partition_modules_and_devices()
+        schema = build_presentation(
+            base_config=config,
+            input_modules=ok_in,
+            devices=ok_dev,
+            input_modules_with_errors=err_in,
+            devices_with_errors=err_dev,
+        )
+        return schema.model_dump(mode="json")
+
+    @app.get("/server/config")
+    def get_config():
+        ok_in, _err_in, ok_dev, _err_dev = _partition_modules_and_devices()
+        return {
+            "schema_version": _current_schema_version(),
+            "values": build_values(
+                base_config=config,
+                input_modules=ok_in,
+                devices=ok_dev,
+            ),
+        }
 
     @app.get("/server/version")
     def get_version_info():
@@ -711,80 +745,81 @@ async def create_app(config_file, config: KalinkaConfig):
         }
 
     @app.put("/server/config")
-    def set_config_fields(fields: Dict[str, Any]):
-        for key, value in fields.items():
-            config = None
-            logger.info(f"Setting config field {key} to {value}")
-            attrs = key.split(".")
-            if not attrs or attrs[0] != "root" or any(part == "" for part in attrs):
+    def set_config_fields(payload: Dict[str, Any]):
+        """Apply staged changes.
+
+        Body: `{"schema_version": "...", "changes": {"<dotted.path>": value, ...}}`.
+        Paths are relative to one of the three roots: `base_config.*`,
+        `input_modules.<name>.*`, or `devices.<name>.*`. No `root.` or
+        `.fields.` wrappers.
+        """
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Body must be a JSON object")
+
+        client_version = payload.get("schema_version")
+        if client_version and client_version != _current_schema_version():
+            raise HTTPException(
+                status_code=409,
+                detail="Stale schema_version; refetch /server/config/schema and retry.",
+            )
+
+        changes = payload.get("changes", payload)
+        if not isinstance(changes, dict):
+            raise HTTPException(
+                status_code=400, detail="'changes' must be a JSON object"
+            )
+
+        for key, value in changes.items():
+            logger.info("Setting config field %s to %r", key, value)
+            attrs = key.split(".") if isinstance(key, str) else []
+            if not attrs or any(p == "" for p in attrs):
                 raise HTTPException(status_code=400, detail="Invalid config key")
 
-            attrs = attrs[1:]  # Skip the 'root' part
-
-            if not attrs:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid config key: section path cannot be updated directly",
-                )
-
-            if attrs[0] == "input_modules":
-                if len(attrs) < 2:
+            target_config = None
+            if attrs[0] == "base_config":
+                target_config = app.state.config
+                attrs = attrs[1:]
+            elif attrs[0] == "input_modules":
+                if len(attrs) < 3:
                     raise HTTPException(status_code=400, detail="Invalid config key")
                 module_name = attrs[1]
                 if module_name in modules.prepared_input_modules:
-                    config = modules.prepared_input_modules[
+                    target_config = modules.prepared_input_modules[
                         module_name
                     ].plugin_context.config
                     attrs = attrs[2:]
-                    if not attrs:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid config key: section path cannot be updated directly",
-                        )
-                    if attrs[0] == "name":
-                        raise HTTPException(
-                            status_code=400, detail="Cannot modify 'name' field"
-                        )
             elif attrs[0] == "devices":
-                if len(attrs) < 2:
+                if len(attrs) < 3:
                     raise HTTPException(status_code=400, detail="Invalid config key")
                 device_name = attrs[1]
                 if device_name in modules.prepared_devices:
-                    config = modules.prepared_devices[device_name].plugin_context.config
+                    target_config = modules.prepared_devices[
+                        device_name
+                    ].plugin_context.config
                     attrs = attrs[2:]
-                    if not attrs:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid config key: section path cannot be updated directly",
-                        )
-                    if attrs[0] == "name":
-                        raise HTTPException(
-                            status_code=400, detail="Cannot modify 'name' field"
-                        )
-            elif attrs[0] == "base_config":
-                config = app.state.config
-                attrs = attrs[1:]
-                if not attrs:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid config key: section path cannot be updated directly",
-                    )
 
-            if config is None:
+            if target_config is None or not attrs:
                 raise HTTPException(status_code=400, detail="Invalid config key")
+            if attrs[0] == "name":
+                raise HTTPException(
+                    status_code=400, detail="Cannot modify 'name' field"
+                )
 
             try:
-                set_field_value(config, attrs, value)
+                set_field_value(target_config, attrs, value)
             except (AttributeError, IndexError, TypeError, ValueError) as exc:
                 logger.warning("Invalid config key '%s': %s", key, exc)
                 raise HTTPException(
                     status_code=400, detail="Invalid config key"
                 ) from exc
             logger.info(
-                f"Set config field {'.'.join(attrs)} to {value}, saved value: {get_field_value(config, attrs)}"
+                "Set %s to %r, saved: %r",
+                ".".join(attrs),
+                value,
+                get_field_value(target_config, attrs),
             )
 
-        return {"message": "Ok"}
+        return {"message": "Ok", "schema_version": _current_schema_version()}
 
     @app.get("/resource/{file_name:path}")
     async def get_resource(file_name: str):

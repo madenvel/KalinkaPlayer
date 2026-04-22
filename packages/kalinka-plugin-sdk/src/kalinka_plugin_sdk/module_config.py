@@ -19,4 +19,4 @@ class ModuleConfig(BaseModel):
         frozen=True,
         exclude=True,
     )
-    enabled: bool = Field(default=True, title="Module Enabled")
+    enabled: bool = Field(default=True, title="Module enabled")
