@@ -235,7 +235,40 @@ class FileIndexer:
 
     async def process_file(self, file_path: str) -> Optional[Dict[str, Optional[str]]]:
         """Process a music file and update the database. Returns changed items IDs."""
-        stat = os.stat(file_path)
+        try:
+            stat = os.stat(file_path)
+        except FileNotFoundError:
+            logger.debug(f"File disappeared before processing: {file_path}")
+            return None
+
+        # Quiescence guard: skip files that may still be in mid-upload.
+        # POSIX has no "upload complete" signal, so we infer it from mtime/size
+        # stability over a short window. If the file is still changing, defer —
+        # the next CLOSE_WRITE/MOVED_TO event or scheduled rescan will retry it.
+        quiescence_seconds = self.config.quiescence_seconds
+        if quiescence_seconds > 0:
+            age = time.time() - stat.st_mtime
+            if age < quiescence_seconds:
+                await asyncio.sleep(quiescence_seconds - age)
+                try:
+                    stat_after = os.stat(file_path)
+                except FileNotFoundError:
+                    logger.debug(
+                        f"File disappeared during quiescence wait: {file_path}"
+                    )
+                    return None
+                if (
+                    stat_after.st_size != stat.st_size
+                    or stat_after.st_mtime != stat.st_mtime
+                ):
+                    logger.info(
+                        f"File still being written, deferring: {file_path} "
+                        f"(size {stat.st_size}->{stat_after.st_size}, "
+                        f"mtime {stat.st_mtime}->{stat_after.st_mtime})"
+                    )
+                    return None
+                stat = stat_after
+
         file_size = stat.st_size
         modified_time = int(stat.st_mtime)
 
