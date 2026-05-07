@@ -344,6 +344,18 @@ class LocalFilesConfig(ModuleConfig):
         title="Enable file watching",
         json_schema_extra={"help": "Rescan on filesystem changes"},
     )
+    quiescence_seconds: int = Field(
+        default=5,
+        title="Upload quiescence window",
+        json_schema_extra={
+            "help": (
+                "Defer indexing of files modified within this many seconds. "
+                "Protects against indexing partial files during slow uploads."
+            ),
+            "constraints": {"unit": "s"},
+            **_ADVANCED,
+        },
+    )
     enricher: EnricherConfig = Field(
         default_factory=EnricherConfig, title="Enricher"
     )
