@@ -23,7 +23,10 @@ class PowerOffCommand(BaseModel):
 
 class SetVolumeCommand(BaseModel):
     command: Literal["set_volume"] = "set_volume"
-    volume: int = Field(..., ge=0, le=100, description="Volume level (0-100)")
+    # Volume is in the device's native scale; the plugin clamps to its own
+    # max_volume (e.g. MusicCast = 161, others = 100). Don't enforce an upper
+    # bound here or commands targeting devices with larger ranges silently fail.
+    volume: int = Field(..., ge=0, description="Volume level in device-native units")
 
 
 # Discriminated union of all commands
