@@ -176,7 +176,17 @@ class DeviceAutomation:
 
         if new_state in (PlayerStateEnum.BUFFERING, PlayerStateEnum.PLAYING):
             self._cancel_auto_off_timer()
-            await self._on_active()
+            # Only fire _on_active on the *transition* into the active group.
+            # Without this guard, BUFFERING → PLAYING (~600 ms apart on a fresh
+            # track) triggers power_on twice in quick succession; the first
+            # call has often not flipped the receiver fully on yet, so the
+            # second is_power_on() check returns False and we redundantly fire
+            # setPower=on again.
+            if self._last_state not in (
+                PlayerStateEnum.BUFFERING,
+                PlayerStateEnum.PLAYING,
+            ):
+                await self._on_active()
 
         elif new_state in (PlayerStateEnum.PAUSED, PlayerStateEnum.STOPPED):
             self._start_auto_off_timer()
