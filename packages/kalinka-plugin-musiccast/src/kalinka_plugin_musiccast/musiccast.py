@@ -565,6 +565,10 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         try:
             while not self.shutdown_event.is_set():
                 try:
+                    logger.info(
+                        f"[udp] refreshing subscription via getStatus "
+                        f"(X-AppPort={self.udp_port})"
+                    )
                     status = await self._get_status(
                         headers={
                             "X-AppName": "MusicCast/1.0(Linux)",
@@ -613,12 +617,12 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                     # Bind to local interface, not remote device address
                     udp_socket.bind(("", self.udp_port))
-                    logger.info(
-                        f"Listening for MusicCast events on 0.0.0.0:{self.udp_port}"
-                    )
-
                     loop = asyncio.get_event_loop()
                     device_addr = urllib.parse.urlparse(self.base_url).hostname
+                    logger.info(
+                        f"[udp] listening on 0.0.0.0:{self.udp_port}, "
+                        f"expecting packets from device_addr={device_addr}"
+                    )
 
                     while not self.shutdown_event.is_set():
                         try:
@@ -627,18 +631,25 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                             logger.error(f"Socket error in event loop: {e}")
                             break
 
+                        logger.info(
+                            f"[udp] packet rx from {client_address[0]}:{client_address[1]} "
+                            f"len={len(data)}"
+                        )
+
                         # Validate that the event came from the expected device
                         if client_address[0] != device_addr:
                             logger.warning(
-                                f"Received event from unexpected address: {client_address[0]}"
+                                f"[udp] dropping packet — source {client_address[0]} "
+                                f"!= expected {device_addr}"
                             )
                             continue
 
                         try:
                             event_json = json.loads(data.decode("utf-8"))
+                            logger.info(f"[udp] parsed event: {event_json}")
                             await self._handle_event(event_json)
                         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                            logger.warning(f"Failed to decode event data: {e}")
+                            logger.warning(f"[udp] failed to decode payload: {e}")
 
                 except socket.error as e:
                     logger.error(f"Failed to create/bind UDP socket: {e}")
