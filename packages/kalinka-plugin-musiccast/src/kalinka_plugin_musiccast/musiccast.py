@@ -480,7 +480,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                 volume_changed.clear()
 
-                logger.info(
+                logger.debug(
                     f"Volume changed event received: {self.volume.current_volume}"
                 )
                 # Debounce: wait for quiet
@@ -590,7 +590,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                     await asyncio.sleep(1)
                     continue
                 try:
-                    logger.info(
+                    logger.debug(
                         f"[udp] refreshing subscription via getStatus "
                         f"(X-AppPort={self.udp_port})"
                     )
@@ -666,7 +666,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                             logger.error(f"Socket error in event loop: {e}")
                             break
 
-                        logger.info(
+                        logger.debug(
                             f"[udp] packet rx from {client_address[0]}:{client_address[1]} "
                             f"len={len(data)}"
                         )
@@ -681,7 +681,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                         try:
                             event_json = json.loads(data.decode("utf-8"))
-                            logger.info(f"[udp] parsed event: {event_json}")
+                            logger.debug(f"[udp] parsed event: {event_json}")
                             await self._handle_event(event_json)
                         except (json.JSONDecodeError, UnicodeDecodeError) as e:
                             logger.warning(f"[udp] failed to decode payload: {e}")
