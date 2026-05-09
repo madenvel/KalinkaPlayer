@@ -811,6 +811,13 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         volume = max(0, min(volume, self.volume.max_volume))
         await self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
+        # YXC suppresses the UDP echo for self-issued setVolume, so the cache
+        # would otherwise stay frozen until an external source (knob, phone app)
+        # nudges it. Update locally and signal the event sender.
+        if volume != self.volume.current_volume:
+            self.volume.current_volume = volume
+            if hasattr(self, "_volume_changed_event"):
+                self._volume_changed_event.set()
 
     async def power_on(self) -> None:
         if not self.ready:
