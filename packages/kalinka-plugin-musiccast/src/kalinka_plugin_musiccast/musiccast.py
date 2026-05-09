@@ -340,6 +340,10 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             current_volume=status["volume"],
             volume_gain=0,
         )
+        logger.info(
+            f"[volume] init from getStatus: current={self.volume.current_volume} "
+            f"max={self.volume.max_volume}"
+        )
 
         self.poweroff_timer = None
         self.udp_port = find_available_port()
@@ -544,20 +548,45 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             raise
 
     async def _timer_loop(self):
-        """Timer loop that periodically polls device status"""
-        # Recommended poll time for main zone is 5 seconds
-        # But we do not poll and instead rely on events
+        """Timer loop that periodically polls device status.
+
+        Two responsibilities:
+          1. Refresh the X-AppPort UDP subscription so the receiver keeps
+             pushing change events to us.
+          2. Resync `self.volume.current_volume` from the polled status as a
+             defence-in-depth fallback for missed UDP pushes. Without this,
+             external volume changes (front-panel knob, MusicCast app) leave
+             the cached value stale until the next UDP echo — which YXC may
+             never send if the subscription has lapsed or packets were
+             dropped. A stale cache makes hardware-key volume-up on the
+             phone snap the receiver to `cached + 1` regardless of where it
+             physically is.
+        """
         try:
             while not self.shutdown_event.is_set():
                 try:
-                    await self._get_status(
+                    status = await self._get_status(
                         headers={
                             "X-AppName": "MusicCast/1.0(Linux)",
                             "X-AppPort": str(self.udp_port),
                         }
                     )
 
-                    await asyncio.sleep(300)
+                    polled_volume = status.get("volume")
+                    if isinstance(polled_volume, int):
+                        if polled_volume != self.volume.current_volume:
+                            logger.info(
+                                f"[volume] poll resync: {self.volume.current_volume} -> {polled_volume}"
+                            )
+                            self.volume.current_volume = polled_volume
+                            if hasattr(self, "_volume_changed_event"):
+                                self._volume_changed_event.set()
+                        else:
+                            logger.debug(
+                                f"[volume] poll: cache in sync at {polled_volume}"
+                            )
+
+                    await asyncio.sleep(60)
                 except (httpx.ConnectError, httpx.TimeoutException, ConnectionError):
                     # Network error - trigger rediscovery and retry sooner
                     logger.warning(
@@ -643,10 +672,12 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if "volume" in zone_state:
             new_volume = zone_state["volume"]
             if isinstance(new_volume, int) and new_volume != self.volume.current_volume:
+                logger.info(
+                    f"[volume] UDP push: {self.volume.current_volume} -> {new_volume}"
+                )
                 self.volume.current_volume = new_volume
                 if hasattr(self, "_volume_changed_event"):
                     self._volume_changed_event.set()
-                logger.debug(f"Volume changed to: {new_volume}")
 
         # Handle power state changes
         power_state = zone_state.get("power")
@@ -809,13 +840,21 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if not self.ready:
             return
 
-        volume = max(0, min(volume, self.volume.max_volume))
-        await self._request_musiccast(f"/{self.zone_name}/setVolume?volume={volume}")
+        clamped = max(0, min(volume, self.volume.max_volume))
+        logger.info(
+            f"[volume] set_volume requested={volume} clamped={clamped} "
+            f"cache_before={self.volume.current_volume}"
+        )
+        await self._request_musiccast(f"/{self.zone_name}/setVolume?volume={clamped}")
         # YXC suppresses the UDP echo for self-issued setVolume, so the cache
         # would otherwise stay frozen until an external source (knob, phone app)
         # nudges it. Update locally and signal the event sender.
-        if volume != self.volume.current_volume:
-            self.volume.current_volume = volume
+        if clamped != self.volume.current_volume:
+            logger.info(
+                f"[volume] set_volume optimistic update: "
+                f"{self.volume.current_volume} -> {clamped}"
+            )
+            self.volume.current_volume = clamped
             if hasattr(self, "_volume_changed_event"):
                 self._volume_changed_event.set()
 
