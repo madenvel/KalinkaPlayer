@@ -332,6 +332,18 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         self.tasks = []
         self._discovery_task = None
 
+        # Worker tasks may be spawned before get_ready() completes (when
+        # discovery is in flight). They reference shutdown_event,
+        # _volume_changed_event, and udp_port from their first line, so
+        # initialise them up front — otherwise the workers raise
+        # AttributeError immediately and asyncio swallows the exception
+        # because nobody awaits the dead tasks until terminate(). The
+        # symptom is silent: no [udp] logs ever appear despite the rest of
+        # the plugin (set_volume etc.) working through the request path.
+        self.shutdown_event = asyncio.Event()
+        self.udp_port: Optional[int] = None
+        self._volume_changed_event = asyncio.Event()
+
     async def get_ready(self):
         # Test connection and get initial status
         status = await self._get_status()
@@ -350,7 +362,6 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if self.udp_port is None:
             raise Exception("Could not find available UDP port")
         logger.info(f"Using UDP port {self.udp_port}")
-        self.shutdown_event = asyncio.Event()
         self.ready = True
 
         # Track "effective on" state: device powered on AND correct input selected
@@ -450,12 +461,14 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
     # This event sender runs in its own task
     # and used to throttle volume change notifications to once per second
     async def _event_sender(self):
+        logger.info("[task] event_sender started")
         last_sent_volume = None
         last_sent_at = 0.0
         debounce_sec = 0.10
         min_interval_sec = 0.00  # set to 0.10 to cap at 10 Hz
-        volume_changed = asyncio.Event()
-        self._volume_changed_event = volume_changed
+        # Use the instance-level event so signals from set_volume /
+        # _handle_event / _timer_loop reach us regardless of restart timing.
+        volume_changed = self._volume_changed_event
 
         try:
             while not self.shutdown_event.is_set():
@@ -511,13 +524,16 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                     last_sent_volume = target
                     last_sent_at = time.monotonic()
         except asyncio.CancelledError:
-            logger.debug("Event sender task cancelled")
+            logger.info("[task] event_sender cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[task] event_sender died: {e!r}", exc_info=True)
             raise
 
     async def _playback_state_listener(self):
         """Listen to playback state changes and call appropriate handlers"""
+        logger.info("[task] playback_state_listener started")
         try:
-            logger.debug("Playback state listener started")
             async with self.listener.stream(
                 [PlayQueueEventType.PlaybackStateChanged]
             ) as stream:  # type: ignore
@@ -541,10 +557,12 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                             logger.info("Playback stopped, calling _on_stopped")
                             await self._on_stopped()
         except asyncio.CancelledError:
-            logger.debug("Playback state listener task cancelled")
+            logger.info("[task] playback_state_listener cancelled")
             raise
         except Exception as e:
-            logger.error(f"Error in playback state listener: {e}")
+            logger.error(
+                f"[task] playback_state_listener died: {e!r}", exc_info=True
+            )
             raise
 
     async def _timer_loop(self):
@@ -562,8 +580,15 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
              phone snap the receiver to `cached + 1` regardless of where it
              physically is.
         """
+        logger.info("[task] timer_loop started")
         try:
             while not self.shutdown_event.is_set():
+                # Wait for discovery to finish (self.ready / udp_port set)
+                # before issuing requests. Otherwise base_url is None and
+                # _get_status raises before any [udp] log can fire.
+                if not self.ready or self.udp_port is None:
+                    await asyncio.sleep(1)
+                    continue
                 try:
                     logger.info(
                         f"[udp] refreshing subscription via getStatus "
@@ -602,13 +627,23 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                     logger.error(f"Timer loop error: {e}")
                     await asyncio.sleep(10)
         except asyncio.CancelledError:
-            logger.debug("Timer loop task cancelled")
+            logger.info("[task] timer_loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[task] timer_loop died: {e!r}", exc_info=True)
             raise
 
     async def _event_loop(self):
         """Event loop that listens for UDP events from MusicCast device"""
+        logger.info("[task] event_loop started")
         try:
             while not self.shutdown_event.is_set():
+                # Wait for discovery to finish (self.ready / udp_port set)
+                # before binding. Without this gate the worker would crash
+                # on a None udp_port the very first iteration.
+                if not self.ready or self.udp_port is None:
+                    await asyncio.sleep(1)
+                    continue
                 udp_socket = None
                 try:
                     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -664,7 +699,10 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                         except:
                             pass
         except asyncio.CancelledError:
-            logger.debug("Event loop task cancelled")
+            logger.info("[task] event_loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"[task] event_loop died: {e!r}", exc_info=True)
             raise
 
     async def _handle_event(self, event_json):
