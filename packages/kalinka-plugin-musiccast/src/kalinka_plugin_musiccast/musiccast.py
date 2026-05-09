@@ -340,7 +340,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             current_volume=status["volume"],
             volume_gain=0,
         )
-        logger.info(
+        logger.debug(
             f"[volume] init from getStatus: current={self.volume.current_volume} "
             f"max={self.volume.max_volume}"
         )
@@ -575,7 +575,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                     polled_volume = status.get("volume")
                     if isinstance(polled_volume, int):
                         if polled_volume != self.volume.current_volume:
-                            logger.info(
+                            logger.debug(
                                 f"[volume] poll resync: {self.volume.current_volume} -> {polled_volume}"
                             )
                             self.volume.current_volume = polled_volume
@@ -672,7 +672,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         if "volume" in zone_state:
             new_volume = zone_state["volume"]
             if isinstance(new_volume, int) and new_volume != self.volume.current_volume:
-                logger.info(
+                logger.debug(
                     f"[volume] UDP push: {self.volume.current_volume} -> {new_volume}"
                 )
                 self.volume.current_volume = new_volume
@@ -841,7 +841,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             return
 
         clamped = max(0, min(volume, self.volume.max_volume))
-        logger.info(
+        logger.debug(
             f"[volume] set_volume requested={volume} clamped={clamped} "
             f"cache_before={self.volume.current_volume}"
         )
@@ -850,7 +850,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         # would otherwise stay frozen until an external source (knob, phone app)
         # nudges it. Update locally and signal the event sender.
         if clamped != self.volume.current_volume:
-            logger.info(
+            logger.debug(
                 f"[volume] set_volume optimistic update: "
                 f"{self.volume.current_volume} -> {clamped}"
             )
