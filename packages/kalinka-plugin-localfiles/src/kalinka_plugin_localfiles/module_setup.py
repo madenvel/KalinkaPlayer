@@ -1,8 +1,9 @@
 import logging
 import logging.handlers
 import multiprocessing
-from typing import Optional
+from typing import ClassVar, Optional
 
+from kalinka_plugin_sdk import OptionalPackageSpec
 from kalinka_plugin_sdk.plugin import InputPluginContext, InputModulePlugin
 from kalinka_plugin_sdk.inputmodule import InputModule
 
@@ -10,6 +11,7 @@ from .config_model import LocalFilesConfig
 from .db_schema import init_db
 from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
+from .optional_packages import OPTIONAL_PACKAGES
 from . import enricher
 from . import indexer
 from . import embedder
@@ -23,6 +25,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     REQUIRES_SDK = ">=1.0,<2"
     PLUGIN_ID = "localfiles"
     CONFIG_MODEL = LocalFilesConfig
+    OPTIONAL_PACKAGES: ClassVar[dict[str, OptionalPackageSpec]] = OPTIONAL_PACKAGES
 
     def __init__(self):
         self._enricher_proc = None

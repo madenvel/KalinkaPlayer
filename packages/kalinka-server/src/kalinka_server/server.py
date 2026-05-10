@@ -42,6 +42,10 @@ from .config_schema_processor import (
 )
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .multisearch import calculate_fuzzy_score
+from .optional_packages_registry import (
+    build_catalog as build_optional_packages_catalog,
+    write_pending_installs,
+)
 from .player_setup import modules, setup, shutdown, ModuleHealthState
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
@@ -705,7 +709,46 @@ async def create_app(config_file, config: KalinkaConfig):
         }
 
     @app.put("/server/restart")
-    def restart_server():
+    def restart_server(payload: Optional[Dict[str, Any]] = None):
+        """Request a full systemd-driven restart of the server.
+
+        Optional body: `{"install": ["<key>", ...]}` to also queue a
+        bootstrap-time install of the named optional packages. Keys must
+        already be in the in-memory registry (declared by a loaded plugin);
+        unknown keys are rejected with 400. The bootstrap still
+        re-validates against deb-shipped manifests before invoking pip.
+        """
+        accepted: list[str] = []
+        rejected: list[str] = []
+        if payload and isinstance(payload, dict):
+            requested = payload.get("install") or []
+            if requested and not isinstance(requested, list):
+                raise HTTPException(
+                    status_code=400, detail="'install' must be a list of keys"
+                )
+            if requested:
+                try:
+                    accepted, rejected = write_pending_installs(
+                        list(requested),
+                        modules.prepared_input_modules,
+                        modules.prepared_devices,
+                    )
+                except OSError as e:
+                    logger.error("Failed to write pending installs: %s", e)
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to record install request",
+                    ) from e
+                if rejected:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "message": "Unknown optional-package keys",
+                            "rejected": rejected,
+                            "accepted": accepted,
+                        },
+                    )
+
         # Touch the trigger file watched by kalinka-restart.path. systemd's
         # path unit fires the (root-owned) kalinka-restart.service oneshot,
         # which runs `systemctl restart kalinka.service`. We exit only when
@@ -719,7 +762,20 @@ async def create_app(config_file, config: KalinkaConfig):
             raise HTTPException(
                 status_code=500, detail="Failed to request restart"
             ) from e
-        return {"message": "restarting"}
+        return {"message": "restarting", "install_queued": accepted}
+
+    @app.get("/server/optional_packages")
+    def get_optional_packages():
+        """Return the catalog of plugin-declared optional packages.
+
+        Each entry includes pip_spec, description, triggered_by config
+        paths, whether the import name resolves in the current process,
+        and whether the key is in the pending-installs queue.
+        """
+        return build_optional_packages_catalog(
+            modules.prepared_input_modules,
+            modules.prepared_devices,
+        )
 
     @app.get("/server/modules")
     def list_modules():
