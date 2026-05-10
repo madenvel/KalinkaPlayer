@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart kalinka.service on request
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart kalinka.service
+ExecStartPost=-/bin/rm -f /run/kalinka/restart-request

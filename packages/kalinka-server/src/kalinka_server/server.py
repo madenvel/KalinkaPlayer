@@ -105,10 +105,7 @@ async def lifespan(app: FastAPI):
 
         app.state.player_context.playqueue_eventbus.close()
         await save_state(app.state.player_context.playqueue_eventbus)
-        save_config(
-            app.state.config_file,
-            app.state.config.model_copy(update={"restart": False}),
-        )
+        save_config(app.state.config_file, app.state.config)
         await app.state.player_context.playqueue.__aexit__(None, None, None)
 
 
@@ -709,9 +706,20 @@ async def create_app(config_file, config: KalinkaConfig):
 
     @app.put("/server/restart")
     def restart_server():
-        app.state.config.restart = True
-        app.state.server.should_exit = True
-        return {"message": "Ok"}
+        # Touch the trigger file watched by kalinka-restart.path. systemd's
+        # path unit fires the (root-owned) kalinka-restart.service oneshot,
+        # which runs `systemctl restart kalinka.service`. We exit only when
+        # systemd sends SIGTERM, letting the lifespan teardown run normally.
+        trigger = Path("/run/kalinka/restart-request")
+        try:
+            trigger.parent.mkdir(parents=True, exist_ok=True)
+            trigger.touch()
+        except OSError as e:
+            logger.error("Failed to write restart trigger %s: %s", trigger, e)
+            raise HTTPException(
+                status_code=500, detail="Failed to request restart"
+            ) from e
+        return {"message": "restarting"}
 
     @app.get("/server/modules")
     def list_modules():

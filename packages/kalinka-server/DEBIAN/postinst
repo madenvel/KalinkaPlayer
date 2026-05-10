@@ -7,6 +7,8 @@ INSTALL_DIR="/opt/kalinka"
 CONFIG_DIR="/etc/kalinka"
 UNIT_NAME="kalinka.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
+RESTART_PATH_UNIT="kalinka-restart.path"
+RESTART_PATH_UNIT_PATH="/etc/systemd/system/${RESTART_PATH_UNIT}"
 
 case "$1" in
   configure)
@@ -29,8 +31,14 @@ case "$1" in
     find "$CONFIG_DIR" -type f -exec chmod 600 {} \;
     find "$CONFIG_DIR" -type d -exec chmod 700 {} \;
 
-    echo "[4/4] systemd: reload; enable/start if unit exists"
+    echo "[4/4] systemd: reload; enable/start if units exist"
+    systemd-tmpfiles --create /usr/lib/tmpfiles.d/kalinka.conf || true
     systemctl daemon-reload
+    if [ -f "$RESTART_PATH_UNIT_PATH" ]; then
+      systemctl enable --now "$RESTART_PATH_UNIT"
+    else
+      echo "Note: $RESTART_PATH_UNIT not found at $RESTART_PATH_UNIT_PATH. Skipping."
+    fi
     if [ -f "$UNIT_PATH" ]; then
       systemctl enable "$UNIT_NAME"
       systemctl restart "$UNIT_NAME"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for kalinka restart requests
+After=kalinka.service
+
+[Path]
+PathChanged=/run/kalinka/restart-request
+Unit=kalinka-restart.service
+
+[Install]
+WantedBy=multi-user.target
