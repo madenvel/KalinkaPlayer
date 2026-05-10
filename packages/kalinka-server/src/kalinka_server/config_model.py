@@ -195,7 +195,6 @@ class KalinkaConfig(BaseModel):
     device_automation: DeviceAutomationConfig = Field(
         default_factory=DeviceAutomationConfig, title="Device automation"
     )
-    restart: bool = Field(default=False, title="Restart the server", exclude=True)
 
     @classmethod
     def presentation_layout(

@@ -55,11 +55,15 @@ rm "$TARGET_DIR/DEBIAN/control.in"
 
 mkdir -p "$TARGET_DIR/opt/kalinka/wheels"
 mkdir -p "$TARGET_DIR/etc/systemd/system/"
+mkdir -p "$TARGET_DIR/usr/lib/tmpfiles.d/"
 
 cp "$WHEEL_PATH" "$TARGET_DIR/opt/kalinka/wheels/"
 cp scripts/bootstrap.sh "$TARGET_DIR/opt/kalinka/bootstrap.sh"
 chmod 755 "$TARGET_DIR/opt/kalinka/bootstrap.sh"
 cp scripts/kalinka.service "$TARGET_DIR/etc/systemd/system/"
+cp scripts/kalinka-restart.path "$TARGET_DIR/etc/systemd/system/"
+cp scripts/kalinka-restart.service "$TARGET_DIR/etc/systemd/system/"
+cp scripts/kalinka.tmpfiles.conf "$TARGET_DIR/usr/lib/tmpfiles.d/kalinka.conf"
 cp ../../README.md "$TARGET_DIR/opt/kalinka/"
 cp LICENSE "$TARGET_DIR/opt/kalinka/"
 

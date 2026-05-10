@@ -88,44 +88,33 @@ async def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     try:
-
-        while True:
-            config = KalinkaConfig()
-            try:
-                with open(args.config, "r") as f:
-                    config = KalinkaConfig(**json.load(f))
-            except Exception as e:
-                logger.warning(
-                    f"Config file {args.config} not found or corrupted. Using default configuration."
-                )
-
-            if args.state:
-                set_state_file(args.state)
-
-            host = get_ip_address(config.server.interface)
-            port = config.server.port
-            logger.info(f"Starting server on {host}:{port}")
-            app = await create_app(args.config, config)
-            uvicorn_config = uvicorn.Config(
-                app,
-                host=host,
-                port=port,
-                reload=False,
-                timeout_graceful_shutdown=5,
-                log_config=uvicorn_log_config,
+        config = KalinkaConfig()
+        try:
+            with open(args.config, "r") as f:
+                config = KalinkaConfig(**json.load(f))
+        except Exception:
+            logger.warning(
+                f"Config file {args.config} not found or corrupted. Using default configuration."
             )
-            server = uvicorn.Server(uvicorn_config)
-            app.state.server = server
-            await server.serve()
 
-            # Check if this is a restart or a normal shutdown
-            if hasattr(app.state.config, "restart") and app.state.config.restart:
-                logger.info("Server restarting ...")
-                # Reset the restart flag for the next iteration
-                app.state.config.restart = False
-            else:
-                logger.info("Server shut down")
-                break
+        if args.state:
+            set_state_file(args.state)
+
+        host = get_ip_address(config.server.interface)
+        port = config.server.port
+        logger.info(f"Starting server on {host}:{port}")
+        app = await create_app(args.config, config)
+        uvicorn_config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            reload=False,
+            timeout_graceful_shutdown=5,
+            log_config=uvicorn_log_config,
+        )
+        server = uvicorn.Server(uvicorn_config)
+        await server.serve()
+        logger.info("Server shut down")
 
     except KeyboardInterrupt:
         logger.info("Server shut down")
