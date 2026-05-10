@@ -39,6 +39,16 @@ fi
 # Copy wheel to package root
 cp "dist/${PLUGIN_WHEEL}" "pkgroot/opt/kalinka/wheels/"
 
+# Export the optional-packages manifest from the plugin source. The module
+# only imports pydantic + kalinka_plugin_sdk; running it as a top-level
+# script (not via `-m`) avoids triggering the parent package's __init__.py
+# so the build env doesn't need the plugin's heavier runtime deps.
+echo "Exporting optional-packages manifest..."
+mkdir -p pkgroot/opt/kalinka/allowed_packages
+PYTHONPATH="../kalinka-plugin-sdk/src" \
+    python3 src/kalinka_plugin_localfiles/optional_packages.py \
+    > pkgroot/opt/kalinka/allowed_packages/localfiles.json
+
 # Generate control file from template
 sed "s/@VERSION@/${VERSION}/g" debian/control.in > pkgroot/DEBIAN/control
 

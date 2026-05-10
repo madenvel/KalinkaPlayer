@@ -1,0 +1,171 @@
+"""Tests for the optional-packages registry that backs /server/optional_packages."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
+from kalinka_plugin_sdk import OptionalPackageSpec
+from kalinka_server.optional_packages_registry import (
+    build_catalog,
+    build_registry,
+    write_pending_installs,
+)
+
+
+@dataclass
+class FakePluginClass:
+    OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec]
+
+
+@dataclass
+class FakePrepared:
+    plugin_class: type
+
+
+def _prepared(packages: dict[str, OptionalPackageSpec]) -> FakePrepared:
+    return FakePrepared(plugin_class=FakePluginClass(OPTIONAL_PACKAGES=packages))
+
+
+def _spec(name: str, import_name: str = "") -> OptionalPackageSpec:
+    return OptionalPackageSpec(
+        pip_spec=f"{name}==1.0",
+        description=f"desc for {name}",
+        import_name=import_name,
+    )
+
+
+def test_registry_collects_from_input_modules_and_devices():
+    input_modules = {
+        "localfiles": _prepared({"numpy": _spec("numpy")}),
+    }
+    devices = {
+        "fancydac": _prepared({"alsa_extras": _spec("alsa_extras")}),
+    }
+    registry = build_registry(input_modules, devices)
+    assert set(registry) == {"numpy", "alsa_extras"}
+    assert registry["numpy"][0] == "localfiles"
+    assert registry["alsa_extras"][0] == "fancydac"
+
+
+def test_registry_first_declarer_wins_on_duplicate_keys(caplog):
+    input_modules = {
+        "alpha": _prepared({"shared": _spec("shared-v1")}),
+        "beta": _prepared({"shared": _spec("shared-v2")}),
+    }
+    with caplog.at_level("WARNING"):
+        registry = build_registry(input_modules, {})
+    assert registry["shared"][0] == "alpha"
+    assert "declared by both" in caplog.text
+
+
+def test_registry_skips_malformed_entries(caplog):
+    input_modules = {
+        "weird": _prepared({"bogus": "not a spec object"}),  # type: ignore[dict-item]
+    }
+    with caplog.at_level("WARNING"):
+        registry = build_registry(input_modules, {})
+    assert "bogus" not in registry
+    assert "expected OptionalPackageSpec" in caplog.text
+
+
+def test_catalog_reports_installed_via_import_name(tmp_path: Path):
+    # 'sys' is always importable; 'definitely_not_a_module' isn't.
+    input_modules = {
+        "p": _prepared(
+            {
+                "sys-pkg": _spec("sys-pkg", import_name="sys"),
+                "ghost": _spec("ghost", import_name="definitely_not_a_module"),
+            }
+        ),
+    }
+    catalog = build_catalog(
+        input_modules,
+        {},
+        last_install_path=tmp_path / "last.json",
+        pending_installs_path=tmp_path / "pending.json",
+    )
+    by_key = {p["key"]: p for p in catalog["packages"]}
+    assert by_key["sys-pkg"]["installed"] is True
+    assert by_key["ghost"]["installed"] is False
+
+
+def test_catalog_marks_pending_keys(tmp_path: Path):
+    input_modules = {
+        "p": _prepared({"a": _spec("a"), "b": _spec("b")}),
+    }
+    pending_path = tmp_path / "pending.json"
+    pending_path.write_text(
+        json.dumps({"schema": 1, "requested": ["a"], "requested_at": 0})
+    )
+    catalog = build_catalog(
+        input_modules,
+        {},
+        last_install_path=tmp_path / "last.json",
+        pending_installs_path=pending_path,
+    )
+    by_key = {p["key"]: p for p in catalog["packages"]}
+    assert by_key["a"]["pending"] is True
+    assert by_key["b"]["pending"] is False
+
+
+def test_catalog_includes_last_install_audit(tmp_path: Path):
+    input_modules = {"p": _prepared({"a": _spec("a")})}
+    last_install_path = tmp_path / "last.json"
+    last_install_path.write_text(json.dumps({"results": [{"key": "a", "status": "ok"}]}))
+    catalog = build_catalog(
+        input_modules,
+        {},
+        last_install_path=last_install_path,
+        pending_installs_path=tmp_path / "pending.json",
+    )
+    assert catalog["last_install"] == {"results": [{"key": "a", "status": "ok"}]}
+
+
+def test_catalog_tolerates_malformed_last_install(tmp_path: Path, caplog):
+    input_modules = {"p": _prepared({"a": _spec("a")})}
+    last_install_path = tmp_path / "last.json"
+    last_install_path.write_text("not json")
+    with caplog.at_level("WARNING"):
+        catalog = build_catalog(
+            input_modules,
+            {},
+            last_install_path=last_install_path,
+            pending_installs_path=tmp_path / "pending.json",
+        )
+    assert catalog["last_install"] is None
+    assert "Cannot read last install" in caplog.text
+
+
+def test_write_pending_installs_validates_and_dedupes(tmp_path: Path):
+    input_modules = {"p": _prepared({"numpy": _spec("numpy"), "scipy": _spec("scipy")})}
+    pending = tmp_path / "pending.json"
+    accepted, rejected = write_pending_installs(
+        ["numpy", "scipy", "bogus", "numpy"],
+        input_modules,
+        {},
+        pending_installs_path=pending,
+    )
+    assert accepted == ["numpy", "scipy"]
+    assert rejected == ["bogus"]
+    payload = json.loads(pending.read_text())
+    assert payload["schema"] == 1
+    assert payload["requested"] == ["numpy", "scipy"]
+    assert "requested_at" in payload
+
+
+def test_write_pending_installs_atomic_replace(tmp_path: Path):
+    """The pending file must be replaced atomically (no half-written state)."""
+    input_modules = {"p": _prepared({"numpy": _spec("numpy")})}
+    pending = tmp_path / "pending.json"
+    pending.write_text(json.dumps({"schema": 1, "requested": ["old"]}))
+    write_pending_installs(
+        ["numpy"], input_modules, {}, pending_installs_path=pending
+    )
+    payload = json.loads(pending.read_text())
+    assert payload["requested"] == ["numpy"]
+    # No leftover .tmp
+    assert list(tmp_path.glob("pending.json.tmp")) == []

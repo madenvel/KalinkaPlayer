@@ -49,6 +49,7 @@ from .plugin import (
     OutputDevicePluginContext,
 )
 from .module_config import ModuleConfig
+from .optional_packages import OptionalPackageSpec
 
 __all__ = [
     "API_VERSION",
@@ -83,4 +84,5 @@ __all__ = [
     "ExternalOutputDevice",
     "SupportedFunction",
     "ModuleConfig",
+    "OptionalPackageSpec",
 ]
