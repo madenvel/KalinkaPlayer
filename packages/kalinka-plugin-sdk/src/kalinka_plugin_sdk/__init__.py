@@ -49,6 +49,8 @@ from .plugin import (
     OutputDevicePluginContext,
 )
 from .module_config import ModuleConfig
+from .module_health import ModuleHealthState, ModuleState
+from .dynamic_fields import DynamicFieldDecl
 from .optional_packages import OptionalPackageSpec
 
 __all__ = [
@@ -84,5 +86,8 @@ __all__ = [
     "ExternalOutputDevice",
     "SupportedFunction",
     "ModuleConfig",
+    "ModuleHealthState",
+    "ModuleState",
+    "DynamicFieldDecl",
     "OptionalPackageSpec",
 ]

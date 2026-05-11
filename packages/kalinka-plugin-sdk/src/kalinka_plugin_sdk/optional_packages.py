@@ -7,7 +7,6 @@ A plugin declares a static allow-list as a class attribute:
             "numpy": OptionalPackageSpec(
                 pip_spec="numpy==1.26.4",
                 description="Used by AI search",
-                triggered_by=("input_modules.mine.searcher.enabled",),
             ),
         }
 
@@ -18,6 +17,10 @@ At runtime the server exposes the catalog and accepts install requests
 keyed by allow-list key (never by pip spec). Requested keys are validated
 against the in-memory registry and written to a pending-installs file;
 bootstrap re-validates against the manifest before invoking pip.
+
+Which packages a plugin currently needs is reported via ``get_state()`` →
+``ModuleState.missing_packages``; the UI takes those keys directly to
+queue an install via ``PUT /server/restart {"install": [...]}``.
 """
 
 from __future__ import annotations
@@ -50,11 +53,4 @@ class OptionalPackageSpec(BaseModel):
         "already installed. Defaults to the registry key when empty. "
         "Set explicitly when the pip distribution name differs from the "
         "import name (e.g. 'essentia-tensorflow' -> 'essentia').",
-    )
-    triggered_by: tuple[str, ...] = Field(
-        default=(),
-        description="Dotted config paths whose enablement makes this package "
-        "required. Informational; the server uses this to surface "
-        "'package needed but not installed' hints. Not currently used "
-        "to auto-queue installs.",
     )

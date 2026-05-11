@@ -18,13 +18,14 @@ import hashlib
 import json
 import logging
 from enum import Enum
-from typing import Any, Dict, List, Union, get_origin, get_args
+from typing import Any, Dict, Iterable, List, Union, get_origin, get_args
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
+from .dynamic_field_registry import DynamicFieldEntry, resolve_value
 from .presentation_schema import (
     Banner,
     Constraints,
@@ -260,17 +261,104 @@ def _sections_for(model: BaseModel, prefix: str) -> list[SectionSpec]:
 # ---------------------------------------------------------------------------
 
 
+def _find_section_by_id(
+    sections: list[SectionSpec], target_id: str
+) -> SectionSpec | None:
+    """Walk a section tree (DFS) and return the section whose id matches."""
+    for s in sections:
+        if s.id == target_id:
+            return s
+        nested = _find_section_by_id(s.sections, target_id)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _dynamic_field_spec(
+    entry: DynamicFieldEntry,
+) -> FieldSpec:
+    """Build a FieldSpec from a dynamic-field declaration."""
+    decl = entry.decl
+    try:
+        widget = Widget(decl.widget)
+    except ValueError:
+        logger.warning(
+            "Dynamic field %s declared unknown widget %r; falling back to 'text'",
+            entry.full_path,
+            decl.widget,
+        )
+        widget = Widget.TEXT
+    try:
+        importance = Importance(decl.importance)
+    except ValueError:
+        importance = Importance.NORMAL
+    return FieldSpec(
+        path=entry.full_path,
+        label=decl.label,
+        widget=widget,
+        type=decl.value_type,
+        help=decl.help,
+        readonly=True,
+        dynamic=True,
+        importance=importance,
+    )
+
+
+def _inject_dynamic_fields(
+    sections: list[SectionSpec],
+    module_path_prefix: str,
+    entries: Iterable[DynamicFieldEntry],
+) -> None:
+    """Insert dynamic-field FieldSpecs into the matching nested sections.
+
+    Plugins reference sections by *relative* id (e.g. "searcher"); the
+    server prepends the module's full path prefix to find them in the
+    auto-generated section tree.
+    """
+    for entry in entries:
+        decl = entry.decl
+        if decl.section_id:
+            target_id = f"{module_path_prefix}.{decl.section_id}"
+        else:
+            target_id = f"{module_path_prefix}.general"
+        target = _find_section_by_id(sections, target_id)
+        if target is None and decl.section_id:
+            # Try the auto-generated 'general' bucket inside the named section
+            target = _find_section_by_id(
+                sections, f"{module_path_prefix}.{decl.section_id}.general"
+            )
+        if target is None:
+            logger.warning(
+                "Dynamic field %s declared section_id %r but no matching "
+                "section was emitted under %s; field will not appear in the "
+                "schema",
+                entry.full_path,
+                decl.section_id,
+                module_path_prefix,
+            )
+            continue
+        target.fields.append(_dynamic_field_spec(entry))
+
+
 def _module_spec(
     config: ModuleConfig,
     kind: str,
     *,
-    status: str,
-    error_message: str | None,
     path_prefix: str,
+    dynamic_entries: Iterable[DynamicFieldEntry] = (),
 ) -> ModuleSpec:
+    """Build the static schema entry for a module.
+
+    Live state (READY/WARNING/ERROR + message + missing packages) is
+    served separately by GET /server/modules; the schema deliberately
+    omits it so schema_version stays stable across transient plugin
+    state changes.
+    """
     cls = config.__class__
     prefix = f"{path_prefix}.{config.name}"
     sections = _sections_for(config, prefix)
+
+    _inject_dynamic_fields(sections, prefix, dynamic_entries)
 
     title = cls.model_fields["name"].title or config.name
     banners_raw = getattr(cls, "__module_banners__", [])
@@ -282,8 +370,6 @@ def _module_spec(
         title=title,
         icon=getattr(cls, "__module_icon__", None),
         icon_color=getattr(cls, "__module_icon_color__", None),
-        status=status,  # type: ignore[arg-type]
-        error_message=error_message,
         preview_fields=list(getattr(cls, "__preview_fields__", [])),
         banners=banners,
         sections=sections,
@@ -309,18 +395,32 @@ def _flatten_values(model: BaseModel, prefix: str, out: dict[str, Any]) -> None:
             out[path] = value
 
 
-def build_values(
+async def build_values(
     base_config: BaseModel,
     input_modules: dict[str, ModuleConfig],
     devices: dict[str, ModuleConfig],
+    dynamic_entries: Iterable[DynamicFieldEntry] = (),
 ) -> dict[str, Any]:
-    """Return flat `{dotted_path: value}` for every writable field."""
+    """Return flat `{dotted_path: value}` for every settable + dynamic field.
+
+    Static values come from the in-memory Pydantic config models.
+    Dynamic values are resolved sequentially via the registry. All
+    current resolvers read in-memory bookkeeping (no I/O), so parallel
+    gather buys nothing over a plain for-loop. Failures are logged but
+    omitted (the field appears with no value rather than failing the
+    whole request).
+    """
     out: dict[str, Any] = {}
     _flatten_values(base_config, "base_config", out)
     for name, module in input_modules.items():
         _flatten_values(module, f"input_modules.{name}", out)
     for name, device in devices.items():
         _flatten_values(device, f"devices.{name}", out)
+
+    for entry in dynamic_entries:
+        value = await resolve_value(entry)
+        if value is not None:
+            out[entry.full_path] = value
     return out
 
 
@@ -348,6 +448,14 @@ def get_field_value(model: BaseModel, field_path: List[str]) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def _entries_for(
+    registry: dict[str, DynamicFieldEntry],
+    kind: str,
+    plugin_id: str,
+) -> list[DynamicFieldEntry]:
+    return [e for e in registry.values() if e.kind == kind and e.plugin_id == plugin_id]
+
+
 def build_presentation(
     base_config: BaseModel,
     input_modules: dict[str, ModuleConfig],
@@ -355,9 +463,11 @@ def build_presentation(
     *,
     input_modules_with_errors: dict[str, tuple[ModuleConfig, str]] | None = None,
     devices_with_errors: dict[str, tuple[ModuleConfig, str]] | None = None,
+    dynamic_field_registry: dict[str, DynamicFieldEntry] | None = None,
 ) -> PresentationSchema:
     input_modules_with_errors = input_modules_with_errors or {}
     devices_with_errors = devices_with_errors or {}
+    registry = dynamic_field_registry or {}
 
     # General page: let KalinkaConfig.presentation_layout() shape the sections
     general_sections = _sections_for(base_config, "base_config")
@@ -380,20 +490,13 @@ def build_presentation(
             _module_spec(
                 m,
                 kind="input_module",
-                status="ready",
-                error_message=None,
                 path_prefix="input_modules",
+                dynamic_entries=_entries_for(registry, "input_module", name),
             )
         )
-    for name, (m, err) in input_modules_with_errors.items():
+    for name, (m, _err) in input_modules_with_errors.items():
         module_specs.append(
-            _module_spec(
-                m,
-                kind="input_module",
-                status="error",
-                error_message=err,
-                path_prefix="input_modules",
-            )
+            _module_spec(m, kind="input_module", path_prefix="input_modules")
         )
 
     modules_page = PageSpec(id="modules", title="Input modules", modules=module_specs)
@@ -405,21 +508,12 @@ def build_presentation(
             _module_spec(
                 d,
                 kind="device",
-                status="ready",
-                error_message=None,
                 path_prefix="devices",
+                dynamic_entries=_entries_for(registry, "device", name),
             )
         )
-    for name, (d, err) in devices_with_errors.items():
-        device_specs.append(
-            _module_spec(
-                d,
-                kind="device",
-                status="error",
-                error_message=err,
-                path_prefix="devices",
-            )
-        )
+    for name, (d, _err) in devices_with_errors.items():
+        device_specs.append(_module_spec(d, kind="device", path_prefix="devices"))
 
     devices_page = PageSpec(
         id="devices",

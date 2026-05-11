@@ -40,6 +40,7 @@ class Severity(str, Enum):
 
 class Widget(str, Enum):
     TEXT = "text"
+    RICH_TEXT = "rich_text"
     PASSWORD = "password"
     PATH = "path"
     URL = "url"
@@ -80,6 +81,7 @@ class FieldSpec(BaseModel):
     help: Optional[str] = None
     default: Any = None
     readonly: bool = False
+    dynamic: bool = False           # Value is resolved by the owning module at request time
     importance: Importance = Importance.NORMAL
     enum_values: Optional[list[str]] = None
     constraints: Optional[Constraints] = None
@@ -98,15 +100,20 @@ class SectionSpec(BaseModel):
 
 
 class ModuleSpec(BaseModel):
-    """A pluggable input module or output device entry on its page."""
+    """A pluggable input module or output device entry on its page.
+
+    Live runtime state (READY/WARNING/ERROR/DISABLED + message + missing
+    optional packages) is served by `GET /server/modules`, not the
+    schema — the schema describes the static layout. Mixing live state
+    into the schema would churn `schema_version` on every transient
+    plugin hiccup.
+    """
 
     id: str
     kind: Literal["input_module", "device"]
     title: str
     icon: Optional[str] = None
     icon_color: Optional[str] = None
-    status: Optional[Literal["ready", "error", "disabled"]] = None
-    error_message: Optional[str] = None
     preview_fields: list[str] = Field(default_factory=list)
     banners: list[Banner] = Field(default_factory=list)
     sections: list[SectionSpec] = Field(default_factory=list)

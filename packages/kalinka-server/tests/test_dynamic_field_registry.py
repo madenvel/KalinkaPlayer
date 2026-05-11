@@ -1,0 +1,249 @@
+"""Tests for the dynamic-field registry, schema injection, and values resolution."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import Any
+
+import pytest
+
+from kalinka_plugin_sdk import (
+    DynamicFieldDecl,
+    ModuleHealthState,
+    ModuleState,
+)
+from kalinka_plugin_sdk.plugin import PluginBase
+
+from kalinka_server.config_model import KalinkaConfig
+from kalinka_server.config_schema_processor import build_presentation, build_values
+from kalinka_server.dynamic_field_registry import (
+    build_dynamic_field_registry,
+    resolve_value,
+)
+from kalinka_server.presentation_schema import SectionSpec
+
+
+# ---------------------------------------------------------------------------
+# Fakes
+# ---------------------------------------------------------------------------
+
+
+class _FakePluginClass:
+    DYNAMIC_FIELDS: dict[str, DynamicFieldDecl] = {}
+
+
+@dataclass
+class _FakePrepared:
+    plugin_class: type
+    plugin_instance: Any
+
+
+class _FakeInstance:
+    def __init__(self, resolved: dict[str, Any] | None = None):
+        self._resolved = resolved or {}
+
+    async def resolve_dynamic_field(self, path: str):
+        if path not in self._resolved:
+            raise KeyError(path)
+        return self._resolved[path]
+
+
+def _prepared(decls: dict[str, DynamicFieldDecl], instance: Any) -> _FakePrepared:
+    cls = type("PluginCls", (_FakePluginClass,), {"DYNAMIC_FIELDS": decls})
+    return _FakePrepared(plugin_class=cls, plugin_instance=instance)
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+
+def test_registry_builds_full_paths_from_kind_and_id():
+    decls = {
+        "searcher.status_view": DynamicFieldDecl(
+            section_id="searcher", label="Status", widget="rich_text"
+        ),
+    }
+    instance = _FakeInstance({"searcher.status_view": "ok"})
+    registry = build_dynamic_field_registry(
+        input_modules={"localfiles": _prepared(decls, instance)},
+        devices={},
+    )
+    assert set(registry) == {"input_modules.localfiles.searcher.status_view"}
+    entry = registry["input_modules.localfiles.searcher.status_view"]
+    assert entry.plugin_id == "localfiles"
+    assert entry.kind == "input_module"
+    assert entry.subpath == "searcher.status_view"
+
+
+def test_registry_skips_plugins_without_instances():
+    decls = {"a.x": DynamicFieldDecl(section_id="a", label="x")}
+    prepared = _FakePrepared(
+        plugin_class=type("X", (_FakePluginClass,), {"DYNAMIC_FIELDS": decls}),
+        plugin_instance=None,
+    )
+    registry = build_dynamic_field_registry({"broken": prepared}, {})
+    assert registry == {}
+
+
+def test_registry_warns_on_non_decl_entry(caplog):
+    decls = {"x": "not-a-decl"}  # type: ignore[dict-item]
+    prepared = _prepared(decls, _FakeInstance())  # type: ignore[arg-type]
+    with caplog.at_level("WARNING"):
+        registry = build_dynamic_field_registry({"p": prepared}, {})
+    assert registry == {}
+    assert "expected DynamicFieldDecl" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# resolve_value
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_value_returns_value_on_success():
+    instance = _FakeInstance({"x": "value-x"})
+    decls = {"x": DynamicFieldDecl(section_id="", label="x")}
+    registry = build_dynamic_field_registry(
+        {"p": _prepared(decls, instance)}, {}
+    )
+    entry = next(iter(registry.values()))
+    assert asyncio.run(resolve_value(entry)) == "value-x"
+
+
+def test_resolve_value_returns_none_on_keyerror(caplog):
+    instance = _FakeInstance({})  # nothing registered
+    decls = {"x": DynamicFieldDecl(section_id="", label="x")}
+    registry = build_dynamic_field_registry(
+        {"p": _prepared(decls, instance)}, {}
+    )
+    entry = next(iter(registry.values()))
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(resolve_value(entry))
+    assert result is None
+
+
+def test_resolve_value_returns_none_on_unexpected_exception(caplog):
+    class _Boom:
+        async def resolve_dynamic_field(self, path):
+            raise RuntimeError("boom")
+
+    decls = {"x": DynamicFieldDecl(section_id="", label="x")}
+    registry = build_dynamic_field_registry(
+        {"p": _prepared(decls, _Boom())}, {}
+    )
+    entry = next(iter(registry.values()))
+    with caplog.at_level("ERROR"):
+        result = asyncio.run(resolve_value(entry))
+    assert result is None
+    assert "Failed to resolve dynamic field" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# build_values: dynamic resolution
+# ---------------------------------------------------------------------------
+
+
+def test_build_values_includes_resolved_dynamic_values():
+    instance = _FakeInstance({"searcher.status_view": "**Ready**"})
+    decls = {
+        "searcher.status_view": DynamicFieldDecl(
+            section_id="searcher", label="Status"
+        ),
+    }
+    registry = build_dynamic_field_registry(
+        {"localfiles": _prepared(decls, instance)}, {}
+    )
+    values = asyncio.run(
+        build_values(KalinkaConfig(), {}, {}, registry.values())
+    )
+    assert (
+        values["input_modules.localfiles.searcher.status_view"] == "**Ready**"
+    )
+
+
+def test_build_values_omits_failed_dynamic_paths():
+    instance = _FakeInstance({})  # raises KeyError for any path
+    decls = {"x": DynamicFieldDecl(section_id="", label="x")}
+    registry = build_dynamic_field_registry(
+        {"p": _prepared(decls, instance)}, {}
+    )
+    values = asyncio.run(
+        build_values(KalinkaConfig(), {}, {}, registry.values())
+    )
+    # The failed path should not appear in values.
+    assert "input_modules.p.x" not in values
+
+
+# ---------------------------------------------------------------------------
+# Schema injection (presentation)
+# ---------------------------------------------------------------------------
+
+
+def test_schema_injects_dynamic_field_into_named_section():
+    # Use a real plugin config so the schema has matching sub-sections.
+    from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+
+    instance = _FakeInstance({"searcher.status_view": "x"})
+    decls = {
+        "searcher.status_view": DynamicFieldDecl(
+            section_id="searcher", label="Status", widget="rich_text"
+        ),
+    }
+    registry = build_dynamic_field_registry(
+        {"localfiles": _prepared(decls, instance)}, {}
+    )
+    schema = build_presentation(
+        base_config=KalinkaConfig(),
+        input_modules={"localfiles": LocalFilesConfig()},
+        devices={},
+        dynamic_field_registry=registry,
+    )
+
+    def find_field(sections, target_path):
+        for s in sections:
+            for f in s.fields:
+                if f.path == target_path:
+                    return s, f
+            found = find_field(s.sections, target_path)
+            if found is not None:
+                return found
+        return None
+
+    for page in schema.pages:
+        for ms in page.modules:
+            if ms.id == "localfiles":
+                hit = find_field(
+                    ms.sections,
+                    "input_modules.localfiles.searcher.status_view",
+                )
+                assert hit is not None, "dynamic field not injected"
+                section, field = hit
+                assert section.id == "input_modules.localfiles.searcher"
+                assert field.dynamic is True
+                assert field.readonly is True
+                assert field.widget.value == "rich_text"
+                return
+    pytest.fail("localfiles module not found in schema")
+
+
+def test_schema_warns_when_section_id_is_unknown(caplog):
+    from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+
+    instance = _FakeInstance({})
+    decls = {
+        "ghost.x": DynamicFieldDecl(
+            section_id="does_not_exist", label="X"
+        ),
+    }
+    registry = build_dynamic_field_registry(
+        {"localfiles": _prepared(decls, instance)}, {}
+    )
+    with caplog.at_level("WARNING"):
+        build_presentation(
+            base_config=KalinkaConfig(),
+            input_modules={"localfiles": LocalFilesConfig()},
+            devices={},
+            dynamic_field_registry=registry,
+        )
+    assert "no matching section was emitted" in caplog.text
