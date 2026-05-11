@@ -22,19 +22,15 @@ PLUGIN_ID = "localfiles"
 MANIFEST_SCHEMA_VERSION = 1
 
 
-# Triggered-by paths use the same dotted form as PUT /server/config keys,
-# so the UI can correlate "this setting requires this package" without
-# extra mapping.
+# Each plugin's internal sub-features are now the authority on "this
+# functionality needs these packages" — see KalinkaPluginLocalFiles
+# subfeature bookkeeping in module_setup.py.
 OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
     "numpy": OptionalPackageSpec(
         pip_spec="numpy==1.26.4",
         description=(
             "Numerical core required by AI tag prediction (searcher) and "
             "CLAP audio embedding (embedder)."
-        ),
-        triggered_by=(
-            "input_modules.localfiles.searcher.enabled",
-            "input_modules.localfiles.embedder.enabled",
         ),
     ),
     "onnxruntime": OptionalPackageSpec(
@@ -43,19 +39,16 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
             "ONNX inference runtime for the CLAP audio/text encoder used "
             "by AI search."
         ),
-        triggered_by=("input_modules.localfiles.embedder.enabled",),
     ),
     "librosa": OptionalPackageSpec(
         pip_spec="librosa==0.11.0",
         description=(
             "Audio loading and resampling for the CLAP audio embedder."
         ),
-        triggered_by=("input_modules.localfiles.embedder.enabled",),
     ),
     "tokenizers": OptionalPackageSpec(
         pip_spec="tokenizers==0.22.2",
         description="HuggingFace tokenizers used by the CLAP text encoder.",
-        triggered_by=("input_modules.localfiles.embedder.enabled",),
     ),
     "essentia-tensorflow": OptionalPackageSpec(
         pip_spec="essentia-tensorflow==2.1b6.dev1389",
@@ -65,9 +58,6 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
             "and first-time install may take several minutes on a Pi."
         ),
         import_name="essentia",
-        triggered_by=(
-            "input_modules.localfiles.searcher.tags.enabled",
-        ),
     ),
 }
 

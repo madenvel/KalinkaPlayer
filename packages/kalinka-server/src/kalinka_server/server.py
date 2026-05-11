@@ -41,6 +41,7 @@ from .config_schema_processor import (
     set_field_value,
 )
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
+from .dynamic_field_registry import build_dynamic_field_registry
 from .multisearch import calculate_fuzzy_score
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
@@ -665,6 +666,12 @@ async def create_app(config_file, config: KalinkaConfig):
             failed_devices,
         )
 
+    def _dynamic_registry():
+        return build_dynamic_field_registry(
+            modules.prepared_input_modules,
+            modules.prepared_devices,
+        )
+
     def _current_schema_version() -> str:
         ok_in, err_in, ok_dev, err_dev = _partition_modules_and_devices()
         return build_presentation(
@@ -673,6 +680,7 @@ async def create_app(config_file, config: KalinkaConfig):
             devices=ok_dev,
             input_modules_with_errors=err_in,
             devices_with_errors=err_dev,
+            dynamic_field_registry=_dynamic_registry(),
         ).schema_version
 
     @app.get("/server/config/schema")
@@ -684,19 +692,23 @@ async def create_app(config_file, config: KalinkaConfig):
             devices=ok_dev,
             input_modules_with_errors=err_in,
             devices_with_errors=err_dev,
+            dynamic_field_registry=_dynamic_registry(),
         )
         return schema.model_dump(mode="json")
 
     @app.get("/server/config")
-    def get_config():
+    async def get_config():
         ok_in, _err_in, ok_dev, _err_dev = _partition_modules_and_devices()
+        registry = _dynamic_registry()
+        values = await build_values(
+            base_config=config,
+            input_modules=ok_in,
+            devices=ok_dev,
+            dynamic_entries=registry.values(),
+        )
         return {
             "schema_version": _current_schema_version(),
-            "values": build_values(
-                base_config=config,
-                input_modules=ok_in,
-                devices=ok_dev,
-            ),
+            "values": values,
         }
 
     @app.get("/server/version")
@@ -768,45 +780,67 @@ async def create_app(config_file, config: KalinkaConfig):
     def get_optional_packages():
         """Return the catalog of plugin-declared optional packages.
 
-        Each entry includes pip_spec, description, triggered_by config
-        paths, whether the import name resolves in the current process,
-        and whether the key is in the pending-installs queue.
+        Each entry includes pip_spec, description, import_name, whether
+        the package resolves in the current process, and whether the key
+        is in the pending-installs queue. Which packages a *running*
+        plugin currently needs is surfaced via
+        ``GET /server/modules`` → ``missing_packages`` on each module.
         """
         return build_optional_packages_catalog(
             modules.prepared_input_modules,
             modules.prepared_devices,
         )
 
-    @app.get("/server/modules")
-    def list_modules():
-        return {
-            "input_modules": [
-                {
-                    "name": module.plugin_context.config.name,
-                    "title": module.plugin_context.config.__class__.model_fields[
-                        "name"
-                    ].title
-                    or module.plugin_context.config.name,
-                    "enabled": module.plugin_context.config.enabled,
-                    "state": module.health_state,
-                    "error_message": module.error_message,
-                }
-                for module in modules.prepared_input_modules.values()
-            ],
-            "devices": [
-                {
-                    "name": device.plugin_context.config.name,
-                    "title": device.plugin_context.config.__class__.model_fields[
-                        "name"
-                    ].title
-                    or device.plugin_context.config.name,
-                    "enabled": device.plugin_context.config.enabled,
-                    "state": device.health_state,
-                    "error_message": device.error_message,
-                }
-                for device in modules.prepared_devices.values()
-            ],
+    async def _module_entry(prepared) -> Dict[str, Any]:
+        """Roll-up live state for one prepared plugin.
+
+        If the plugin failed to set up (or is disabled in config), the
+        setup-time health_state and error_message are authoritative.
+        Otherwise call plugin_instance.get_state() so plugins with
+        internal sub-features can report WARNING + a message + the
+        optional-package keys they're missing.
+        """
+        cfg = prepared.plugin_context.config
+        entry: Dict[str, Any] = {
+            "name": cfg.name,
+            "title": cfg.__class__.model_fields["name"].title or cfg.name,
+            "enabled": cfg.enabled,
+            "state": prepared.health_state.value,
+            "error_message": prepared.error_message,
+            "missing_packages": [],
         }
+        if (
+            prepared.health_state == ModuleHealthState.READY
+            and prepared.plugin_instance is not None
+        ):
+            try:
+                live = await prepared.plugin_instance.get_state()
+                # Unconditional override: when health_state is READY the
+                # setup-time error_message is always None, so we replace
+                # it with whatever the live state says (which can also
+                # legitimately be None when the plugin is happy).
+                entry["state"] = live.state.value
+                entry["error_message"] = live.message
+                entry["missing_packages"] = list(live.missing_packages)
+            except Exception as e:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "Plugin %s get_state() raised; falling back to setup-time "
+                    "state: %s",
+                    cfg.name,
+                    e,
+                )
+        return entry
+
+    @app.get("/server/modules")
+    async def list_modules():
+        input_entries = [
+            await _module_entry(m)
+            for m in modules.prepared_input_modules.values()
+        ]
+        device_entries = [
+            await _module_entry(d) for d in modules.prepared_devices.values()
+        ]
+        return {"input_modules": input_entries, "devices": device_entries}
 
     @app.put("/server/config")
     def set_config_fields(payload: Dict[str, Any]):
@@ -833,11 +867,19 @@ async def create_app(config_file, config: KalinkaConfig):
                 status_code=400, detail="'changes' must be a JSON object"
             )
 
+        dynamic_paths = set(_dynamic_registry().keys())
+
         for key, value in changes.items():
             logger.info("Setting config field %s to %r", key, value)
             attrs = key.split(".") if isinstance(key, str) else []
             if not attrs or any(p == "" for p in attrs):
                 raise HTTPException(status_code=400, detail="Invalid config key")
+            if key in dynamic_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'{key}' is a dynamic (plugin-resolved) field and "
+                    "cannot be written via /server/config",
+                )
 
             target_config = None
             if attrs[0] == "base_config":

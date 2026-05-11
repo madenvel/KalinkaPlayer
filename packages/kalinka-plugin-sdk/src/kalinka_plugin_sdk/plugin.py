@@ -1,11 +1,13 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, Optional, TypeVar
+from typing import Any, ClassVar, Generic, Optional, TypeVar
 from .api import EventEmitter, EventListener, LoggerAPI, PlayQueueController
+from .dynamic_fields import DynamicFieldDecl
 from .events import PlayQueueEventType, PlayQueueEvent, PlayQueueState
 from .ext_device_events import ExtDeviceEventType, ExtDeviceEvent, ExtDeviceState
 from .module_config import ModuleConfig
+from .module_health import ModuleHealthState, ModuleState
 from .inputmodule import InputModule
 from .ext_device import ExternalOutputDevice
 
@@ -58,6 +60,11 @@ class PluginBase(ABC, Generic[PLUGIN_CLASS, CTX_TYPE]):
     PLUGIN_TYPE: PluginType
     CONFIG_MODEL: type[ModuleConfig]
 
+    # Optional: plugins with internal sub-features can declare dynamic
+    # fields here. The server reads this at load time to build the
+    # presentation schema and the resolver registry. The default is empty.
+    DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {}
+
     @abstractmethod
     async def setup(self, context: CTX_TYPE) -> None:
         """Called when the plugin is being loaded. Initialize resources here.
@@ -76,6 +83,29 @@ class PluginBase(ABC, Generic[PLUGIN_CLASS, CTX_TYPE]):
     def get_interface(self) -> Optional[PLUGIN_CLASS]:
         """Return the plugin's specific interface if applicable."""
         return None
+
+    async def get_state(self) -> ModuleState:
+        """Return the plugin's current health roll-up.
+
+        Called on demand by the server. The plugin is responsible for
+        keeping enough internal bookkeeping (sub-feature states, optional
+        package availability) to answer cheaply — this should not perform
+        I/O on the hot path.
+
+        Default implementation reports READY with no message. Plugins
+        with internal sub-features should override.
+        """
+        return ModuleState(state=ModuleHealthState.READY)
+
+    async def resolve_dynamic_field(self, path: str) -> Any:
+        """Resolve the current value of a dynamic field declared via
+        ``DYNAMIC_FIELDS``.
+
+        ``path`` is the key from ``DYNAMIC_FIELDS`` (e.g. "searcher.status").
+        Raises ``KeyError`` if the path is unknown; the server treats this
+        as a 404 for the caller.
+        """
+        raise KeyError(path)
 
 
 @dataclass

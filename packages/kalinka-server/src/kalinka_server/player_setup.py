@@ -7,7 +7,7 @@ from importlib.metadata import entry_points
 from typing import AsyncGenerator, Generator
 
 from kalinka_eventbus import EventBus
-from kalinka_plugin_sdk import API_VERSION, DeviceVolume
+from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
 from kalinka_plugin_sdk.events import (
     PlayQueueState,
@@ -43,14 +43,6 @@ class PlayerContext:
     playqueue: PlayQueueController
     playqueue_eventbus: EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent]  # type: ignore[type-var]
     ext_device_eventbus: EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent]  # type: ignore[type-var]
-
-
-class ModuleHealthState(str, Enum):
-    """Enum to represent the health state of a module."""
-
-    READY = "ready"
-    ERROR = "error"
-    DISABLED = "disabled"
 
 
 @dataclass

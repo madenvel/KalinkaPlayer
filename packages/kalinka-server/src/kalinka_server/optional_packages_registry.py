@@ -130,7 +130,6 @@ def build_catalog(
                 "pip_spec": spec.pip_spec,
                 "description": spec.description,
                 "import_name": spec.import_name or key,
-                "triggered_by": list(spec.triggered_by),
                 "installed": _is_installed(spec, key),
                 "pending": key in pending_keys,
             }
