@@ -225,6 +225,44 @@ async def create_app(config_file, config: KalinkaConfig):
     player_context = await setup(os.path.dirname(config_file), config)
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
+
+    # Plugin classes are fixed for the process lifetime, so the dynamic-
+    # field registry and the schema_version are stable. Compute once
+    # here and reuse on every request; the alternative (rebuilding on
+    # every GET /server/config and twice per PUT) wastes measurable
+    # work for a quantity that never changes.
+    app.state.dynamic_field_registry = build_dynamic_field_registry(
+        modules.prepared_input_modules, modules.prepared_devices,
+    )
+    _initial_ok_in = {
+        name: m.plugin_context.config
+        for name, m in modules.prepared_input_modules.items()
+        if m.health_state != ModuleHealthState.ERROR
+    }
+    _initial_err_in = {
+        name: (m.plugin_context.config, m.error_message or "Unknown error")
+        for name, m in modules.prepared_input_modules.items()
+        if m.health_state == ModuleHealthState.ERROR
+    }
+    _initial_ok_dev = {
+        name: d.plugin_context.config
+        for name, d in modules.prepared_devices.items()
+        if d.health_state != ModuleHealthState.ERROR
+    }
+    _initial_err_dev = {
+        name: (d.plugin_context.config, d.error_message or "Unknown error")
+        for name, d in modules.prepared_devices.items()
+        if d.health_state == ModuleHealthState.ERROR
+    }
+    app.state.schema_version = build_presentation(
+        base_config=config,
+        input_modules=_initial_ok_in,
+        devices=_initial_ok_dev,
+        input_modules_with_errors=_initial_err_in,
+        devices_with_errors=_initial_err_dev,
+        dynamic_field_registry=app.state.dynamic_field_registry,
+    ).schema_version
+    app.state.dynamic_paths = frozenset(app.state.dynamic_field_registry.keys())
     first_enabled_device_name = next(iter(modules.enabled_devices), None)
     prepared_device = (
         modules.prepared_devices[first_enabled_device_name]
@@ -666,23 +704,6 @@ async def create_app(config_file, config: KalinkaConfig):
             failed_devices,
         )
 
-    def _dynamic_registry():
-        return build_dynamic_field_registry(
-            modules.prepared_input_modules,
-            modules.prepared_devices,
-        )
-
-    def _current_schema_version() -> str:
-        ok_in, err_in, ok_dev, err_dev = _partition_modules_and_devices()
-        return build_presentation(
-            base_config=config,
-            input_modules=ok_in,
-            devices=ok_dev,
-            input_modules_with_errors=err_in,
-            devices_with_errors=err_dev,
-            dynamic_field_registry=_dynamic_registry(),
-        ).schema_version
-
     @app.get("/server/config/schema")
     def get_config_schema():
         ok_in, err_in, ok_dev, err_dev = _partition_modules_and_devices()
@@ -692,22 +713,21 @@ async def create_app(config_file, config: KalinkaConfig):
             devices=ok_dev,
             input_modules_with_errors=err_in,
             devices_with_errors=err_dev,
-            dynamic_field_registry=_dynamic_registry(),
+            dynamic_field_registry=app.state.dynamic_field_registry,
         )
         return schema.model_dump(mode="json")
 
     @app.get("/server/config")
     async def get_config():
         ok_in, _err_in, ok_dev, _err_dev = _partition_modules_and_devices()
-        registry = _dynamic_registry()
         values = await build_values(
             base_config=config,
             input_modules=ok_in,
             devices=ok_dev,
-            dynamic_entries=registry.values(),
+            dynamic_entries=app.state.dynamic_field_registry.values(),
         )
         return {
-            "schema_version": _current_schema_version(),
+            "schema_version": app.state.schema_version,
             "values": values,
         }
 
@@ -843,7 +863,7 @@ async def create_app(config_file, config: KalinkaConfig):
         return {"input_modules": input_entries, "devices": device_entries}
 
     @app.put("/server/config")
-    def set_config_fields(payload: Dict[str, Any]):
+    async def set_config_fields(payload: Dict[str, Any]):
         """Apply staged changes.
 
         Body: `{"schema_version": "...", "changes": {"<dotted.path>": value, ...}}`.
@@ -855,7 +875,7 @@ async def create_app(config_file, config: KalinkaConfig):
             raise HTTPException(status_code=400, detail="Body must be a JSON object")
 
         client_version = payload.get("schema_version")
-        if client_version and client_version != _current_schema_version():
+        if client_version and client_version != app.state.schema_version:
             raise HTTPException(
                 status_code=409,
                 detail="Stale schema_version; refetch /server/config/schema and retry.",
@@ -867,7 +887,7 @@ async def create_app(config_file, config: KalinkaConfig):
                 status_code=400, detail="'changes' must be a JSON object"
             )
 
-        dynamic_paths = set(_dynamic_registry().keys())
+        dynamic_paths = app.state.dynamic_paths
 
         for key, value in changes.items():
             logger.info("Setting config field %s to %r", key, value)
@@ -925,7 +945,7 @@ async def create_app(config_file, config: KalinkaConfig):
                 get_field_value(target_config, attrs),
             )
 
-        return {"message": "Ok", "schema_version": _current_schema_version()}
+        return {"message": "Ok", "schema_version": app.state.schema_version}
 
     @app.get("/resource/{file_name:path}")
     async def get_resource(file_name: str):

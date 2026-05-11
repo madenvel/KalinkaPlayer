@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable
+from typing import Any
 
 from kalinka_plugin_sdk import DynamicFieldDecl
 from kalinka_plugin_sdk.plugin import PluginBase

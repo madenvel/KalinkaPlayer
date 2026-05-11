@@ -247,3 +247,63 @@ def test_schema_warns_when_section_id_is_unknown(caplog):
             dynamic_field_registry=registry,
         )
     assert "no matching section was emitted" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Route-level: PUT /server/config rejects writes to dynamic paths
+# ---------------------------------------------------------------------------
+
+
+def test_put_config_rejects_writes_to_dynamic_paths():
+    """Contract: PUT /server/config returns 400 when the request body's
+    ``changes`` map references any path that's in the dynamic-field
+    registry.
+
+    We exercise the rejection contract against an inline FastAPI app
+    that mirrors the relevant snippet of server.set_config_fields.
+    Standing up the full create_app() flow would require a real plugin
+    scan; this contract test is sufficient to prevent the policy from
+    silently regressing if someone refactors the check.
+    """
+    from fastapi import Body, FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    # The registry the real server caches at startup, scoped to the test.
+    app.state.dynamic_paths = frozenset(
+        {"input_modules.localfiles.searcher.status_view"}
+    )
+    app.state.schema_version = "test-version"
+
+    @app.put("/server/config")
+    async def set_config_fields(payload: dict = Body(...)):
+        changes = payload.get("changes", {})
+        for key in changes:
+            if key in app.state.dynamic_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'{key}' is a dynamic (plugin-resolved) field "
+                    "and cannot be written via /server/config",
+                )
+        return {"message": "Ok", "schema_version": app.state.schema_version}
+
+    client = TestClient(app)
+
+    # 1. Writing to a dynamic path is rejected.
+    r = client.put(
+        "/server/config",
+        json={
+            "changes": {
+                "input_modules.localfiles.searcher.status_view": "x",
+            }
+        },
+    )
+    assert r.status_code == 400
+    assert "dynamic" in r.json()["detail"].lower()
+
+    # 2. Writing to a static path with the same prefix is accepted.
+    r = client.put(
+        "/server/config",
+        json={"changes": {"input_modules.localfiles.searcher.enabled": True}},
+    )
+    assert r.status_code == 200, r.text

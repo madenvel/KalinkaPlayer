@@ -291,6 +291,12 @@ def _dynamic_field_spec(
     try:
         importance = Importance(decl.importance)
     except ValueError:
+        logger.warning(
+            "Dynamic field %s declared unknown importance %r; falling back "
+            "to 'normal'",
+            entry.full_path,
+            decl.importance,
+        )
         importance = Importance.NORMAL
     return FieldSpec(
         path=entry.full_path,
