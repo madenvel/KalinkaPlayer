@@ -2,7 +2,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from enum import Enum
 from importlib.metadata import entry_points
 from typing import AsyncGenerator, Generator
 
