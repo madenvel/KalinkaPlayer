@@ -9,9 +9,19 @@ _ADVANCED = {"importance": "advanced"}
 
 
 class TagsConfig(BaseModel):
-    """Shared tag prediction settings (used by both searcher and embedder)."""
+    """Shared tag prediction settings (used by both searcher and embedder).
 
-    enabled: bool = Field(default=True, title="Enable tag prediction")
+    Disabled by default. The pipeline depends on essentia-tensorflow,
+    which is only published as cp311 ARM wheels and pulls TensorFlow as
+    a transitive dep — opt-in keeps the typical install from triggering
+    a multi-hundred-megabyte fetch the user didn't ask for, and avoids
+    constraining the venv's Python version for everyone. CLAP KNN
+    search (embedder) covers most of the value of tag prediction
+    without the cost; enable this only if you specifically want the
+    Discogs/MIREX/danceability classifiers.
+    """
+
+    enabled: bool = Field(default=False, title="Enable tag prediction")
     min_confidence: float = Field(
         default=0.3,
         ge=0.0,
