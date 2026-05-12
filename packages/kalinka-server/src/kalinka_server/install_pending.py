@@ -126,13 +126,36 @@ def main(argv: list[str]) -> int:
             pass
         return 1
 
+    # Move the pending file aside *before* we touch pip. A long source-
+    # build install can outlast systemd's TimeoutStartSec, an apt deb
+    # upgrade, or a hand-pulled power plug — and on any of those the
+    # next bootstrap would otherwise re-find the same pending file and
+    # restart the install from scratch, infinite loop. The
+    # .in_progress.<ts> name preserves an audit trail of what was
+    # attempted; the canonical pending_installs.json is gone, so the
+    # next boot finds nothing to do. Retry path is via re-toggling the
+    # subfeature in the UI — that writes a fresh pending file.
+    started_at = time.time()
+    in_progress_path = pending_path.with_suffix(
+        f".in_progress.{int(started_at)}"
+    )
+    try:
+        pending_path.rename(in_progress_path)
+    except OSError as e:
+        logger.error(
+            "Cannot reserve pending file %s as %s: %s",
+            pending_path,
+            in_progress_path,
+            e,
+        )
+        return 1
+    logger.info("Reserved pending request as %s", in_progress_path)
+
     registry = _load_manifests(manifests_dir)
     logger.info(
         "Allow-list keys available: %s",
         sorted(registry.keys()) or "(none)",
     )
-
-    started_at = time.time()
     results: list[dict] = []
     for raw_key in requested:
         key = str(raw_key)
@@ -179,22 +202,24 @@ def main(argv: list[str]) -> int:
         logger.error("Failed to write audit log %s: %s", last_install_path, e)
         # Still try to move the pending file out of the way below.
 
-    # Move the pending file aside so the same request isn't retried on every
-    # boot. Use a suffix that conveys success vs. partial failure.
+    # Rename the in-progress audit trail to .done or .failed depending
+    # on the outcome. If this rename fails the file simply stays as
+    # .in_progress.<ts> — still a valid record, just less informative.
     any_failed = any(r.get("status") == "failed" for r in results)
     any_rejected = any(
         r.get("status") == "rejected_unknown_key" for r in results
     )
-    if any_failed or any_rejected:
-        archive = pending_path.with_suffix(
-            f".failed.{int(started_at)}"
-        )
-    else:
-        archive = pending_path.with_suffix(f".done.{int(started_at)}")
+    suffix = ".failed" if (any_failed or any_rejected) else ".done"
+    archive = pending_path.with_suffix(f"{suffix}.{int(started_at)}")
     try:
-        shutil.move(str(pending_path), str(archive))
+        shutil.move(str(in_progress_path), str(archive))
     except OSError as e:
-        logger.error("Failed to move pending file to %s: %s", archive, e)
+        logger.error(
+            "Failed to rename %s to %s: %s",
+            in_progress_path,
+            archive,
+            e,
+        )
 
     return 0
 
