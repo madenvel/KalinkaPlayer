@@ -10,6 +10,17 @@ STATE_DIR="/var/lib/kalinka"
 PENDING_INSTALLS="$STATE_DIR/pending_installs.json"
 LAST_INSTALL="$STATE_DIR/last_install.json"
 
+# Hard-pin the venv to Python 3.11.
+#
+# The optional-package stack (numpy 1.26 ABI, essentia-tensorflow,
+# librosa, etc.) only has prebuilt ARM wheels for cp311; on cp312+
+# pip falls back to source builds that don't terminate inside a
+# reasonable window on a Pi, and essentia-tensorflow has no source
+# distribution at all. The deb declares a python3.11 dependency so
+# apt installs the interpreter if it isn't already present.
+PYTHON_BIN="python3.11"
+PYTHON_MAJOR_MINOR="3.11"
+
 # Under systemd hardening (`ProtectHome=yes`), pip should not rely on $HOME/.cache.
 # Use the service cache directory so wheel installs keep cache enabled.
 export XDG_CACHE_HOME="$CACHE_DIR"
@@ -28,10 +39,26 @@ chmod 755 "$CACHE_DIR" "$PIP_CACHE_DIR" || true
 export PIP_INDEX_URL="${PIP_INDEX_URL:-https://www.piwheels.org/simple}"
 export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://pypi.org/simple}"
 
-# Create venv if it doesn't exist
+# Create / recreate venv if missing or built against a different Python.
+#
+# Recreating wipes any optional packages a user previously installed via
+# the auto-queue flow — that's intentional. Wheels are tagged to the
+# specific cpXY interpreter; a venv that points at /usr/bin/python3.13
+# can't load a cp311 wheel anyway. If the user toggles the affected
+# sub-features again, required_packages() will re-queue the install.
+recreate_venv=false
 if [ ! -d "$VENV_DIR" ]; then
-  echo "[bootstrap] Creating Python venv at $VENV_DIR"
-  python3 -m venv "$VENV_DIR"
+  recreate_venv=true
+elif ! "$VENV_DIR/bin/python" -c \
+      "import sys; sys.exit(0 if sys.version_info[:2] == (3, 11) else 1)" \
+      2>/dev/null; then
+  echo "[bootstrap] Existing venv at $VENV_DIR is not Python ${PYTHON_MAJOR_MINOR}; recreating"
+  rm -rf "$VENV_DIR"
+  recreate_venv=true
+fi
+if [ "$recreate_venv" = true ]; then
+  echo "[bootstrap] Creating Python venv at $VENV_DIR using $PYTHON_BIN"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
   chown -R root:root "$VENV_DIR"
   chmod -R go-w "$VENV_DIR"
 fi
