@@ -227,6 +227,97 @@ def test_schema_injects_dynamic_field_into_named_section():
     pytest.fail("localfiles module not found in schema")
 
 
+def test_dynamic_field_lands_directly_after_enabled():
+    """Convention: a status_view lives next to the `enabled` toggle that
+    controls the same sub-feature, not at the bottom of the section."""
+    from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+
+    instance = _FakeInstance({"searcher.status_view": "x"})
+    decls = {
+        "searcher.status_view": DynamicFieldDecl(
+            section_id="searcher", label="Status", widget="rich_text"
+        ),
+    }
+    registry = build_dynamic_field_registry(
+        {"localfiles": _prepared(decls, instance)}, {}
+    )
+    schema = build_presentation(
+        base_config=KalinkaConfig(),
+        input_modules={"localfiles": LocalFilesConfig()},
+        devices={},
+        dynamic_field_registry=registry,
+    )
+
+    def find_section(sections, target_id):
+        for s in sections:
+            if s.id == target_id:
+                return s
+            nested = find_section(s.sections, target_id)
+            if nested is not None:
+                return nested
+        return None
+
+    searcher = None
+    for page in schema.pages:
+        for ms in page.modules:
+            if ms.id == "localfiles":
+                searcher = find_section(
+                    ms.sections, "input_modules.localfiles.searcher"
+                )
+                break
+    assert searcher is not None, "searcher section not emitted"
+
+    enabled_idx = next(
+        i for i, f in enumerate(searcher.fields) if f.path.endswith(".enabled")
+    )
+    status_idx = next(
+        i
+        for i, f in enumerate(searcher.fields)
+        if f.path.endswith(".status_view")
+    )
+    assert status_idx == enabled_idx + 1, (
+        f"status_view should land directly after enabled "
+        f"(enabled@{enabled_idx}, status@{status_idx})"
+    )
+
+
+def test_dynamic_field_appends_when_section_has_no_enabled(caplog):
+    """Fallback: section with no `enabled` toggle just appends."""
+    from kalinka_server.dynamic_field_registry import DynamicFieldEntry
+    from kalinka_server.config_schema_processor import (
+        _inject_dynamic_fields,
+    )
+    from kalinka_server.presentation_schema import (
+        FieldSpec,
+        Importance,
+        SectionSpec,
+        Widget,
+    )
+
+    section = SectionSpec(
+        id="input_modules.x.general",
+        title="General",
+        fields=[
+            FieldSpec(
+                path="input_modules.x.scan_interval",
+                label="Scan interval",
+                widget=Widget.NUMBER_INPUT,
+                type="int",
+            ),
+        ],
+    )
+    entry = DynamicFieldEntry(
+        full_path="input_modules.x.status_view",
+        plugin_id="x",
+        kind="input_module",
+        plugin_instance=_FakeInstance(),
+        subpath="status_view",
+        decl=DynamicFieldDecl(section_id="", label="Status"),
+    )
+    _inject_dynamic_fields([section], "input_modules.x", [entry])
+    assert section.fields[-1].path == "input_modules.x.status_view"
+
+
 def test_schema_warns_when_section_id_is_unknown(caplog):
     from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 
