@@ -6,12 +6,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ARCH=$(dpkg --print-architecture)
+PYTHON_VERSION=$(python3 -c "import sys; print('{}.{}'.format(*sys.version_info[:2]))")
+PYTHON_VERSION_UPPER=$(python3 -c "import sys; print('{}.{}'.format(sys.version_info[0], sys.version_info[1] + 1))")
 
-# The deb is pinned to Python 3.11 (control.in declares python3.11 as a
-# Depends). The wheel must therefore be built with python3.11 too so its
-# cpXY tag matches what the venv on the Pi will use. If you're building
-# on a host with a different default python3, run this script under
-# `python3.11 -m build` or set up python3.11 as the build interpreter.
 echo "Building wheel with native extensions..."
 
 if ! command -v python3 > /dev/null || [ ! -f setup.py ]; then
@@ -53,7 +50,7 @@ echo "Target file: $TARGET_FILE"
 mkdir -p "$TARGET_DIR"
 cp -r DEBIAN "$TARGET_DIR"
 
-sed "s/@ARCH@/$ARCH/; s/@VERSION@/$WHEEL_VERSION/" DEBIAN/control.in > "$TARGET_DIR/DEBIAN/control"
+sed "s/@ARCH@/$ARCH/; s/@VERSION@/$WHEEL_VERSION/; s/@PYTHON_VERSION@/$PYTHON_VERSION/g; s/@PYTHON_VERSION_UPPER@/$PYTHON_VERSION_UPPER/g" DEBIAN/control.in > "$TARGET_DIR/DEBIAN/control"
 rm "$TARGET_DIR/DEBIAN/control.in"
 
 mkdir -p "$TARGET_DIR/opt/kalinka/wheels"
