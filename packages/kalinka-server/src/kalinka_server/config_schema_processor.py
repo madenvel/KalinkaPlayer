@@ -310,6 +310,23 @@ def _dynamic_field_spec(
     )
 
 
+def _insert_after_enabled(section: SectionSpec, field_spec: FieldSpec) -> None:
+    """Insert a dynamic field directly after the section's `enabled` field.
+
+    Convention: every sub-feature config exposes an ``enabled`` toggle as
+    its first scalar field. A "Status" view that reflects whether the
+    sub-feature is currently working is most useful when it sits right
+    next to that toggle, not buried at the bottom of the section. If
+    the section has no ``enabled`` field, fall back to appending — the
+    rule's relative ordering is then meaningless.
+    """
+    for i, f in enumerate(section.fields):
+        if f.path.endswith(".enabled"):
+            section.fields.insert(i + 1, field_spec)
+            return
+    section.fields.append(field_spec)
+
+
 def _inject_dynamic_fields(
     sections: list[SectionSpec],
     module_path_prefix: str,
@@ -319,7 +336,8 @@ def _inject_dynamic_fields(
 
     Plugins reference sections by *relative* id (e.g. "searcher"); the
     server prepends the module's full path prefix to find them in the
-    auto-generated section tree.
+    auto-generated section tree. Each injected field lands directly
+    after the section's ``enabled`` toggle (or at the end if none).
     """
     for entry in entries:
         decl = entry.decl
@@ -343,7 +361,7 @@ def _inject_dynamic_fields(
                 module_path_prefix,
             )
             continue
-        target.fields.append(_dynamic_field_spec(entry))
+        _insert_after_enabled(target, _dynamic_field_spec(entry))
 
 
 def _module_spec(
