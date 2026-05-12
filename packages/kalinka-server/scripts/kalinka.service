@@ -21,6 +21,17 @@ ExecStart=/opt/kalinka/venv/bin/kalinka-server \
   --config /etc/kalinka/kalinka_conf.cfg \
   --state  /var/lib/kalinka/kalinka_state.json
 
+# Default TimeoutStartSec (90s) is far too tight when bootstrap.sh
+# has to install optional packages that lack ARM wheels for the
+# current Python version — numpy alone can take 5-10 minutes from
+# source on a Pi, essentia-tensorflow + librosa another 10-20 each.
+# systemd kills ExecStartPre on timeout, which then loops via
+# Restart=on-failure and you never finish the install. `infinity`
+# is honest about there being no safe upper bound for a source-build
+# pip install on slow hardware; a wedged install is recoverable with
+# `systemctl stop kalinka`.
+TimeoutStartSec=infinity
+
 Restart=on-failure
 
 ProtectSystem=full
