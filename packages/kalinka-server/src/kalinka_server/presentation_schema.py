@@ -107,6 +107,12 @@ class ModuleSpec(BaseModel):
     schema — the schema describes the static layout. Mixing live state
     into the schema would churn `schema_version` on every transient
     plugin hiccup.
+
+    Top-level scalar fields of the module's CONFIG_MODEL (e.g. localfiles'
+    `music_folders`, `db_path`, `scan_interval_minutes`) appear in `fields`
+    so the client can render them flat under the module header, not buried
+    inside a redundant "General" foldable. Nested BaseModels still become
+    entries in `sections`.
     """
 
     id: str
@@ -116,6 +122,7 @@ class ModuleSpec(BaseModel):
     icon_color: Optional[str] = None
     preview_fields: list[str] = Field(default_factory=list)
     banners: list[Banner] = Field(default_factory=list)
+    fields: list[FieldSpec] = Field(default_factory=list)
     sections: list[SectionSpec] = Field(default_factory=list)
 
 
