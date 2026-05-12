@@ -212,10 +212,14 @@ class SearcherConfig(BaseModel):
 
 
 class EmbedderConfig(BaseModel):
+    # Tag prediction (genre/mood/danceability) is run by the *searcher*,
+    # not the embedder — see SearcherConfig.tags. Earlier revisions of
+    # this config declared an unused `tags: TagsConfig` and
+    # `batch_size_tags` field here, which the presentation schema then
+    # rendered as a duplicate "Tag prediction" section on the embedder
+    # card. Both fields were dead code in the embedder process; removed.
+
     enabled: bool = Field(default=False, title="Enable embedder")
-    batch_size_tags: int = Field(
-        default=8, title="Tag prediction batch size", json_schema_extra=_EXPERT,
-    )
     batch_size_clap: int = Field(
         default=4, title="CLAP audio embedding batch size", json_schema_extra=_EXPERT,
     )
@@ -241,9 +245,6 @@ class EmbedderConfig(BaseModel):
         default="/var/lib/kalinka/models",
         title="Model directory",
         json_schema_extra={"widget": "path", **_ADVANCED},
-    )
-    tags: TagsConfig = Field(
-        default_factory=TagsConfig, title="Tag prediction"
     )
     clap: EmbedderClapConfig = Field(
         default_factory=EmbedderClapConfig, title="CLAP audio embedding"
