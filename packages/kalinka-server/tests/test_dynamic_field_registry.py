@@ -318,6 +318,45 @@ def test_dynamic_field_appends_when_section_has_no_enabled(caplog):
     assert section.fields[-1].path == "input_modules.x.status_view"
 
 
+def test_module_top_level_scalars_render_flat_not_under_general():
+    """Convention: scalar fields at the module's CONFIG_MODEL top level
+    appear in `ModuleSpec.fields`, not buried inside an auto-generated
+    `<module>.general` sub-section. Nested config models still become
+    entries in `ModuleSpec.sections`."""
+    from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+
+    schema = build_presentation(
+        base_config=KalinkaConfig(),
+        input_modules={"localfiles": LocalFilesConfig()},
+        devices={},
+    )
+
+    module_spec = None
+    for page in schema.pages:
+        for ms in page.modules:
+            if ms.id == "localfiles":
+                module_spec = ms
+                break
+    assert module_spec is not None, "localfiles ModuleSpec missing"
+
+    # Flat scalars hoisted onto the module spec
+    field_paths = {f.path for f in module_spec.fields}
+    assert "input_modules.localfiles.music_folders" in field_paths
+    assert "input_modules.localfiles.scan_interval_minutes" in field_paths
+    assert "input_modules.localfiles.enabled" in field_paths
+
+    # No leftover "General" sub-section at the module top level
+    assert not any(
+        s.id == "input_modules.localfiles.general" for s in module_spec.sections
+    ), "auto-general sub-section should be promoted, not retained"
+
+    # Nested sub-sections are kept
+    section_ids = {s.id for s in module_spec.sections}
+    assert "input_modules.localfiles.enricher" in section_ids
+    assert "input_modules.localfiles.searcher" in section_ids
+    assert "input_modules.localfiles.embedder" in section_ids
+
+
 def test_schema_warns_when_section_id_is_unknown(caplog):
     from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 

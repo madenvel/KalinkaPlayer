@@ -377,12 +377,32 @@ def _module_spec(
     served separately by GET /server/modules; the schema deliberately
     omits it so schema_version stays stable across transient plugin
     state changes.
+
+    A module's top-level scalar fields are hoisted to ``ModuleSpec.fields``
+    so the client renders them as a flat list under the module header.
+    Nested config models remain in ``sections``. The auto-generated
+    "General" sub-section that the section walker emits for these
+    scalars is dropped — these are essential settings, not something to
+    bury in a foldable.
     """
     cls = config.__class__
     prefix = f"{path_prefix}.{config.name}"
     sections = _sections_for(config, prefix)
 
     _inject_dynamic_fields(sections, prefix, dynamic_entries)
+
+    # Promote the module-level auto-general fields onto the ModuleSpec
+    # so they render flat under the header. We run this AFTER dynamic-field
+    # injection so plugins can target the general section by id if they
+    # ever need to (current plugins target named sub-sections only).
+    module_fields: list[FieldSpec] = []
+    general_id = f"{prefix}.general"
+    kept_sections: list[SectionSpec] = []
+    for s in sections:
+        if s.id == general_id and not s.sections:
+            module_fields = s.fields
+        else:
+            kept_sections.append(s)
 
     title = cls.model_fields["name"].title or config.name
     banners_raw = getattr(cls, "__module_banners__", [])
@@ -396,7 +416,8 @@ def _module_spec(
         icon_color=getattr(cls, "__module_icon_color__", None),
         preview_fields=list(getattr(cls, "__preview_fields__", [])),
         banners=banners,
-        sections=sections,
+        fields=module_fields,
+        sections=kept_sections,
     )
 
 
