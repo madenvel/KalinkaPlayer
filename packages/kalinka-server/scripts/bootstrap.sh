@@ -17,6 +17,17 @@ export PIP_CACHE_DIR="$CACHE_DIR/pip"
 mkdir -p "$PIP_CACHE_DIR"
 chmod 755 "$CACHE_DIR" "$PIP_CACHE_DIR" || true
 
+# Prefer prebuilt ARM wheels from piwheels (Raspberry-Pi-specific
+# mirror) so numpy / librosa / scipy / numba don't compile from source
+# on a Pi — that takes 5-15 minutes per package and is the main reason
+# install_pending used to blow systemd's start timeout. piwheels only
+# returns matches for the cp* + linux_armv*l platform tags it builds
+# for; on non-ARM hardware (or for packages it lacks) pip simply
+# moves on to PyPI. Override either URL via the systemd unit's
+# Environment= directive if you need a different mirror.
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://www.piwheels.org/simple}"
+export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://pypi.org/simple}"
+
 # Create venv if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
   echo "[bootstrap] Creating Python venv at $VENV_DIR"
