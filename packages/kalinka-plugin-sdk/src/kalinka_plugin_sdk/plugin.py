@@ -107,6 +107,24 @@ class PluginBase(ABC, Generic[PLUGIN_CLASS, CTX_TYPE]):
         """
         raise KeyError(path)
 
+    async def required_packages(self) -> list[str]:
+        """Return optional-package keys the plugin would need to install
+        given its *current* in-memory config.
+
+        Called by the server on restart to auto-queue installs when a
+        user enables a sub-feature whose packages aren't yet importable.
+        Keys must come from this plugin's ``OPTIONAL_PACKAGES`` (or
+        another loaded plugin's — the server validates against the
+        global registry). The default returns ``[]``: thin plugins
+        without optional deps need not implement this.
+
+        The plugin reads its *current* config (typically via the context
+        captured at setup time), not the config at last setup, so this
+        reflects any changes the user has just staged through
+        ``PUT /server/config``.
+        """
+        return []
+
 
 @dataclass
 class InputPluginContext(PluginContextBase):

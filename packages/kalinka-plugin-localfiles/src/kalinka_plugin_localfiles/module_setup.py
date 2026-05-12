@@ -113,6 +113,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         self._log_listener = None
         self._inputmodule = None
 
+        # Context captured at setup() so methods called by the server
+        # later (get_state, required_packages, resolve_dynamic_field)
+        # can read the *current* in-memory config — which the server
+        # mutates via PUT /server/config without re-invoking setup.
+        self._context: Optional[InputPluginContext] = None
+
         # Per-sub-feature state used by get_state() and resolve_dynamic_field().
         # Populated during setup() based on actual subprocess start outcomes
         # and import probing for optional packages.
@@ -142,6 +148,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         return self._inputmodule
 
     async def setup(self, context: InputPluginContext) -> None:
+        self._context = context
         config = LocalFilesConfig(**context.config.model_dump())
         logger.info("Setting up localfiles input module")
 
@@ -417,6 +424,45 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 raise KeyError(path)
             return _format_subfeature_status(sf)
         raise KeyError(path)
+
+    async def required_packages(self) -> list[str]:
+        """Optional-package keys this plugin would need given the *current*
+        in-memory config.
+
+        Reads context.config (which reflects any staged PUT /server/config
+        changes), not the config captured at setup. The server calls this
+        when handling /server/restart so an install is auto-queued for
+        sub-features the user just enabled but whose deps aren't yet
+        importable.
+        """
+        if self._context is None:
+            return []
+        cfg = self._context.config
+
+        missing: list[str] = []
+        seen: set[str] = set()
+
+        def need(key: str, import_name: str) -> None:
+            if key in seen:
+                return
+            if not _is_importable(import_name):
+                missing.append(key)
+                seen.add(key)
+
+        # Searcher: numpy always, essentia when tag prediction is enabled.
+        if cfg.searcher.enabled:
+            need("numpy", "numpy")
+            if cfg.searcher.tags.enabled:
+                need("essentia-tensorflow", "essentia")
+
+        # Embedder CLAP pipeline: numpy + the three CLAP-side deps.
+        if cfg.embedder.enabled:
+            need("numpy", "numpy")
+            need("onnxruntime", "onnxruntime")
+            need("librosa", "librosa")
+            need("tokenizers", "tokenizers")
+
+        return missing
 
     def _shutdown_process(self, proc):
         """Shutdown a process by sending a termination signal"""

@@ -741,45 +741,106 @@ async def create_app(config_file, config: KalinkaConfig):
         }
 
     @app.put("/server/restart")
-    def restart_server(payload: Optional[Dict[str, Any]] = None):
+    async def restart_server(payload: Optional[Dict[str, Any]] = None):
         """Request a full systemd-driven restart of the server.
 
-        Optional body: `{"install": ["<key>", ...]}` to also queue a
-        bootstrap-time install of the named optional packages. Keys must
-        already be in the in-memory registry (declared by a loaded plugin);
-        unknown keys are rejected with 400. The bootstrap still
-        re-validates against deb-shipped manifests before invoking pip.
+        Before triggering the restart, the server polls every loaded
+        plugin's ``required_packages()`` and unions the result with an
+        optional ``{"install": [...]}`` body. Any allowed keys land in
+        ``/var/lib/kalinka/pending_installs.json`` so the bootstrap-time
+        install runs automatically on the way back up. This keeps the
+        optional-packages mechanism invisible from the user's perspective:
+        flipping a sub-feature toggle and clicking restart just works,
+        with a longer restart while the install completes.
+
+        The explicit body is kept as a power-user override (and for
+        future "retry failed install" affordances). Unknown keys in
+        the body are rejected with 400; keys returned by plugins'
+        ``required_packages()`` but absent from the registry are
+        dropped with a log line (the plugin is misconfigured, but the
+        restart itself should still proceed).
         """
-        accepted: list[str] = []
-        rejected: list[str] = []
+        # Explicit body keys
+        body_requested: list[str] = []
         if payload and isinstance(payload, dict):
-            requested = payload.get("install") or []
-            if requested and not isinstance(requested, list):
+            raw = payload.get("install") or []
+            if raw and not isinstance(raw, list):
                 raise HTTPException(
                     status_code=400, detail="'install' must be a list of keys"
                 )
-            if requested:
-                try:
-                    accepted, rejected = write_pending_installs(
-                        list(requested),
-                        modules.prepared_input_modules,
-                        modules.prepared_devices,
-                    )
-                except OSError as e:
-                    logger.error("Failed to write pending installs: %s", e)
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to record install request",
-                    ) from e
-                if rejected:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "message": "Unknown optional-package keys",
-                            "rejected": rejected,
-                            "accepted": accepted,
-                        },
-                    )
+            body_requested = [str(k) for k in raw]
+
+        # Auto-collect from plugins' required_packages(). Defensive: a
+        # misbehaving plugin must not block the restart.
+        auto_keys: list[str] = []
+        for prepared in list(modules.prepared_input_modules.values()) + list(
+            modules.prepared_devices.values()
+        ):
+            instance = prepared.plugin_instance
+            if instance is None:
+                continue
+            try:
+                keys = await instance.required_packages()
+            except Exception as e:  # noqa: BLE001 — defensive
+                logger.warning(
+                    "Plugin %s required_packages() raised; ignoring: %s",
+                    prepared.plugin_class.PLUGIN_ID,
+                    e,
+                )
+                continue
+            for k in keys or []:
+                if k not in auto_keys:
+                    auto_keys.append(str(k))
+
+        # Union, body first (so explicit user intent ordering wins for
+        # display) then auto-detected.
+        combined: list[str] = []
+        seen: set[str] = set()
+        for k in list(body_requested) + list(auto_keys):
+            if k not in seen:
+                seen.add(k)
+                combined.append(k)
+
+        accepted: list[str] = []
+        rejected: list[str] = []
+        if combined:
+            try:
+                accepted, rejected = write_pending_installs(
+                    combined,
+                    modules.prepared_input_modules,
+                    modules.prepared_devices,
+                )
+            except OSError as e:
+                logger.error("Failed to write pending installs: %s", e)
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to record install request",
+                ) from e
+            # Body-provided keys must be valid (user-facing API). Keys
+            # we auto-collected from plugins are best-effort — drop with
+            # a log if the plugin is misconfigured.
+            body_rejected = [k for k in rejected if k in body_requested]
+            auto_rejected = [k for k in rejected if k not in body_requested]
+            if auto_rejected:
+                logger.warning(
+                    "Plugin required_packages() returned keys not in the "
+                    "registry; dropping: %s",
+                    auto_rejected,
+                )
+            if body_rejected:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "message": "Unknown optional-package keys",
+                        "rejected": body_rejected,
+                        "accepted": accepted,
+                    },
+                )
+            if accepted:
+                logger.info(
+                    "Queued optional packages for next-boot install: %s",
+                    accepted,
+                )
 
         # Touch the trigger file watched by kalinka-restart.path. systemd's
         # path unit fires the (root-owned) kalinka-restart.service oneshot,
