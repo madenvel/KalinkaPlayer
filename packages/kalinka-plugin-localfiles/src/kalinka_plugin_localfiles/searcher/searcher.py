@@ -477,12 +477,23 @@ class SearchWorker:
         Weights are dynamically normalised based on which search legs
         actually contributed results, so scores always use the full 0–1
         range regardless of CLAP availability.
+
+        ``cfg.tags.enabled`` gates the entire tag pipeline — both
+        prediction (handled elsewhere) and search-time scoring. When
+        False, ``tracks.tags_predicted`` is ignored even if previous
+        runs populated it. This makes the toggle a single switch for
+        "use tags" as a user expects, not a misleading "stop predicting
+        but keep using" semi-state.
         """
         cfg = self.config.searcher
+        tags_active = cfg.tags.enabled
 
-        genre_score, mood_score, dance_score = self._compute_tag_components(
-            parsed, track_tags
-        )
+        if tags_active:
+            genre_score, mood_score, dance_score = self._compute_tag_components(
+                parsed, track_tags
+            )
+        else:
+            genre_score = mood_score = dance_score = 0.0
 
         # Build weighted sum only from active components
         components: list[tuple[float, float]] = []
@@ -490,12 +501,16 @@ class SearchWorker:
             components.append((cfg.weight_fts, fts_rank_norm))
         if has_knn_hits:
             components.append((cfg.weight_knn, knn_norm))
-        if parsed.genres:
-            components.append((cfg.weight_genre, genre_score))
-        if parsed.mood_clusters:
-            components.append((cfg.weight_mood, mood_score))
-        if parsed.min_danceability is not None or parsed.max_danceability is not None:
-            components.append((cfg.weight_danceability, dance_score))
+        if tags_active:
+            if parsed.genres:
+                components.append((cfg.weight_genre, genre_score))
+            if parsed.mood_clusters:
+                components.append((cfg.weight_mood, mood_score))
+            if (
+                parsed.min_danceability is not None
+                or parsed.max_danceability is not None
+            ):
+                components.append((cfg.weight_danceability, dance_score))
 
         total_weight = sum(w for w, _ in components) or 1.0
         score = sum(w * v for w, v in components) / total_weight
@@ -512,20 +527,24 @@ class SearchWorker:
         """One-line per-query summary of how much the tag pipeline
         actually changed the top-N ranking.
 
-        Lets you A/B with ``searcher.tags.enabled`` on vs off — run the
-        same query both ways, compare the ``in_top tag_matches`` counts.
-        If none of the top-N tracks have non-zero tag components, the
-        pipeline is dead weight for that query shape. If most do, tags
-        are genuinely contributing.
+        ``tags_active`` reflects the current value of
+        ``searcher.tags.enabled``. When False, tag components are
+        forced to 0 in scoring — the in_top counts shown here are then
+        *hypothetical* (what the matches would be if tags were on),
+        which is the useful A/B signal: same query, both states, compare.
         """
+        tags_active = self.config.searcher.tags.enabled
+
         if not parsed.has_tag_constraints:
             # No tag constraints on the query — tags can't have shifted
             # ranking by definition. Keeping the summary terse.
             logger.info(
-                "%s summary: q=%r no_tag_constraints top=%d tag_fallback=%s",
+                "%s summary: q=%r no_tag_constraints top=%d tags_active=%s "
+                "tag_fallback=%s",
                 kind,
                 parsed.raw[:60],
                 len(top_track_ids),
+                tags_active,
                 tag_fallback_used,
             )
             return
@@ -541,9 +560,11 @@ class SearchWorker:
                 dance_hits += 1
 
         top_n = len(top_track_ids)
+        label = "in_top" if tags_active else "in_top_hypothetical"
         logger.info(
             "%s summary: q=%r parsed{genres=%s moods=%s dance=[%s,%s] similar=%s} "
-            "top=%d tag_fallback=%s in_top: genre=%d/%d mood=%d/%d dance=%d/%d",
+            "top=%d tags_active=%s tag_fallback=%s %s: "
+            "genre=%d/%d mood=%d/%d dance=%d/%d",
             kind,
             parsed.raw[:60],
             parsed.genres or "-",
@@ -552,7 +573,9 @@ class SearchWorker:
             parsed.max_danceability if parsed.max_danceability is not None else "-",
             parsed.similar_to_track_id or "-",
             top_n,
+            tags_active,
             tag_fallback_used,
+            label,
             genre_hits,
             top_n,
             mood_hits,
@@ -625,9 +648,15 @@ class SearchWorker:
         )
 
         # Tag fallback — only when both FTS and KNN returned nothing
+        # AND the tag pipeline is active. With tags disabled we leave the
+        # result empty rather than reaching into stale tag predictions.
         tag_fallback_used = False
         if not fts_hits and not knn_hits:
-            if parsed.has_tag_constraints and parsed.genres:
+            if (
+                cfg.tags.enabled
+                and parsed.has_tag_constraints
+                and parsed.genres
+            ):
                 tag_track_ids = await self.db.get_similar_tracks_by_tags(
                     parsed.genres, cfg.fts_candidate_limit
                 )
@@ -739,8 +768,23 @@ class SearchWorker:
         return results
 
     async def _do_similar_search(self, parsed: ParsedQuery, limit: int) -> dict:
-        """Handle "songs like this" queries using CLAP audio KNN + tag matching."""
+        """Handle "songs like this" queries using CLAP audio KNN + tag matching.
+
+        The synth query is built from the reference track's predicted
+        tags, so the feature is hard-gated on ``searcher.tags.enabled``.
+        When tags are off the function returns empty rather than
+        falling through to a CLAP-only similar path — keeping the
+        toggle as a single switch for the whole tag pipeline.
+        """
         empty: dict = {"tracks": [], "albums": [], "artists": []}
+
+        if not self.config.searcher.tags.enabled:
+            logger.info(
+                "_do_similar_search summary: tags.enabled=False — "
+                "'songs like this' requires the tag pipeline; returning empty"
+            )
+            return empty
+
         ref_id = parsed.similar_to_track_id
         if not ref_id:
             return empty
