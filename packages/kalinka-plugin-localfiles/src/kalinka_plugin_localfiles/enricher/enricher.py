@@ -8,6 +8,7 @@ import signal
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
+from ..worker_utils import set_proc_title
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -555,6 +556,8 @@ def main(
     embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
 ):
     """Main entry point for the enricher daemon."""
+
+    set_proc_title("kal-enricher")
 
     global _enricher_queue, _embedder_nudge_queue
 
