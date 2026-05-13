@@ -102,9 +102,13 @@ class MetadataEnricher:
             self.running = True
 
         try:
-            logger.info("Starting enrichment process")
+            # Idle-path logs demoted to DEBUG: the indexer sends "enrich"
+            # after every scheduled scan (default every 5 min), so on a
+            # quiescent library the user used to see 11 INFO lines of
+            # nothing-to-do noise per pass.
+            logger.debug("Starting enrichment process")
             await self.run_enrichment()
-            logger.info("Enricher process completed")
+            logger.debug("Enricher process completed")
         except Exception as e:
             logger.exception(f"Error running enricher: {e}")
         finally:
@@ -113,26 +117,36 @@ class MetadataEnricher:
 
     async def run_enrichment(self):
         """Run the enrichment process"""
+        totals = {"artists": 0, "albums": 0, "tracks": 0}
         while True:
-            # Process artists
-            logger.info("Processing artists for enrichment")
+            logger.debug("Processing artists for enrichment")
             artist_update_count = await self._process_artists()
-
-            # Process albums
-            logger.info("Processing albums for enrichment")
+            logger.debug("Processing albums for enrichment")
             album_update_count = await self._process_albums()
-
-            # Process tracks
-            logger.info("Processing tracks for enrichment")
+            logger.debug("Processing tracks for enrichment")
             track_update_count = await self._process_tracks()
+
+            totals["artists"] += artist_update_count
+            totals["albums"] += album_update_count
+            totals["tracks"] += track_update_count
 
             total_updates = (
                 artist_update_count + album_update_count + track_update_count
             )
 
             if total_updates == 0:
-                logger.info("No more items to process, finishing enrichment")
+                logger.debug("No more items to process, finishing enrichment")
                 break
+
+        # Single INFO summary, only when the pass actually did work. On
+        # an idle library this stays silent entirely.
+        if any(totals.values()):
+            logger.info(
+                "Enrichment pass complete: %d artists, %d albums, %d tracks updated",
+                totals["artists"],
+                totals["albums"],
+                totals["tracks"],
+            )
 
     async def _process_artists(self) -> int:
         """Process non-enriched artists"""
@@ -143,7 +157,7 @@ class MetadataEnricher:
             artists = await self.db_manager.get_non_enriched_artists(limit=1)
             logger.debug(f"Found {len(artists)} non-enriched artists")
             if not artists:
-                logger.info("No more artists to process")
+                logger.debug("No more artists to process")
                 return len(processed_artists)
             artist = artists[0]
             logger.debug(f"Processing artist: {artist}")
@@ -223,7 +237,7 @@ class MetadataEnricher:
             albums = await self.db_manager.get_non_enriched_albums(limit=1)
             logger.debug(f"Found {len(albums)} non-enriched albums")
             if not albums:
-                logger.info("No more albums to process")
+                logger.debug("No more albums to process")
                 return len(processed_albums)
             album = albums[0]
             logger.debug(f"Processing album: {album}")
@@ -297,7 +311,7 @@ class MetadataEnricher:
             tracks = await self.db_manager.get_non_enriched_tracks(limit=1)
             logger.debug(f"Found {len(tracks)} non-enriched tracks")
             if not tracks:
-                logger.info("No more tracks to process")
+                logger.debug("No more tracks to process")
                 return len(processed_tracks)
             track = tracks[0]
             logger.debug(f"Processing track: {track}")
@@ -425,14 +439,14 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                     None, lambda: _enricher_queue.get(block=True, timeout=30.0)
                 )
 
-                logger.info("Received command from queue: %s", command)
+                logger.debug("Received command from queue: %s", command)
 
                 if command == "stop":
                     logger.info("Stopping enricher task")
                     _shutdown_event.set()
                     break
                 elif command == "enrich":
-                    logger.info("Manual enrichment triggered")
+                    logger.debug("Manual enrichment triggered")
                     await enricher_instance.start()
                     if _embedder_nudge_queue is not None:
                         try:

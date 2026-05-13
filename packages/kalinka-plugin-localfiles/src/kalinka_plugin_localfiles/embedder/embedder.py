@@ -511,7 +511,11 @@ class EmbeddingWorker:
                 self._unload_clap_model()
                 self._last_work_time = time.monotonic()
 
-            logger.info("No pending embedding work; sleeping %ds", poll)
+            # DEBUG: fires every poll cycle on an idle library
+            # (default poll=300s, so ~288 lines/day per process).
+            # Real work is already announced by "CLAP embeddings written"
+            # / "CLAP text embedded" — no need to narrate the gaps.
+            logger.debug("No pending embedding work; sleeping %ds", poll)
             await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 
         # Clean shutdown

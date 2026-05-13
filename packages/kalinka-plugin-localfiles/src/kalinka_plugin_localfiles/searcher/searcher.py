@@ -1023,7 +1023,7 @@ class SearchWorker:
                 self._unload_models()
                 last_work_time = time.monotonic()
 
-            logger.info("No pending searcher work; sleeping %ds", poll)
+            logger.debug("No pending searcher work; sleeping %ds", poll)
             await sleep_interruptible(poll, shutdown_event, nudge_queue, "Searcher")
 
         # Clean shutdown
