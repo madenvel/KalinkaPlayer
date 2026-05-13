@@ -410,6 +410,58 @@ class SearchWorker:
     # Ranking helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _compute_tag_components(
+        parsed: ParsedQuery, track_tags: dict | None
+    ) -> tuple[float, float, float]:
+        """Compute the genre / mood / danceability score components for
+        a single track against the parsed query.
+
+        Each value is in [0, 1]; absent tags or unconfigured query
+        constraints yield 0.0. Pulled out of ``_score_track`` so the
+        per-query summary logging can reuse the exact same logic
+        rather than duplicating the matching rules.
+        """
+        if not track_tags:
+            return 0.0, 0.0, 0.0
+
+        genre_score = 0.0
+        if parsed.genres:
+            t_genres = track_tags.get("genres") or []
+            genre_labels = " ".join(
+                g.get("label", "") for g in t_genres if isinstance(g, dict)
+            ).lower()
+            matched = sum(1 for qg in parsed.genres if qg in genre_labels)
+            genre_score = matched / len(parsed.genres)
+
+        mood_score = 0.0
+        if parsed.mood_clusters:
+            t_mood = track_tags.get("mood_cluster")
+            if t_mood is not None and t_mood in parsed.mood_clusters:
+                mood_score = 1.0
+
+        dance_score = 0.0
+        t_dance = track_tags.get("danceability")
+        if t_dance is not None:
+            dance_ok = True
+            if (
+                parsed.min_danceability is not None
+                and t_dance < parsed.min_danceability
+            ):
+                dance_ok = False
+            if (
+                parsed.max_danceability is not None
+                and t_dance > parsed.max_danceability
+            ):
+                dance_ok = False
+            if dance_ok and (
+                parsed.min_danceability is not None
+                or parsed.max_danceability is not None
+            ):
+                dance_score = 1.0
+
+        return genre_score, mood_score, dance_score
+
     def _score_track(
         self,
         parsed: ParsedQuery,
@@ -428,42 +480,9 @@ class SearchWorker:
         """
         cfg = self.config.searcher
 
-        genre_score = 0.0
-        mood_score = 0.0
-        dance_score = 0.0
-
-        if track_tags:
-            if parsed.genres:
-                t_genres = track_tags.get("genres") or []
-                genre_labels = " ".join(
-                    g.get("label", "") for g in t_genres if isinstance(g, dict)
-                ).lower()
-                matched = sum(1 for qg in parsed.genres if qg in genre_labels)
-                genre_score = matched / len(parsed.genres)
-
-            if parsed.mood_clusters:
-                t_mood = track_tags.get("mood_cluster")
-                if t_mood is not None and t_mood in parsed.mood_clusters:
-                    mood_score = 1.0
-
-            t_dance = track_tags.get("danceability")
-            if t_dance is not None:
-                dance_ok = True
-                if (
-                    parsed.min_danceability is not None
-                    and t_dance < parsed.min_danceability
-                ):
-                    dance_ok = False
-                if (
-                    parsed.max_danceability is not None
-                    and t_dance > parsed.max_danceability
-                ):
-                    dance_ok = False
-                if dance_ok and (
-                    parsed.min_danceability is not None
-                    or parsed.max_danceability is not None
-                ):
-                    dance_score = 1.0
+        genre_score, mood_score, dance_score = self._compute_tag_components(
+            parsed, track_tags
+        )
 
         # Build weighted sum only from active components
         components: list[tuple[float, float]] = []
@@ -481,6 +500,66 @@ class SearchWorker:
         total_weight = sum(w for w, _ in components) or 1.0
         score = sum(w * v for w, v in components) / total_weight
         return score
+
+    def _log_tag_contribution_summary(
+        self,
+        kind: str,
+        parsed: ParsedQuery,
+        top_track_ids: list[str],
+        tags_map: dict[str, dict],
+        tag_fallback_used: bool = False,
+    ) -> None:
+        """One-line per-query summary of how much the tag pipeline
+        actually changed the top-N ranking.
+
+        Lets you A/B with ``searcher.tags.enabled`` on vs off — run the
+        same query both ways, compare the ``in_top tag_matches`` counts.
+        If none of the top-N tracks have non-zero tag components, the
+        pipeline is dead weight for that query shape. If most do, tags
+        are genuinely contributing.
+        """
+        if not parsed.has_tag_constraints:
+            # No tag constraints on the query — tags can't have shifted
+            # ranking by definition. Keeping the summary terse.
+            logger.info(
+                "%s summary: q=%r no_tag_constraints top=%d tag_fallback=%s",
+                kind,
+                parsed.raw[:60],
+                len(top_track_ids),
+                tag_fallback_used,
+            )
+            return
+
+        genre_hits = mood_hits = dance_hits = 0
+        for tid in top_track_ids:
+            g, m, d = self._compute_tag_components(parsed, tags_map.get(tid))
+            if g > 0:
+                genre_hits += 1
+            if m > 0:
+                mood_hits += 1
+            if d > 0:
+                dance_hits += 1
+
+        top_n = len(top_track_ids)
+        logger.info(
+            "%s summary: q=%r parsed{genres=%s moods=%s dance=[%s,%s] similar=%s} "
+            "top=%d tag_fallback=%s in_top: genre=%d/%d mood=%d/%d dance=%d/%d",
+            kind,
+            parsed.raw[:60],
+            parsed.genres or "-",
+            parsed.mood_clusters or "-",
+            parsed.min_danceability if parsed.min_danceability is not None else "-",
+            parsed.max_danceability if parsed.max_danceability is not None else "-",
+            parsed.similar_to_track_id or "-",
+            top_n,
+            tag_fallback_used,
+            genre_hits,
+            top_n,
+            mood_hits,
+            top_n,
+            dance_hits,
+            top_n,
+        )
 
     def _derive_album_artist_results(
         self, scored_tracks: list[tuple[float, str]], limit: int
@@ -546,6 +625,7 @@ class SearchWorker:
         )
 
         # Tag fallback — only when both FTS and KNN returned nothing
+        tag_fallback_used = False
         if not fts_hits and not knn_hits:
             if parsed.has_tag_constraints and parsed.genres:
                 tag_track_ids = await self.db.get_similar_tracks_by_tags(
@@ -555,9 +635,13 @@ class SearchWorker:
                     "_do_search: tag fallback returned %d tracks", len(tag_track_ids)
                 )
                 fts_hits = [{"track_id": tid, "rank": -1.0} for tid in tag_track_ids]
+                tag_fallback_used = bool(tag_track_ids)
 
         if not fts_hits and not knn_hits:
             logger.info("_do_search: no hits — returning empty")
+            self._log_tag_contribution_summary(
+                "_do_search", parsed, [], {}, tag_fallback_used=False
+            )
             return empty
 
         # --- Merge candidate sets ---
@@ -614,6 +698,14 @@ class SearchWorker:
 
         album_ids, artist_ids = self._derive_album_artist_results(top_tracks, limit)
 
+        self._log_tag_contribution_summary(
+            "_do_search",
+            parsed,
+            track_result,
+            tags_map,
+            tag_fallback_used=tag_fallback_used,
+        )
+
         return {
             "tracks": track_result,
             "albums": album_ids,
@@ -655,6 +747,12 @@ class SearchWorker:
 
         ref_tags = await self.db.get_track_tags(ref_id)
         if not ref_tags:
+            logger.info(
+                "_do_similar_search summary: ref=%s no_tags_predicted — "
+                "feature requires tag prediction (essentia-tensorflow); "
+                "returning empty",
+                ref_id,
+            )
             return empty
 
         ref_genres = [
@@ -696,6 +794,13 @@ class SearchWorker:
             dict.fromkeys(tid for tid in (*tag_ids, *knn_map.keys()) if tid != ref_id)
         )
         if not all_ids:
+            logger.info(
+                "_do_similar_search summary: ref=%s tag_candidates=%d "
+                "knn_candidates=%d merged=0 — returning empty",
+                ref_id,
+                len(tag_ids),
+                len(knn_map),
+            )
             return empty
 
         tags_map = await self.db.get_tracks_tags_bulk(all_ids)
@@ -720,6 +825,28 @@ class SearchWorker:
         track_result = [tid for _, tid in top_tracks]
 
         album_ids, artist_ids = self._derive_album_artist_results(top_tracks, limit)
+
+        # Similar-search has a richer pre-merge picture than _do_search:
+        # call the shared summary for the in-top tag contribution, then
+        # log the candidate-set breakdown separately so the user can see
+        # whether the tag leg or the CLAP-KNN leg sourced more of the
+        # final ranking.
+        self._log_tag_contribution_summary(
+            "_do_similar_search",
+            synth,
+            track_result,
+            tags_map,
+            tag_fallback_used=False,
+        )
+        logger.info(
+            "_do_similar_search candidates: ref=%s tag_candidates=%d "
+            "knn_candidates=%d merged=%d top=%d",
+            ref_id,
+            len(tag_ids),
+            len(knn_map),
+            len(all_ids),
+            len(top_tracks),
+        )
 
         return {
             "tracks": track_result,
