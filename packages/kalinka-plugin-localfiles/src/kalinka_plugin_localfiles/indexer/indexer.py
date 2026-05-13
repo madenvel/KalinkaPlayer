@@ -680,8 +680,16 @@ async def _file_watcher_worker(config: LocalFilesConfig):
 
             while not _file_watcher_stop_event.is_set():
                 try:
+                    # inotify_simple's timeout follows select.poll() —
+                    # MILLISECONDS, not seconds. timeout=1 was a busy-spin
+                    # at ~1000 reads/sec (the ThreadPoolExecutor worker
+                    # processing each submit() showed up as 27% CPU at
+                    # idle in py-spy). 1000 ms = 1 s gives a check
+                    # cadence consistent with how often shutdown needs
+                    # to be observed while still letting the read block
+                    # in-kernel for almost all of the time.
                     events = await asyncio.get_running_loop().run_in_executor(
-                        None, lambda: inotify.read(timeout=1)
+                        None, lambda: inotify.read(timeout=1000)
                     )
                     if not events:
                         continue
