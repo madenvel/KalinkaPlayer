@@ -39,7 +39,7 @@ from typing import Optional
 
 from ..config_model import LocalFilesConfig
 from ..pip_utils import ensure_package
-from ..worker_utils import sleep_interruptible
+from ..worker_utils import set_proc_title, sleep_interruptible
 from .genre_labels import label_for_index
 from .query_parser import ParsedQuery, parse_query
 from .searcher_db import AsyncSearcherDb
@@ -1107,6 +1107,8 @@ def main(
     text_encode_response_queue: Optional[multiprocessing.Queue] = None,
 ) -> None:
     """Entry point for the searcher subprocess."""
+    set_proc_title("kal-searcher")
+
     root = logging.getLogger()
     for handler in root.handlers[:]:
         root.removeHandler(handler)

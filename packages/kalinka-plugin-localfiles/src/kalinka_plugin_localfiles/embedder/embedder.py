@@ -31,7 +31,7 @@ from typing import Optional
 from ..config_model import LocalFilesConfig
 from ..embedding_utils import encode_embedding, normalise
 from ..pip_utils import ensure_package
-from ..worker_utils import sleep_interruptible
+from ..worker_utils import set_proc_title, sleep_interruptible
 from .embedder_db import AsyncEmbedderDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -569,6 +569,8 @@ def main(
     text_encode_response_queue: Optional[multiprocessing.Queue] = None,
 ):
     """Entry point for the embedder subprocess."""
+    set_proc_title("kal-embedder")
+
     root = logging.getLogger()
     for handler in root.handlers[:]:
         root.removeHandler(handler)

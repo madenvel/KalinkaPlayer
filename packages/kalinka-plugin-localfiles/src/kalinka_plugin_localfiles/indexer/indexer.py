@@ -25,6 +25,7 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..worker_utils import set_proc_title
 from .id_generator import (
     generate_artist_id,
     generate_album_id,
@@ -914,6 +915,8 @@ async def async_main(config: LocalFilesConfig):
 
 def main(config: LocalFilesConfig, enricher_queue, logger_queue):
     """Main entry point for the indexer daemon."""
+
+    set_proc_title("kal-indexer")
 
     global _enricher_queue
     _enricher_queue = enricher_queue
