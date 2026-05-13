@@ -52,10 +52,33 @@ _TOKEN_MAX_LEN = 77
 
 
 def _ensure_model_file(name: str, model_dir: str) -> Optional[str]:
-    """Return path to a model file, downloading if necessary."""
+    """Return path to a model file, downloading if necessary.
+
+    Writes to ``<dest>.part`` first and atomic-renames on success.
+    Without that, an interrupted ``urlretrieve`` leaves a truncated
+    file at ``dest``; on the next call ``os.path.isfile(dest)`` short-
+    circuits and onnxruntime fails to parse the partial ONNX — and
+    the download never retries because the loader's failure is not
+    interpreted as "redownload". Stale ``.part`` from a previous
+    interrupted run is removed before the new attempt starts.
+    """
     filename = _MODEL_FILENAMES.get(name)
     if not filename:
         logger.error("Unknown model file: %s", name)
+        return None
+
+    # Create the model directory tree up front, before checking for
+    # existing files. Without this, a fresh install on a host where
+    # /var/lib/kalinka/models doesn't exist yet would race
+    # `os.path.isfile(dest)` returning False (because the dir is
+    # absent) into the download branch, which then has to create the
+    # dir anyway — and if `url` is None for some other code path,
+    # the directory never gets created and a manual file-copy is
+    # impossible without sudo.
+    try:
+        os.makedirs(model_dir, exist_ok=True)
+    except OSError as e:
+        logger.error("Cannot create model dir %s: %s", model_dir, e)
         return None
 
     dest = os.path.join(model_dir, filename)
@@ -73,15 +96,29 @@ def _ensure_model_file(name: str, model_dir: str) -> Optional[str]:
         )
         return None
 
-    os.makedirs(model_dir, exist_ok=True)
+    tmp = dest + ".part"
+    # Clear stale .part from a previous interrupted run (e.g. SIGKILL
+    # mid-download). Cannot be a partial-but-resumable file because
+    # urllib.request.urlretrieve doesn't support range requests.
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+
     logger.info("Downloading '%s' from %s ...", name, url)
     try:
-        urllib.request.urlretrieve(url, dest)
-        logger.info("Saved '%s' to %s", name, dest)
-        return dest
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, dest)
     except Exception as e:
         logger.error("Failed to download '%s': %s", name, e)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
         return None
+
+    logger.info("Saved '%s' to %s", name, dest)
+    return dest
 
 
 # ---------------------------------------------------------------------------
