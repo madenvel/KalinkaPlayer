@@ -16,6 +16,11 @@ export XDG_CACHE_HOME="$CACHE_DIR"
 export PIP_CACHE_DIR="$CACHE_DIR/pip"
 mkdir -p "$PIP_CACHE_DIR"
 chmod 755 "$CACHE_DIR" "$PIP_CACHE_DIR" || true
+# numba's cache dir is set via Environment= in kalinka.service — it
+# isn't pre-created here because mkdir under ExecStartPre runs as root
+# and would leave the dir root-owned. numba creates it on first JIT
+# compile as kalusr (who already owns /var/cache/kalinka thanks to
+# CacheDirectory=kalinka in the unit).
 
 # Prefer prebuilt ARM wheels from piwheels (Raspberry-Pi-specific
 # mirror) so numpy / librosa / scipy / numba don't compile from source
