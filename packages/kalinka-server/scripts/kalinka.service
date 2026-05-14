@@ -16,6 +16,16 @@ RuntimeDirectoryMode=0755
 CacheDirectory=kalinka
 CacheDirectoryMode=0755
 
+# numba (used by librosa for audio decoding in the CLAP embedder)
+# caches its JIT-compiled functions next to the .py source by default.
+# Our venv is root-owned and chmodded read-only for kalusr, so numba
+# fails with "no locator available for file …/librosa/core/notation.py"
+# and that propagates up as "Failed to load audio …" — clap_audio jobs
+# get marked failed for every track that hits this path. Redirect the
+# cache to /var/cache/kalinka/numba (already in CacheDirectory and
+# ReadWritePaths, kalusr-writable).
+Environment=NUMBA_CACHE_DIR=/var/cache/kalinka/numba
+
 ExecStartPre=+/opt/kalinka/bootstrap.sh
 ExecStart=/opt/kalinka/venv/bin/kalinka-server \
   --config /etc/kalinka/kalinka_conf.cfg \
