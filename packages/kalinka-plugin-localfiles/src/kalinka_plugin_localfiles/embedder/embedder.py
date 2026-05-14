@@ -19,7 +19,6 @@ ML dependencies are NOT listed in pyproject.toml — installed on demand.
 from __future__ import annotations
 
 import asyncio
-import gc
 import logging
 import logging.handlers
 import multiprocessing
@@ -122,17 +121,6 @@ class EmbeddingWorker:
             logger.info("CLAP ONNX model loaded from: %s", cfg.model_dir)
         except Exception as e:
             logger.warning("CLAP model loading failed: %s; audio embedding disabled", e)
-
-    def _unload_clap_model(self):
-        if not self._clap_available:
-            return
-        if self._clap is not None:
-            self._clap.unload()
-        self._clap = None
-        self._clap_available = False
-        self._clap_load_attempted_at = 0.0
-        gc.collect()
-        logger.info("CLAP model unloaded after idle timeout")
 
     # ------------------------------------------------------------------
     # Inference helpers
@@ -414,7 +402,6 @@ class EmbeddingWorker:
     ):
         cfg = self.config.embedder
         poll = cfg.poll_interval_seconds
-        idle_timeout = cfg.model_idle_timeout_seconds
         embedding_enabled = cfg.enabled
 
         logger.info("EmbeddingWorker started (CLAP-only pipeline)")
@@ -453,7 +440,7 @@ class EmbeddingWorker:
             return
 
         # Wait for the first nudge or poll cycle before loading models
-        logger.info("Embedder ready (poll=%ds, idle_timeout=%ds)", poll, idle_timeout)
+        logger.info("Embedder ready (poll=%ds)", poll)
         await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 
         self._last_work_time = time.monotonic()
@@ -504,17 +491,20 @@ class EmbeddingWorker:
             if did_work:
                 continue
 
-            # No work: check idle timeout, then sleep
-            if idle_timeout > 0 and (
-                time.monotonic() - self._last_work_time >= idle_timeout
-            ):
-                self._unload_clap_model()
-                self._last_work_time = time.monotonic()
-
-            # DEBUG: fires every poll cycle on an idle library
-            # (default poll=300s, so ~288 lines/day per process).
-            # Real work is already announced by "CLAP embeddings written"
-            # / "CLAP text embedded" — no need to narrate the gaps.
+            # CLAP stays resident for the lifetime of the embedder
+            # process. The model is shared with the text-encode handler
+            # that the searcher hits on every KNN query — unloading it
+            # here would force a multi-minute reload on the next user
+            # search (the model files alone are ~1.6 GB; one prior
+            # observation: "CLAP text encoding IPC failed: <empty>"
+            # because the 30-second response timeout fired while the
+            # embedder was busy re-downloading / re-instantiating the
+            # ONNX sessions).
+            #
+            # DEBUG line below fires every poll cycle on an idle library
+            # (default poll=300s, so ~288 lines/day per process). Real
+            # work is already announced by "CLAP embeddings written" /
+            # "CLAP text embedded".
             logger.debug("No pending embedding work; sleeping %ds", poll)
             await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 
