@@ -151,7 +151,29 @@ def _load_audio(file_path: str) -> Optional[np.ndarray]:
     try:
         import librosa
 
-        waveform, _ = librosa.load(file_path, sr=_SAMPLE_RATE, mono=True)
+        # The HTSAT-unfused checkpoint only consumes a fixed 10-second
+        # window, so we limit librosa to that span instead of decoding
+        # the whole file (a 10-min FLAC ≈ 110 MB float32, the main OOM
+        # contributor on the 4 GB Pi).
+        #
+        # Offset past the intro for tracks long enough to afford it:
+        # fade-ins / silence / spoken intros aren't characteristic of
+        # the song and degrade retrieval quality. get_duration with
+        # path= is a header-only probe (no decode) via the soundfile
+        # backend, so the cost is negligible.
+        try:
+            duration_s = librosa.get_duration(path=file_path)
+        except Exception:
+            duration_s = 0.0
+        offset = 15.0 if duration_s >= 30.0 else 0.0
+
+        waveform, _ = librosa.load(
+            file_path,
+            sr=_SAMPLE_RATE,
+            mono=True,
+            offset=offset,
+            duration=10.0,
+        )
         waveform = _quantize(waveform)
         waveform = _pad_or_crop(waveform)
         return waveform
@@ -203,6 +225,13 @@ class ClapOnnxModel:
         sess_opts = ort.SessionOptions()
         sess_opts.inter_op_num_threads = 1
         sess_opts.intra_op_num_threads = 2
+        # ORT's CPU memory arena grows to the high-water mark of
+        # intermediate tensors and never returns pages to the OS, which
+        # on a 4 GB Pi accumulates into OOM territory over a few hundred
+        # tracks. Disabling the arena costs ~5-10% inference latency
+        # but keeps the RSS flat.
+        sess_opts.enable_cpu_mem_arena = False
+        sess_opts.enable_mem_pattern = False
         providers = ["CPUExecutionProvider"]
 
         self._audio_session = ort.InferenceSession(
