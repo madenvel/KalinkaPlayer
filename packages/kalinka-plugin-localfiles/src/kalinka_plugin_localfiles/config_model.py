@@ -228,15 +228,10 @@ class EmbedderConfig(BaseModel):
         title="Poll interval",
         json_schema_extra={"constraints": {"unit": "s"}, **_ADVANCED},
     )
-    model_idle_timeout_seconds: int = Field(
-        default=300,
-        title="Model idle timeout",
-        json_schema_extra={
-            "help": "Unload models from memory after this (0 = never unload)",
-            "constraints": {"unit": "s"},
-            **_ADVANCED,
-        },
-    )
+    # NB: CLAP no longer idles out. The model is shared with the searcher's
+    # text-encode IPC and unloading made the first post-idle search query
+    # time out (~30 s for a model reload). It now stays resident for the
+    # lifetime of the embedder process.
     max_job_attempts: int = Field(
         default=3, title="Max attempts per embedding job",
         json_schema_extra=_EXPERT,
