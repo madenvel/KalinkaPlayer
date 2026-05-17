@@ -172,6 +172,72 @@ class AcoustIdPlugin(EnricherPlugin):
     # still surfaces orphan tracks, and re-enrichment may resolve later.
     MIN_MATCH_MARGIN = 5.0
 
+    @staticmethod
+    def _release_group_score(rg_type, secondary_types) -> float:
+        """Heuristic score for a release group by its type metadata.
+
+        Prefer a clean 'Album' release; deprioritize compilations, live
+        cuts, soundtracks, and other secondary placements. The same
+        recording usually appears on many releases — the original studio
+        album, a greatest-hits compilation, a regional re-issue, a
+        live recording — and the compilations/lives are almost never
+        what the user has on disk, so we lean hard against them.
+        """
+        primary = (rg_type or "").lower()
+        secondary = [s.lower() for s in (secondary_types or [])]
+
+        score = 0.0
+        if primary == "album":
+            score += 30
+        elif primary == "ep":
+            score += 20
+        elif primary == "single":
+            score += 15
+        elif primary == "broadcast":
+            score += 5
+
+        for sec in secondary:
+            if sec in ("compilation", "live", "remix"):
+                score -= 15
+            elif sec in ("soundtrack", "demo", "interview", "spokenword", "audiobook"):
+                score -= 25
+
+        return score
+
+    def _pick_best_release(self, recording: Dict) -> Tuple[Optional[str], Optional[str]]:
+        """Pick the best (album_title, album_mbid) for a recording.
+
+        AcoustID with ``meta=releasegroups`` returns releases nested
+        under their release groups with a ``type`` (and
+        ``secondarytypes``) field, which lets us prefer the original
+        studio album over a compilation re-release of the same
+        recording. When that nested structure isn't present (older
+        responses or recordings with no release-group meta), we fall
+        back to the recording's flat ``releases`` list and just take
+        the first.
+        """
+        candidates: List[Tuple[float, Dict]] = []
+
+        for rg in recording.get("releasegroups") or []:
+            rg_score = self._release_group_score(
+                rg.get("type"), rg.get("secondarytypes")
+            )
+            for rel in rg.get("releases") or []:
+                candidates.append((rg_score, rel))
+
+        if not candidates:
+            for rel in recording.get("releases") or []:
+                candidates.append((0.0, rel))
+
+        if not candidates:
+            return None, None
+
+        # Highest-scoring release wins; first occurrence breaks ties so
+        # behavior reduces to ``releases[0]`` when no type info exists.
+        best = max(range(len(candidates)), key=lambda i: candidates[i][0])
+        release = candidates[best][1]
+        return release.get("title"), release.get("id")
+
     def _get_best_match_info(
         self,
         acoustid_results: List[Dict],
@@ -241,13 +307,7 @@ class AcoustIdPlugin(EnricherPlugin):
         artist_name = artists[0].get("name") if artists else None
         artist_id = artists[0].get("id") if artists else None
 
-        releases = best_recording.get("releases", []) or []
-        album_title = None
-        album_id = None
-        if releases:
-            release = releases[0]
-            album_title = release.get("title")
-            album_id = release.get("id")
+        album_title, album_id = self._pick_best_release(best_recording)
 
         return {
             "score": best_score,
