@@ -66,6 +66,7 @@ class MusicBrainzPlugin(EnricherPlugin):
         additional_checks: bool = True,
         target_duration_s: Optional[float] = None,
         length_key: Optional[str] = None,
+        min_margin: float = 0.0,
     ) -> Tuple[Optional[Dict], int, float]:
         """
         Find the best match among items based on score and string similarity
@@ -85,6 +86,10 @@ class MusicBrainzPlugin(EnricherPlugin):
                 (ms, typically a string). When set together with
                 ``target_duration_s``, the duration bonus is added to the
                 weighted score.
+            min_margin: When >0, reject the pick if the best and runner-up
+                weighted scores are within this margin. Used for tracks,
+                where two indistinguishable candidates are usually safer
+                left as orphan than committed to the wrong release.
 
         Returns:
             Tuple of (best_match, score, similarity)
@@ -93,8 +98,9 @@ class MusicBrainzPlugin(EnricherPlugin):
             return None, 0, 0.0
 
         best_match = None
-        best_score = 0
+        best_score = 0.0
         best_similarity = 0.0
+        runner_up_score: Optional[float] = None
 
         # Debug logging
         if self.debug_matching:
@@ -141,9 +147,15 @@ class MusicBrainzPlugin(EnricherPlugin):
             if weighted_score > best_score or (
                 weighted_score == best_score and similarity > best_similarity
             ):
+                # Previous best becomes the new runner-up.
+                if best_match is not None:
+                    if runner_up_score is None or best_score > runner_up_score:
+                        runner_up_score = best_score
                 best_score = weighted_score
                 best_match = item
                 best_similarity = similarity
+            elif runner_up_score is None or weighted_score > runner_up_score:
+                runner_up_score = weighted_score
 
         # If best match has poor string similarity, log a warning
         if (
@@ -156,6 +168,23 @@ class MusicBrainzPlugin(EnricherPlugin):
                 f"(score={int(best_match.get('ext:score', 0))}, similarity={best_similarity:.2f})"
             )
 
+            return None, 0, 0.0
+
+        # Reject ambiguous picks: when two candidates are nearly tied, we
+        # can't reliably tell them apart. Leaving the track as orphan is
+        # safer than committing the wrong release/recording — the artist
+        # view surfaces orphan tracks, and re-enrichment can try again.
+        if (
+            best_match
+            and min_margin > 0
+            and runner_up_score is not None
+            and (best_score - runner_up_score) < min_margin
+        ):
+            logger.info(
+                f"Ambiguous match for '{name}': best={best_score:.1f} "
+                f"runner_up={runner_up_score:.1f} margin<{min_margin:.1f} — "
+                f"holding as orphan rather than committing"
+            )
             return None, 0, 0.0
 
         if best_match and self.debug_matching:
@@ -362,6 +391,8 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Find best match — fold in track duration when we have it so
             # same-titled recordings (live cuts, edits, demos, remixes) are
             # disambiguated rather than picked arbitrarily by title alone.
+            # Require a margin to runner-up so genuinely-ambiguous picks
+            # stay as orphan instead of being committed wrong.
             best_match, score, similarity = self._find_best_match(
                 result["recording-list"],
                 track["title"],
@@ -369,6 +400,7 @@ class MusicBrainzPlugin(EnricherPlugin):
                 match_key="title",
                 target_duration_s=track.get("duration"),
                 length_key="length",
+                min_margin=5.0,
             )
 
             if not best_match:

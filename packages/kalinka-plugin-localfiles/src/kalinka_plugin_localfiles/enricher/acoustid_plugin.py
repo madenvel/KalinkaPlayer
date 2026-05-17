@@ -166,6 +166,12 @@ class AcoustIdPlugin(EnricherPlugin):
             logger.error(f"Unexpected error during AcoustID lookup: {str(e)}")
             return None
 
+    # When two candidate recordings end up with nearly-tied combined
+    # scores, we can't reliably tell them apart. Leave the track as
+    # orphan rather than commit to the wrong release — the artist view
+    # still surfaces orphan tracks, and re-enrichment may resolve later.
+    MIN_MATCH_MARGIN = 5.0
+
     def _get_best_match_info(
         self,
         acoustid_results: List[Dict],
@@ -179,13 +185,17 @@ class AcoustIdPlugin(EnricherPlugin):
         version of a track whose original recording is also in the
         candidate list. We instead score every (result, recording) pair
         by combined AcoustID confidence + duration match against the
-        local file, and pick the highest.
+        local file, pick the highest, and reject the pick if the next
+        candidate is within ``MIN_MATCH_MARGIN`` — the latter prevents
+        coin-flip assignments to the wrong recording when several
+        candidates look equally plausible.
         """
         if not acoustid_results:
             return None
 
         best_pair: Optional[Tuple[Dict, Dict]] = None
         best_combined = float("-inf")
+        runner_up_combined: float = float("-inf")
         best_score = 0.0
 
         for result in acoustid_results:
@@ -197,12 +207,29 @@ class AcoustIdPlugin(EnricherPlugin):
                 cand_s = recording.get("duration")
                 combined = base_score + duration_bonus(target_duration_s, cand_s)
                 if combined > best_combined:
+                    runner_up_combined = best_combined
                     best_combined = combined
                     best_pair = (result, recording)
                     best_score = result.get("score", 0)
+                elif combined > runner_up_combined:
+                    runner_up_combined = combined
 
         if best_pair is None:
             logger.debug("No recordings with MBIDs in AcoustID results")
+            return None
+
+        # Skip when the top two candidates are effectively tied.
+        if (
+            runner_up_combined != float("-inf")
+            and (best_combined - runner_up_combined) < self.MIN_MATCH_MARGIN
+        ):
+            logger.info(
+                "AcoustID match is ambiguous: best=%.1f runner_up=%.1f "
+                "margin<%.1f — holding as orphan rather than committing",
+                best_combined,
+                runner_up_combined,
+                self.MIN_MATCH_MARGIN,
+            )
             return None
 
         best_result, best_recording = best_pair
