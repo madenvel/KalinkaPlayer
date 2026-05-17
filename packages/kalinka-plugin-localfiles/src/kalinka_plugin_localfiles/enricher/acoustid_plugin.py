@@ -204,18 +204,76 @@ class AcoustIdPlugin(EnricherPlugin):
 
         return score
 
-    def _pick_best_release(self, recording: Dict) -> Tuple[Optional[str], Optional[str]]:
+    @staticmethod
+    def _position_match_score(
+        release: Dict,
+        recording_mbid: Optional[str],
+        track_number: Optional[int],
+        disc_number: Optional[int],
+    ) -> float:
+        """Bonus when this release's tracklist places the recording at
+        the same position the local file claims via its ID3 tags.
+
+        AcoustID with ``meta=tracks`` returns
+        ``release.mediums[].tracks[]`` carrying each track's recording
+        MBID, its position on the medium, and the medium's own position
+        (disc number). If our local file is tagged "track 5 disc 1" and
+        a candidate release places this recording at position 5/disc 1,
+        that's a strong signal it's the right one — particularly useful
+        for distinguishing rip-with-bonus-track editions from the
+        original.
+        """
+        if not recording_mbid or track_number is None:
+            return 0.0
+        try:
+            target_t = int(track_number)
+        except (TypeError, ValueError):
+            return 0.0
+        target_d: Optional[int] = None
+        if disc_number is not None:
+            try:
+                target_d = int(disc_number)
+            except (TypeError, ValueError):
+                target_d = None
+
+        for medium in release.get("mediums") or []:
+            for track in medium.get("tracks") or []:
+                if track.get("id") != recording_mbid:
+                    continue
+                score = 0.0
+                try:
+                    if int(track.get("position")) == target_t:
+                        score += 20.0
+                except (TypeError, ValueError):
+                    pass
+                if target_d is not None:
+                    try:
+                        if int(medium.get("position")) == target_d:
+                            score += 10.0
+                    except (TypeError, ValueError):
+                        pass
+                return score
+        return 0.0
+
+    def _pick_best_release(
+        self,
+        recording: Dict,
+        track_number: Optional[int] = None,
+        disc_number: Optional[int] = None,
+    ) -> Tuple[Optional[str], Optional[str]]:
         """Pick the best (album_title, album_mbid) for a recording.
 
         AcoustID with ``meta=releasegroups`` returns releases nested
         under their release groups with a ``type`` (and
         ``secondarytypes``) field, which lets us prefer the original
         studio album over a compilation re-release of the same
-        recording. When that nested structure isn't present (older
-        responses or recordings with no release-group meta), we fall
-        back to the recording's flat ``releases`` list and just take
-        the first.
+        recording. When the local file is tagged with a track/disc
+        number, releases whose tracklist puts the recording at the same
+        position get a further bonus on top of the release-group score.
+        Falls back to ``recording.releases`` when no release-group
+        metadata is present.
         """
+        recording_mbid = recording.get("id")
         candidates: List[Tuple[float, Dict]] = []
 
         for rg in recording.get("releasegroups") or []:
@@ -223,11 +281,17 @@ class AcoustIdPlugin(EnricherPlugin):
                 rg.get("type"), rg.get("secondarytypes")
             )
             for rel in rg.get("releases") or []:
-                candidates.append((rg_score, rel))
+                pos_score = self._position_match_score(
+                    rel, recording_mbid, track_number, disc_number
+                )
+                candidates.append((rg_score + pos_score, rel))
 
         if not candidates:
             for rel in recording.get("releases") or []:
-                candidates.append((0.0, rel))
+                pos_score = self._position_match_score(
+                    rel, recording_mbid, track_number, disc_number
+                )
+                candidates.append((pos_score, rel))
 
         if not candidates:
             return None, None
@@ -242,6 +306,8 @@ class AcoustIdPlugin(EnricherPlugin):
         self,
         acoustid_results: List[Dict],
         target_duration_s: Optional[float] = None,
+        track_number: Optional[int] = None,
+        disc_number: Optional[int] = None,
     ) -> Optional[Dict]:
         """Extract the best match information from AcoustID results.
 
@@ -307,7 +373,9 @@ class AcoustIdPlugin(EnricherPlugin):
         artist_name = artists[0].get("name") if artists else None
         artist_id = artists[0].get("id") if artists else None
 
-        album_title, album_id = self._pick_best_release(best_recording)
+        album_title, album_id = self._pick_best_release(
+            best_recording, track_number, disc_number
+        )
 
         return {
             "score": best_score,
@@ -479,9 +547,16 @@ class AcoustIdPlugin(EnricherPlugin):
             # Extract best match information. Pass the local file's
             # duration (preferring the tag-derived value when present,
             # falling back to the fpcalc-measured one) so duration is used
-            # to pick among same-named recordings.
+            # to pick among same-named recordings, and the file's
+            # track/disc numbers so a release that places this recording
+            # at the same position gets preference over one that doesn't.
             target_duration_s = track.get("duration") or duration
-            match_info = self._get_best_match_info(results, target_duration_s)
+            match_info = self._get_best_match_info(
+                results,
+                target_duration_s,
+                track_number=track.get("track_number"),
+                disc_number=track.get("disc_number"),
+            )
             if not match_info:
                 logger.debug(
                     f"Could not extract match info for {track.get('file_path')}"
