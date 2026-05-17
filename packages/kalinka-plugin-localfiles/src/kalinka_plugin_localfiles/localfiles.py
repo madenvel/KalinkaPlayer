@@ -512,17 +512,43 @@ class LocalFilesInputModule(InputModule):
     def _browse_artist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """Browse albums by an artist"""
+        """Browse an artist's albums followed by their album-less tracks.
+
+        Album detection (MusicBrainz/AcoustID) sometimes can't attribute a
+        track to a release — typically when only a handful of an album's
+        tracks are present locally. Those tracks land in the
+        ``unknown_album`` bucket and would otherwise be invisible from the
+        artist page. We append them after the real albums so the artist
+        view is complete; pagination spans both collections.
+        """
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
             return EmptyList(0, 0)
 
-        albums, total = self.db_manager.get_artist_albums(id, offset, limit)
+        # Fetch albums first; albums_total tells us where the window crosses
+        # into the orphan-tracks section.
+        albums, albums_total = self.db_manager.get_artist_albums(id, offset, limit)
 
-        items = []
-        for album in albums:
-            items.append(self._create_album_browse_item(album))
+        items: List[BrowseItem] = [
+            self._create_album_browse_item(album) for album in albums
+        ]
 
+        # If the window extends past the albums, fill the remainder with
+        # orphan tracks at offset (offset - albums_total).
+        remaining = limit - len(items)
+        track_offset = max(0, offset - albums_total)
+        orphans_total = 0
+        if remaining > 0:
+            tracks, orphans_total = self.db_manager.get_artist_orphan_tracks(
+                id, track_offset, remaining
+            )
+            for track in tracks:
+                items.append(self._create_track_browse_item(track))
+        else:
+            # Still need orphans_total for the overall total.
+            _, orphans_total = self.db_manager.get_artist_orphan_tracks(id, 0, 0)
+
+        total = albums_total + orphans_total
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
     def _browse_playlist(
