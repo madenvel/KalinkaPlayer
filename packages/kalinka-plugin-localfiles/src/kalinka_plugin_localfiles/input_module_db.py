@@ -544,6 +544,45 @@ class LocalFilesInputModuleDb:
         finally:
             conn.close()
 
+    def get_artist_orphan_tracks(
+        self, artist_id: str, offset: int = 0, limit: int = 50
+    ) -> Tuple[List[Dict], int]:
+        """Get tracks attributed to an artist that have no resolved album
+        (album_id == 'unknown_album'). These are tracks the enricher could
+        not confidently assign to a release — surface them in the artist
+        view so they remain reachable without a phantom 'Unknown Album'.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) as count
+                FROM tracks
+                WHERE artist_id = ? AND album_id = 'unknown_album'
+                """,
+                (artist_id,),
+            )
+            total = cursor.fetchone()["count"]
+
+            cursor.execute(
+                """
+                SELECT t.*, a.title as album_title, ar.name as artist_name
+                FROM tracks t
+                JOIN albums a ON t.album_id = a.id
+                JOIN artists ar ON t.artist_id = ar.id
+                WHERE t.artist_id = ? AND t.album_id = 'unknown_album'
+                ORDER BY t.title COLLATE NOCASE
+                LIMIT ? OFFSET ?
+                """,
+                (artist_id, limit, offset),
+            )
+
+            return [dict(row) for row in cursor.fetchall()], total
+        finally:
+            conn.close()
+
     def get_artist_recent_tracks(
         self, artist_id: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
