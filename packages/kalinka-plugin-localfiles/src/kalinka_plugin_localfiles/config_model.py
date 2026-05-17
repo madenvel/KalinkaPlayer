@@ -341,7 +341,7 @@ class LocalFilesConfig(ModuleConfig):
         json_schema_extra={"widget": "path", **_ADVANCED},
     )
     scan_interval_minutes: int = Field(
-        default=5,
+        default=15,
         title="Scan interval",
         json_schema_extra={"constraints": {"unit": "min"}},
     )
