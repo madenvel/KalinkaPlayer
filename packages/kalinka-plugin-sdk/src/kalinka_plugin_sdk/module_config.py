@@ -19,4 +19,13 @@ class ModuleConfig(BaseModel):
         frozen=True,
         exclude=True,
     )
-    enabled: bool = Field(default=True, title="Module enabled")
+    # Tagged SIMPLE so it appears on the structured settings page by
+    # default. The enable toggle is the one control a user must always
+    # reach to wire a module on or off — burying it behind the
+    # about:config search would be hostile. Plugins that override this
+    # field should keep the simple tag.
+    enabled: bool = Field(
+        default=True,
+        title="Module enabled",
+        json_schema_extra={"importance": "simple"},
+    )

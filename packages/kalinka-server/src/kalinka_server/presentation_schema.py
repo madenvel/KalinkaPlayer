@@ -27,8 +27,24 @@ from pydantic import BaseModel, Field
 
 
 class Importance(str, Enum):
-    NORMAL = "normal"
-    ADVANCED = "advanced"
+    """Two-tier UI prominence.
+
+    * SIMPLE — appears in the default settings page. Reserved for fields
+      the user is expected to interact with (auth tokens, music folders,
+      module enable toggles, the ALSA device, etc.). Must be tagged
+      explicitly; the *default* for any field that doesn't declare an
+      importance is EXPERT.
+    * EXPERT — accessible only through the about:config-style search.
+      The structured page won't show these unless the user opens the
+      expert view.
+
+    Legacy values ``"normal"`` and ``"advanced"`` (from the previous
+    three-tier scheme) are accepted on the input side: ``normal`` maps
+    to SIMPLE, ``advanced`` maps to EXPERT. The enum itself only emits
+    the two canonical values on the wire.
+    """
+
+    SIMPLE = "simple"
     EXPERT = "expert"
 
 
@@ -82,7 +98,7 @@ class FieldSpec(BaseModel):
     default: Any = None
     readonly: bool = False
     dynamic: bool = False           # Value is resolved by the owning module at request time
-    importance: Importance = Importance.NORMAL
+    importance: Importance = Importance.EXPERT
     enum_values: Optional[list[str]] = None
     constraints: Optional[Constraints] = None
 
@@ -93,7 +109,12 @@ class SectionSpec(BaseModel):
     id: str
     title: str
     icon: Optional[str] = None
-    importance: Importance = Importance.NORMAL
+    # Sections default to SIMPLE so the prune step is purely
+    # content-driven (an empty/all-expert section is dropped). Setting
+    # ``importance=EXPERT`` explicitly force-drops the section in the
+    # simple view regardless of children — useful for "advanced tuning"
+    # groups that should never surface to casual users.
+    importance: Importance = Importance.SIMPLE
     banners: list[Banner] = Field(default_factory=list)
     fields: list[FieldSpec] = Field(default_factory=list)
     sections: list["SectionSpec"] = Field(default_factory=list)
@@ -138,10 +159,28 @@ class PageSpec(BaseModel):
 
 
 class PresentationSchema(BaseModel):
-    """Top-level payload of `GET /server/config/schema`."""
+    """Top-level payload of `GET /server/config/schema`.
+
+    Two parallel views over the same underlying config tree:
+
+    * ``pages`` — the **simple** view, a hierarchy of pages → modules →
+      sections → fields. Only SIMPLE-tier fields appear here. Module
+      cards are always kept (with at least their enable toggle), even
+      when the rest of the module is expert-only, so the user can
+      always switch a module on or off without leaving simple mode.
+    * ``expert_fields`` — a **flat list** of every settable field
+      across the whole config tree, sorted by dotted path, used to back
+      the about:config-style search. Includes both simple and expert
+      tiers so power users have a single searchable surface (each
+      entry carries its own ``importance`` tag).
+
+    Both views share a single ``schema_version``: a field's
+    re-categorisation or any plugin reload invalidates both at once.
+    """
 
     schema_version: str
     pages: list[PageSpec]
+    expert_fields: list[FieldSpec] = Field(default_factory=list)
 
 
 SectionSpec.model_rebuild()

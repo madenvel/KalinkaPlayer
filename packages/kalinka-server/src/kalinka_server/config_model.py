@@ -5,9 +5,14 @@ recognized by the presentation emitter:
 
     widget       — one of the values of presentation_schema.Widget
     help         — inline sublabel / help text shown under the label
-    importance   — "normal" | "advanced" | "expert"
+    importance   — "simple" | "expert" (default: "expert")
     constraints  — dict with slider_min/slider_max/step/unit (merges with
                    Pydantic's own ge/le/etc.)
+
+The default tier for unmarked fields is EXPERT — they're reachable only
+through the about:config-style search. To put a field on the main
+settings page (mandatory or frequently changed), tag it
+``"importance": "simple"`` explicitly.
 
 KalinkaConfig.presentation_layout() defines the General page grouping and
 collapses the redundant `base_config` level so the UI shows peer sections.
@@ -22,6 +27,10 @@ if TYPE_CHECKING:
     from .presentation_schema import SectionSpec
 
 
+# Shared extras — keeps audit-tagging consistent across the file.
+_SIMPLE = {"importance": "simple"}
+
+
 class LogLevel(str, Enum):
     debug = "debug"
     info = "info"
@@ -33,7 +42,10 @@ class ServerConfig(BaseModel):
     interface: str = Field(
         default="all",
         title="Network interface",
-        json_schema_extra={"help": 'Bind to a specific interface or "all"'},
+        json_schema_extra={
+            "help": 'Bind to a specific interface or "all"',
+            **_SIMPLE,
+        },
     )
     port: int = Field(
         default=8000,
@@ -42,28 +54,38 @@ class ServerConfig(BaseModel):
             "help": "HTTP API port",
             "widget": "number_input",
             "constraints": {"ge": 1, "le": 65535},
+            **_SIMPLE,
         },
     )
     service_name: str = Field(
         default="My Kalinka Service",
         title="Service name",
-        json_schema_extra={"help": "Shown during Zeroconf discovery"},
+        json_schema_extra={
+            "help": "Shown during Zeroconf discovery",
+            **_SIMPLE,
+        },
     )
-    log_level: LogLevel = Field(default=LogLevel.info, title="Log level")
+    log_level: LogLevel = Field(
+        default=LogLevel.info,
+        title="Log level",
+        json_schema_extra=_SIMPLE,
+    )
 
 
 class AlsaConfig(BaseModel):
     device: str = Field(
         default="default",
         title="ALSA device",
-        json_schema_extra={"help": "Hardware output device identifier"},
+        json_schema_extra={
+            "help": "Hardware output device identifier",
+            **_SIMPLE,
+        },
     )
     latency_ms: int = Field(
         default=160,
         title="Output latency",
         json_schema_extra={
             "widget": "number_slider",
-            "importance": "advanced",
             "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
         },
     )
@@ -72,7 +94,6 @@ class AlsaConfig(BaseModel):
         title="Period size",
         json_schema_extra={
             "widget": "number_slider",
-            "importance": "advanced",
             "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
         },
     )
@@ -88,7 +109,6 @@ class HttpInputConfig(BaseModel):
         title="Buffer size",
         json_schema_extra={
             "help": "HTTP input buffer (bytes)",
-            "importance": "expert",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -97,7 +117,6 @@ class HttpInputConfig(BaseModel):
         title="Chunk size",
         json_schema_extra={
             "help": "HTTP input chunk (bytes)",
-            "importance": "expert",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -113,7 +132,6 @@ class FlacDecoderConfig(BaseModel):
         title="FLAC buffer",
         json_schema_extra={
             "help": "FLAC decoder buffer (bytes)",
-            "importance": "expert",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -125,7 +143,6 @@ class MpegDecoderConfig(BaseModel):
         title="MPEG buffer",
         json_schema_extra={
             "help": "MPEG decoder buffer (bytes)",
-            "importance": "expert",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -149,7 +166,6 @@ class FixupsConfig(BaseModel):
                 "Delay (ms) after ALSA format change. Increase if audio glitches "
                 "when format switches."
             ),
-            "importance": "advanced",
             "constraints": {"unit": "ms"},
         },
     )
@@ -158,7 +174,6 @@ class FixupsConfig(BaseModel):
         title="Reopen device on format change",
         json_schema_extra={
             "help": "Full device reopen when format changes. Required by some DACs.",
-            "importance": "advanced",
         },
     )
 
@@ -167,12 +182,18 @@ class DeviceAutomationConfig(BaseModel):
     auto_power_on: bool = Field(
         default=True,
         title="Auto power on",
-        json_schema_extra={"help": "Turn on device when playback starts"},
+        json_schema_extra={
+            "help": "Turn on device when playback starts",
+            **_SIMPLE,
+        },
     )
     auto_power_off: bool = Field(
         default=True,
         title="Auto power off",
-        json_schema_extra={"help": "Turn off device when playback stops"},
+        json_schema_extra={
+            "help": "Turn off device when playback stops",
+            **_SIMPLE,
+        },
     )
     auto_off_timeout_seconds: int = Field(
         default=60,
@@ -180,6 +201,7 @@ class DeviceAutomationConfig(BaseModel):
         json_schema_extra={
             "help": "Stop playback if paused for this many seconds (0 = disabled)",
             "constraints": {"unit": "s"},
+            **_SIMPLE,
         },
     )
 

@@ -12,4 +12,8 @@ class DummydeviceConfig(ModuleConfig):
         frozen=True,
         exclude=True,
     )
-    enabled: bool = Field(default=False, title="Module enabled")
+    enabled: bool = Field(
+        default=False,
+        title="Module enabled",
+        json_schema_extra={"importance": "simple"},
+    )
