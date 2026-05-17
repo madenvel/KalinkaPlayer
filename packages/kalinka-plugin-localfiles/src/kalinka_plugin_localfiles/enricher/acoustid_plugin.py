@@ -10,6 +10,7 @@ from typing import Dict, Optional, List, Tuple
 from ..config_model import LocalFilesConfig
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
+from .match_utils import duration_bonus
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -165,58 +166,64 @@ class AcoustIdPlugin(EnricherPlugin):
             logger.error(f"Unexpected error during AcoustID lookup: {str(e)}")
             return None
 
-    def _get_best_match_info(self, acoustid_results: List[Dict]) -> Optional[Dict]:
-        """
-        Extract the best match information from AcoustID results
+    def _get_best_match_info(
+        self,
+        acoustid_results: List[Dict],
+        target_duration_s: Optional[float] = None,
+    ) -> Optional[Dict]:
+        """Extract the best match information from AcoustID results.
 
-        Returns:
-            Dictionary with best match metadata
+        AcoustID typically returns several results, each potentially
+        containing several recordings. Picking ``results[0].recordings[0]``
+        blindly (the prior behavior) often grabs a re-issue or compilation
+        version of a track whose original recording is also in the
+        candidate list. We instead score every (result, recording) pair
+        by combined AcoustID confidence + duration match against the
+        local file, and pick the highest.
         """
         if not acoustid_results:
             return None
 
-        # Sort by score (highest first)
-        sorted_results = sorted(
-            acoustid_results, key=lambda x: x.get("score", 0), reverse=True
-        )
-        best_result = sorted_results[0]
+        best_pair: Optional[Tuple[Dict, Dict]] = None
+        best_combined = float("-inf")
+        best_score = 0.0
 
-        # Extract recordings
-        recordings = best_result.get("recordings", [])
-        if not recordings:
-            logger.debug("No recordings in best AcoustID result")
+        for result in acoustid_results:
+            base_score = float(result.get("score", 0)) * 100  # 0-100 scale
+            for recording in result.get("recordings", []) or []:
+                if not recording.get("id"):
+                    continue
+                # AcoustID recording duration is in seconds.
+                cand_s = recording.get("duration")
+                combined = base_score + duration_bonus(target_duration_s, cand_s)
+                if combined > best_combined:
+                    best_combined = combined
+                    best_pair = (result, recording)
+                    best_score = result.get("score", 0)
+
+        if best_pair is None:
+            logger.debug("No recordings with MBIDs in AcoustID results")
             return None
 
-        # Get highest scored recording
-        best_recording = recordings[0]
+        best_result, best_recording = best_pair
 
-        # Extract MusicBrainz data
         mb_recording_id = best_recording.get("id")
-        if not mb_recording_id:
-            logger.debug("No MusicBrainz recording ID in best match")
-            return None
-
-        # Get title
         title = best_recording.get("title")
 
-        # Extract artists
-        artists = best_recording.get("artists", [])
+        artists = best_recording.get("artists", []) or []
         artist_name = artists[0].get("name") if artists else None
         artist_id = artists[0].get("id") if artists else None
 
-        # Get best release
-        releases = best_recording.get("releases", [])
+        releases = best_recording.get("releases", []) or []
         album_title = None
         album_id = None
-
         if releases:
             release = releases[0]
             album_title = release.get("title")
             album_id = release.get("id")
 
-        # Return collected metadata
         return {
-            "score": best_result.get("score", 0),
+            "score": best_score,
             "recording_mbid": mb_recording_id,
             "title": title,
             "artist_name": artist_name,
@@ -382,8 +389,12 @@ class AcoustIdPlugin(EnricherPlugin):
                 logger.debug(f"No AcoustID matches for {track.get('file_path')}")
                 return None
 
-            # Extract best match information
-            match_info = self._get_best_match_info(results)
+            # Extract best match information. Pass the local file's
+            # duration (preferring the tag-derived value when present,
+            # falling back to the fpcalc-measured one) so duration is used
+            # to pick among same-named recordings.
+            target_duration_s = track.get("duration") or duration
+            match_info = self._get_best_match_info(results, target_duration_s)
             if not match_info:
                 logger.debug(
                     f"Could not extract match info for {track.get('file_path')}"
