@@ -6,6 +6,7 @@ from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
 from .enricher_plugin import EnricherPlugin
+from .match_utils import duration_bonus, parse_mb_length_seconds
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -63,6 +64,8 @@ class MusicBrainzPlugin(EnricherPlugin):
         threshold: int,
         match_key: str = "name",
         additional_checks: bool = True,
+        target_duration_s: Optional[float] = None,
+        length_key: Optional[str] = None,
     ) -> Tuple[Optional[Dict], int, float]:
         """
         Find the best match among items based on score and string similarity
@@ -73,6 +76,15 @@ class MusicBrainzPlugin(EnricherPlugin):
             threshold: Score threshold (0-100)
             match_key: Key to use for string comparison
             additional_checks: Whether to perform additional string similarity checks
+            target_duration_s: Local file duration (seconds). When supplied
+                together with ``length_key``, candidates are scored by how
+                closely their length matches — a critical signal for
+                distinguishing same-titled recordings (live cut vs studio,
+                edit vs album version, etc.).
+            length_key: Key on each item holding a MusicBrainz-style length
+                (ms, typically a string). When set together with
+                ``target_duration_s``, the duration bonus is added to the
+                weighted score.
 
         Returns:
             Tuple of (best_match, score, similarity)
@@ -108,15 +120,23 @@ class MusicBrainzPlugin(EnricherPlugin):
                 else 1.0
             )
 
+            # Use a weighted average of score and string similarity, then
+            # fold in a duration match when the caller supplied one. The
+            # duration bonus is additive on the same 0-100 scale.
+            weighted_score = 0.5 * score + 0.5 * (similarity * 100)
+            d_bonus = 0.0
+            if target_duration_s is not None and length_key:
+                cand_s = parse_mb_length_seconds(item.get(length_key))
+                d_bonus = duration_bonus(target_duration_s, cand_s)
+                weighted_score += d_bonus
+
             # Debug logging
             if self.debug_matching and score >= threshold:
                 logger.debug(
-                    f"  Candidate: '{compare_name}' score={score} similarity={similarity:.2f}"
+                    f"  Candidate: '{compare_name}' score={score} "
+                    f"similarity={similarity:.2f} dur_bonus={d_bonus:+.0f} "
+                    f"weighted={weighted_score:.1f}"
                 )
-
-            # Use a weighted average of score and string similarity
-            # Give more weight to string similarity when score is high
-            weighted_score = 0.5 * score + 0.5 * (similarity * 100)
 
             if weighted_score > best_score or (
                 weighted_score == best_score and similarity > best_similarity
@@ -339,12 +359,16 @@ class MusicBrainzPlugin(EnricherPlugin):
                 logger.debug(f"No MusicBrainz match found for track: {track['title']}")
                 return None
 
-            # Find best match
+            # Find best match — fold in track duration when we have it so
+            # same-titled recordings (live cuts, edits, demos, remixes) are
+            # disambiguated rather than picked arbitrarily by title alone.
             best_match, score, similarity = self._find_best_match(
                 result["recording-list"],
                 track["title"],
                 self.track_threshold,
                 match_key="title",
+                target_duration_s=track.get("duration"),
+                length_key="length",
             )
 
             if not best_match:
