@@ -9,6 +9,7 @@ extensions = [
         sources=[
             "Buffer.cpp",
             "AlsaAudioEmitter.cpp",
+            "AlsaDeviceEnumeration.cpp",
             "AudioSampleFormat.cpp",
             "AudioGraphHttpStream.cpp",
             "AudioGraphNode.cpp",

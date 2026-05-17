@@ -1,3 +1,4 @@
+#include "AlsaDeviceEnumeration.h"
 #include "AudioGraphNode.h"
 #include "AudioInfo.h"
 #include "AudioPlayer.h"
@@ -131,4 +132,22 @@ PYBIND11_MODULE(native_player, m) {
       .export_values();
 
   m.def("py_dict_to_config", &dict_to_map);
+
+  // ALSA device enumeration — exposed as plain tuples so the Python
+  // side stays free to evolve the option model without re-pinning the
+  // pybind class layout. Each entry is (name, label, ioid) where
+  // `name` is what gets passed back to snd_pcm_open() at playback
+  // time (e.g. "default", "hw:CARD=sofhdadsp,DEV=0"), `label` is the
+  // joined card+pcm description for the UI, and `ioid` is "Output",
+  // "Input", or empty (= both). Filtering to outputs is the caller's
+  // job.
+  py::class_<AlsaPcmDevice>(m, "AlsaPcmDevice")
+      .def_readonly("name", &AlsaPcmDevice::name)
+      .def_readonly("label", &AlsaPcmDevice::label)
+      .def_readonly("ioid", &AlsaPcmDevice::ioid);
+
+  m.def("list_alsa_pcm_devices", &listAlsaPcmDevices,
+        "Enumerate ALSA PCM device hints (every CARD/DEV combo + "
+        "virtual entries like 'default', 'pipewire'). Returns an "
+        "empty list if libasound's hint API is unavailable.");
 }
