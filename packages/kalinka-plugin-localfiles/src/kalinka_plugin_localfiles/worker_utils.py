@@ -60,7 +60,7 @@ async def sleep_interruptible(
         if nudge_queue is not None:
             try:
                 nudge_queue.get_nowait()
-                logger.info("%s woken by nudge", label)
+                logger.debug("%s woken by nudge", label)
                 return True
             except queue.Empty:
                 pass

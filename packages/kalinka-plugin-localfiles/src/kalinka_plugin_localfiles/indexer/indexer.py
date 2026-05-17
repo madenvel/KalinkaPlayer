@@ -61,7 +61,7 @@ async def trigger_enricher_update(data):
         logger.warning("No data provided to trigger enricher update")
         return
 
-    logger.info(f"Triggering enricher update with data: {data}")
+    logger.debug(f"Triggering enricher update with data: {data}")
 
     if _enricher_queue is None:
         logger.error("Enricher queue is not initialized; cannot trigger update")
@@ -101,7 +101,7 @@ class FileIndexer:
 
         try:
             await self.run_scan()
-            logger.info("Indexer scan completed")
+            logger.debug("Indexer scan completed")
         except Exception as e:
             logger.exception(f"Error running indexer scan: {str(e)}")
         finally:
@@ -110,7 +110,7 @@ class FileIndexer:
 
     async def run_scan(self):
         """Scan all music folders for files"""
-        logger.info(f"Starting music file scan in folders: {self.music_folders}")
+        logger.debug(f"Starting music file scan in folders: {self.music_folders}")
 
         changed_items: Dict[str, Set[str]] = {
             "artists": set(),
@@ -123,7 +123,7 @@ class FileIndexer:
                 logger.warning(f"Music folder does not exist: {folder}")
                 continue
 
-            logger.info(f"Scanning folder: {folder}")
+            logger.debug(f"Scanning folder: {folder}")
             await self.scan_folder(folder, changed_items)
 
         # Delete stale entries after scanning but before enrichment
@@ -142,7 +142,7 @@ class FileIndexer:
                 f"Albums={len(changed_items['albums'])}, Tracks={len(changed_items['tracks'])}"
             )
         else:
-            logger.info("Scan completed with no changes")
+            logger.debug("Scan completed with no changes")
 
         # Trigger the enricher run regardless of changes
         # as there might be old files pending enrichment
@@ -541,7 +541,7 @@ class FileIndexer:
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries for files that no longer exist in the file system"""
-        logger.info("Checking for stale files in the database...")
+        logger.debug("Checking for stale files in the database...")
         all_tracks = await self.db_manager.get_all_tracks()
         removed_tracks = 0
         for track in all_tracks:
@@ -563,7 +563,7 @@ class FileIndexer:
                 f"and {removed_artists} artists removed"
             )
         else:
-            logger.info("No stale entries found in the database")
+            logger.debug("No stale entries found in the database")
         return {
             "tracks": removed_tracks,
             "albums": removed_albums,
@@ -608,7 +608,7 @@ async def _indexer_worker(config: LocalFilesConfig, db_manager: AsyncIndexerDb):
                     pass
 
                 if time.time() - last_run > interval_minutes * 60:
-                    logger.info(
+                    logger.debug(
                         f"Scheduled indexer scan triggered (interval: {interval_minutes} mins)"
                     )
                     await indexer_instance.start()
