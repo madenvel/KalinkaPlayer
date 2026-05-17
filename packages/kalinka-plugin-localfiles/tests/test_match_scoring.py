@@ -135,6 +135,67 @@ class TestMusicBrainzFindBestMatch:
         assert best is not None
         assert best["id"] == "b"
 
+    def test_min_margin_rejects_ambiguous_picks(self):
+        """When two candidates are within the margin, neither should
+        be returned — better to leave the track orphan than commit
+        the wrong recording."""
+        plugin = _make_mb_plugin()
+        candidates = [
+            # Two essentially-identical candidates: same title, same MB
+            # score, both with perfect duration match. There's no signal
+            # to pick between them.
+            {"id": "a", "title": "Yesterday", "ext:score": "95", "length": "180000"},
+            {"id": "b", "title": "Yesterday", "ext:score": "95", "length": "180000"},
+        ]
+        best, score, _sim = plugin._find_best_match(
+            candidates,
+            "Yesterday",
+            threshold=70,
+            match_key="title",
+            target_duration_s=180,
+            length_key="length",
+            min_margin=5.0,
+        )
+        assert best is None
+        assert score == 0
+
+    def test_min_margin_accepts_clear_winner(self):
+        """With a clear margin in either score or duration, the pick
+        should still succeed."""
+        plugin = _make_mb_plugin()
+        candidates = [
+            # Clear winner: matches duration; the other has -50 penalty.
+            {"id": "winner", "title": "Yesterday", "ext:score": "95", "length": "180000"},
+            {"id": "loser", "title": "Yesterday", "ext:score": "95", "length": "320000"},
+        ]
+        best, _score, _sim = plugin._find_best_match(
+            candidates,
+            "Yesterday",
+            threshold=70,
+            match_key="title",
+            target_duration_s=180,
+            length_key="length",
+            min_margin=5.0,
+        )
+        assert best is not None
+        assert best["id"] == "winner"
+
+    def test_min_margin_zero_keeps_old_behavior(self):
+        """Default ``min_margin=0`` should not reject anything for
+        callers (like artist/album matching) that don't opt in."""
+        plugin = _make_mb_plugin()
+        candidates = [
+            {"id": "a", "title": "Yesterday", "ext:score": "95"},
+            {"id": "b", "title": "Yesterday", "ext:score": "95"},
+        ]
+        best, _score, _sim = plugin._find_best_match(
+            candidates,
+            "Yesterday",
+            threshold=70,
+            match_key="title",
+        )
+        assert best is not None
+
     def test_missing_length_falls_back_to_neutral(self):
         """A candidate without a length should not be penalized for the
         missing field — it just doesn't get a duration bonus."""
@@ -234,23 +295,48 @@ class TestAcoustidBestMatch:
         assert match["recording_mbid"] == "rec-right-len"
 
     def test_no_target_duration_picks_top_scored(self):
-        """Without a target duration, behavior reduces to: pick the
-        highest-scored result's first (with-MBID) recording."""
+        """Without a target duration, a clearly-higher-scoring result
+        still wins."""
         plugin = _make_acoustid_plugin()
         results = [
             {
                 "score": 0.95,
                 "recordings": [
-                    {"id": "first", "title": "X", "duration": 120, "artists": [], "releases": []},
-                    {"id": "second", "title": "X", "duration": 360, "artists": [], "releases": []},
+                    {"id": "winner", "title": "X", "duration": 120, "artists": [], "releases": []},
                 ],
-            }
+            },
+            {
+                "score": 0.75,
+                "recordings": [
+                    {"id": "loser", "title": "X", "duration": 360, "artists": [], "releases": []},
+                ],
+            },
         ]
         match = plugin._get_best_match_info(results, target_duration_s=None)
         assert match is not None
-        # Both recordings get the same base score; we should pick one of them
-        # (tie broken by iteration order — first wins).
-        assert match["recording_mbid"] == "first"
+        assert match["recording_mbid"] == "winner"
+
+    def test_ambiguous_top_candidates_returns_none(self):
+        """Two candidates with effectively-tied combined scores should
+        be held as orphan rather than committed to the wrong release."""
+        plugin = _make_acoustid_plugin()
+        results = [
+            {
+                "score": 0.95,
+                "recordings": [
+                    {"id": "a", "title": "X", "duration": 180, "artists": [], "releases": [{"id": "rel-a", "title": "A"}]},
+                ],
+            },
+            {
+                "score": 0.95,
+                "recordings": [
+                    {"id": "b", "title": "X", "duration": 180, "artists": [], "releases": [{"id": "rel-b", "title": "B"}]},
+                ],
+            },
+        ]
+        # Both produce combined = 95 + 20 = 115. Margin = 0 → ambiguous.
+        match = plugin._get_best_match_info(results, target_duration_s=180)
+        assert match is None
 
     def test_skips_recordings_without_mbid(self):
         plugin = _make_acoustid_plugin()
