@@ -420,6 +420,83 @@ class TestAcoustidReleasePicking:
         title, mbid = plugin._pick_best_release({"id": "rec"})
         assert title is None and mbid is None
 
+    def test_position_match_lifts_correct_release(self):
+        """A release whose tracklist places the recording at the local
+        file's track number should beat one whose tracklist doesn't —
+        useful for picking the original edition over a bonus-track
+        reissue when both share a release-group type."""
+        plugin = _make_acoustid_plugin()
+        recording = {
+            "id": "rec-1",
+            "releasegroups": [
+                {
+                    "type": "Album",
+                    "secondarytypes": [],
+                    "releases": [
+                        {
+                            "id": "reissue",
+                            "title": "Help! (Deluxe)",
+                            "mediums": [
+                                {
+                                    "position": 1,
+                                    "tracks": [
+                                        {"id": "rec-1", "position": 8},
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "id": "original",
+                            "title": "Help!",
+                            "mediums": [
+                                {
+                                    "position": 1,
+                                    "tracks": [
+                                        {"id": "rec-1", "position": 5},
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+        # Local file claims track 5, disc 1.
+        _, mbid = plugin._pick_best_release(recording, track_number=5, disc_number=1)
+        assert mbid == "original"
+
+    def test_position_match_score_disc_only(self):
+        """Disc match alone (without track match) still contributes."""
+        release = {
+            "mediums": [
+                {"position": 2, "tracks": [{"id": "rec", "position": 3}]},
+            ]
+        }
+        # Track 99 doesn't match, but disc 2 does.
+        score = AcoustIdPlugin._position_match_score(
+            release, "rec", track_number=99, disc_number=2
+        )
+        assert score == 10.0
+
+    def test_position_match_score_no_data(self):
+        """Missing tracklist or missing local position returns 0."""
+        assert AcoustIdPlugin._position_match_score({}, "rec", 1, 1) == 0.0
+        assert AcoustIdPlugin._position_match_score(
+            {"mediums": [{"tracks": [{"id": "rec", "position": 1}]}]},
+            "rec",
+            None,
+            None,
+        ) == 0.0
+
+    def test_position_match_score_recording_not_on_release(self):
+        """If the recording isn't found in the tracklist, no bonus."""
+        release = {
+            "mediums": [
+                {"position": 1, "tracks": [{"id": "other-rec", "position": 5}]},
+            ]
+        }
+        assert AcoustIdPlugin._position_match_score(release, "rec", 5, 1) == 0.0
+
     def test_release_group_score_basics(self):
         # Bare 'Album' is the gold standard.
         assert AcoustIdPlugin._release_group_score("Album", []) == 30
