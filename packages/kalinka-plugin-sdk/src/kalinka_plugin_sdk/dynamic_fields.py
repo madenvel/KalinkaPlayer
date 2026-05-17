@@ -49,6 +49,12 @@ class DynamicFieldDecl(BaseModel):
         default=None, description="Inline help/description for the field."
     )
     importance: str = Field(
-        default="normal",
-        description="Display importance: 'normal' | 'advanced' | 'expert'.",
+        default="simple",
+        description=(
+            "Display tier: 'simple' (always shown on the structured "
+            "settings page; the default for dynamic fields, since they "
+            "act as status displays for their parent enable toggle) "
+            "or 'expert' (hidden behind the about:config search). The "
+            "legacy values 'normal'/'advanced' are accepted as synonyms."
+        ),
     )

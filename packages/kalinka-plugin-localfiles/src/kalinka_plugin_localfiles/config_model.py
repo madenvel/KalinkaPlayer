@@ -3,9 +3,11 @@ from pydantic import BaseModel, Field
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
-# Shared extras
-_EXPERT = {"importance": "expert"}
-_ADVANCED = {"importance": "advanced"}
+# Shared extras. The presentation layer recognises two tiers:
+# "simple" (always shown on the structured settings page) and
+# "expert" (the default; reachable only via about:config search).
+# Mark a field "simple" only when it's mandatory or frequently changed.
+_SIMPLE = {"importance": "simple"}
 
 
 class TagsConfig(BaseModel):
@@ -21,18 +23,18 @@ class TagsConfig(BaseModel):
     Discogs/MIREX/danceability classifiers.
     """
 
-    enabled: bool = Field(default=False, title="Enable tag prediction")
+    enabled: bool = Field(
+        default=False, title="Enable tag prediction", json_schema_extra=_SIMPLE,
+    )
     min_confidence: float = Field(
         default=0.3,
         ge=0.0,
         le=1.0,
         title="Minimum tag confidence",
-        json_schema_extra=_ADVANCED,
     )
     top_genres: int = Field(
         default=5,
         title="Max genres stored per track",
-        json_schema_extra=_ADVANCED,
     )
     effnet_path: str = Field(
         default="",
@@ -40,7 +42,6 @@ class TagsConfig(BaseModel):
         json_schema_extra={
             "help": "Auto-downloaded if empty",
             "widget": "path",
-            **_EXPERT,
         },
     )
     genre_path: str = Field(
@@ -49,7 +50,6 @@ class TagsConfig(BaseModel):
         json_schema_extra={
             "help": "Auto-downloaded if empty",
             "widget": "path",
-            **_EXPERT,
         },
     )
     vggish_path: str = Field(
@@ -58,7 +58,6 @@ class TagsConfig(BaseModel):
         json_schema_extra={
             "help": "Auto-downloaded if empty",
             "widget": "path",
-            **_EXPERT,
         },
     )
     mood_mirex_path: str = Field(
@@ -67,7 +66,6 @@ class TagsConfig(BaseModel):
         json_schema_extra={
             "help": "Auto-downloaded if empty",
             "widget": "path",
-            **_EXPERT,
         },
     )
     danceability_path: str = Field(
@@ -76,16 +74,12 @@ class TagsConfig(BaseModel):
         json_schema_extra={
             "help": "Auto-downloaded if empty",
             "widget": "path",
-            **_EXPERT,
         },
     )
     current_version: int = Field(
         default=1,
         title="Model version",
-        json_schema_extra={
-            "help": "Increment to force re-tagging",
-            **_EXPERT,
-        },
+        json_schema_extra={"help": "Increment to force re-tagging"},
     )
 
 
@@ -93,7 +87,7 @@ class EmbedderClapConfig(BaseModel):
     model_name: str = Field(
         default="laion/clap-htsat-unfused",
         title="CLAP model name",
-        json_schema_extra={"help": "HuggingFace model ID", **_ADVANCED},
+        json_schema_extra={"help": "HuggingFace model ID"},
     )
     ckpt_path: str = Field(
         default="",
@@ -102,7 +96,7 @@ class EmbedderClapConfig(BaseModel):
             "Directory containing ONNX model files (clap_audio_encoder.onnx, "
             "clap_text_encoder.onnx, clap_tokenizer.json). Uses model_dir if empty."
         ),
-        json_schema_extra={"widget": "path", **_EXPERT},
+        json_schema_extra={"widget": "path"},
     )
     dimensions: int = Field(
         default=512, frozen=True, title="Embedding dimensions"
@@ -110,33 +104,25 @@ class EmbedderClapConfig(BaseModel):
     current_version: int = Field(
         default=1,
         title="Model version",
-        json_schema_extra={
-            "help": "Increment to force re-embedding",
-            **_EXPERT,
-        },
+        json_schema_extra={"help": "Increment to force re-embedding"},
     )
 
 
 class AiSearchConfig(BaseModel):
     weight_clap_similarity: float = Field(
         default=0.75, ge=0.0, le=1.0, title="CLAP similarity weight",
-        json_schema_extra=_EXPERT,
     )
     weight_tag_boost: float = Field(
         default=0.15, ge=0.0, le=1.0, title="Tag overlap boost weight",
-        json_schema_extra=_EXPERT,
     )
     weight_popularity: float = Field(
         default=0.10, ge=0.0, le=1.0, title="Popularity weight",
-        json_schema_extra=_EXPERT,
     )
     max_results: int = Field(
         default=20, title="Max results per entity type",
-        json_schema_extra=_ADVANCED,
     )
     knn_candidates: int = Field(
         default=50, title="KNN candidates before re-ranking",
-        json_schema_extra=_EXPERT,
     )
     fallback_coverage_threshold: float = Field(
         default=10.0,
@@ -144,22 +130,23 @@ class AiSearchConfig(BaseModel):
         json_schema_extra={
             "help": "Warn if CLAP coverage % is below this",
             "constraints": {"unit": "%"},
-            **_EXPERT,
         },
     )
 
 
 class SearcherConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable searcher")
+    enabled: bool = Field(
+        default=True, title="Enable searcher", json_schema_extra=_SIMPLE,
+    )
     tags: TagsConfig = Field(
         default_factory=TagsConfig, title="Tag prediction"
     )
     batch_size_tags: int = Field(
-        default=8, title="Tag prediction batch size", json_schema_extra=_EXPERT,
+        default=8, title="Tag prediction batch size",
     )
     poll_interval_seconds: int = Field(
         default=300, title="Poll interval",
-        json_schema_extra={"constraints": {"unit": "s"}, **_ADVANCED},
+        json_schema_extra={"constraints": {"unit": "s"}},
     )
     model_idle_timeout_seconds: int = Field(
         default=300,
@@ -167,47 +154,39 @@ class SearcherConfig(BaseModel):
         json_schema_extra={
             "help": "Unload tag models from memory after this (0 = never unload)",
             "constraints": {"unit": "s"},
-            **_ADVANCED,
         },
     )
     max_job_attempts: int = Field(
         default=3, title="Max attempts per tag job",
-        json_schema_extra=_EXPERT,
     )
     model_dir: str = Field(
         default="/var/lib/kalinka/models",
         title="Model directory",
-        json_schema_extra={"widget": "path", **_ADVANCED},
+        json_schema_extra={"widget": "path"},
     )
     weight_fts: float = Field(
-        default=0.35, ge=0.0, le=1.0, title="FTS rank weight", json_schema_extra=_EXPERT,
+        default=0.35, ge=0.0, le=1.0, title="FTS rank weight",
     )
     weight_knn: float = Field(
         default=0.30, ge=0.0, le=1.0, title="CLAP KNN similarity weight",
-        json_schema_extra=_EXPERT,
     )
     weight_genre: float = Field(
         default=0.20, ge=0.0, le=1.0, title="Genre match weight",
-        json_schema_extra=_EXPERT,
     )
     weight_mood: float = Field(
         default=0.10, ge=0.0, le=1.0, title="Mood match weight",
-        json_schema_extra=_EXPERT,
     )
     weight_danceability: float = Field(
         default=0.05, ge=0.0, le=1.0, title="Danceability match weight",
-        json_schema_extra=_EXPERT,
     )
     fts_candidate_limit: int = Field(
         default=100, title="Max FTS candidates before re-ranking",
-        json_schema_extra=_EXPERT,
     )
     knn_candidate_limit: int = Field(
         default=50, title="Max KNN candidates before re-ranking",
-        json_schema_extra=_EXPERT,
     )
     max_results: int = Field(
-        default=20, title="Max results per entity type", json_schema_extra=_ADVANCED,
+        default=20, title="Max results per entity type",
     )
 
 
@@ -219,14 +198,16 @@ class EmbedderConfig(BaseModel):
     # rendered as a duplicate "Tag prediction" section on the embedder
     # card. Both fields were dead code in the embedder process; removed.
 
-    enabled: bool = Field(default=False, title="Enable embedder")
+    enabled: bool = Field(
+        default=False, title="Enable embedder", json_schema_extra=_SIMPLE,
+    )
     batch_size_clap: int = Field(
-        default=4, title="CLAP audio embedding batch size", json_schema_extra=_EXPERT,
+        default=4, title="CLAP audio embedding batch size",
     )
     poll_interval_seconds: int = Field(
         default=300,
         title="Poll interval",
-        json_schema_extra={"constraints": {"unit": "s"}, **_ADVANCED},
+        json_schema_extra={"constraints": {"unit": "s"}},
     )
     # NB: CLAP no longer idles out. The model is shared with the searcher's
     # text-encode IPC and unloading made the first post-idle search query
@@ -234,12 +215,11 @@ class EmbedderConfig(BaseModel):
     # lifetime of the embedder process.
     max_job_attempts: int = Field(
         default=3, title="Max attempts per embedding job",
-        json_schema_extra=_EXPERT,
     )
     model_dir: str = Field(
         default="/var/lib/kalinka/models",
         title="Model directory",
-        json_schema_extra={"widget": "path", **_ADVANCED},
+        json_schema_extra={"widget": "path"},
     )
     clap: EmbedderClapConfig = Field(
         default_factory=EmbedderClapConfig, title="CLAP audio embedding"
@@ -250,44 +230,50 @@ class EmbedderConfig(BaseModel):
 
 
 class MusicBrainzConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable MusicBrainz")
+    enabled: bool = Field(
+        default=True, title="Enable MusicBrainz", json_schema_extra=_SIMPLE,
+    )
     artist_threshold: int = Field(
         default=90, title="Artist match threshold", ge=0, le=100,
-        json_schema_extra={"constraints": {"unit": "%"}, **_ADVANCED},
+        json_schema_extra={"constraints": {"unit": "%"}},
     )
     album_threshold: int = Field(
         default=90, title="Album match threshold", ge=0, le=100,
-        json_schema_extra={"constraints": {"unit": "%"}, **_ADVANCED},
+        json_schema_extra={"constraints": {"unit": "%"}},
     )
     track_threshold: int = Field(
         default=90, title="Track match threshold", ge=0, le=100,
-        json_schema_extra={"constraints": {"unit": "%"}, **_ADVANCED},
+        json_schema_extra={"constraints": {"unit": "%"}},
     )
     string_similarity: float = Field(
         default=0.8, title="String match similarity", ge=0, le=1,
-        json_schema_extra=_ADVANCED,
     )
     debug_matching: bool = Field(
         default=False, title="Enable detailed matching logs",
-        json_schema_extra=_EXPERT,
     )
 
 
 class AcoustIDConfig(BaseModel):
-    enabled: bool = Field(default=False, title="Enable AcoustID")
+    enabled: bool = Field(
+        default=False, title="Enable AcoustID", json_schema_extra=_SIMPLE,
+    )
     api_key: str = Field(
         default="",
         title="AcoustID API key",
-        json_schema_extra={"widget": "password"},
+        json_schema_extra={"widget": "password", **_SIMPLE},
     )
 
 
 class WikidataConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable Wikidata")
+    enabled: bool = Field(
+        default=True, title="Enable Wikidata", json_schema_extra=_SIMPLE,
+    )
 
 
 class DeezerConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable Deezer")
+    enabled: bool = Field(
+        default=True, title="Enable Deezer", json_schema_extra=_SIMPLE,
+    )
 
 
 class PluginsConfig(BaseModel):
@@ -300,17 +286,19 @@ class PluginsConfig(BaseModel):
     filesystem_fallback_enabled: bool = Field(
         default=True,
         title="Use file name/path for enrichment",
+        json_schema_extra=_SIMPLE,
     )
 
     user_agent: str = Field(
         default="Kalinka/1.0 (https://github.com/madenvel/KalinkaPlayer)",
         title="User agent",
-        json_schema_extra=_EXPERT,
     )
 
 
 class EnricherConfig(BaseModel):
-    enabled: bool = Field(default=True, title="Enable enricher")
+    enabled: bool = Field(
+        default=True, title="Enable enricher", json_schema_extra=_SIMPLE,
+    )
     plugins: PluginsConfig = Field(
         default_factory=PluginsConfig, title="Enrichment plugins"
     )
@@ -324,31 +312,33 @@ class LocalFilesConfig(ModuleConfig):
     ]
 
     name: str = Field(default="localfiles", title="Local files", frozen=True, exclude=True)
-    enabled: bool = Field(default=True, title="Module enabled")
+    enabled: bool = Field(
+        default=True, title="Module enabled", json_schema_extra=_SIMPLE,
+    )
     music_folders: list[str] = Field(
         default=["~/Music"],
         title="Music folders",
-        json_schema_extra={"widget": "folder_list"},
+        json_schema_extra={"widget": "folder_list", **_SIMPLE},
     )
     db_path: str = Field(
         default="/var/lib/kalinka/localfiles.db",
         title="Database path",
-        json_schema_extra={"widget": "path", **_ADVANCED},
+        json_schema_extra={"widget": "path"},
     )
     artwork_path: str = Field(
         default="/var/cache/kalinka/artwork",
         title="Artwork cache path",
-        json_schema_extra={"widget": "path", **_ADVANCED},
+        json_schema_extra={"widget": "path"},
     )
     scan_interval_minutes: int = Field(
         default=15,
         title="Scan interval",
-        json_schema_extra={"constraints": {"unit": "min"}},
+        json_schema_extra={"constraints": {"unit": "min"}, **_SIMPLE},
     )
     file_watch_enabled: bool = Field(
         default=True,
         title="Enable file watching",
-        json_schema_extra={"help": "Rescan on filesystem changes"},
+        json_schema_extra={"help": "Rescan on filesystem changes", **_SIMPLE},
     )
     quiescence_seconds: int = Field(
         default=5,
@@ -359,7 +349,6 @@ class LocalFilesConfig(ModuleConfig):
                 "Protects against indexing partial files during slow uploads."
             ),
             "constraints": {"unit": "s"},
-            **_ADVANCED,
         },
     )
     enricher: EnricherConfig = Field(
@@ -370,7 +359,6 @@ class LocalFilesConfig(ModuleConfig):
         title="Rescan on next restart",
         json_schema_extra={
             "help": "Purges the database and rebuilds it on next server restart",
-            **_ADVANCED,
         },
     )
     searcher: SearcherConfig = Field(

@@ -4,12 +4,23 @@ and a flat values dict for the wire.
 The old nested "{type, title, fields}" wire format has been replaced by two
 independent payloads:
 
-    GET /server/config/schema  → PresentationSchema (pages/sections/fields)
+    GET /server/config/schema  → PresentationSchema (pages + expert_fields)
     GET /server/config         → {"schema_version", "values": flat dotted-path dict}
     PUT /server/config         → {"schema_version", "changes": {path: value}}
 
-A monotonic `schema_version` string lets the client detect staleness after
-plugin reloads.
+``PresentationSchema`` carries two parallel views:
+
+    * ``pages`` — simple view, hierarchical; only SIMPLE-tier fields appear.
+      Module cards are always kept with at least their enable toggle.
+    * ``expert_fields`` — flat list of every settable field (SIMPLE +
+      EXPERT), sorted by dotted path, backing the about:config search UI.
+
+The default tier for a field that doesn't declare ``importance`` is EXPERT.
+Anything user-facing must opt in explicitly via
+``Field(json_schema_extra={"importance": "simple"})``.
+
+A monotonic ``schema_version`` string lets the client detect staleness
+after plugin reloads.
 """
 
 from __future__ import annotations
@@ -131,15 +142,51 @@ def _infer_widget(wire_type: str, field_name: str, extras: dict[str, Any]) -> Wi
     return Widget.TEXT
 
 
+# Legacy three-tier tags accepted for plugin back-compat. The wire model
+# only emits "simple"/"expert" — see presentation_schema.Importance.
+_LEGACY_IMPORTANCE_ALIASES = {
+    "normal": Importance.SIMPLE,
+    "advanced": Importance.EXPERT,
+}
+
+
 def _importance_from_extras(extras: dict[str, Any]) -> Importance:
+    """Resolve the field's tier. Defaults to EXPERT for unmarked fields:
+    only fields the user *explicitly* opts into via ``"importance":
+    "simple"`` (or the legacy ``"normal"``) appear in the simple view.
+    """
     hint = extras.get("importance")
     if hint is None:
-        return Importance.NORMAL
+        return Importance.EXPERT
+    if hint in _LEGACY_IMPORTANCE_ALIASES:
+        return _LEGACY_IMPORTANCE_ALIASES[hint]
     try:
         return Importance(hint)
     except ValueError:
-        logger.warning("Unknown importance %r", hint)
-        return Importance.NORMAL
+        logger.warning("Unknown importance %r; defaulting to EXPERT", hint)
+        return Importance.EXPERT
+
+
+def _section_importance_from_extras(extras: dict[str, Any]) -> Importance:
+    """Section-level tier resolver. Defaults to SIMPLE (not EXPERT) so
+    pruning is purely *content*-driven: a section is dropped iff every
+    field beneath it is EXPERT. Only an explicit ``"importance":
+    "expert"`` on the section's owning field force-hides the whole
+    group regardless of its children — used for things like the
+    "Buffers & decoders" group on the General page.
+    """
+    hint = extras.get("importance")
+    if hint is None:
+        return Importance.SIMPLE
+    if hint in _LEGACY_IMPORTANCE_ALIASES:
+        return _LEGACY_IMPORTANCE_ALIASES[hint]
+    try:
+        return Importance(hint)
+    except ValueError:
+        logger.warning(
+            "Unknown section importance %r; defaulting to SIMPLE", hint
+        )
+        return Importance.SIMPLE
 
 
 def _enum_values(field: FieldInfo) -> list[str] | None:
@@ -202,7 +249,7 @@ def _auto_sections(model: BaseModel, prefix: str) -> list[SectionSpec]:
             nested_model = getattr(model, field_name)
             sub_sections = _sections_for(nested_model, child_path)
             extras = _json_extra(field)
-            section_importance = _importance_from_extras(extras)
+            section_importance = _section_importance_from_extras(extras)
 
             # Absorb the child's "General" auto-section (if any) onto the parent
             # wrapper so a BaseModel with both scalars and nested models renders
@@ -288,16 +335,7 @@ def _dynamic_field_spec(
             decl.widget,
         )
         widget = Widget.TEXT
-    try:
-        importance = Importance(decl.importance)
-    except ValueError:
-        logger.warning(
-            "Dynamic field %s declared unknown importance %r; falling back "
-            "to 'normal'",
-            entry.full_path,
-            decl.importance,
-        )
-        importance = Importance.NORMAL
+    importance = _importance_from_extras({"importance": decl.importance})
     return FieldSpec(
         path=entry.full_path,
         label=decl.label,
@@ -419,6 +457,137 @@ def _module_spec(
         fields=module_fields,
         sections=kept_sections,
     )
+
+
+# ---------------------------------------------------------------------------
+# Simple-view pruning
+# ---------------------------------------------------------------------------
+
+
+def _prune_sections_to_simple(sections: list[SectionSpec]) -> list[SectionSpec]:
+    """Return a copy of ``sections`` containing only the SIMPLE-tier leaves.
+
+    A section is dropped when either:
+
+    * it is itself tagged ``importance=EXPERT`` (developer explicitly
+      marked the entire group as expert-only — e.g. the "Buffers &
+      decoders" section), OR
+    * *all* its fields are EXPERT *and* every sub-section recursively
+      prunes empty.
+
+    Field order is preserved. The returned tree is fully new — callers
+    retain ownership of the original (used to build the expert flat
+    list).
+    """
+    kept: list[SectionSpec] = []
+    for s in sections:
+        if s.importance == Importance.EXPERT:
+            continue
+        simple_fields = [f for f in s.fields if f.importance == Importance.SIMPLE]
+        pruned_children = _prune_sections_to_simple(s.sections)
+        if not simple_fields and not pruned_children:
+            continue
+        kept.append(
+            SectionSpec(
+                id=s.id,
+                title=s.title,
+                icon=s.icon,
+                importance=s.importance,
+                banners=list(s.banners),
+                fields=simple_fields,
+                sections=pruned_children,
+            )
+        )
+    return kept
+
+
+def _prune_module_to_simple(module: ModuleSpec) -> ModuleSpec:
+    """Prune a module to its SIMPLE-tier surface.
+
+    The module shell is *always* retained, even when every settable
+    field below it is EXPERT — the enable toggle (and any other simple
+    fields) must remain reachable so the user can switch the module on
+    or off without entering expert mode.
+
+    The module-level ``.enabled`` field is *also* always retained,
+    regardless of importance. A plugin that forgot to tag its
+    ``enabled`` field SIMPLE would otherwise lose the toggle entirely
+    in the simple view, leaving the user with a card that displays a
+    module but offers no way to turn it on or off. That's hostile, so
+    we treat ``enabled`` as a guaranteed-simple field by contract — it
+    matches what users expect, and plugin authors can't accidentally
+    break it.
+    """
+    kept_fields: list[FieldSpec] = []
+    for f in module.fields:
+        if f.importance == Importance.SIMPLE or f.path.endswith(".enabled"):
+            kept_fields.append(f)
+    return ModuleSpec(
+        id=module.id,
+        kind=module.kind,
+        title=module.title,
+        icon=module.icon,
+        icon_color=module.icon_color,
+        preview_fields=list(module.preview_fields),
+        banners=list(module.banners),
+        fields=kept_fields,
+        sections=_prune_sections_to_simple(module.sections),
+    )
+
+
+def _prune_page_to_simple(page: PageSpec) -> PageSpec:
+    return PageSpec(
+        id=page.id,
+        title=page.title,
+        icon=page.icon,
+        banners=list(page.banners),
+        sections=_prune_sections_to_simple(page.sections),
+        modules=[_prune_module_to_simple(m) for m in page.modules],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flat expert-list collector
+# ---------------------------------------------------------------------------
+
+
+def _collect_fields_from_sections(
+    sections: list[SectionSpec], out: list[FieldSpec]
+) -> None:
+    for s in sections:
+        out.extend(s.fields)
+        _collect_fields_from_sections(s.sections, out)
+
+
+def _collect_fields_from_pages(pages: list[PageSpec]) -> list[FieldSpec]:
+    """Walk the full (unpruned) page tree and return every leaf field.
+
+    Dynamic (plugin-resolved, read-only) fields are excluded — the
+    expert/about:config view is a *settable* surface, and dynamic
+    fields are status displays that don't accept writes.
+
+    The list is sorted by dotted path so the about:config search UI
+    has a stable ordering it can paginate against. Duplicate paths
+    are de-duplicated (a defensive guard; the auto/override section
+    builders today don't emit the same path twice, but
+    ``presentation_layout`` overrides could in principle).
+    """
+    bucket: list[FieldSpec] = []
+    for p in pages:
+        _collect_fields_from_sections(p.sections, bucket)
+        for m in p.modules:
+            bucket.extend(m.fields)
+            _collect_fields_from_sections(m.sections, bucket)
+
+    seen: set[str] = set()
+    unique: list[FieldSpec] = []
+    for f in bucket:
+        if f.dynamic or f.path in seen:
+            continue
+        seen.add(f.path)
+        unique.append(f)
+    unique.sort(key=lambda f: f.path)
+    return unique
 
 
 # ---------------------------------------------------------------------------
@@ -575,12 +744,30 @@ def build_presentation(
         modules=device_specs,
     )
 
-    pages = [general_page, modules_page, devices_page]
+    full_pages = [general_page, modules_page, devices_page]
 
-    # schema_version: stable hash of the presentation content (excluding itself).
+    # Build the two views from the same source tree:
+    #   * pages — pruned to SIMPLE; structured navigation in the default UI.
+    #   * expert_fields — every leaf (SIMPLE + EXPERT), flat and sorted,
+    #     for about:config-style search. Dynamic (read-only) fields are
+    #     excluded — they live in the simple view only as status displays.
+    simple_pages = [_prune_page_to_simple(p) for p in full_pages]
+    expert_fields = _collect_fields_from_pages(full_pages)
+
+    # schema_version: stable hash over BOTH views — moving a field
+    # between tiers invalidates both surfaces at once.
     blob = json.dumps(
-        [p.model_dump(mode="json") for p in pages], sort_keys=True, default=str
+        {
+            "pages": [p.model_dump(mode="json") for p in simple_pages],
+            "expert_fields": [f.model_dump(mode="json") for f in expert_fields],
+        },
+        sort_keys=True,
+        default=str,
     )
     schema_version = hashlib.sha1(blob.encode("utf-8")).hexdigest()[:16]
 
-    return PresentationSchema(schema_version=schema_version, pages=pages)
+    return PresentationSchema(
+        schema_version=schema_version,
+        pages=simple_pages,
+        expert_fields=expert_fields,
+    )
