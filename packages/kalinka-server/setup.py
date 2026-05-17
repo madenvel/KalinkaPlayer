@@ -21,6 +21,7 @@ extensions = [
         sources=[
             os.path.join(native_player_src, "Buffer.cpp"),
             os.path.join(native_player_src, "AlsaAudioEmitter.cpp"),
+            os.path.join(native_player_src, "AlsaDeviceEnumeration.cpp"),
             os.path.join(native_player_src, "AudioSampleFormat.cpp"),
             os.path.join(native_player_src, "AudioGraphHttpStream.cpp"),
             os.path.join(native_player_src, "AudioGraphNode.cpp"),

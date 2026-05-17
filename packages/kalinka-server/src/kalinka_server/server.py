@@ -33,8 +33,10 @@ from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 
+from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
 from .config_model import KalinkaConfig
 from .config_schema_processor import (
+    build_enum_options,
     build_presentation,
     build_values,
     get_field_value,
@@ -42,6 +44,7 @@ from .config_schema_processor import (
 )
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
+from .options_registry import OptionsRegistry
 from .multisearch import calculate_fuzzy_score
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
@@ -233,6 +236,15 @@ async def create_app(config_file, config: KalinkaConfig):
     # work for a quantity that never changes.
     app.state.dynamic_field_registry = build_dynamic_field_registry(
         modules.prepared_input_modules, modules.prepared_devices,
+    )
+    # Options registry — resolvers for writable enum fields whose
+    # choice list depends on live system state (ALSA devices today,
+    # network interfaces / COM ports tomorrow). Sits alongside the
+    # dynamic-field registry but for *choices* rather than *values*.
+    app.state.options_registry = OptionsRegistry()
+    app.state.options_registry.register(
+        ALSA_DEVICE_PATH,
+        make_alsa_resolver(lambda: config.output.alsa.device),
     )
     _initial_ok_in = {
         name: m.plugin_context.config
@@ -726,9 +738,17 @@ async def create_app(config_file, config: KalinkaConfig):
             devices=ok_dev,
             dynamic_entries=app.state.dynamic_field_registry.values(),
         )
+        # Resolve dynamic-options enums (ALSA devices etc.) per-request
+        # so hot-plug is reflected without a schema bump. Each entry is
+        # a list of {value, label} option specs.
+        enum_options = await build_enum_options(app.state.options_registry)
         return {
             "schema_version": app.state.schema_version,
             "values": values,
+            "enum_options": {
+                path: [opt.model_dump(mode="json") for opt in opts]
+                for path, opts in enum_options.items()
+            },
         }
 
     @app.get("/server/version")

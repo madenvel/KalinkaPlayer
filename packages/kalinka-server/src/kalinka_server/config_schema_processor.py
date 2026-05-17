@@ -37,12 +37,14 @@ from pydantic.fields import FieldInfo
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 from .dynamic_field_registry import DynamicFieldEntry, resolve_value
+from .options_registry import OptionsRegistry
 from .presentation_schema import (
     Banner,
     Constraints,
     FieldSpec,
     Importance,
     ModuleSpec,
+    OptionSpec,
     PageSpec,
     PresentationSchema,
     SectionSpec,
@@ -635,6 +637,26 @@ async def build_values(
         value = await resolve_value(entry)
         if value is not None:
             out[entry.full_path] = value
+    return out
+
+
+async def build_enum_options(
+    registry: OptionsRegistry,
+) -> dict[str, list[OptionSpec]]:
+    """Resolve every dynamic-options path in the registry.
+
+    Returned as a flat ``{path: [OptionSpec, ...]}`` map that goes
+    alongside ``values`` in the GET /server/config envelope. Paths
+    whose resolver returned ``None`` (resolver missing, exception
+    inside the resolver) are omitted, so the client sees no entry
+    rather than an empty/half-populated list and can fall back to
+    rendering the current value as a plain text row.
+    """
+    out: dict[str, list[OptionSpec]] = {}
+    for path in registry.paths():
+        options = await registry.resolve(path)
+        if options is not None:
+            out[path] = options
     return out
 
 

@@ -87,8 +87,37 @@ class Constraints(BaseModel):
     slider_max: Optional[float] = None
 
 
+class OptionSpec(BaseModel):
+    """One choice in a dynamic-options enum field.
+
+    ``value`` is the opaque token that gets written back to the
+    config (e.g. an ALSA ``hw:CARD=…,DEV=…`` handle); ``label`` is
+    what the user sees in the dropdown. Splitting them lets the
+    stored identity stay stable (system-readable, survives reboot)
+    while the human label can vary with hardware description.
+    """
+
+    value: str
+    label: str
+
+
 class FieldSpec(BaseModel):
-    """A single settable leaf in the UI."""
+    """A single settable leaf in the UI.
+
+    Note on enum dynamism: writable enum fields with *runtime-resolved*
+    option lists (e.g. ALSA devices) leave ``enum_values`` empty in
+    the schema. Their options ship in the values envelope under
+    ``enum_options[path]`` — fresh on every GET /server/config so
+    hot-plug is reflected without churning schema_version. Clients
+    rendering an enum widget prefer envelope options when present,
+    else fall back to ``enum_values``. This keeps the schema stable
+    and lets the same widget render both fixed enums and live ones
+    without a per-field flag.
+
+    ``dynamic=True`` is a different concept — it marks fields whose
+    *value* is plugin-resolved (status views). Those are read-only
+    and rejected by PUT /server/config.
+    """
 
     path: str                       # Dotted storage path, e.g. "base_config.server.port"
     label: str

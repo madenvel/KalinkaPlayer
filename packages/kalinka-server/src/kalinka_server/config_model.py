@@ -73,11 +73,22 @@ class ServerConfig(BaseModel):
 
 
 class AlsaConfig(BaseModel):
+    # Options are enumerated live from ALSA — they ship in the values
+    # envelope under enum_options[path], so we leave enum_values empty
+    # in the schema. The widget kind enum_dropdown tells the client to
+    # render a dropdown; the presence of enum_options at request time
+    # is what makes the option list dynamic. See alsa_options.py.
     device: str = Field(
         default="default",
         title="ALSA device",
         json_schema_extra={
-            "help": "Hardware output device identifier",
+            "help": (
+                "Hardware output. Stored as `hw:CARD=…,DEV=…` so the "
+                "selection survives card-index shuffling on kernel "
+                "upgrade — ALSA itself resolves the card id to the "
+                "current index at open time."
+            ),
+            "widget": "enum_dropdown",
             **_SIMPLE,
         },
     )
