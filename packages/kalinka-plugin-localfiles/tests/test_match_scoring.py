@@ -356,3 +356,79 @@ class TestAcoustidBestMatch:
     def test_empty_input(self):
         plugin = _make_acoustid_plugin()
         assert plugin._get_best_match_info([], target_duration_s=180) is None
+
+
+class TestAcoustidReleasePicking:
+    def test_prefers_album_over_compilation(self):
+        """When a recording shows up on both the original studio album
+        and a later compilation, we should pick the album."""
+        plugin = _make_acoustid_plugin()
+        recording = {
+            "id": "rec",
+            "releasegroups": [
+                {
+                    "type": "Album",
+                    "secondarytypes": ["Compilation"],
+                    "releases": [{"id": "comp", "title": "Greatest Hits"}],
+                },
+                {
+                    "type": "Album",
+                    "secondarytypes": [],
+                    "releases": [{"id": "studio", "title": "Help!"}],
+                },
+            ],
+        }
+        title, mbid = plugin._pick_best_release(recording)
+        assert mbid == "studio"
+        assert title == "Help!"
+
+    def test_prefers_ep_over_live_album(self):
+        plugin = _make_acoustid_plugin()
+        recording = {
+            "releasegroups": [
+                {
+                    "type": "Album",
+                    "secondarytypes": ["Live"],
+                    "releases": [{"id": "live", "title": "Live at X"}],
+                },
+                {
+                    "type": "EP",
+                    "secondarytypes": [],
+                    "releases": [{"id": "ep", "title": "The EP"}],
+                },
+            ],
+        }
+        _, mbid = plugin._pick_best_release(recording)
+        # Album+Live: 30 - 15 = 15; EP: 20. EP wins.
+        assert mbid == "ep"
+
+    def test_falls_back_to_flat_releases(self):
+        """When no release-group metadata is present, fall back to
+        recording.releases (first one)."""
+        plugin = _make_acoustid_plugin()
+        recording = {
+            "releases": [
+                {"id": "a", "title": "A"},
+                {"id": "b", "title": "B"},
+            ],
+        }
+        _, mbid = plugin._pick_best_release(recording)
+        assert mbid == "a"
+
+    def test_no_releases_returns_none(self):
+        plugin = _make_acoustid_plugin()
+        title, mbid = plugin._pick_best_release({"id": "rec"})
+        assert title is None and mbid is None
+
+    def test_release_group_score_basics(self):
+        # Bare 'Album' is the gold standard.
+        assert AcoustIdPlugin._release_group_score("Album", []) == 30
+        # Compilation pulls Album back below an EP.
+        assert AcoustIdPlugin._release_group_score("Album", ["Compilation"]) == 15
+        # Soundtrack penalty is harsher.
+        assert AcoustIdPlugin._release_group_score("Album", ["Soundtrack"]) == 5
+        # Single beats nothing-known.
+        assert AcoustIdPlugin._release_group_score("Single", []) == 15
+        # Unknown type → 0.
+        assert AcoustIdPlugin._release_group_score(None, None) == 0.0
+        assert AcoustIdPlugin._release_group_score("", []) == 0.0
