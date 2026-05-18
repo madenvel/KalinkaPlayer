@@ -1,0 +1,201 @@
+{
+  "_schema": {
+    "description": "Benchmark queries + relevance rules for Kalinka AI search evaluation.",
+    "rule_fields": {
+      "pred_top_genre_in":   "track is relevant if any predicted top-level genre is in this set",
+      "pred_subgenre_in":    "track is relevant if any predicted subgenre is in this set (substring match, case-insensitive)",
+      "album_genre_contains":"track is relevant if albums.genre (lowercased) contains any of these substrings",
+      "artist_label_in":     "track is relevant if any of its curated artist_labels is in this set",
+      "artist_in":           "track is relevant if its artist name (case-insensitive exact match) is in this set",
+      "mood_cluster_in":     "track is relevant if tags_predicted.mood_cluster is in this set",
+      "danceability_min":    "track is relevant if tags_predicted.danceability >= this",
+      "danceability_max":    "track is relevant if tags_predicted.danceability <= this",
+      "year_min":            "track is relevant if year >= this",
+      "year_max":            "track is relevant if year <= this",
+      "_combine":            "default OR across all rule fields in a query; set _combine='AND' to require all"
+    }
+  },
+
+  "artist_labels": {
+    "Pink Floyd":              ["rock", "prog rock", "psychedelic rock", "classic rock", "70s"],
+    "Queen":                   ["rock", "classic rock", "glam rock", "pop rock", "70s", "80s"],
+    "The Beatles":             ["rock", "pop", "classic rock", "60s"],
+    "Michael Jackson":         ["pop", "rnb", "dance", "80s"],
+    "Daft Punk":               ["electronic", "house", "dance", "french house"],
+    "Vangelis":                ["electronic", "ambient", "soundtrack", "synth", "new age"],
+    "Jean-Michel Jarre":       ["electronic", "ambient", "synth", "new age"],
+    "Jean Michel Jarre":       ["electronic", "ambient", "synth", "new age"],
+    "VNV Nation":              ["electronic", "futurepop", "ebm", "industrial", "synth"],
+    "LukHash":                 ["electronic", "synthwave", "chiptune", "darksynth"],
+    "Zero-project":            ["electronic", "chiptune", "synthwave", "ambient"],
+    "The Orb":                 ["electronic", "ambient", "downtempo", "dub"],
+    "Tunguska Electronic Music Society": ["electronic", "ambient", "downtempo", "idm"],
+    "Gregorian":               ["new age", "sacred", "choral", "ambient", "chant"],
+    "Patrick Bernard":         ["new age", "world", "sacred", "ambient"],
+    "Steve Kindler/Teja Bell": ["new age", "ambient", "instrumental"],
+    "The Piano Guys":          ["classical", "classical crossover", "piano", "instrumental"],
+    "Vladimir Ashkenazy & Philharmonia Orchestra": ["classical", "romantic", "orchestral", "piano"],
+    "Кино":                    ["rock", "russian rock", "post-punk", "80s"],
+    "Ленинград":               ["rock", "russian rock", "ska", "punk"],
+    "Аквариум":                ["rock", "russian rock", "folk rock"],
+    "Борис Гребенщиков":       ["rock", "russian rock", "folk rock"],
+    "Ддт":                     ["rock", "russian rock"],
+    "Nautilus Pompilius":      ["rock", "russian rock", "post-punk", "80s"],
+    "Дискотека Авария":        ["pop", "russian pop", "dance", "eurodance"],
+    "ÐÓÊÈ ÂÂÅÐÕ!":             ["pop", "russian pop", "dance", "eurodance"],
+    "Clean Bandit":            ["pop", "electronic", "dance"],
+    "GrayMic":                 ["electronic", "ambient"],
+    "FROSTiE":                 ["electronic", "synthwave"],
+    "Kentix":                  ["electronic"],
+    "Shon Tha Phenom":         ["hip hop", "rap"],
+    "Ralph Da God":            ["hip hop", "rap"],
+    "Dreadpool":               ["hip hop", "rap"],
+    "Double-F The King":       ["hip hop", "rap"],
+    "Young Keys":              ["hip hop", "rap"],
+    "Ogi Feel the Beat":       ["hip hop", "rap"],
+    "PUETO PA LO MIO RECORDS": ["hip hop", "latin", "reggaeton"]
+  },
+
+  "categories": [
+    {
+      "name": "genre",
+      "queries": [
+        {"q": "rock music",                     "rule": {"pred_top_genre_in":["rock"], "album_genre_contains":["rock"], "artist_label_in":["rock"]}},
+        {"q": "jazz",                           "rule": {"pred_top_genre_in":["jazz"], "album_genre_contains":["jazz"]}},
+        {"q": "electronic music",               "rule": {"pred_top_genre_in":["electronic"], "album_genre_contains":["electro","electronic"], "artist_label_in":["electronic"]}},
+        {"q": "classical music",                "rule": {"pred_top_genre_in":["classical"], "album_genre_contains":["classical"], "artist_label_in":["classical"]}},
+        {"q": "pop music",                      "rule": {"pred_top_genre_in":["pop"], "album_genre_contains":["pop"], "artist_label_in":["pop"]}},
+        {"q": "hip hop",                        "rule": {"pred_top_genre_in":["hip-hop","rap"], "album_genre_contains":["hip","rap"], "artist_label_in":["hip hop","rap"]}},
+        {"q": "reggae",                         "rule": {"pred_top_genre_in":["reggae"], "album_genre_contains":["reggae","ska"], "artist_label_in":["reggae","ska"]}},
+        {"q": "country music",                  "rule": {"pred_top_genre_in":["country"], "album_genre_contains":["country"]}},
+        {"q": "blues",                          "rule": {"pred_top_genre_in":["blues"], "album_genre_contains":["blues"]}},
+        {"q": "heavy metal",                    "rule": {"pred_top_genre_in":["metal"], "album_genre_contains":["metal"], "pred_subgenre_in":["metal"]}},
+        {"q": "ambient music",                  "rule": {"pred_subgenre_in":["ambient"], "album_genre_contains":["ambient"], "artist_label_in":["ambient"]}},
+        {"q": "folk music",                     "rule": {"pred_top_genre_in":["folk"], "album_genre_contains":["folk"], "artist_label_in":["folk rock"]}},
+        {"q": "movie soundtrack",               "rule": {"pred_top_genre_in":["stage & screen"], "pred_subgenre_in":["soundtrack","score"], "album_genre_contains":["soundtrack","score","ost"], "artist_label_in":["soundtrack"]}},
+        {"q": "rhythm and blues",               "rule": {"pred_top_genre_in":["rnb","r&b","soul"], "album_genre_contains":["r&b","rnb","soul"], "artist_label_in":["rnb","soul"]}},
+        {"q": "world music",                    "rule": {"pred_top_genre_in":["world"], "album_genre_contains":["world","ethnic"], "artist_label_in":["world"]}}
+      ]
+    },
+    {
+      "name": "subgenre",
+      "queries": [
+        {"q": "progressive rock",               "rule": {"pred_subgenre_in":["prog rock","progressive rock"], "album_genre_contains":["prog","progressive"], "artist_label_in":["prog rock"]}},
+        {"q": "psychedelic rock",               "rule": {"pred_subgenre_in":["psychedelic"], "album_genre_contains":["psychedelic"], "artist_label_in":["psychedelic rock"]}},
+        {"q": "synthwave",                      "rule": {"pred_subgenre_in":["synth","synth-pop","synthwave","new wave"], "album_genre_contains":["synth","new wave"], "artist_label_in":["synthwave","synth"]}},
+        {"q": "futurepop",                      "rule": {"artist_label_in":["futurepop","ebm"], "pred_subgenre_in":["futurepop","ebm","synth-pop"]}},
+        {"q": "ebm electronic body music",      "rule": {"artist_label_in":["ebm","industrial"], "pred_subgenre_in":["ebm","industrial"]}},
+        {"q": "darkwave",                       "rule": {"pred_subgenre_in":["darkwave","dark wave","gothic"], "album_genre_contains":["darkwave","gothic"], "artist_label_in":["darksynth"]}},
+        {"q": "dungeon synth",                  "rule": {"pred_subgenre_in":["dungeon synth","dark ambient"], "album_genre_contains":["dungeon"]}},
+        {"q": "eurodance",                      "rule": {"pred_subgenre_in":["eurodance","dance","euro"], "album_genre_contains":["dance","euro"], "artist_label_in":["eurodance","dance"]}},
+        {"q": "trance music",                   "rule": {"pred_subgenre_in":["trance","psytrance"], "album_genre_contains":["trance"]}},
+        {"q": "house music",                    "rule": {"pred_subgenre_in":["house","deep house","french house"], "album_genre_contains":["house"], "artist_label_in":["house","french house"]}},
+        {"q": "drum and bass",                  "rule": {"pred_subgenre_in":["drum and bass","dnb","jungle"], "album_genre_contains":["drum","dnb"]}},
+        {"q": "dub reggae",                     "rule": {"pred_subgenre_in":["dub","reggae"], "album_genre_contains":["dub","reggae"], "artist_label_in":["dub","reggae"]}},
+        {"q": "ska music",                      "rule": {"pred_subgenre_in":["ska"], "album_genre_contains":["ska"], "artist_label_in":["ska"]}},
+        {"q": "post rock instrumental",         "rule": {"pred_subgenre_in":["post-rock","post rock","math rock"], "album_genre_contains":["post-rock","post rock"]}},
+        {"q": "hard rock",                      "rule": {"pred_subgenre_in":["hard rock","arena rock"], "album_genre_contains":["hard rock"], "artist_label_in":["classic rock","glam rock"]}},
+        {"q": "glam rock",                      "rule": {"pred_subgenre_in":["glam","glam rock"], "album_genre_contains":["glam"], "artist_label_in":["glam rock"]}},
+        {"q": "new wave",                       "rule": {"pred_subgenre_in":["new wave","post-punk"], "album_genre_contains":["new wave"], "artist_label_in":["post-punk","new wave"]}},
+        {"q": "lo-fi hip hop beats",            "rule": {"pred_subgenre_in":["lo-fi","lofi","downtempo","trip hop"], "album_genre_contains":["lo-fi","lofi","downtempo"]}},
+        {"q": "baroque",                        "rule": {"pred_subgenre_in":["baroque"], "album_genre_contains":["baroque"]}},
+        {"q": "romantic era classical music",   "rule": {"pred_subgenre_in":["romantic","modern"], "album_genre_contains":["romantic","classical"], "artist_label_in":["romantic","classical"]}}
+      ]
+    },
+    {
+      "name": "mood",
+      "queries": [
+        {"q": "melancholic and sad",            "rule": {"mood_cluster_in":[0,1], "danceability_max":0.3}},
+        {"q": "uplifting and inspiring",        "rule": {"mood_cluster_in":[2,3], "danceability_min":0.5}},
+        {"q": "dark and brooding",              "rule": {"mood_cluster_in":[0,1], "pred_subgenre_in":["dark ambient","industrial","darkwave","dungeon synth"], "artist_label_in":["industrial","darksynth","dark ambient"]}},
+        {"q": "euphoric and energetic",         "rule": {"mood_cluster_in":[2,3], "danceability_min":0.6}},
+        {"q": "nostalgic and warm",             "rule": {"year_max":1990, "pred_top_genre_in":["rock","pop"], "artist_label_in":["classic rock","60s","70s","80s"]}},
+        {"q": "tense and anxious",              "rule": {"mood_cluster_in":[0,1], "pred_subgenre_in":["industrial","dark ambient"]}},
+        {"q": "peaceful and calm",              "rule": {"pred_subgenre_in":["ambient","new age","chant"], "artist_label_in":["ambient","new age","sacred"], "danceability_max":0.25}},
+        {"q": "romantic love song",             "rule": {"album_genre_contains":["ballad","love"], "danceability_max":0.4, "mood_cluster_in":[1,2]}},
+        {"q": "aggressive and heavy",           "rule": {"pred_subgenre_in":["metal","industrial","punk","ebm"], "album_genre_contains":["metal","punk","industrial"], "artist_label_in":["industrial","ebm","punk"]}},
+        {"q": "dreamy and ethereal",            "rule": {"pred_subgenre_in":["ambient","dream pop","shoegaze"], "artist_label_in":["ambient","new age"]}},
+        {"q": "mysterious and atmospheric",     "rule": {"pred_subgenre_in":["ambient","dark ambient","soundtrack"], "artist_label_in":["soundtrack","ambient","new age"]}},
+        {"q": "triumphant and epic",            "rule": {"pred_subgenre_in":["soundtrack","score","epic"], "album_genre_contains":["soundtrack","score"], "artist_label_in":["soundtrack","classical"]}},
+        {"q": "sad ballad",                     "rule": {"mood_cluster_in":[0,1], "danceability_max":0.3}},
+        {"q": "joyful and happy",               "rule": {"mood_cluster_in":[2,3], "danceability_min":0.5, "pred_top_genre_in":["pop","dance"]}},
+        {"q": "contemplative and introspective","rule": {"pred_subgenre_in":["ambient","new age","post-rock","piano"], "artist_label_in":["new age","piano","ambient"]}}
+      ]
+    },
+    {
+      "name": "energy",
+      "queries": [
+        {"q": "high energy music",              "rule": {"danceability_min":0.6, "mood_cluster_in":[2,3]}},
+        {"q": "calm and slow",                  "rule": {"danceability_max":0.25}},
+        {"q": "upbeat dance",                   "rule": {"danceability_min":0.55, "pred_top_genre_in":["electronic","pop","dance"], "artist_label_in":["dance","eurodance","house"]}},
+        {"q": "mellow groove",                  "rule": {"danceability_min":0.3, "danceability_max":0.55}},
+        {"q": "fast and frantic",               "rule": {"danceability_min":0.7}},
+        {"q": "slow ballad",                    "rule": {"danceability_max":0.25, "mood_cluster_in":[0,1]}},
+        {"q": "driving rhythm",                 "rule": {"danceability_min":0.5, "pred_top_genre_in":["rock","electronic"]}},
+        {"q": "sparse minimalist",              "rule": {"pred_subgenre_in":["ambient","minimalism","minimal","drone"], "danceability_max":0.2}},
+        {"q": "energetic workout music",        "rule": {"danceability_min":0.6, "pred_top_genre_in":["electronic","pop","dance"]}},
+        {"q": "low tempo chill",                "rule": {"danceability_max":0.35, "pred_subgenre_in":["ambient","chillout","downtempo","lo-fi"]}}
+      ]
+    },
+    {
+      "name": "instrument",
+      "queries": [
+        {"q": "piano solo",                     "rule": {"artist_label_in":["piano"], "pred_subgenre_in":["piano","classical"], "album_genre_contains":["piano"]}},
+        {"q": "acoustic guitar",                "rule": {"pred_subgenre_in":["folk","acoustic","singer-songwriter"], "album_genre_contains":["folk","acoustic"]}},
+        {"q": "heavy guitar riffs",             "rule": {"pred_subgenre_in":["metal","hard rock","punk"], "album_genre_contains":["metal","hard rock","punk"]}},
+        {"q": "synthesizer pads",               "rule": {"pred_top_genre_in":["electronic"], "pred_subgenre_in":["ambient","synth","synth-pop","new age"], "artist_label_in":["synth","ambient","new age"]}},
+        {"q": "orchestral strings",             "rule": {"pred_top_genre_in":["classical","stage & screen"], "pred_subgenre_in":["soundtrack","score","classical","orchestral"], "artist_label_in":["classical","soundtrack","orchestral"]}},
+        {"q": "electronic drums",               "rule": {"pred_top_genre_in":["electronic"], "pred_subgenre_in":["techno","house","drum and bass","industrial"], "artist_label_in":["electronic","house","industrial"]}},
+        {"q": "vocal harmonies",                "rule": {"pred_subgenre_in":["choral","chant","pop","gospel"], "artist_label_in":["sacred","choral","pop"]}},
+        {"q": "saxophone lead",                 "rule": {"pred_top_genre_in":["jazz"], "pred_subgenre_in":["jazz","sax"], "album_genre_contains":["jazz"]}},
+        {"q": "choir vocals",                   "rule": {"pred_subgenre_in":["choral","chant","sacred"], "artist_label_in":["choral","sacred","chant"]}},
+        {"q": "layered synthesizers",           "rule": {"pred_top_genre_in":["electronic"], "artist_label_in":["synth","electronic","ambient"]}}
+      ]
+    },
+    {
+      "name": "activity",
+      "queries": [
+        {"q": "music for studying",             "rule": {"danceability_max":0.35, "pred_subgenre_in":["ambient","piano","classical","post-rock"], "artist_label_in":["piano","classical","ambient","new age"]}},
+        {"q": "workout energy",                 "rule": {"danceability_min":0.6, "pred_top_genre_in":["electronic","pop","dance","rock"]}},
+        {"q": "late night drive",               "rule": {"pred_subgenre_in":["synthwave","synth-pop","ambient","new wave","trip hop"], "artist_label_in":["synthwave","synth","new wave"]}},
+        {"q": "morning coffee",                 "rule": {"danceability_max":0.4, "pred_subgenre_in":["jazz","acoustic","folk","singer-songwriter"]}},
+        {"q": "rainy day vibes",                "rule": {"danceability_max":0.4, "pred_subgenre_in":["ambient","piano","jazz","post-rock"], "mood_cluster_in":[0,1]}},
+        {"q": "party anthem",                   "rule": {"danceability_min":0.6, "pred_top_genre_in":["pop","dance","electronic"], "artist_label_in":["pop","dance","eurodance"]}},
+        {"q": "meditation music",               "rule": {"pred_subgenre_in":["ambient","new age","chant","drone"], "artist_label_in":["sacred","new age","ambient"], "danceability_max":0.2}},
+        {"q": "road trip rock",                 "rule": {"pred_top_genre_in":["rock"], "artist_label_in":["classic rock","rock"]}},
+        {"q": "cinematic background",           "rule": {"pred_subgenre_in":["soundtrack","score","ambient"], "artist_label_in":["soundtrack","classical","ambient"]}},
+        {"q": "focus instrumental",             "rule": {"danceability_max":0.35, "pred_subgenre_in":["ambient","piano","classical","post-rock"], "artist_label_in":["piano","classical","instrumental","ambient"]}}
+      ]
+    },
+    {
+      "name": "era",
+      "queries": [
+        {"q": "80s synth pop",                  "rule": {"year_min":1980, "year_max":1989, "pred_subgenre_in":["synth","synth-pop","new wave"], "artist_label_in":["80s","synth","new wave","post-punk"]}},
+        {"q": "90s eurodance",                  "rule": {"year_min":1990, "year_max":1999, "pred_subgenre_in":["dance","eurodance","euro"], "artist_label_in":["eurodance","dance"]}},
+        {"q": "modern electronic music",        "rule": {"year_min":2010, "pred_top_genre_in":["electronic"], "artist_label_in":["electronic","synth","synthwave"]}},
+        {"q": "classic rock",                   "rule": {"year_min":1965, "year_max":1985, "pred_top_genre_in":["rock"], "artist_label_in":["classic rock","rock","prog rock","glam rock"]}},
+        {"q": "russian rock",                   "rule": {"artist_label_in":["russian rock"]}},
+        {"q": "soviet era ballads",             "rule": {"artist_label_in":["russian rock","russian pop"], "year_max":1995}},
+        {"q": "70s progressive rock",           "rule": {"year_min":1970, "year_max":1979, "pred_subgenre_in":["prog rock","progressive rock"], "artist_label_in":["prog rock","70s"]}},
+        {"q": "contemporary indie",             "rule": {"year_min":2005, "pred_top_genre_in":["rock","pop"], "pred_subgenre_in":["indie","indie rock","indie pop"]}},
+        {"q": "baroque era classical",          "rule": {"pred_subgenre_in":["baroque","classical"], "album_genre_contains":["baroque","classical"]}},
+        {"q": "60s pop",                        "rule": {"year_min":1960, "year_max":1969, "pred_top_genre_in":["pop","rock"], "artist_label_in":["60s","pop"]}}
+      ]
+    },
+    {
+      "name": "abstract",
+      "queries": [
+        {"q": "neon city nightlife",            "rule": {"pred_subgenre_in":["synthwave","synth-pop","darksynth","new wave"], "artist_label_in":["synthwave","synth","darksynth"]}},
+        {"q": "epic orchestral score",          "rule": {"pred_subgenre_in":["soundtrack","score","orchestral"], "album_genre_contains":["soundtrack","score"], "artist_label_in":["soundtrack","classical","orchestral"]}},
+        {"q": "hauntingly beautiful",           "rule": {"pred_subgenre_in":["ambient","dark ambient","new age","choral"], "artist_label_in":["ambient","sacred","new age"]}},
+        {"q": "glitchy and weird",              "rule": {"pred_subgenre_in":["idm","glitch","experimental","industrial"], "artist_label_in":["idm","industrial"]}},
+        {"q": "warm and analog",                "rule": {"pred_subgenre_in":["folk","singer-songwriter","blues","jazz","acoustic"], "year_max":1985}},
+        {"q": "futuristic and cold",            "rule": {"pred_subgenre_in":["industrial","ebm","synth","darksynth","dark ambient"], "artist_label_in":["industrial","ebm","synth","darksynth"]}},
+        {"q": "retro arcade chiptune",          "rule": {"pred_subgenre_in":["chiptune","8bit","video game"], "artist_label_in":["chiptune"]}},
+        {"q": "sacred chant",                   "rule": {"pred_subgenre_in":["chant","sacred","choral"], "artist_label_in":["sacred","chant","choral"]}},
+        {"q": "lush ambient texture",           "rule": {"pred_subgenre_in":["ambient","new age","drone"], "artist_label_in":["ambient","new age"]}},
+        {"q": "gritty industrial",              "rule": {"pred_subgenre_in":["industrial","ebm","noise"], "artist_label_in":["industrial","ebm"]}}
+      ]
+    }
+  ]
+}
