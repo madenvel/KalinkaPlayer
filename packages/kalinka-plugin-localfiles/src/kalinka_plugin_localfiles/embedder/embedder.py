@@ -42,7 +42,8 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 _PIP_SPECS: dict[str, str] = {
     "onnxruntime": "onnxruntime",
-    "librosa": "librosa",
+    "soundfile": "soundfile",
+    "soxr": "soxr",
     "tokenizers": "tokenizers",
     "numpy": "numpy",
     "sqlite_vec": "sqlite-vec",
@@ -101,7 +102,7 @@ class EmbeddingWorker:
         if not _ensure_numpy():
             return
 
-        for pkg in ("onnxruntime", "librosa", "tokenizers"):
+        for pkg in ("onnxruntime", "soundfile", "soxr", "tokenizers"):
             if not _ensure_package(pkg):
                 logger.warning(
                     "%s unavailable; CLAP audio embedding disabled.",

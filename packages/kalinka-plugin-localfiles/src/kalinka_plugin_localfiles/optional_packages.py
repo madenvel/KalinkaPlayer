@@ -40,10 +40,20 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
             "by AI search."
         ),
     ),
-    "librosa": OptionalPackageSpec(
-        pip_spec="librosa==0.11.0",
+    "soundfile": OptionalPackageSpec(
+        pip_spec="soundfile==0.13.1",
         description=(
-            "Audio loading and resampling for the CLAP audio embedder."
+            "Header-aware audio decoder used by the CLAP embedder. "
+            "Reads only the 10 s fragments we need instead of the whole "
+            "file (the librosa path it replaced OOM'd on long tracks)."
+        ),
+    ),
+    "soxr": OptionalPackageSpec(
+        pip_spec="soxr==1.0.0",
+        description=(
+            "Resampling kernel paired with soundfile in the CLAP "
+            "embedder; only invoked when the source sample rate "
+            "differs from 48 kHz."
         ),
     ),
     "tokenizers": OptionalPackageSpec(

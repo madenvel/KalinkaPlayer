@@ -4,6 +4,13 @@ Replaces the PyTorch-based ``laion_clap`` library with a lightweight
 ONNX Runtime backend, reducing the embedder process memory footprint
 from ~1.7 GB to ~300-400 MB.
 
+Audio loading uses ``soundfile`` (header probe + seek/read fragment)
+plus ``soxr`` for resampling, deliberately avoiding ``librosa.load``,
+which decodes the whole file into memory and OOMs on a 4 GB Pi for
+tracks longer than a few minutes. With fragment-level decoding the
+peak waveform allocation is bounded by the 10 s fragment length
+regardless of track duration.
+
 Expected model files in *model_dir*:
   - clap_audio_encoder.onnx
   - clap_text_encoder.onnx
@@ -14,6 +21,7 @@ Generate these with ``scripts/export_clap_onnx.py``.
 
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import urllib.request
@@ -47,8 +55,18 @@ _MODEL_FILENAMES: dict[str, str] = {
 
 # Audio constants matching laion_clap (non-fusion, HTSAT-tiny)
 _SAMPLE_RATE = 48_000
-_MAX_SAMPLES = 480_000  # 10 seconds at 48 kHz
+_FRAGMENT_SECONDS = 10
+_MAX_SAMPLES = _SAMPLE_RATE * _FRAGMENT_SECONDS  # 480_000 = 10 s at 48 kHz
 _TOKEN_MAX_LEN = 77
+
+# Multi-fragment sampling thresholds (in seconds of source audio):
+#   duration <  _MULTI_FRAGMENT_MIN_S  → 1 fragment (repeat-padded)
+#   <= duration <  _THREE_FRAGMENT_MIN_S → 2 fragments at 33% / 66%
+#   duration >= _THREE_FRAGMENT_MIN_S   → 3 fragments at 25% / 50% / 75%
+# Fragment starts are clamped to ``max(0, duration - fragment)`` so
+# the read window always fits inside the file.
+_MULTI_FRAGMENT_MIN_S = 15.0
+_THREE_FRAGMENT_MIN_S = 30.0
 
 
 def _ensure_model_file(name: str, model_dir: str) -> Optional[str]:
@@ -146,40 +164,100 @@ def _pad_or_crop(waveform: np.ndarray, max_len: int = _MAX_SAMPLES) -> np.ndarra
     return padded
 
 
-def _load_audio(file_path: str) -> Optional[np.ndarray]:
-    """Load and preprocess audio to (480000,) float32 at 48 kHz."""
+def _fragment_starts_s(duration_s: float) -> list[float]:
+    """Pick fragment start positions (seconds) for a track of *duration_s*.
+
+    See _MULTI_FRAGMENT_MIN_S / _THREE_FRAGMENT_MIN_S for the schedule.
+    Each start is clamped so the 10 s read window fits inside the file;
+    on very short tracks the single returned start is 0.0 and the
+    caller is expected to repeat-pad the result.
+    """
+    if duration_s < _MULTI_FRAGMENT_MIN_S:
+        return [0.0]
+
+    if duration_s < _THREE_FRAGMENT_MIN_S:
+        ratios = (0.33, 0.66)
+    else:
+        ratios = (0.25, 0.50, 0.75)
+
+    max_start = max(0.0, duration_s - _FRAGMENT_SECONDS)
+    return [min(duration_s * r, max_start) for r in ratios]
+
+
+def _read_fragment(
+    f: "soundfile.SoundFile",
+    start_s: float,
+    src_sr: int,
+) -> Optional[np.ndarray]:
+    """Decode a single 10 s fragment from *f* starting at *start_s*.
+
+    Reads only the bytes needed (header-aware seek + read), averages
+    stereo to mono, resamples to 48 kHz with soxr if needed, then
+    runs the int16 quantisation roundtrip to match laion_clap's
+    training-time preprocessing. Returns ``None`` on read failure.
+    """
+    import soxr
+
+    n_src = int(_FRAGMENT_SECONDS * src_sr)
     try:
-        import librosa
-
-        # The HTSAT-unfused checkpoint only consumes a fixed 10-second
-        # window, so we limit librosa to that span instead of decoding
-        # the whole file (a 10-min FLAC ≈ 110 MB float32, the main OOM
-        # contributor on the 4 GB Pi).
-        #
-        # Offset past the intro for tracks long enough to afford it:
-        # fade-ins / silence / spoken intros aren't characteristic of
-        # the song and degrade retrieval quality. get_duration with
-        # path= is a header-only probe (no decode) via the soundfile
-        # backend, so the cost is negligible.
-        try:
-            duration_s = librosa.get_duration(path=file_path)
-        except Exception:
-            duration_s = 0.0
-        offset = 15.0 if duration_s >= 30.0 else 0.0
-
-        waveform, _ = librosa.load(
-            file_path,
-            sr=_SAMPLE_RATE,
-            mono=True,
-            offset=offset,
-            duration=10.0,
-        )
-        waveform = _quantize(waveform)
-        waveform = _pad_or_crop(waveform)
-        return waveform
+        f.seek(int(start_s * src_sr))
+        chunk = f.read(n_src, dtype="float32", always_2d=False)
     except Exception as e:
-        logger.warning("Failed to load audio %s: %s", file_path, e)
+        logger.warning("soundfile read failed at %.2fs: %s", start_s, e)
         return None
+
+    if chunk.size == 0:
+        return None
+
+    # mono: average channels for stereo+ input. soundfile returns
+    # shape (frames,) for mono files when always_2d=False.
+    if chunk.ndim == 2:
+        chunk = chunk.mean(axis=1, dtype=np.float32)
+
+    if src_sr != _SAMPLE_RATE:
+        chunk = soxr.resample(chunk, src_sr, _SAMPLE_RATE).astype(
+            np.float32, copy=False
+        )
+
+    chunk = _quantize(chunk)
+    return _pad_or_crop(chunk)
+
+
+def _load_audio_fragments(file_path: str):
+    """Yield 10 s mono/48 kHz fragments from *file_path*, one at a time.
+
+    Generator — never holds more than one fragment in memory at once,
+    so the embedder can run inference and discard each waveform
+    before the next read. For files we can't open the generator
+    yields nothing and the caller treats that as a failed embedding.
+    """
+    try:
+        import soundfile as sf
+    except Exception as e:
+        logger.warning("soundfile import failed: %s", e)
+        return
+
+    try:
+        with sf.SoundFile(file_path) as f:
+            src_sr = f.samplerate
+            n_frames = len(f)
+            duration_s = n_frames / src_sr if src_sr else 0.0
+            if duration_s <= 0.0:
+                logger.warning("Audio %s has zero duration", file_path)
+                return
+
+            for start_s in _fragment_starts_s(duration_s):
+                frag = _read_fragment(f, start_s, src_sr)
+                if frag is None:
+                    continue
+                yield frag
+                # Free the waveform before the next seek/read so peak
+                # RSS is bounded by one fragment, not N.
+                del frag
+                gc.collect()
+    except Exception as e:
+        logger.warning("Failed to open audio %s: %s", file_path, e)
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -260,20 +338,51 @@ class ClapOnnxModel:
         self._tokenizer = None
 
     def get_audio_embedding(self, file_path: str) -> Optional[np.ndarray]:
-        """Compute 512-dim audio embedding. Returns None on failure."""
+        """Compute 512-dim audio embedding. Returns None on failure.
+
+        Long enough tracks are sampled at multiple fragments and the
+        per-fragment embeddings are averaged before returning. The
+        caller is expected to L2-normalise the result.
+
+        We only accumulate the 512-float embedding vectors (≈ 2 KB
+        each), never the raw fragment waveforms — the audio loader
+        is a generator and `_run_one` drops its input before returning.
+        """
         if not self.is_loaded:
             return None
-        waveform = _load_audio(file_path)
-        if waveform is None:
+
+        accum: Optional[np.ndarray] = None
+        n_fragments = 0
+
+        for waveform in _load_audio_fragments(file_path):
+            try:
+                result = self._audio_session.run(
+                    None, {"waveform": waveform[np.newaxis, :]}
+                )
+                vec = result[0][0].astype(np.float32)
+                del result
+            except Exception as e:
+                logger.warning(
+                    "ONNX audio inference failed for %s (fragment %d): %s",
+                    file_path, n_fragments, e,
+                )
+                continue
+            finally:
+                del waveform
+
+            if accum is None:
+                accum = vec
+            else:
+                accum += vec
+                del vec
+            n_fragments += 1
+            gc.collect()
+
+        if accum is None or n_fragments == 0:
             return None
-        try:
-            result = self._audio_session.run(
-                None, {"waveform": waveform[np.newaxis, :]}
-            )
-            return result[0][0].astype(np.float32)
-        except Exception as e:
-            logger.warning("ONNX audio inference failed for %s: %s", file_path, e)
-            return None
+        if n_fragments > 1:
+            accum /= n_fragments
+        return accum
 
     def get_text_embedding(self, text: str) -> Optional[np.ndarray]:
         """Compute 512-dim text embedding. Returns None on failure."""
