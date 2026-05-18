@@ -70,6 +70,9 @@ configs/
 .tmp/
 .temp/
 
+# Skill-generated evaluation output (e.g. /assess-ai-search)
+tmp/ai_search_eval/
+
 # Log files
 *.log
 logs/
