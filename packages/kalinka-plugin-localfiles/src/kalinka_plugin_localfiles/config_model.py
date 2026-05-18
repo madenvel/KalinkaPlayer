@@ -85,7 +85,7 @@ class TagsConfig(BaseModel):
 
 class EmbedderClapConfig(BaseModel):
     model_name: str = Field(
-        default="laion/clap-htsat-unfused",
+        default="lukewys/laion_clap (music_audioset_epoch_15)",
         title="CLAP model name",
         json_schema_extra={"help": "HuggingFace model ID"},
     )
@@ -102,7 +102,7 @@ class EmbedderClapConfig(BaseModel):
         default=512, frozen=True, title="Embedding dimensions"
     )
     current_version: int = Field(
-        default=2,
+        default=3,
         title="Model version",
         json_schema_extra={"help": "Increment to force re-embedding"},
     )
