@@ -168,10 +168,10 @@ class SearcherConfig(BaseModel):
         default=0.35, ge=0.0, le=1.0, title="FTS rank weight",
     )
     weight_knn: float = Field(
-        default=0.30, ge=0.0, le=1.0, title="CLAP KNN similarity weight",
+        default=0.45, ge=0.0, le=1.0, title="CLAP KNN similarity weight",
     )
     weight_genre: float = Field(
-        default=0.20, ge=0.0, le=1.0, title="Genre match weight",
+        default=0.05, ge=0.0, le=1.0, title="Genre match weight",
     )
     weight_mood: float = Field(
         default=0.10, ge=0.0, le=1.0, title="Mood match weight",
