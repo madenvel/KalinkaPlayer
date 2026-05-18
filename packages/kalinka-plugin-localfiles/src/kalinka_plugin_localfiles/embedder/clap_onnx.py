@@ -202,6 +202,12 @@ def _read_fragment(
     stereo to mono, resamples to 48 kHz with soxr if needed, then
     runs the int16 quantisation roundtrip to match laion_clap's
     training-time preprocessing. Returns ``None`` on read failure.
+
+    Per-fragment failures log at DEBUG; the caller in
+    ``_load_audio_fragments`` decides whether the whole file is
+    unembeddable and emits a single WARNING in that case. This keeps
+    one bad file from spamming three per-fragment warnings × N retry
+    attempts × parent album/artist aggregate jobs.
     """
     import soxr
 
@@ -210,10 +216,11 @@ def _read_fragment(
         f.seek(int(start_s * src_sr))
         chunk = f.read(n_src, dtype="float32", always_2d=False)
     except Exception as e:
-        logger.warning("soundfile read failed at %.2fs: %s", start_s, e)
+        logger.debug("soundfile read failed at %.2fs: %s", start_s, e)
         return None
 
     if chunk.size == 0:
+        logger.debug("soundfile read at %.2fs returned 0 frames", start_s)
         return None
 
     # mono: average channels for stereo+ input. soundfile returns
@@ -253,15 +260,37 @@ def _load_audio_fragments(file_path: str):
                 logger.warning("Audio %s has zero duration", file_path)
                 return
 
-            for start_s in _fragment_starts_s(duration_s):
+            starts = _fragment_starts_s(duration_s)
+            n_yielded = 0
+            for i, start_s in enumerate(starts):
                 frag = _read_fragment(f, start_s, src_sr)
                 if frag is None:
+                    # If the first fragment fails, the file is most
+                    # likely structurally unreadable by libsndfile
+                    # (e.g. malformed MP3 framing, or a FLAC variant
+                    # libsndfile can't seek). Bail out instead of
+                    # retrying the same broken file at two more
+                    # offsets — saves log noise and a few hundred ms
+                    # per file × N retry attempts.
+                    if i == 0:
+                        logger.warning(
+                            "Skipping %s: libsndfile cannot read first "
+                            "fragment (file may be malformed or use a "
+                            "FLAC/MP3 variant libsndfile doesn't support)",
+                            file_path,
+                        )
+                        return
                     continue
                 yield frag
+                n_yielded += 1
                 # Free the waveform before the next seek/read so peak
                 # RSS is bounded by one fragment, not N.
                 del frag
                 gc.collect()
+
+            # Mid-file fragment failures (i > 0) are silent at WARNING;
+            # partial embeddings still get produced from the fragments
+            # that did work, so this isn't a track-level failure.
     except Exception as e:
         logger.warning("Failed to open audio %s: %s", file_path, e)
         return
