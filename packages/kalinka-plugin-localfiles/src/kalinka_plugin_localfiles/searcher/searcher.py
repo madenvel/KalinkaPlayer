@@ -103,6 +103,15 @@ def _ensure_model_file(
     name: str, configured_path: str, model_dir: str
 ) -> Optional[str]:
     """Return path to model file, downloading into model_dir if necessary."""
+    # Both inputs come from user config and may contain ``~`` — expand
+    # so os.path.isfile / os.makedirs see absolute paths. Without this,
+    # ``model_dir = "~/kalinka/models"`` causes a literal ``~`` directory
+    # to be created under the server's CWD (which then masks future
+    # "delete cached models" migrations).
+    if configured_path:
+        configured_path = os.path.expanduser(configured_path)
+    model_dir = os.path.expanduser(model_dir)
+
     if configured_path and os.path.isfile(configured_path):
         return configured_path
 

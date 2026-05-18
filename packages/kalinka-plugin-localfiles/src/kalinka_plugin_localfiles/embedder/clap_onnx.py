@@ -279,8 +279,22 @@ class ClapOnnxModel:
     """
 
     def __init__(self, model_dir: str, ckpt_path: str = ""):
-        # ckpt_path overrides model_dir if it points to a directory with ONNX files
-        self._model_dir = ckpt_path if (ckpt_path and os.path.isdir(ckpt_path)) else model_dir
+        # ckpt_path overrides model_dir if it points to a directory with
+        # ONNX files. Both come from user config and may contain a
+        # leading ``~`` — expand here so every downstream consumer
+        # (``_ensure_model_file``, ``os.makedirs``, ORT session loader)
+        # sees an absolute path. Without this, a config value of
+        # ``~/kalinka/models`` is treated literally and the loader
+        # creates a directory named ``~`` under the server's CWD, which
+        # then masks subsequent "delete cached models and re-download"
+        # migrations because the real home directory is empty.
+        expanded_ckpt = os.path.expanduser(ckpt_path) if ckpt_path else ""
+        expanded_dir = os.path.expanduser(model_dir)
+        self._model_dir = (
+            expanded_ckpt
+            if (expanded_ckpt and os.path.isdir(expanded_ckpt))
+            else expanded_dir
+        )
         self._audio_session = None
         self._text_session = None
         self._tokenizer = None
