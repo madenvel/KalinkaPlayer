@@ -748,8 +748,22 @@ class SearchWorker:
         return await self.db.fts_search(parsed.text_query, candidate_limit)
 
     async def _knn_leg(self, query: str, candidate_limit: int) -> list[dict]:
-        """CLAP KNN search leg — returns [{track_id, distance}]."""
+        """CLAP KNN search leg — returns [{track_id, distance}].
+
+        Encodes the query with CLAP's text encoder and KNN-searches the
+        audio-side index (``vec_tracks_clap``). CLAP is contrastively
+        trained text↔audio, so text query → audio embedding is the
+        canonical retrieval direction and outperforms text↔text on
+        every semantic category in our benchmark.
+
+        Non-ASCII queries are skipped: CLAP's text tokenizer is
+        English-only and produces noise vectors for Cyrillic / CJK
+        input, so we leave those queries to the FTS leg.
+        """
         if not self.db._vec_available:
+            return []
+        if not query.isascii():
+            logger.info("KNN skipped: non-ASCII query %r — FTS only", query)
             return []
         if (
             self._text_encode_request_queue is None
@@ -761,9 +775,9 @@ class SearchWorker:
         if blob is None:
             return []
         t0 = time.monotonic()
-        results = await self.db.knn_search_text(blob, candidate_limit)
+        results = await self.db.knn_search_audio(blob, candidate_limit)
         logger.info(
-            "KNN text search: %d results in %.3fs", len(results), time.monotonic() - t0
+            "KNN audio search: %d results in %.3fs", len(results), time.monotonic() - t0
         )
         return results
 
