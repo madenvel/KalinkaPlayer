@@ -102,7 +102,7 @@ class EmbedderClapConfig(BaseModel):
         default=512, frozen=True, title="Embedding dimensions"
     )
     current_version: int = Field(
-        default=1,
+        default=2,
         title="Model version",
         json_schema_extra={"help": "Increment to force re-embedding"},
     )
