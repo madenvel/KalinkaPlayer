@@ -1,16 +1,36 @@
 #!/usr/bin/env python3
-"""Export CLAP model (laion/clap-htsat-unfused) to ONNX format.
+"""Export a CLAP checkpoint to ONNX format.
 
-Produces three artifacts in the output directory:
-  - clap_audio_encoder.onnx   (waveform -> 512-dim embedding)
-  - clap_text_encoder.onnx    (token IDs + mask -> 512-dim embedding)
-  - clap_tokenizer.json        (RoBERTa BPE tokenizer)
+Defaults to the music-specialized HTSAT-base checkpoint
+``music_audioset_epoch_15_esc_90.14.pt`` from
+https://huggingface.co/lukewys/laion_clap — this is what the player
+ships as ``clap-onnx-v2``. The original HTSAT-tiny general-audio
+checkpoint (``630k-audioset-best.pt``, ``clap-onnx-v1``) can still
+be exported by passing ``--amodel HTSAT-tiny``.
 
-Requires: torch, laion-clap, transformers, onnx, onnxruntime
-Run on a dev machine (NOT the RPi).
+Produces three (technically four with external weights) artifacts in
+the output directory:
+  - clap_audio_encoder.onnx        (waveform -> 512-dim embedding)
+  - clap_audio_encoder.onnx.data   (external weights, present for
+                                    larger backbones like HTSAT-base)
+  - clap_text_encoder.onnx         (token IDs + mask -> 512-dim
+                                    embedding)
+  - clap_tokenizer.json            (RoBERTa BPE tokenizer)
+
+Requires: torch, laion-clap, transformers, onnx, onnxruntime,
+huggingface_hub. Run on a dev machine (NOT the RPi).
 
 Usage:
-    python scripts/export_clap_onnx.py [--output-dir ./clap_onnx] [--ckpt path/to/630k-audioset-best.pt]
+    # default: music HTSAT-base, ckpt auto-downloaded from HF
+    python scripts/export_clap_onnx.py --output-dir ./clap_onnx_v2
+
+    # explicit ckpt path (skip HF download)
+    python scripts/export_clap_onnx.py --output-dir ./clap_onnx_v2 \
+        --ckpt /path/to/music_audioset_epoch_15_esc_90.14.pt
+
+    # general-audio HTSAT-tiny (the original v1 export)
+    python scripts/export_clap_onnx.py --output-dir ./clap_onnx_v1 \
+        --amodel HTSAT-tiny
 """
 
 from __future__ import annotations
@@ -138,15 +158,42 @@ class TextEncoderForExport(nn.Module):
 # Export helpers
 # ---------------------------------------------------------------------------
 
-def load_clap(ckpt_path: str | None):
-    """Load the full CLAP model with checkpoint."""
+# Default checkpoint pulled from HF when neither --ckpt nor laion_clap's
+# built-in download applies (i.e. the music HTSAT-base ckpt isn't part of
+# laion_clap.load_ckpt()'s auto-download list).
+_HF_MUSIC_CKPT = ("lukewys/laion_clap", "music_audioset_epoch_15_esc_90.14.pt")
+
+
+def _resolve_ckpt(ckpt_path: str | None, amodel: str) -> str | None:
+    """Return a local checkpoint path, downloading from HF if necessary.
+
+    Returns ``None`` when the caller should fall back to
+    ``laion_clap.CLAP_Module.load_ckpt()``'s built-in download (only
+    valid for HTSAT-tiny ``630k-audioset-best.pt``).
+    """
+    if ckpt_path:
+        return ckpt_path
+    if amodel == "HTSAT-tiny":
+        return None  # let laion_clap auto-download the general-audio ckpt
+    # HTSAT-base music ckpt: fetch from HF
+    from huggingface_hub import hf_hub_download
+
+    repo_id, filename = _HF_MUSIC_CKPT
+    print(f"Downloading {filename} from {repo_id} ...")
+    return hf_hub_download(repo_id=repo_id, filename=filename)
+
+
+def load_clap(ckpt_path: str | None, amodel: str = "HTSAT-base"):
+    """Load the full CLAP model with the requested backbone + checkpoint."""
     import laion_clap
 
-    clap = laion_clap.CLAP_Module(enable_fusion=False)
-    if ckpt_path:
-        clap.load_ckpt(ckpt_path)
+    resolved = _resolve_ckpt(ckpt_path, amodel)
+
+    clap = laion_clap.CLAP_Module(enable_fusion=False, amodel=amodel)
+    if resolved is not None:
+        clap.load_ckpt(resolved)
     else:
-        clap.load_ckpt()  # auto-downloads 630k-audioset-best.pt
+        clap.load_ckpt()  # HTSAT-tiny: auto-downloads 630k-audioset-best.pt
     clap.model.eval()
     return clap
 
@@ -299,7 +346,19 @@ def main():
         "--ckpt",
         type=str,
         default=None,
-        help="Path to CLAP checkpoint (auto-downloads 630k-audioset-best.pt if omitted)",
+        help=(
+            "Path to CLAP checkpoint. With --amodel HTSAT-base (default) "
+            "and no --ckpt, the music_audioset_epoch_15 ckpt is fetched "
+            "from huggingface.co/lukewys/laion_clap. With --amodel "
+            "HTSAT-tiny, laion_clap auto-downloads 630k-audioset-best.pt."
+        ),
+    )
+    parser.add_argument(
+        "--amodel",
+        type=str,
+        default="HTSAT-base",
+        choices=("HTSAT-base", "HTSAT-tiny"),
+        help="Audio backbone. HTSAT-base ships in v2; HTSAT-tiny was v1.",
     )
     parser.add_argument(
         "--skip-validation",
@@ -311,8 +370,8 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Loading CLAP model...")
-    clap = load_clap(args.ckpt)
+    print(f"Loading CLAP model (amodel={args.amodel})...")
+    clap = load_clap(args.ckpt, amodel=args.amodel)
 
     export_audio_encoder(clap, out_dir)
     export_text_encoder(clap, out_dir)

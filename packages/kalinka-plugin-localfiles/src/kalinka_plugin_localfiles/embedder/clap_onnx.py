@@ -1,8 +1,15 @@
-"""ONNX Runtime wrapper for CLAP (laion/clap-htsat-unfused).
+"""ONNX Runtime wrapper for the CLAP music checkpoint.
+
+The shipped model is HTSAT-base + RoBERTa text encoder, trained on
+the AudioSet music subset (``music_audioset_epoch_15_esc_90.14.pt``
+from huggingface.co/lukewys/laion_clap). It replaces the original
+general-audio HTSAT-tiny ``630k-audioset-best.pt`` that v1 used.
 
 Replaces the PyTorch-based ``laion_clap`` library with a lightweight
 ONNX Runtime backend, reducing the embedder process memory footprint
-from ~1.7 GB to ~300-400 MB.
+from ~1.7 GB to ~600-800 MB (HTSAT-base is ~2x the weights of tiny;
+still well within the 4 GB Pi budget when paired with the multi-
+fragment loader below).
 
 Audio loading uses ``soundfile`` (header probe + seek/read fragment)
 plus ``soxr`` for resampling, deliberately avoiding ``librosa.load``,
@@ -36,19 +43,19 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # ---------------------------------------------------------------------------
 
 _RELEASE_BASE = (
-    "https://github.com/madenvel/KalinkaPlayer/releases/download/clap-onnx-v1"
+    "https://github.com/madenvel/KalinkaPlayer/releases/download/clap-onnx-v2"
 )
 
+# HTSAT-base fits in a single ONNX protobuf (≈ 285 MB), so unlike v1
+# there's no separate ``.onnx.data`` external-weights file.
 _MODEL_URLS: dict[str, str] = {
     "clap_audio_encoder": f"{_RELEASE_BASE}/clap_audio_encoder.onnx",
-    "clap_audio_encoder_data": f"{_RELEASE_BASE}/clap_audio_encoder.onnx.data",
     "clap_text_encoder": f"{_RELEASE_BASE}/clap_text_encoder.onnx",
     "clap_tokenizer": f"{_RELEASE_BASE}/clap_tokenizer.json",
 }
 
 _MODEL_FILENAMES: dict[str, str] = {
     "clap_audio_encoder": "clap_audio_encoder.onnx",
-    "clap_audio_encoder_data": "clap_audio_encoder.onnx.data",
     "clap_text_encoder": "clap_text_encoder.onnx",
     "clap_tokenizer": "clap_tokenizer.json",
 }
@@ -290,7 +297,6 @@ class ClapOnnxModel:
         import onnxruntime as ort
 
         audio_path = _ensure_model_file("clap_audio_encoder", self._model_dir)
-        _ensure_model_file("clap_audio_encoder_data", self._model_dir)
         text_path = _ensure_model_file("clap_text_encoder", self._model_dir)
         tok_path = _ensure_model_file("clap_tokenizer", self._model_dir)
 
