@@ -119,7 +119,12 @@ class EmbeddingWorker:
             )
             self._clap.load()
             self._clap_available = True
-            logger.info("CLAP ONNX model loaded from: %s", cfg.model_dir)
+            # Log the resolved (tilde-expanded) path the loader actually
+            # used, not the raw config string — otherwise a misconfigured
+            # ``~/`` value silently looks like it loaded from the home
+            # directory when it really loaded from a literal-tilde
+            # directory under the server's CWD.
+            logger.info("CLAP ONNX model loaded from: %s", self._clap._model_dir)
         except Exception as e:
             logger.warning("CLAP model loading failed: %s; audio embedding disabled", e)
 
