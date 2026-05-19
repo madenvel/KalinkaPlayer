@@ -437,7 +437,7 @@ class AcoustIdPlugin(EnricherPlugin):
     async def _create_or_get_album(
         self,
         album_title: str,
-        artist_id: str,
+        artist_id: Optional[str],
         file_path: str,
         album_mbid: Optional[str] = None,
     ) -> Optional[str]:
@@ -445,13 +445,16 @@ class AcoustIdPlugin(EnricherPlugin):
         Find album by folder+title or MBID, or create if not exists.
 
         ``file_path`` is used to derive the album folder so quality variants
-        in sibling directories get distinct album IDs.
+        in sibling directories get distinct album IDs. ``artist_id`` is
+        stored on the row but no longer part of the ID key, so an album
+        with a known title and an unknown anchor artist is still useful
+        and is created as an orphan rather than dropped.
 
         Returns:
-            Album ID
+            Album ID, or None if the title is missing.
         """
         album_title = clean_display_name(album_title) if album_title else ""
-        if not album_title or not artist_id:
+        if not album_title:
             return None
 
         # Try to find existing album by MBID first
@@ -472,7 +475,7 @@ class AcoustIdPlugin(EnricherPlugin):
         album_data = {
             "id": album_id,
             "title": album_title,
-            "artist_id": artist_id,
+            "artist_id": artist_id or "unknown_artist",
             "mbid": album_mbid,
             "enriched": 0,
             "last_updated": int(time.time()),

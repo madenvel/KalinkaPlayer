@@ -31,6 +31,11 @@ _LEADING_PUNCT_RE = re.compile(r"^[\-_.,/ ]+")
 _TRAILING_PUNCT_RE = re.compile(r"[\-_.,/ ]+$")
 _MULTI_SPACE_RE = re.compile(r"  +")
 
+# Heuristics for "this album title was almost certainly derived from a
+# directory name, not a music tag". The disc-subdir token was removed —
+# the indexer now strips ``CD1`` / ``Disc 2`` at the folder level, and a
+# title that legitimately contains "CD 1" (compilation tag) is not an
+# artifact.
 _PATH_ARTIFACT_PATTERNS = [
     (re.compile(r"---"),                 "triple-hyphen"),
     (re.compile(r"\b(MP3|FLAC|WAV|WEBM|WEB|OGG|AAC|M4A)\b", re.I), "format-token"),
@@ -39,14 +44,24 @@ _PATH_ARTIFACT_PATTERNS = [
     (re.compile(r"[\-_.,/ ]$"),          "trailing-punct"),
     (re.compile(r"\bJamendo\b", re.I),   "jamendo-token"),
     (re.compile(r"\bBeatport\b", re.I),  "beatport-token"),
-    (re.compile(r"\bCD\s*\d+\b", re.I),  "cd-disc-token"),
 ]
 
 
 def normalize_artist(name: str) -> str:
-    """Permissive normalization used to detect probable duplicate artists.
+    """Normalization that mirrors production ``normalize_for_id``.
 
-    Lowercase → NFKD → strip combining marks → [-_./] → space → collapse ws.
+    Kept inline rather than imported so the skill can run against a DB
+    without needing the kalinka package on PYTHONPATH. The two
+    implementations must stay in lockstep — if you change one, change
+    both (and add a regression test in ``tests/test_name_normalization``
+    if the divergence is meaningful).
+
+    Steps:
+      1. NFKD + strip combining marks (Beyoncé ≡ Beyonce)
+      2. Lowercase
+      3. Replace -_./ with space (Jean-Michel ≡ Jean Michel)
+      4. Drop remaining non-word chars (P!nk ≡ Pnk)
+      5. Collapse whitespace
     """
     if not name:
         return ""
@@ -54,6 +69,7 @@ def normalize_artist(name: str) -> str:
     n = "".join(c for c in n if not unicodedata.combining(c))
     n = n.lower()
     n = re.sub(r"[\-_./]", " ", n)
+    n = re.sub(r"[^\w\s]", "", n)
     n = re.sub(r"\s+", " ", n).strip()
     return n
 
@@ -316,10 +332,24 @@ def scan(db_path: str) -> Dict[str, Any]:
         """
     ).fetchone()[0]
 
-    # V/A bug: an album whose tracks span >1 artist but the album itself is keyed to one
-    va_with_single_artist = conn.execute(
+    # Multi-artist albums anchored to a single artist row. Since the
+    # album-ID change, this is no longer a "bug" by itself: a
+    # legitimate V/A compilation has many artists but one album row,
+    # and that's the *intended* shape. We split the signal into two
+    # subcategories so the report distinguishes:
+    #
+    #   * mistagging artifacts — small albums (≤3 tracks) with 2+
+    #     distinct artists. Almost always one or two mistagged tracks
+    #     in an otherwise single-artist album. Was the original
+    #     "Abbey Road" bug; should be near zero after a re-index.
+    #
+    #   * V/A compilations — albums with many tracks (≥4) and many
+    #     distinct artists (≥4). Real compilations; flagged for the
+    #     V/A coalescing fix that comes next.
+    multi_artist_albums = conn.execute(
         """
-        SELECT a.id, a.title, a.artist_id, COUNT(DISTINCT t.artist_id) AS n_track_artists,
+        SELECT a.id, a.title, a.artist_id,
+               COUNT(DISTINCT t.artist_id) AS n_track_artists,
                COUNT(*) AS n_tracks
         FROM albums a
         JOIN tracks t ON t.album_id = a.id
@@ -330,19 +360,26 @@ def scan(db_path: str) -> Dict[str, Any]:
         """
     ).fetchall()
 
+    mistagging_candidates = []
+    va_candidates_cross = []
+    for r in multi_artist_albums:
+        rec = {
+            "album_id": r["id"],
+            "title": r["title"],
+            "anchor_artist_id": r["artist_id"],
+            "distinct_track_artists": r["n_track_artists"],
+            "track_count": r["n_tracks"],
+        }
+        if r["n_tracks"] <= 3 and r["n_track_artists"] >= 2:
+            mistagging_candidates.append(rec)
+        elif r["n_tracks"] >= 4 and r["n_track_artists"] >= 4:
+            va_candidates_cross.append(rec)
+
     findings["cross_entity"] = {
         "enriched_albums_with_unmatched_tracks": enriched_albums_with_unmatched_tracks,
         "tracks_matched_in_unmatched_albums": tracks_matched_in_unmatched_albums,
-        "va_with_single_artist": [
-            {
-                "album_id": r["id"],
-                "title": r["title"],
-                "anchor_artist_id": r["artist_id"],
-                "distinct_track_artists": r["n_track_artists"],
-                "track_count": r["n_tracks"],
-            }
-            for r in va_with_single_artist
-        ],
+        "mistagging_candidates": mistagging_candidates,
+        "va_albums_to_coalesce": va_candidates_cross,
     }
 
     # ---- duration signal ----
@@ -497,15 +534,28 @@ def render_markdown(findings: Dict[str, Any]) -> str:
         f"- Tracks matched in unmatched albums: **{ce['tracks_matched_in_unmatched_albums']}**"
     )
     lines.append(
-        f"- V/A albums anchored to a single artist (V/A bug): **{len(ce['va_with_single_artist'])}**"
+        f"- Mistagging candidates (small albums w/ mixed artists): "
+        f"**{len(ce['mistagging_candidates'])}**"
     )
-    if ce["va_with_single_artist"][:5]:
+    lines.append(
+        f"- V/A compilations to coalesce (≥4 tracks, ≥4 distinct artists): "
+        f"**{len(ce['va_albums_to_coalesce'])}**"
+    )
+    if ce["mistagging_candidates"][:5]:
         lines.append("")
-        lines.append("**V/A-anchored-to-one-artist examples:**")
-        for r in ce["va_with_single_artist"][:5]:
+        lines.append("**Mistagging candidate examples:**")
+        for r in ce["mistagging_candidates"][:5]:
             lines.append(
                 f"- `{r['title']}` — {r['track_count']} tracks across "
-                f"{r['distinct_track_artists']} artists, anchored to `{r['anchor_artist_id']}`"
+                f"{r['distinct_track_artists']} artists"
+            )
+    if ce["va_albums_to_coalesce"][:5]:
+        lines.append("")
+        lines.append("**V/A coalesce candidates:**")
+        for r in ce["va_albums_to_coalesce"][:5]:
+            lines.append(
+                f"- `{r['title']}` — {r['track_count']} tracks across "
+                f"{r['distinct_track_artists']} artists"
             )
     lines.append("")
 
@@ -568,7 +618,8 @@ def main() -> None:
         f"artist_dups={len(ah['probable_duplicates'])} "
         f"path_titles={len(bh['path_artifact_titles'])} "
         f"folder_splits={len(bh['folder_splits'])} "
-        f"va_bug={len(ce['va_with_single_artist'])}"
+        f"mistag={len(ce['mistagging_candidates'])} "
+        f"va_coalesce={len(ce['va_albums_to_coalesce'])}"
     )
     print(f"Wrote {out_dir/'findings.json'} and {out_dir/'REPORT.md'}")
 

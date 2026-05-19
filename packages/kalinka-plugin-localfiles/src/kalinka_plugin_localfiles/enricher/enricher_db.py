@@ -134,25 +134,6 @@ class AsyncEnricherDb:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
-    async def get_album_by_title_and_artist(
-        self, title: str, artist_id: str
-    ) -> Optional[Dict]:
-        """Get album information by title and artist ID"""
-        async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.cursor()
-            await cursor.execute(
-                """
-                SELECT a.*, ar.name as artist_name
-                FROM albums a
-                LEFT JOIN artists ar ON a.artist_id = ar.id
-                WHERE a.title = ? AND a.artist_id = ? LIMIT 1
-                """,
-                (title, artist_id),
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
-
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
         async with self._open() as conn:

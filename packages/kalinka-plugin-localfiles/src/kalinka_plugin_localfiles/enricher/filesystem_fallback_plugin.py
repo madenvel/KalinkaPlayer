@@ -195,17 +195,23 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         self, album_title: str, artist_id: str, file_path: str
     ) -> str:
         """
-        Find existing album by folder + title or create new one.
+        Return the album ID for (title, folder), creating a row if absent.
+
+        With the folder-bounded album ID, the lookup is deterministic:
+        two calls with the same cleaned title and the same album folder
+        always produce the same ID, so we go straight to a
+        ``get_album_by_id`` check — no separate title/artist search.
 
         Args:
-            album_title: The album title to find or create
-            artist_id: The artist ID for the album (stored on the row,
-                not part of the ID key)
-            file_path: Track file path — used to derive the album folder
-                so quality variants in sibling directories get distinct IDs.
+            album_title: The album title to find or create.
+            artist_id: The artist ID stored on the new row (not part of
+                the ID key — only used as the album's "anchor artist").
+            file_path: A track's file path, used to derive the album
+                folder so quality variants in sibling directories get
+                distinct IDs.
 
         Returns:
-            The album ID (existing or newly created)
+            The album ID (existing or newly created).
         """
         album_title = clean_display_name(album_title)
         if not album_title:

@@ -587,6 +587,17 @@ class TestParseMbTrackCount:
         assert parse_mb_track_count({}) is None
         assert parse_mb_track_count({"medium-list": [{}, {}]}) is None
 
+    def test_zero_count_treated_as_missing(self):
+        # MB sometimes returns 0 for a release whose tracklist hasn't
+        # been entered. We treat 0 as "no signal" rather than penalize
+        # a 12-track local against it.
+        assert parse_mb_track_count({"medium-track-count": "0"}) is None
+        assert parse_mb_track_count({"track-count": 0}) is None
+        assert (
+            parse_mb_track_count({"medium-list": [{"track-count": "0"}, {"track-count": "0"}]})
+            is None
+        )
+
 
 class TestReleaseTotalLength:
     def test_sums_across_media(self):
