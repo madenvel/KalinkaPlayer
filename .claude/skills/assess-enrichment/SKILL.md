@@ -67,7 +67,8 @@ Detects "we matched the album but the tracks are orphans" and vice versa.
 
 - `enriched_albums_with_unmatched_tracks` — albums where the album has an MBID but ≥1 track inside it has no MBID. Sometimes legitimate (rare recording, no MB entry) but usually a sign the track-matcher couldn't disambiguate. After cross-track consensus + duration fixes, this number should drop.
 - `tracks_with_mbid_in_unmatched_albums` — the opposite: track is matched but its album isn't. Usually means the album title is a path artifact (see §3).
-- `va_with_single_artist` — albums whose tracks span multiple artists but the album is keyed to one artist_id. The V/A merge bug.
+- `mistagging_candidates` — small albums (≤3 tracks) where the tracks span multiple artists. After the folder-bounded album-id change, the original "Abbey Road forks into three" case shows up here — mostly tag-quality issues to fix at the source.
+- `va_albums_to_coalesce` — larger albums (≥4 tracks, ≥4 distinct artists). Legitimate V/A compilations that the upcoming V/A-coalescing fix will collapse to a single `various_artists` anchor.
 
 ### 6. Duration sanity (proxy for the duration-bonus fix)
 

@@ -17,6 +17,13 @@ from .match_utils import (
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+# How close (in weighted score points) the top two album candidates have
+# to be before we hold the album as orphan rather than commit a guess.
+# Smaller than the track-level margin (5.0) because albums have richer
+# disambiguating signal (track count + total duration) — a 3-point gap
+# between two stage-B candidates is already meaningful.
+ALBUM_MATCH_MIN_MARGIN = 3.0
+
 
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
@@ -280,11 +287,13 @@ class MusicBrainzPlugin(EnricherPlugin):
         similarity, and a track-count bonus computed from
         ``medium-track-count`` (or summed per-medium track counts).
 
-        Candidates below ``string_similarity_threshold`` are filtered
-        out here, not after the weighted score is computed — otherwise
-        a noisy low-similarity candidate with a coincidental duration
-        match could outrank the correct one and then get rejected,
-        leaving us with no match at all.
+        Candidates below the configured similarity threshold are
+        filtered out here, not after the weighted score is computed —
+        otherwise a noisy low-similarity candidate with a coincidental
+        duration match could outrank the correct one and then get
+        rejected, leaving us with no match at all. Real releases with
+        sub-threshold title similarity are vanishingly rare; defaulting
+        to "no match" (orphan) is safer than risking a wrong commit.
         """
         ranked: List[Tuple[Dict, float, float]] = []
         for item in items:
@@ -406,7 +415,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             # stays orphan rather than committing the wrong edition.
             if len(scored) > 1:
                 runner_up_score = scored[1][1]
-                if best_score - runner_up_score < 3.0:
+                if best_score - runner_up_score < ALBUM_MATCH_MIN_MARGIN:
                     logger.info(
                         f"Ambiguous album match for '{album['title']}': "
                         f"best={best_score:.1f} runner_up={runner_up_score:.1f} — "

@@ -141,24 +141,28 @@ def parse_mb_track_count(release) -> Optional[int]:
 
     Tries (in order): top-level ``medium-track-count``, top-level
     ``track-count``, then sums per-medium ``track-count`` from
-    ``medium-list``.
+    ``medium-list``. Returns ``None`` if the count is unknown OR all
+    fields parse to zero (no real release has zero tracks, so a zero
+    is almost certainly a missing-data artifact that the caller
+    should treat as "no signal" rather than "definitely 0 tracks").
     """
     for key in ("medium-track-count", "track-count"):
         v = release.get(key)
-        if v is not None:
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                pass
+        if v is None:
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            return n
     total = 0
-    saw_any = False
     for medium in release.get("medium-list") or []:
         v = medium.get("track-count")
         if v is None:
             continue
         try:
             total += int(v)
-            saw_any = True
         except (TypeError, ValueError):
             pass
-    return total if saw_any else None
+    return total if total > 0 else None
