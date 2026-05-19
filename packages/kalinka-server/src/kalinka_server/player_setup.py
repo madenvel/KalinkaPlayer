@@ -1,9 +1,7 @@
-import json
 import logging
-import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Dict, Generator, Mapping
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
@@ -31,6 +29,7 @@ from kalinka_plugin_sdk.plugin import (
 from pydantic import BaseModel, ConfigDict
 
 from .config_model import KalinkaConfig
+from .config_overrides import apply_overrides_with_prefix
 from .playqueue import PlayQueueImpl
 from kalinka_plugin_sdk.api import PlayQueueController
 
@@ -146,35 +145,25 @@ class PreparedModuleCollection:
             except Exception as e:
                 logger.error(f"Failed to load plugin {ep.name}: {e}", exc_info=True)
 
-    def _read_or_create_module_config(
-        self, config_path: str, plugin_name: str, plugin_class: type[PluginBase]
-    ):
-        """Read or create a module configuration file.
-        If the file does not exist, it will be created with the default configuration.
-        """
-        config_file = os.path.join(config_path, f"{plugin_name}_config.cfg")
-
-        config_data: dict | None = None
-
-        try:
-            with open(config_file, "r") as f:
-                config_data = json.load(f)
-        except FileNotFoundError:
-            logger.warning(
-                f"Config file not found for {plugin_name}, creating default config."
-            )
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON config for {plugin_name}: {e}")
-
-        if config_data is None:
-            logger.info(f"Creating default config for {plugin_name} at {config_file}")
-            return plugin_class.CONFIG_MODEL()
-
-        return plugin_class.CONFIG_MODEL(**config_data)
+    def _build_module_config(
+        self,
+        plugin_name: str,
+        plugin_class: type[PluginBase],
+        overrides: Mapping[str, Any],
+    ) -> ModuleConfig:
+        """Instantiate a plugin's default config, then apply matching overrides."""
+        config = plugin_class.CONFIG_MODEL()
+        prefix = (
+            "input_modules."
+            if plugin_class.PLUGIN_TYPE == PluginType.INPUT_MODULE
+            else "devices."
+        )
+        apply_overrides_with_prefix(config, overrides, f"{prefix}{plugin_name}.")
+        return config
 
     async def _scan_and_setup_plugins_from_entry_points(
         self,
-        config_path: str,
+        overrides: Mapping[str, Any],
     ) -> AsyncGenerator[tuple[str, PreparedPlugin], None]:
         """Scan for installed plugins using entry points and setup those matching the specified type."""
 
@@ -185,10 +174,10 @@ class PreparedModuleCollection:
             error_message = None
             config = None
             plugin_context = None
-            
+
             try:
-                config = self._read_or_create_module_config(
-                    config_path, plugin_name, plugin_class
+                config = self._build_module_config(
+                    plugin_name, plugin_class, overrides
                 )
                 plugin_context = self._make_plugin_context(
                     plugin_name, plugin_class, config
@@ -259,8 +248,8 @@ class PreparedModuleCollection:
 
     async def scan_and_setup_plugins(
         self,
-        config_path: str,
         player_context: PlayerContext,
+        overrides: Mapping[str, Any],
     ):
         """Scan for input modules from both entry points and legacy filesystem locations."""
 
@@ -271,7 +260,7 @@ class PreparedModuleCollection:
         async for (
             plugin_name,
             prepared_plugin,
-        ) in self._scan_and_setup_plugins_from_entry_points(config_path):
+        ) in self._scan_and_setup_plugins_from_entry_points(overrides):
             plugin_type = prepared_plugin.plugin_class.PLUGIN_TYPE
             if plugin_type == PluginType.INPUT_MODULE:
                 input_modules[plugin_name] = prepared_plugin
@@ -287,15 +276,14 @@ class PreparedModuleCollection:
 modules = PreparedModuleCollection()
 
 
-async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
-    """
-    Setup the player components.
+async def setup(
+    config: KalinkaConfig, overrides: Mapping[str, Any]
+) -> PlayerContext:
+    """Setup the player components.
 
-    Args:
-        config_path: Path to the configuration file
-
-    Returns:
-        tuple: (playqueue, event_listener)
+    ``overrides`` is the user-set config map (loaded from the overrides
+    file); only entries whose keys begin with ``input_modules.<name>.``
+    or ``devices.<name>.`` will be applied to plugin configs.
     """
 
     playqueue_eventbus=EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](  # type: ignore[type-var]
@@ -307,7 +295,7 @@ async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
                 ),
             )
         )
-    
+
     device_eventbus=EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent](  # type: ignore[type-var]
             initial_state=ExtDeviceState(power_on=False, volume=DeviceVolume()))
 
@@ -319,7 +307,7 @@ async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
         )
 
     # Scan and setup plugins
-    await modules.scan_and_setup_plugins(config_path, player_context)
+    await modules.scan_and_setup_plugins(player_context, overrides)
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))
@@ -327,12 +315,10 @@ async def setup(config_path: str, config: KalinkaConfig) -> PlayerContext:
     return player_context
 
 
-async def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str):
-    """Shutdown all modules and save their configurations."""
+async def shutdown_modules(modules: dict[str, PreparedPlugin]):
+    """Shutdown all modules."""
     for module_name, prepared_module in modules.items():
         logger.info(f"Shutting down module: {module_name}")
-        
-        # Shutdown the plugin instance if it exists
         if prepared_module.plugin_instance is not None:
             try:
                 await prepared_module.plugin_instance.shutdown()
@@ -341,23 +327,11 @@ async def shutdown_modules(modules: dict[str, PreparedPlugin], config_path: str)
         else:
             logger.info(f"Module {module_name} was not initialized, skipping shutdown.")
 
-        # Always save the configuration, regardless of whether the plugin was initialized
-        config_file_path = os.path.join(config_path, f"{module_name}_config.cfg")
-        # Ensure the directory exists
-        config_dir = os.path.dirname(config_file_path)
-        if config_dir:  # Only create directory if path is not empty
-            os.makedirs(config_dir, exist_ok=True)
 
-        if prepared_module.plugin_context is not None:
-            with open(config_file_path, "w") as f:
-                json.dump(prepared_module.plugin_context.config.model_dump(), f, indent=2)
-                logger.info(f"Saved config for module {module_name} to {config_file_path}")
-
-
-async def shutdown(config_path: str):
+async def shutdown():
     """Shutdown all plugin modules."""
     global modules
 
-    await shutdown_modules(modules.prepared_input_modules, config_path)
-    await shutdown_modules(modules.prepared_devices, config_path)
+    await shutdown_modules(modules.prepared_input_modules)
+    await shutdown_modules(modules.prepared_devices)
 
