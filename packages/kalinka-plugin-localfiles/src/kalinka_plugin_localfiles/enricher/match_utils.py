@@ -50,3 +50,115 @@ def parse_mb_length_seconds(length) -> Optional[float]:
         return int(length) / 1000.0
     except (TypeError, ValueError):
         return None
+
+
+def album_duration_bonus(
+    target_s: Optional[float], candidate_s: Optional[float]
+) -> float:
+    """Like ``duration_bonus`` but with album-scale tolerances.
+
+    Albums are ~30-90 minutes; the per-track tolerance of ±2s/±5s is too
+    tight for summed durations where small rounding errors compound. We
+    also have to be lenient because MB's recording lengths sometimes
+    omit gaps/silence between tracks.
+
+    Tiers:
+      |dt| ≤ 15s  → +20  (confident match)
+      |dt| ≤ 60s  → +10
+      |dt| ≤ 180s →   0  (not informative)
+      else        → -50  (almost certainly a different release —
+                          deluxe edition, bonus disc, reissue)
+    """
+    if not target_s or not candidate_s:
+        return 0.0
+    try:
+        dt = abs(float(target_s) - float(candidate_s))
+    except (TypeError, ValueError):
+        return 0.0
+    if dt <= 15.0:
+        return 20.0
+    if dt <= 60.0:
+        return 10.0
+    if dt <= 180.0:
+        return 0.0
+    return -50.0
+
+
+def track_count_bonus(
+    target_count: Optional[int], candidate_count: Optional[int]
+) -> float:
+    """Additive score adjustment for how well a release's track count
+    matches the local album's. Sits on the same 0-100 scale as the
+    title/similarity score.
+
+    Tiers:
+      exact       → +15  (very strong: distinguishes standard / deluxe / hits)
+      off by 1    →  +5
+      off by ≥ 3  → -20  (different edition)
+
+    Returns 0 when either side is missing.
+    """
+    if target_count is None or candidate_count is None:
+        return 0.0
+    try:
+        diff = abs(int(target_count) - int(candidate_count))
+    except (TypeError, ValueError):
+        return 0.0
+    if diff == 0:
+        return 15.0
+    if diff == 1:
+        return 5.0
+    if diff >= 3:
+        return -20.0
+    return 0.0
+
+
+def release_total_length_seconds(mb_release) -> Optional[float]:
+    """Sum every recording's ``length`` across all media of a release.
+
+    The release must have been fetched with ``includes=["recordings"]``.
+    Returns None if no track lengths were available so callers can
+    treat the sum as opt-in.
+    """
+    if not mb_release:
+        return None
+    media = mb_release.get("medium-list") or []
+    total = 0.0
+    saw_any = False
+    for medium in media:
+        for tr in medium.get("track-list") or []:
+            length = tr.get("length") or (tr.get("recording") or {}).get("length")
+            secs = parse_mb_length_seconds(length)
+            if secs is not None:
+                total += secs
+                saw_any = True
+    return total if saw_any else None
+
+
+def parse_mb_track_count(release) -> Optional[int]:
+    """Extract the total track count from a MusicBrainz release as
+    returned by ``search_releases``.
+
+    Tries (in order): top-level ``medium-track-count``, top-level
+    ``track-count``, then sums per-medium ``track-count`` from
+    ``medium-list``.
+    """
+    for key in ("medium-track-count", "track-count"):
+        v = release.get(key)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    total = 0
+    saw_any = False
+    for medium in release.get("medium-list") or []:
+        v = medium.get("track-count")
+        if v is None:
+            continue
+        try:
+            total += int(v)
+            saw_any = True
+        except (TypeError, ValueError):
+            pass
+    return total if saw_any else None

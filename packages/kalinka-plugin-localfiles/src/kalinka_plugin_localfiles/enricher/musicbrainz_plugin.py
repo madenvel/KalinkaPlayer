@@ -6,7 +6,14 @@ from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
 from .enricher_plugin import EnricherPlugin
-from .match_utils import duration_bonus, parse_mb_length_seconds
+from .match_utils import (
+    album_duration_bonus,
+    duration_bonus,
+    parse_mb_length_seconds,
+    parse_mb_track_count,
+    release_total_length_seconds,
+    track_count_bonus,
+)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -258,8 +265,57 @@ class MusicBrainzPlugin(EnricherPlugin):
             logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
             return None
 
+    def _shortlist_releases(
+        self,
+        items: List[Dict],
+        name: str,
+        target_track_count: Optional[int],
+    ) -> List[Tuple[Dict, float, float]]:
+        """Stage-A ranking from cheap signals already in search_releases
+        results. Returns ``[(item, weighted_score, similarity), ...]``
+        sorted best-first, filtered to items at or above the album
+        score threshold.
+
+        The weighted score folds in the MB ext:score, our string
+        similarity, and a track-count bonus computed from
+        ``medium-track-count`` (or summed per-medium track counts).
+
+        Candidates below ``string_similarity_threshold`` are filtered
+        out here, not after the weighted score is computed — otherwise
+        a noisy low-similarity candidate with a coincidental duration
+        match could outrank the correct one and then get rejected,
+        leaving us with no match at all.
+        """
+        ranked: List[Tuple[Dict, float, float]] = []
+        for item in items:
+            score = int(item.get("ext:score", 0))
+            if score < self.album_threshold:
+                continue
+            similarity = self._string_similarity(name, item.get("title", ""))
+            if similarity < self.string_similarity_threshold:
+                continue
+            weighted = 0.5 * score + 0.5 * (similarity * 100)
+            weighted += track_count_bonus(
+                target_track_count, parse_mb_track_count(item)
+            )
+            ranked.append((item, weighted, similarity))
+        ranked.sort(key=lambda t: -t[1])
+        return ranked
+
     async def enrich_album(self, album: Dict) -> Optional[Dict]:
-        """Enrich album metadata with MusicBrainz data"""
+        """Enrich album metadata with MusicBrainz data.
+
+        Two-stage matcher:
+
+          A. Cheap rank from ``search_releases`` results — combines
+             ext:score, title similarity, and track-count match. Used
+             to shortlist the top candidates without extra API calls.
+
+          B. Fetch the top shortlisted releases with recordings included,
+             then disambiguate by total-tracklist duration. This is what
+             tells a 12-track standard edition from a 16-track deluxe
+             with the same title.
+        """
         try:
             if album["id"] == "unknown_album":
                 return None
@@ -281,51 +337,91 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             logger.debug(f"Enriching album: {album['title']} by {album['artist_name']}")
 
-            # Search for album in MusicBrainz with better query parameters
             result = musicbrainzngs.search_releases(
                 album["title"],
                 artistname=album["artist_name"],
-                strict=True,  # Use strict search mode
-                limit=20,  # Limit results to top matches
+                strict=True,
+                limit=20,
             )
-
             if not result["release-list"]:
                 logger.debug(
                     f"No MusicBrainz match found for album: {album['title']} by {album['artist_name']}"
                 )
                 return None
 
-            # Find best match with string similarity check
-            best_match, score, similarity = self._find_best_match(
+            local_track_count = album.get("track_count")
+            local_duration_s = album.get("duration")
+
+            # ---- Stage A: rank by score + similarity + track-count ----
+            shortlist = self._shortlist_releases(
                 result["release-list"],
                 album["title"],
-                self.album_threshold,
-                match_key="title",
+                local_track_count,
             )
-
-            if not best_match:
+            if not shortlist:
                 logger.debug(
-                    f"No good MusicBrainz match for album: {album['title']} (best score: {score})"
+                    f"No MB candidates clear the threshold for album: {album['title']}"
                 )
                 return None
 
-            # Get more details about the release
-            release_mbid = best_match["id"]
-            mb_release_details = musicbrainzngs.get_release_by_id(
-                release_mbid, includes=["recordings", "artist-credits", "tags"]
-            )
-            mb_release_data = mb_release_details["release"]
+            # ---- Stage B: fetch top 3, score by tracklist duration ----
+            # Fetching the winner's recordings is something we'd do anyway
+            # below; doing it for two extras costs ~2 additional MB calls
+            # per album but lets us tell std/deluxe/reissue apart.
+            scored: List[Tuple[Dict, float, float, Dict]] = []
+            for cand, base_score, similarity in shortlist[:3]:
+                try:
+                    details = musicbrainzngs.get_release_by_id(
+                        cand["id"],
+                        includes=["recordings", "artist-credits", "tags"],
+                    )
+                except Exception as e:
+                    logger.debug(
+                        f"Could not fetch release {cand['id']} for stage-B scoring: {e}"
+                    )
+                    continue
+                release_data = details["release"]
+                cand_duration = release_total_length_seconds(release_data)
+                d_bonus = album_duration_bonus(local_duration_s, cand_duration)
+                combined = base_score + d_bonus
+                if self.debug_matching:
+                    logger.debug(
+                        f"  Stage B: '{release_data.get('title')}' "
+                        f"local_dur={local_duration_s} cand_dur={cand_duration} "
+                        f"base={base_score:.1f} d_bonus={d_bonus:+.0f} "
+                        f"combined={combined:.1f}"
+                    )
+                scored.append((cand, combined, similarity, release_data))
 
-            # Update album data
+            if not scored:
+                logger.debug(
+                    f"No stage-B candidates retrievable for album: {album['title']}"
+                )
+                return None
+
+            scored.sort(key=lambda t: -t[1])
+            best, best_score, best_similarity, mb_release_data = scored[0]
+
+            # Reject ambiguous picks (deluxe vs standard etc.) so the album
+            # stays orphan rather than committing the wrong edition.
+            if len(scored) > 1:
+                runner_up_score = scored[1][1]
+                if best_score - runner_up_score < 3.0:
+                    logger.info(
+                        f"Ambiguous album match for '{album['title']}': "
+                        f"best={best_score:.1f} runner_up={runner_up_score:.1f} — "
+                        f"holding as orphan rather than committing"
+                    )
+                    return None
+
+            release_mbid = best["id"]
             updates = {
                 "mbid": release_mbid,
-                "match_score": score,
-                "match_similarity": round(similarity * 100),
+                "match_score": int(best.get("ext:score", 0)),
+                "match_similarity": round(best_similarity * 100),
             }
 
-            # Add genre if available from tags
             if "tag-list" in mb_release_data and mb_release_data["tag-list"]:
-                # Sort by tag count to get the most popular tag first
                 sorted_tags = sorted(
                     mb_release_data["tag-list"],
                     key=lambda x: int(x.get("count", 0)),
@@ -336,14 +432,12 @@ class MusicBrainzPlugin(EnricherPlugin):
                     f"Found genre for album {album['title']}: {updates['genre']}"
                 )
 
-            # Add year if available
             if "date" in mb_release_data:
                 try:
                     updates["year"] = int(mb_release_data["date"].split("-")[0])
                 except (ValueError, IndexError):
                     pass
 
-            # Return data for further enrichment if needed
             return {"updates": updates, "mbid": release_mbid}
 
         except Exception as e:

@@ -13,8 +13,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from kalinka_plugin_localfiles.enricher.match_utils import (
+    album_duration_bonus,
     duration_bonus,
     parse_mb_length_seconds,
+    parse_mb_track_count,
+    release_total_length_seconds,
+    track_count_bonus,
 )
 from kalinka_plugin_localfiles.enricher.acoustid_plugin import AcoustIdPlugin
 from kalinka_plugin_localfiles.enricher.musicbrainz_plugin import MusicBrainzPlugin
@@ -509,3 +513,304 @@ class TestAcoustidReleasePicking:
         # Unknown type → 0.
         assert AcoustIdPlugin._release_group_score(None, None) == 0.0
         assert AcoustIdPlugin._release_group_score("", []) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Album-level scoring helpers (the duration / track-count fix)
+# ---------------------------------------------------------------------------
+
+
+class TestAlbumDurationBonus:
+    def test_exact_match(self):
+        # Random Access Memories is ~74 minutes.
+        assert album_duration_bonus(4440, 4440) == 20.0
+
+    def test_within_fifteen_seconds(self):
+        assert album_duration_bonus(4440, 4448) == 20.0
+        assert album_duration_bonus(4440, 4425) == 20.0
+
+    def test_within_sixty_seconds(self):
+        assert album_duration_bonus(4440, 4480) == 10.0
+        assert album_duration_bonus(4440, 4400) == 10.0
+
+    def test_neutral_band(self):
+        assert album_duration_bonus(4440, 4540) == 0.0
+
+    def test_far_off_penalty(self):
+        # Deluxe edition adds 20 minutes of bonus tracks — clearly different.
+        assert album_duration_bonus(4440, 5640) == -50.0
+
+    def test_missing_returns_zero(self):
+        assert album_duration_bonus(None, 4440) == 0.0
+        assert album_duration_bonus(4440, None) == 0.0
+        assert album_duration_bonus(0, 4440) == 0.0
+
+
+class TestTrackCountBonus:
+    def test_exact(self):
+        assert track_count_bonus(12, 12) == 15.0
+
+    def test_off_by_one(self):
+        assert track_count_bonus(12, 13) == 5.0
+        assert track_count_bonus(12, 11) == 5.0
+
+    def test_off_by_two_neutral(self):
+        # 12 vs 14 — could legitimately be a bonus-track variant we still
+        # want as a fallback match, so 0.0 (not penalized, not rewarded).
+        assert track_count_bonus(12, 14) == 0.0
+
+    def test_far_off_penalty(self):
+        # 12-track standard vs 16-track deluxe.
+        assert track_count_bonus(12, 16) == -20.0
+
+    def test_missing_returns_zero(self):
+        assert track_count_bonus(None, 12) == 0.0
+        assert track_count_bonus(12, None) == 0.0
+
+
+class TestParseMbTrackCount:
+    def test_medium_track_count_preferred(self):
+        # When multiple count fields are present, total-across-media wins.
+        rel = {"medium-track-count": "22", "track-count": "11"}
+        assert parse_mb_track_count(rel) == 22
+
+    def test_falls_back_to_per_medium_sum(self):
+        rel = {
+            "medium-list": [
+                {"track-count": "11"},
+                {"track-count": "11"},
+            ]
+        }
+        assert parse_mb_track_count(rel) == 22
+
+    def test_returns_none_when_unknown(self):
+        assert parse_mb_track_count({}) is None
+        assert parse_mb_track_count({"medium-list": [{}, {}]}) is None
+
+
+class TestReleaseTotalLength:
+    def test_sums_across_media(self):
+        # Two discs, 3 tracks each — lengths in ms.
+        release = {
+            "medium-list": [
+                {
+                    "track-list": [
+                        {"length": "180000"},
+                        {"length": "240000"},
+                        {"length": "120000"},
+                    ]
+                },
+                {
+                    "track-list": [
+                        {"length": "200000"},
+                        {"length": "300000"},
+                        {"length": "150000"},
+                    ]
+                },
+            ]
+        }
+        assert release_total_length_seconds(release) == 1190.0
+
+    def test_returns_none_when_no_lengths(self):
+        release = {
+            "medium-list": [
+                {"track-list": [{"length": None}, {"length": None}]},
+            ]
+        }
+        assert release_total_length_seconds(release) is None
+
+    def test_ignores_unparseable_lengths(self):
+        release = {
+            "medium-list": [
+                {"track-list": [{"length": "180000"}, {"length": "garbage"}]},
+            ]
+        }
+        assert release_total_length_seconds(release) == 180.0
+
+
+# ---------------------------------------------------------------------------
+# MusicBrainz enrich_album two-stage scoring
+# ---------------------------------------------------------------------------
+
+
+class TestShortlistReleases:
+    def test_track_count_match_promotes_correct_candidate(self):
+        """The deluxe edition has a higher MB ext:score (it's more
+        notable) but our local has 12 tracks — standard edition's
+        track-count match should let it overtake on the shortlist."""
+        plugin = _make_mb_plugin()
+        candidates = [
+            {
+                "id": "deluxe",
+                "title": "Album",
+                "ext:score": "98",
+                "medium-track-count": "16",
+            },
+            {
+                "id": "standard",
+                "title": "Album",
+                "ext:score": "92",
+                "medium-track-count": "12",
+            },
+        ]
+        # base score (no count): deluxe = 0.5*98 + 0.5*100 = 99; standard = 0.5*92 + 0.5*100 = 96
+        # with bonus: deluxe = 99 + 0 (off by 4) = 79 after -20; standard = 96 + 15 = 111
+        shortlist = plugin._shortlist_releases(candidates, "Album", target_track_count=12)
+        assert [c[0]["id"] for c in shortlist] == ["standard", "deluxe"]
+
+    def test_falls_back_to_search_score_without_local_count(self):
+        plugin = _make_mb_plugin()
+        candidates = [
+            {"id": "a", "title": "Album", "ext:score": "80"},
+            {"id": "b", "title": "Album", "ext:score": "95"},
+        ]
+        shortlist = plugin._shortlist_releases(candidates, "Album", target_track_count=None)
+        assert shortlist[0][0]["id"] == "b"
+
+    def test_threshold_filter(self):
+        plugin = _make_mb_plugin()
+        candidates = [
+            {"id": "low", "title": "Album", "ext:score": "50"},
+            {"id": "ok", "title": "Album", "ext:score": "80"},
+        ]
+        shortlist = plugin._shortlist_releases(candidates, "Album", target_track_count=None)
+        assert [c[0]["id"] for c in shortlist] == ["ok"]
+
+
+class TestEnrichAlbumStageB:
+    """End-to-end test of enrich_album with MB mocked.
+
+    Stage B is what makes the difference: stage A might rank the wrong
+    candidate first because of MB score / track-count alone, but stage B
+    fetches recordings and the right release wins on summed duration.
+    """
+
+    @pytest.mark.asyncio
+    async def test_picks_release_with_matching_total_duration(self, monkeypatch):
+        plugin = _make_mb_plugin()
+
+        # Local: 12-track album, total ~3000s.
+        album = {
+            "id": "alb1",
+            "title": "Album",
+            "artist_name": "Artist",
+            "track_count": 12,
+            "duration": 3000,
+        }
+
+        # MB returns three candidates with similar titles; only one has
+        # the right total duration. The first two are deluxe-edition
+        # variants with 16 tracks (~4200s) — stage A's track-count bonus
+        # already filters them out, but we also verify stage B wins.
+        search_response = {
+            "release-list": [
+                {
+                    "id": "deluxe1",
+                    "title": "Album",
+                    "ext:score": "100",
+                    "medium-track-count": "16",
+                },
+                {
+                    "id": "deluxe2",
+                    "title": "Album",
+                    "ext:score": "95",
+                    "medium-track-count": "16",
+                },
+                {
+                    "id": "standard",
+                    "title": "Album",
+                    "ext:score": "90",
+                    "medium-track-count": "12",
+                },
+            ]
+        }
+
+        def fake_get_release_by_id(rid, includes=None):
+            # Each release returns its full tracklist with lengths.
+            release_lengths = {
+                "deluxe1": [250000] * 16,    # 4000s — way off our 3000
+                "deluxe2": [260000] * 16,    # 4160s — way off
+                "standard": [250000] * 12,   # 3000s — exact match
+            }
+            return {
+                "release": {
+                    "id": rid,
+                    "title": "Album",
+                    "date": "2013-05-17",
+                    "medium-list": [
+                        {
+                            "track-list": [
+                                {"length": str(ms)} for ms in release_lengths[rid]
+                            ],
+                        }
+                    ],
+                    "tag-list": [{"name": "electronic", "count": "5"}],
+                }
+            }
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_releases",
+            lambda *a, **kw: search_response,
+        )
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            fake_get_release_by_id,
+        )
+
+        result = await plugin.enrich_album(album)
+        assert result is not None
+        assert result["mbid"] == "standard"
+        assert result["updates"]["genre"] == "electronic"
+        assert result["updates"]["year"] == 2013
+
+    @pytest.mark.asyncio
+    async def test_holds_orphan_when_top_candidates_indistinguishable(
+        self, monkeypatch
+    ):
+        plugin = _make_mb_plugin()
+        album = {
+            "id": "alb1",
+            "title": "Album",
+            "artist_name": "Artist",
+            "track_count": 12,
+            "duration": 3000,
+        }
+        # Two releases with effectively identical signals.
+        search_response = {
+            "release-list": [
+                {
+                    "id": "a",
+                    "title": "Album",
+                    "ext:score": "95",
+                    "medium-track-count": "12",
+                },
+                {
+                    "id": "b",
+                    "title": "Album",
+                    "ext:score": "95",
+                    "medium-track-count": "12",
+                },
+            ]
+        }
+
+        def fake_get(rid, includes=None):
+            return {
+                "release": {
+                    "id": rid,
+                    "title": "Album",
+                    "medium-list": [
+                        {"track-list": [{"length": "250000"} for _ in range(12)]}
+                    ],
+                }
+            }
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_releases",
+            lambda *a, **kw: search_response,
+        )
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            fake_get,
+        )
+        result = await plugin.enrich_album(album)
+        assert result is None  # within margin → hold as orphan

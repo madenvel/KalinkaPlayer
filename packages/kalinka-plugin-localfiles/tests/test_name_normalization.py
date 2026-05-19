@@ -119,10 +119,21 @@ class TestAlbumFolderForPath:
         )
 
     def test_disc_variants(self):
-        # CD1, Disc1, Disk-3, "Disc 02" all count.
+        # CD1, Disc 2, disk3, Disk-3, CD-04 all count.
         assert album_folder_for_path("/m/X/CD1/01.flac") == "/m/X"
         assert album_folder_for_path("/m/X/Disc 2/01.flac") == "/m/X"
         assert album_folder_for_path("/m/X/disk3/01.flac") == "/m/X"
+        assert album_folder_for_path("/m/X/Disk-3/01.flac") == "/m/X"
+        assert album_folder_for_path("/m/X/CD-04/01.flac") == "/m/X"
+
+    def test_album_named_like_disc_is_not_walked_up(self):
+        # An album literally named "CD1" — unlikely but possible. Since
+        # the regex anchors on the immediate parent, only that parent is
+        # checked. If the album folder ITSELF is "CD1" at the top of the
+        # music library, it stays.
+        assert album_folder_for_path("/Music/CD1/01.flac") == "/Music"
+        # But a non-disc-pattern folder is kept as-is.
+        assert album_folder_for_path("/Music/CD Sampler/01.flac") == "/Music/CD Sampler"
 
     def test_quality_variants_get_different_folders(self):
         # The RPi case: same album in two quality folders → different folders.
