@@ -163,7 +163,7 @@ class MetadataEnricher:
             logger.debug(f"Processing artist: {artist}")
             await self._enrich_artist(artist)
             processed_artists.add(artist["id"])
-            logger.info(f"Processed artist {artist['name']}")
+            logger.debug(f"Processed artist {artist['name']}")
 
     async def _enrich_artist(self, artist):
         """Enrich a single artist"""
@@ -192,14 +192,11 @@ class MetadataEnricher:
             if not plugin.can_enrich_artist():
                 continue
 
-            logger.info(
+            logger.debug(
                 f"Enriching artist {artist['name'] if 'name' in artist else artist['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_artist(updated_artist)
             if result and "updates" in result:
-                logger.info(
-                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
-                )
                 # Apply updates to our working copy
                 updated_artist.update(result["updates"])
                 # Track that we had updates
@@ -243,7 +240,7 @@ class MetadataEnricher:
             logger.debug(f"Processing album: {album}")
             await self._enrich_album(album)
             processed_albums.add(album["id"])
-            logger.info(f"Processed album {album['title']}")
+            logger.debug(f"Processed album {album['title']}")
 
     async def _enrich_album(self, album):
         """Enrich a single album"""
@@ -266,14 +263,11 @@ class MetadataEnricher:
             if not plugin.can_enrich_album():
                 continue
 
-            logger.info(
+            logger.debug(
                 f"Enriching album {album['name'] if 'name' in album else album['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_album(updated_album)
             if result and "updates" in result:
-                logger.info(
-                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
-                )
                 # Apply updates to our working copy
                 updated_album.update(result["updates"])
                 # Track that we had updates
@@ -317,7 +311,7 @@ class MetadataEnricher:
             logger.debug(f"Processing track: {track}")
             await self._enrich_track(track)
             processed_tracks.add(track["id"])
-            logger.info(f"Processed track {track['title']}")
+            logger.debug(f"Processed track {track['title']}")
 
     async def _enrich_track(self, track):
         """Enrich a single track"""
@@ -350,14 +344,11 @@ class MetadataEnricher:
                 )
                 break
 
-            logger.info(
+            logger.debug(
                 f"Enriching track {track['title'] if 'title' in track else track['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_track(updated_track)
             if result and "updates" in result:
-                logger.info(
-                    f"Result from {plugin.__class__.__name__}: {result['updates'].keys()}"
-                )
                 # Apply updates to our working copy
                 updated_track.update(result["updates"])
                 # Track that we had updates

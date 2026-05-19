@@ -174,7 +174,7 @@ class DeezerPlugin(EnricherPlugin):
                 return None
 
             deezer_artist = best_match
-            logger.info(
+            logger.debug(
                 f"Best artist match for '{artist['name']}': '{deezer_artist['name']}' (score: {best_score:.2f})"
             )
 
@@ -201,7 +201,7 @@ class DeezerPlugin(EnricherPlugin):
                     "image_url": artist["id"],
                 }
 
-                logger.info(f"Added image from Deezer for artist: {artist['name']}")
+                logger.debug(f"Added image from Deezer for artist: {artist['name']}")
                 return {"updates": updates}
             else:
                 return None
