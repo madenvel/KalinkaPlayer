@@ -100,18 +100,20 @@ def discover_musiccast_devices(
     Discover MusicCast devices using SSDP via the ssdpy library.
     Much more compact and reliable than manual SSDP implementation.
     """
-    logger.info("Starting SSDP MusicCast device discovery...")
+    # Kept at debug — when the device is offline we retry on a slow loop and
+    # the worker only logs at info on state transitions to avoid spamming.
+    logger.debug("Starting SSDP MusicCast device discovery...")
 
     # Create SSDP client with specified timeout
     client = SSDPClient(iface=iface.encode("utf-8"), timeout=timeout_seconds)
 
     # Search for MediaRenderer devices (per MusicCast specification)
-    logger.info("Sending SSDP M-SEARCH for MediaRenderer devices...")
+    logger.debug("Sending SSDP M-SEARCH for MediaRenderer devices...")
     responses = client.m_search(
         "urn:schemas-upnp-org:device:MediaRenderer:1", mx=timeout_seconds
     )
 
-    logger.info(f"Received {len(responses)} SSDP responses")
+    logger.debug(f"Received {len(responses)} SSDP responses")
 
     # Process each response to find MusicCast devices
     for response in responses:
@@ -160,7 +162,7 @@ def discover_musiccast_devices(
             logger.debug(f"Error fetching device description from {location}: {e}")
             continue
 
-    logger.info("No MusicCast devices found via SSDP discovery")
+    logger.debug("No MusicCast devices found via SSDP discovery")
     return None
 
 
@@ -247,7 +249,7 @@ def parse_device_description(
             logger.debug("Device does not respond to MusicCast API")
             return None
 
-        logger.info(
+        logger.debug(
             f"Found MusicCast device: {device_details['model_name']} at {base_url}"
         )
 
@@ -311,6 +313,12 @@ def verify_musiccast_api(api_base_url: str) -> Optional[Dict[str, Any]]:
 
 
 class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
+    # First few connection attempts use these short delays at INFO level so
+    # an offline-at-startup case is visible. After that the worker drops to
+    # DEBUG and retries every _REDISCOVERY_INTERVAL_SEC indefinitely.
+    _QUICK_RETRY_INTERVALS_SEC = (2, 5, 10)
+    _REDISCOVERY_INTERVAL_SEC = 60
+
     def __init__(
         self,
         config: KalinkaPluginMusiccastConfig,
@@ -331,6 +339,15 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         self.base_url = None
         self.tasks = []
         self._discovery_task = None
+        # Cached so transitions to/from unreachable can be dispatched only
+        # on actual state changes (no event spam every retry).
+        self._device_power_on: bool = False
+        # Placeholder volume used before discovery completes and after the
+        # device disappears. supported=False keeps the UI from offering
+        # volume controls until we actually know the device is reachable.
+        self.volume = DeviceVolume(
+            max_volume=0, current_volume=0, volume_gain=0, supported=False
+        )
 
         # Worker tasks may be spawned before get_ready() completes (when
         # discovery is in flight). They reference shutdown_event,
@@ -345,80 +362,121 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         self._volume_changed_event = asyncio.Event()
 
     async def get_ready(self):
-        # Test connection and get initial status
+        """Probe the device, refresh state, and dispatch events.
+
+        The bus is pre-seeded by start() with an `unavailable` state so any
+        client that connects before the device responds sees the correct
+        UI. Once we successfully read getStatus we dispatch events to flip
+        subscribers to the live state.
+        """
         status = await self._get_status()
         self.volume = DeviceVolume(
             max_volume=status["max_volume"],
             current_volume=status["volume"],
             volume_gain=0,
+            supported=True,
         )
         logger.debug(
             f"[volume] init from getStatus: current={self.volume.current_volume} "
             f"max={self.volume.max_volume}"
         )
 
+        power_on_now = (
+            status["power"] == "on" and status["input"] == self.connected_input
+        )
+        self.ready = True
+        self._device_power_on = power_on_now
+
+        # Always emit so subscribers see supported=True even on the first
+        # successful connection (the seeded initial state had supported=False).
+        self.event_emitter.dispatch(VolumeChangedEvent(volume=self.volume))
+        self.event_emitter.dispatch(
+            DevicePowerStateChangedEvent(power_on=power_on_now)
+        )
+
+    async def run_discovery(self) -> bool:
+        """Run SSDP discovery. Returns True if a device was found and
+        get_ready() succeeded."""
+        interfaces = get_network_interfaces()
+        if not interfaces:
+            logger.debug("No network interfaces found for discovery")
+            return False
+
+        for iface_name, iface_ip in interfaces:
+            logger.debug(f"Running discovery on interface {iface_name} ({iface_ip})")
+            device_info = discover_musiccast_devices(
+                iface=iface_name, timeout_seconds=self.config.discovery_timeout
+            )
+            if device_info:
+                logger.debug(f"Device control URL: {device_info['api_base_url']}")
+                self.base_url = device_info["api_base_url"]
+                try:
+                    await self.get_ready()
+                except Exception as e:
+                    logger.debug(f"get_ready() failed after discovery: {e}")
+                    return False
+                return True
+
+        logger.debug("MusicCast device discovery failed on all interfaces")
+        return False
+
+    async def _connect_once(self) -> bool:
+        """Single connection attempt. Uses the configured address if set,
+        otherwise falls back to SSDP."""
+        if self.config.device_addr and self.config.device_addr.strip():
+            if not self.base_url:
+                yxc_control_url = "/YamahaExtendedControl/v1/"
+                self.base_url = (
+                    f"http://{self.config.device_addr}:{self.config.device_port}"
+                    f"{yxc_control_url}"
+                )
+            try:
+                await self.get_ready()
+                return True
+            except (httpx.ConnectError, httpx.TimeoutException, ConnectionError) as e:
+                logger.debug(f"Configured-device connection failed: {e}")
+                return False
+            except Exception as e:
+                logger.debug(f"Configured-device get_ready failed: {e}")
+                return False
+
+        try:
+            return await self.run_discovery()
+        except Exception as e:
+            logger.debug(f"Discovery error: {e}")
+            return False
+
+    async def start(self):
+        """Start the MusicCast device and initialize tasks."""
+        logger.info("Starting MusicCast device...")
+
+        if self.config.device_addr and self.config.device_addr.strip():
+            logger.info(
+                f"Using configured MusicCast device: "
+                f"{self.config.device_addr}:{self.config.device_port}"
+            )
+
+        # Allocate the UDP listener port up-front so the event-loop worker
+        # can bind as soon as get_ready() flips self.ready to True.
         self.poweroff_timer = None
         self.udp_port = find_available_port()
         if self.udp_port is None:
             raise Exception("Could not find available UDP port")
         logger.info(f"Using UDP port {self.udp_port}")
-        self.ready = True
 
-        # Track "effective on" state: device powered on AND correct input selected
-        self._device_power_on: bool = (
-            status["power"] == "on" and status["input"] == self.connected_input
+        # Seed the bus with an `unavailable` state. If discovery fails for
+        # a while, any client that connects mid-retry sees
+        # `volume.supported=False` and `power_on=False` immediately — they
+        # don't observe the stale defaults from the bus's bootstrap state.
+        self.event_emitter.set_initial_state(
+            ExtDeviceState(power_on=False, volume=self.volume)
         )
 
-        # Set initial device state after we have retrieved it from the device
-        # This must be done before any event emission tasks start
-        initial_state = ExtDeviceState(
-            power_on=self._device_power_on,
-            volume=self.volume,
-        )
-        self.event_emitter.set_initial_state(initial_state)
+        # Always go through the retry loop. If the device is reachable the
+        # first attempt resolves immediately; if not, the loop keeps trying
+        # without blocking start() or the rest of the plugin.
+        self._discovery_task = asyncio.create_task(self._discovery_worker())
 
-    async def run_discovery(self):
-        """Run SSDP discovery to find MusicCast device"""
-        interfaces = get_network_interfaces()
-        if not interfaces:
-            logger.error("No network interfaces found for discovery")
-            return
-
-        for iface_name, iface_ip in interfaces:
-            logger.info(f"Running discovery on interface {iface_name} ({iface_ip})")
-            device_info = discover_musiccast_devices(
-                iface=iface_name, timeout_seconds=self.config.discovery_timeout
-            )
-            if device_info:
-                logger.info(f"Device control URL: {device_info['api_base_url']}")
-                self.base_url = device_info["api_base_url"]
-                await self.get_ready()
-                return
-
-        logger.error("MusicCast device discovery failed on all interfaces")
-
-    async def start(self):
-        """Start the MusicCast device and initialize tasks"""
-        logger.info("Starting MusicCast device...")
-
-        # Initialize device connection
-        if self.config.device_addr and self.config.device_addr.strip():
-            # Use configured address
-            device_addr = self.config.device_addr
-            device_port = self.config.device_port
-            yxc_control_url = "/YamahaExtendedControl/v1/"
-            logger.info(
-                f"Using configured MusicCast device: {device_addr}:{device_port}"
-            )
-            self.base_url = f"http://{device_addr}:{device_port}{yxc_control_url}"
-            await self.get_ready()
-        else:
-            # Run discovery with retries as a task
-            self._discovery_task = asyncio.create_task(
-                self._discovery_worker(max_retries=3)
-            )
-
-        # Create and start asyncio tasks
         self.tasks.append(asyncio.create_task(self._event_loop()))
         self.tasks.append(asyncio.create_task(self._timer_loop()))
         self.tasks.append(asyncio.create_task(self._event_sender()))
@@ -427,8 +485,10 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
     async def terminate(self):
         """Gracefully shutdown all tasks and close connections"""
         logger.info("Terminating MusicCast device...")
-        if self.ready:
-            self.shutdown_event.set()
+        # Always signal shutdown so the discovery retry loop and the workers
+        # (some of which spin on `not self.ready: sleep(1)` and never see
+        # cancellation propagate through the sleep cleanly) exit promptly.
+        self.shutdown_event.set()
 
         # Cancel discovery task if running
         if self._discovery_task and not self._discovery_task.done():
@@ -617,12 +677,11 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
                     await asyncio.sleep(60)
                 except (httpx.ConnectError, httpx.TimeoutException, ConnectionError):
-                    # Network error - trigger rediscovery and retry sooner
-                    logger.warning(
-                        "Network error in timer loop, triggering rediscovery"
-                    )
+                    # Network error — rediscover_device() is idempotent and
+                    # emits the unreachable transition exactly once, so we
+                    # don't log here. The loop will park on `not self.ready`
+                    # until the retry worker recovers the connection.
                     await self.rediscover_device()
-                    await asyncio.sleep(10)
                 except Exception as e:
                     logger.error(f"Timer loop error: {e}")
                     await asyncio.sleep(10)
@@ -825,57 +884,88 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
             return response.json()
         except (httpx.ConnectError, httpx.TimeoutException, ConnectionError) as e:
-            logger.error(f"Network error accessing MusicCast device: {e}")
-            # Trigger rediscovery on network errors
+            # rediscover_device() is idempotent — it only logs / dispatches
+            # on the first transition to unreachable. Keep this at debug so
+            # repeated failures during the retry loop don't fill the log.
+            logger.debug(f"Network error accessing MusicCast device: {e}")
             await self.rediscover_device()
             raise
         except Exception as e:
             logger.error(f"MusicCast request failed for {endpoint}: {e}")
             raise
 
+    def _mark_unavailable(self) -> None:
+        """Signal device-unreachable to subscribers.
+
+        Uses the existing wire model (no new fields): volume.supported=False
+        tells the UI that volume control isn't available, and power_on=False
+        keeps the device card in the off state. Only emits on actual state
+        transitions to avoid spamming the bus during retry loops.
+        """
+        if self.volume.supported:
+            self.volume = DeviceVolume(
+                max_volume=self.volume.max_volume,
+                current_volume=self.volume.current_volume,
+                volume_gain=self.volume.volume_gain,
+                supported=False,
+            )
+            self.event_emitter.dispatch(VolumeChangedEvent(volume=self.volume))
+
+        if self._device_power_on:
+            self._device_power_on = False
+            self.event_emitter.dispatch(
+                DevicePowerStateChangedEvent(power_on=False)
+            )
+
     async def rediscover_device(self):
+        """Mark device unreachable and ensure the retry loop is running.
+
+        Idempotent: callers in the network-error paths can hammer this
+        without piling up tasks or re-dispatching state events.
         """
-        Re-discover MusicCast device using SSDP if the current one becomes unavailable.
-        This runs in the background and doesn't block the caller.
+        if self.ready:
+            logger.info("MusicCast device unreachable, switching to retry loop")
+            self.ready = False
+            self._mark_unavailable()
+
+        if not self._discovery_task or self._discovery_task.done():
+            self._discovery_task = asyncio.create_task(self._discovery_worker())
+
+    async def _discovery_worker(self):
+        """Retry connection until the device is reachable or we're shutting
+        down. First few attempts log at INFO so an offline-at-startup case
+        is visible; after that we drop to DEBUG and retry every
+        _REDISCOVERY_INTERVAL_SEC to avoid spamming the log.
         """
-        logger.info("Current device unreachable, attempting SSDP rediscovery...")
-        self.ready = False
+        attempt = 0
+        while not self.shutdown_event.is_set():
+            attempt += 1
+            is_quick = attempt <= len(self._QUICK_RETRY_INTERVALS_SEC)
+            log = logger.info if is_quick else logger.debug
 
-        # Cancel any existing discovery/rediscovery task
-        if self._discovery_task and not self._discovery_task.done():
-            self._discovery_task.cancel()
-
-        # Start a new discovery task with retries
-        self._discovery_task = asyncio.create_task(
-            self._discovery_worker(max_retries=3)
-        )
-
-    async def _discovery_worker(self, max_retries: int):
-        """Unified discovery worker for both initial discovery and rediscovery with retries."""
-
-        for attempt in range(1, max_retries + 1):
+            log(f"MusicCast connection attempt {attempt}")
             try:
-                logger.info(f"Discovery attempt {attempt}/{max_retries}")
-                # Create discovery as a task and wait for it
-                discovery_task = asyncio.create_task(self.run_discovery())
-                await discovery_task
-
-                if self.ready:
-                    logger.info(f"Device discovery successful")
-                    # Initial state is already set by get_ready() via set_initial_state()
-                    # No need to emit additional events here
-                    self._discovery_task = None
+                if await self._connect_once():
+                    logger.info(
+                        f"MusicCast device available (attempt {attempt})"
+                    )
                     return
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.error(f"Discovery attempt {attempt} failed: {e}")
-                if attempt < max_retries:
-                    # Exponential backoff: 2s, 5s, 10s
-                    wait_time = 2**attempt
-                    logger.info(f"Retrying in {wait_time} seconds...")
-                    await asyncio.sleep(wait_time)
+                log(f"Connection attempt {attempt} failed: {e}")
 
-        logger.error(f"Failed discovery device after {max_retries} attempts")
-        self._discovery_task = None
+            wait = (
+                self._QUICK_RETRY_INTERVALS_SEC[attempt - 1]
+                if is_quick
+                else self._REDISCOVERY_INTERVAL_SEC
+            )
+            log(f"Retrying MusicCast connection in {wait}s")
+            try:
+                await asyncio.wait_for(self.shutdown_event.wait(), timeout=wait)
+                return  # shutdown set during the wait
+            except asyncio.TimeoutError:
+                pass
 
     async def get_volume(self) -> DeviceVolume:
         if not self.ready:
