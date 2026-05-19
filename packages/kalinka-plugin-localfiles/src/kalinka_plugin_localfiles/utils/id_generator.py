@@ -53,6 +53,30 @@ def generate_track_id(file_path: str) -> str:
     return f"track_{hashlib.md5(file_path.encode('utf-8')).hexdigest()[:16]}"
 
 
+# Sentinel used inside ``generate_va_album_id`` so the hash never collides
+# with a tag-derived title. Anything that normalizes to this exact string
+# from a real tag is theoretically possible but vanishingly unlikely —
+# leading/trailing underscores collapse in ``normalize_for_id`` so even
+# ``"___various_artists___"`` from a tag would normalize to
+# ``"various_artists"`` (no underscores), keeping the namespaces apart.
+_VA_TITLE_KEY = "\0__various_artists__\0"
+
+
+def generate_va_album_id(album_folder: str) -> str:
+    """Stable ID for a V/A compilation album associated with a folder.
+
+    Used by the V/A coalescing pass to mint a folder-level album when
+    a directory contains tracks by many different artists. Independent
+    of the per-track album-title tags (which may differ for each
+    track on a compilation) so the same folder always coalesces to the
+    same ID across re-indexes.
+    """
+    if not album_folder:
+        return "unknown_album"
+    payload = f"{album_folder}{_VA_TITLE_KEY}".encode("utf-8")
+    return f"album_{hashlib.md5(payload).hexdigest()[:16]}"
+
+
 def generate_playlist_id(name: str, created_by: str) -> str:
     """Stable playlist ID from name + creator."""
     payload = f"{name.lower()}{created_by}".encode("utf-8")

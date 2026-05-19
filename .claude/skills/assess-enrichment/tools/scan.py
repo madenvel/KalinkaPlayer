@@ -360,9 +360,15 @@ def scan(db_path: str) -> Dict[str, Any]:
         """
     ).fetchall()
 
+    # Albums already anchored to ``various_artists`` were handled by the
+    # V/A coalescing pass and shouldn't appear in either failure bucket.
     mistagging_candidates = []
     va_candidates_cross = []
+    properly_coalesced_va = 0
     for r in multi_artist_albums:
+        if r["artist_id"] == "various_artists":
+            properly_coalesced_va += 1
+            continue
         rec = {
             "album_id": r["id"],
             "title": r["title"],
@@ -380,6 +386,7 @@ def scan(db_path: str) -> Dict[str, Any]:
         "tracks_matched_in_unmatched_albums": tracks_matched_in_unmatched_albums,
         "mistagging_candidates": mistagging_candidates,
         "va_albums_to_coalesce": va_candidates_cross,
+        "properly_coalesced_va_albums": properly_coalesced_va,
     }
 
     # ---- duration signal ----
@@ -540,6 +547,10 @@ def render_markdown(findings: Dict[str, Any]) -> str:
     lines.append(
         f"- V/A compilations to coalesce (≥4 tracks, ≥4 distinct artists): "
         f"**{len(ce['va_albums_to_coalesce'])}**"
+    )
+    lines.append(
+        f"- Properly coalesced V/A albums (anchored to `various_artists`): "
+        f"**{ce.get('properly_coalesced_va_albums', 0)}**"
     )
     if ce["mistagging_candidates"][:5]:
         lines.append("")
