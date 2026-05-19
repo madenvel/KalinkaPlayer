@@ -256,11 +256,52 @@ class AcoustIdPlugin(EnricherPlugin):
                 return score
         return 0.0
 
+    # Bonus added when a candidate release matches the local album's
+    # already-known MBID. Large enough to outweigh any release-group
+    # / position signal because matching the local album is by far the
+    # strongest signal we have for track→album consistency.
+    LOCAL_ALBUM_MATCH_BONUS = 1000.0
+
+    async def _lookup_local_album_mbid(
+        self, album_id: Optional[str]
+    ) -> Optional[str]:
+        """Fetch the MBID stored on the local album row, if any.
+
+        Returns None for the ``unknown_album`` sentinel, for a missing
+        row, or when the album hasn't been enriched yet — callers
+        should treat None as "no context available".
+        """
+        if not album_id or album_id == "unknown_album":
+            return None
+        album = await self.db_manager.get_album_by_id(album_id)
+        if not album:
+            return None
+        mbid = album.get("mbid")
+        return mbid if mbid else None
+
+    @staticmethod
+    def _recording_has_release(recording: Dict, release_mbid: str) -> bool:
+        """Return True if ``recording`` lists a release with this MBID.
+
+        Walks both the ``releasegroups[*].releases[*]`` tree (present
+        when AcoustID was queried with ``meta=releasegroups``) and the
+        flat ``releases`` list as a fallback.
+        """
+        for rg in recording.get("releasegroups") or []:
+            for rel in rg.get("releases") or []:
+                if rel.get("id") == release_mbid:
+                    return True
+        for rel in recording.get("releases") or []:
+            if rel.get("id") == release_mbid:
+                return True
+        return False
+
     def _pick_best_release(
         self,
         recording: Dict,
         track_number: Optional[int] = None,
         disc_number: Optional[int] = None,
+        local_album_mbid: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Pick the best (album_title, album_mbid) for a recording.
 
@@ -273,6 +314,12 @@ class AcoustIdPlugin(EnricherPlugin):
         position get a further bonus on top of the release-group score.
         Falls back to ``recording.releases`` when no release-group
         metadata is present.
+
+        When ``local_album_mbid`` is provided (the local album has
+        already been enriched to a specific MB release), a release
+        whose MBID matches gets ``LOCAL_ALBUM_MATCH_BONUS`` so the
+        recording's release defaults to that one — keeping the track's
+        chosen release in sync with the album row's release.
         """
         recording_mbid = recording.get("id")
         candidates: List[Tuple[float, Dict]] = []
@@ -285,14 +332,24 @@ class AcoustIdPlugin(EnricherPlugin):
                 pos_score = self._position_match_score(
                     rel, recording_mbid, track_number, disc_number
                 )
-                candidates.append((rg_score + pos_score, rel))
+                ctx_bonus = (
+                    self.LOCAL_ALBUM_MATCH_BONUS
+                    if local_album_mbid and rel.get("id") == local_album_mbid
+                    else 0.0
+                )
+                candidates.append((rg_score + pos_score + ctx_bonus, rel))
 
         if not candidates:
             for rel in recording.get("releases") or []:
                 pos_score = self._position_match_score(
                     rel, recording_mbid, track_number, disc_number
                 )
-                candidates.append((pos_score, rel))
+                ctx_bonus = (
+                    self.LOCAL_ALBUM_MATCH_BONUS
+                    if local_album_mbid and rel.get("id") == local_album_mbid
+                    else 0.0
+                )
+                candidates.append((pos_score + ctx_bonus, rel))
 
         if not candidates:
             return None, None
@@ -309,6 +366,7 @@ class AcoustIdPlugin(EnricherPlugin):
         target_duration_s: Optional[float] = None,
         track_number: Optional[int] = None,
         disc_number: Optional[int] = None,
+        local_album_mbid: Optional[str] = None,
     ) -> Optional[Dict]:
         """Extract the best match information from AcoustID results.
 
@@ -322,6 +380,14 @@ class AcoustIdPlugin(EnricherPlugin):
         candidate is within ``MIN_MATCH_MARGIN`` — the latter prevents
         coin-flip assignments to the wrong recording when several
         candidates look equally plausible.
+
+        When ``local_album_mbid`` is provided, recordings whose
+        ``releasegroups[*].releases[*]`` (or fallback ``releases``)
+        include a release matching that MBID get a large additive
+        bonus. This is the album-context re-rank: if the local album
+        is already enriched to a specific MB release, the chosen
+        recording should also be on that release rather than on some
+        compilation re-issue with a coincidentally-similar duration.
         """
         if not acoustid_results:
             return None
@@ -339,6 +405,10 @@ class AcoustIdPlugin(EnricherPlugin):
                 # AcoustID recording duration is in seconds.
                 cand_s = recording.get("duration")
                 combined = base_score + duration_bonus(target_duration_s, cand_s)
+                if local_album_mbid and self._recording_has_release(
+                    recording, local_album_mbid
+                ):
+                    combined += self.LOCAL_ALBUM_MATCH_BONUS
                 if combined > best_combined:
                     runner_up_combined = best_combined
                     best_combined = combined
@@ -375,7 +445,7 @@ class AcoustIdPlugin(EnricherPlugin):
         artist_id = artists[0].get("id") if artists else None
 
         album_title, album_id = self._pick_best_release(
-            best_recording, track_number, disc_number
+            best_recording, track_number, disc_number, local_album_mbid
         )
 
         return {
@@ -557,12 +627,19 @@ class AcoustIdPlugin(EnricherPlugin):
             # to pick among same-named recordings, and the file's
             # track/disc numbers so a release that places this recording
             # at the same position gets preference over one that doesn't.
+            # Also pass the local album's MBID (if its row has already
+            # been enriched) so a recording on the same release outranks
+            # one on a compilation re-issue.
             target_duration_s = track.get("duration") or duration
+            local_album_mbid = await self._lookup_local_album_mbid(
+                track.get("album_id")
+            )
             match_info = self._get_best_match_info(
                 results,
                 target_duration_s,
                 track_number=track.get("track_number"),
                 disc_number=track.get("disc_number"),
+                local_album_mbid=local_album_mbid,
             )
             if not match_info:
                 logger.debug(

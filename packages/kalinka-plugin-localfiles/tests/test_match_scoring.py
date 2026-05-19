@@ -515,6 +515,121 @@ class TestAcoustidReleasePicking:
         assert AcoustIdPlugin._release_group_score("", []) == 0.0
 
 
+class TestAcoustidLocalAlbumContext:
+    """Re-rank using the album's already-known MBID.
+
+    When the local album row has been enriched to a specific MB
+    release, the chosen recording's release should match — otherwise
+    we end up with a track tagged to a different album than its album
+    row says it belongs to.
+    """
+
+    def test_recording_has_release_releasegroups(self):
+        recording = {
+            "releasegroups": [
+                {"releases": [{"id": "alpha"}]},
+                {"releases": [{"id": "beta"}, {"id": "gamma"}]},
+            ]
+        }
+        assert AcoustIdPlugin._recording_has_release(recording, "alpha") is True
+        assert AcoustIdPlugin._recording_has_release(recording, "gamma") is True
+        assert AcoustIdPlugin._recording_has_release(recording, "delta") is False
+
+    def test_recording_has_release_flat_fallback(self):
+        recording = {"releases": [{"id": "alpha"}, {"id": "beta"}]}
+        assert AcoustIdPlugin._recording_has_release(recording, "beta") is True
+        assert AcoustIdPlugin._recording_has_release(recording, "x") is False
+
+    def test_pick_best_release_prefers_local_album_match(self):
+        """The local album's MBID overrides release-group type
+        preference: a compilation that matches the local row wins
+        over a standalone studio album that doesn't."""
+        plugin = _make_acoustid_plugin()
+        recording = {
+            "id": "rec",
+            "releasegroups": [
+                {
+                    "type": "Album",
+                    "secondarytypes": [],
+                    "releases": [{"id": "studio", "title": "Help!"}],
+                },
+                {
+                    "type": "Album",
+                    "secondarytypes": ["Compilation"],
+                    "releases": [{"id": "comp", "title": "Greatest Hits"}],
+                },
+            ],
+        }
+        # Without context: studio wins (Album beats Album+Compilation).
+        _, mbid = plugin._pick_best_release(recording)
+        assert mbid == "studio"
+        # With context = "comp": comp wins despite being a compilation.
+        _, mbid = plugin._pick_best_release(recording, local_album_mbid="comp")
+        assert mbid == "comp"
+
+    def test_get_best_match_info_prefers_recording_on_local_release(self):
+        """When two AcoustID recordings have the same duration and
+        score but different release lists, the one whose releases
+        include the local album's MBID should win."""
+        plugin = _make_acoustid_plugin()
+        results = [
+            {
+                "score": 0.95,
+                "recordings": [
+                    {
+                        "id": "rec-other",
+                        "title": "Yesterday",
+                        "duration": 180,
+                        "artists": [{"id": "a1", "name": "Beatles"}],
+                        "releases": [{"id": "compilation", "title": "Hits"}],
+                    },
+                    {
+                        "id": "rec-original",
+                        "title": "Yesterday",
+                        "duration": 180,
+                        "artists": [{"id": "a1", "name": "Beatles"}],
+                        "releases": [{"id": "help-album", "title": "Help!"}],
+                    },
+                ],
+            }
+        ]
+        # Without context: returns the first one (no signal to break the tie).
+        match = plugin._get_best_match_info(results, target_duration_s=180)
+        # Both candidates score identically, but the ambiguity guard
+        # would normally reject. Verify the local-album context lets
+        # the right one win:
+        match = plugin._get_best_match_info(
+            results, target_duration_s=180, local_album_mbid="help-album"
+        )
+        assert match is not None
+        assert match["recording_mbid"] == "rec-original"
+        assert match["album_mbid"] == "help-album"
+
+    def test_context_does_not_affect_when_no_match_in_releases(self):
+        """A local album MBID with no candidates pointing at it is a
+        no-op — duration/score still decides."""
+        plugin = _make_acoustid_plugin()
+        results = [
+            {
+                "score": 0.95,
+                "recordings": [
+                    {
+                        "id": "rec",
+                        "title": "T",
+                        "duration": 180,
+                        "artists": [{"id": "a", "name": "A"}],
+                        "releases": [{"id": "rel-x", "title": "X"}],
+                    }
+                ],
+            }
+        ]
+        match = plugin._get_best_match_info(
+            results, target_duration_s=180, local_album_mbid="not-present"
+        )
+        assert match is not None
+        assert match["recording_mbid"] == "rec"
+
+
 # ---------------------------------------------------------------------------
 # Album-level scoring helpers (the duration / track-count fix)
 # ---------------------------------------------------------------------------
