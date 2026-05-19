@@ -72,6 +72,7 @@ configs/
 
 # Skill-generated evaluation output (e.g. /assess-ai-search)
 tmp/ai_search_eval/
+tmp/enrichment_assess/
 
 # Log files
 *.log
