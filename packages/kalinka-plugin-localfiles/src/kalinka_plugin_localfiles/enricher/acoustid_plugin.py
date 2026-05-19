@@ -8,6 +8,7 @@ import requests
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import clean_display_name
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
 from .match_utils import duration_bonus
@@ -396,6 +397,7 @@ class AcoustIdPlugin(EnricherPlugin):
         Returns:
             Artist ID
         """
+        artist_name = clean_display_name(artist_name) if artist_name else ""
         if not artist_name:
             return None
 
@@ -441,6 +443,7 @@ class AcoustIdPlugin(EnricherPlugin):
         Returns:
             Album ID
         """
+        album_title = clean_display_name(album_title) if album_title else ""
         if not album_title or not artist_id:
             return None
 

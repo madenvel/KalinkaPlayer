@@ -25,6 +25,7 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import clean_display_name
 from ..worker_utils import set_proc_title
 from .id_generator import (
     generate_artist_id,
@@ -298,7 +299,8 @@ class FileIndexer:
         metadata["modified_time"] = modified_time
         metadata["last_updated"] = int(time.time())
 
-        artist_name = metadata.get("artist", "Unknown Artist")
+        raw_artist = metadata.get("artist", "Unknown Artist")
+        artist_name = clean_display_name(raw_artist) or "Unknown Artist"
         artist_id = generate_artist_id(artist_name)
 
         artist = await self.db_manager.get_artist_by_id(artist_id)
@@ -313,7 +315,8 @@ class FileIndexer:
             )
             changes["artists"] = artist_id
 
-        album_title = metadata.get("album", "Unknown Album")
+        raw_album = metadata.get("album", "Unknown Album")
+        album_title = clean_display_name(raw_album) or "Unknown Album"
         album_id = generate_album_id(album_title, artist_id)
 
         album = await self.db_manager.get_album_by_id(album_id)

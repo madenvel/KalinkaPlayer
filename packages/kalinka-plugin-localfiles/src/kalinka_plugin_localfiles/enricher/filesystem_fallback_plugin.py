@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import clean_display_name
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
 
@@ -155,12 +156,13 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         Returns:
             The artist ID (existing or newly created)
         """
-        if not artist_name or artist_name.strip() == "":
+        artist_name = clean_display_name(artist_name)
+        if not artist_name:
             return "unknown_artist"
 
         # Search for existing artist with case-insensitive match
         search_results, _ = await self.db_manager.search_artists(
-            artist_name.strip(), limit=100
+            artist_name, limit=100
         )
 
         for artist in search_results:
@@ -178,7 +180,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             await self.db_manager.insert_artist(
                 {
                     "id": artist_id,
-                    "name": artist_name.strip(),
+                    "name": artist_name,
                     "enriched": 0,
                     "last_updated": int(__import__("time").time()),
                 }
@@ -200,10 +202,9 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         Returns:
             The album ID (existing or newly created)
         """
-        if not album_title or album_title.strip() == "":
+        album_title = clean_display_name(album_title)
+        if not album_title:
             return "unknown_album"
-
-        album_title = album_title.strip()
 
         # First try exact match by title and artist
         existing_album = await self.db_manager.get_album_by_title_and_artist(

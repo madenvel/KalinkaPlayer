@@ -1,5 +1,7 @@
 import hashlib
 
+from ..utils.name_utils import normalize_for_id
+
 
 def generate_artist_id(artist_name: str) -> str:
     """
@@ -14,8 +16,10 @@ def generate_artist_id(artist_name: str) -> str:
     if not artist_name or artist_name == "Unknown Artist":
         return "unknown_artist"
 
-    # Create a hash from the artist name for a stable ID
-    hash_obj = hashlib.md5(artist_name.lower().encode("utf-8"))
+    key = normalize_for_id(artist_name)
+    if not key:
+        return "unknown_artist"
+    hash_obj = hashlib.md5(key.encode("utf-8"))
     return f"artist_{hash_obj.hexdigest()[:16]}"
 
 
@@ -33,7 +37,8 @@ def generate_album_id(album_title: str, artist_id: str) -> str:
     if not album_title or album_title == "Unknown Album":
         return "unknown_album"
 
-    # Create a hash from the album title and artist ID for a stable ID
-    hash_input = f"{album_title.lower()}{artist_id}"
-    hash_obj = hashlib.md5(hash_input.encode("utf-8"))
+    key = normalize_for_id(album_title)
+    if not key:
+        return "unknown_album"
+    hash_obj = hashlib.md5(f"{key}{artist_id}".encode("utf-8"))
     return f"album_{hash_obj.hexdigest()[:16]}"
