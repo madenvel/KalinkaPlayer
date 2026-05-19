@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import clean_display_name
+from ..utils.name_utils import album_folder_for_path, clean_display_name
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
 
@@ -191,13 +191,18 @@ class FilesystemFallbackPlugin(EnricherPlugin):
 
         return artist_id
 
-    async def _find_or_create_album(self, album_title: str, artist_id: str) -> str:
+    async def _find_or_create_album(
+        self, album_title: str, artist_id: str, file_path: str
+    ) -> str:
         """
-        Find existing album by case-insensitive title and artist match or create new one.
+        Find existing album by folder + title or create new one.
 
         Args:
             album_title: The album title to find or create
-            artist_id: The artist ID for the album
+            artist_id: The artist ID for the album (stored on the row,
+                not part of the ID key)
+            file_path: Track file path — used to derive the album folder
+                so quality variants in sibling directories get distinct IDs.
 
         Returns:
             The album ID (existing or newly created)
@@ -206,21 +211,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         if not album_title:
             return "unknown_album"
 
-        # First try exact match by title and artist
-        existing_album = await self.db_manager.get_album_by_title_and_artist(
-            album_title, artist_id
-        )
-
-        if existing_album:
-            logger.debug(
-                f"Found existing album: {existing_album['title']} (ID: {existing_album['id']})"
-            )
-            return existing_album["id"]
-
-        # If no exact match, we need to do a case-insensitive search
-        # This is a simple implementation - for a full solution, you'd want a search_albums method in the DB
-        # For now, let's check if an album with the generated ID already exists
-        album_id = generate_album_id(album_title, artist_id)
+        album_id = generate_album_id(album_title, album_folder_for_path(file_path))
         existing_album_by_id = await self.db_manager.get_album_by_id(album_id)
 
         if existing_album_by_id:
@@ -440,7 +431,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                 changed_items["artists"].add(artist_id_for_album)
 
             new_album_id = await self._find_or_create_album(
-                fs_album, artist_id_for_album
+                fs_album, artist_id_for_album, track["file_path"]
             )
             if new_album_id != current_album_id:
                 updates["album_id"] = new_album_id

@@ -8,7 +8,7 @@ import requests
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import clean_display_name
+from ..utils.name_utils import album_folder_for_path, clean_display_name
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
 from .match_utils import duration_bonus
@@ -435,10 +435,17 @@ class AcoustIdPlugin(EnricherPlugin):
         return artist_data["id"]
 
     async def _create_or_get_album(
-        self, album_title: str, artist_id: str, album_mbid: Optional[str] = None
+        self,
+        album_title: str,
+        artist_id: str,
+        file_path: str,
+        album_mbid: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Find album by title/artist or MBID, or create if not exists
+        Find album by folder+title or MBID, or create if not exists.
+
+        ``file_path`` is used to derive the album folder so quality variants
+        in sibling directories get distinct album IDs.
 
         Returns:
             Album ID
@@ -453,20 +460,14 @@ class AcoustIdPlugin(EnricherPlugin):
             if existing_album:
                 return existing_album["id"]
 
-        # Try to find by title and artist
-        existing_album = await self.db_manager.get_album_by_title_and_artist(
-            album_title, artist_id
-        )
-        if existing_album:
-            # If found and we have MBID but they don't, update it
-            if album_mbid and not existing_album.get("mbid"):
-                await self.db_manager.update_album(
-                    existing_album["id"], {"mbid": album_mbid}
-                )
-            return existing_album["id"]
-
-        # Create new album
-        album_id = generate_album_id(album_title, artist_id)
+        # Create new album (the folder-bounded ID is what disambiguates
+        # quality variants; we no longer fuzzy-match by title alone).
+        album_id = generate_album_id(album_title, album_folder_for_path(file_path))
+        existing_by_id = await self.db_manager.get_album_by_id(album_id)
+        if existing_by_id:
+            if album_mbid and not existing_by_id.get("mbid"):
+                await self.db_manager.update_album(album_id, {"mbid": album_mbid})
+            return album_id
 
         album_data = {
             "id": album_id,
@@ -611,6 +612,7 @@ class AcoustIdPlugin(EnricherPlugin):
                         album_id = await self._create_or_get_album(
                             match_info["album_title"],
                             artist_id,
+                            track["file_path"],
                             match_info.get("album_mbid"),
                         )
 
