@@ -33,7 +33,7 @@ _LEADING_TRAILING_PUNCT_RE = re.compile(r"^[\-_.,/ \t]+|[\-_.,/ \t]+$")
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
 _PUNCT_FOR_ID_RE = re.compile(r"[\-_./]")
 _NON_WORD_RE = re.compile(r"[^\w\s]")
-_DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk)\s*\d+$", re.IGNORECASE)
+_DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk)[\s\-_]*\d+$", re.IGNORECASE)
 
 
 def clean_display_name(name: str) -> str:

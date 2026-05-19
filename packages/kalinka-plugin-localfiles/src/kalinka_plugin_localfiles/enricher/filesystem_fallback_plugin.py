@@ -212,33 +212,21 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             return "unknown_album"
 
         album_id = generate_album_id(album_title, album_folder_for_path(file_path))
-        existing_album_by_id = await self.db_manager.get_album_by_id(album_id)
-
-        if existing_album_by_id:
-            # Album exists but title might have different case - check case-insensitively
-            if existing_album_by_id["title"].lower() == album_title.lower():
-                logger.debug(
-                    f"Found existing album with different case: {existing_album_by_id['title']} (ID: {album_id})"
-                )
-                return album_id
-
-        # Create new album
-        if not existing_album_by_id:
-            await self.db_manager.insert_album(
-                {
-                    "id": album_id,
-                    "title": album_title,
-                    "artist_id": artist_id,
-                    "enriched": 0,
-                    "last_updated": int(__import__("time").time()),
-                }
-            )
-            logger.debug(
-                f"Created new album: {album_title} by {artist_id} (ID: {album_id})"
-            )
-        else:
+        existing = await self.db_manager.get_album_by_id(album_id)
+        if existing:
             logger.debug(f"Album already exists with ID: {album_id}")
+            return album_id
 
+        await self.db_manager.insert_album(
+            {
+                "id": album_id,
+                "title": album_title,
+                "artist_id": artist_id,
+                "enriched": 0,
+                "last_updated": int(__import__("time").time()),
+            }
+        )
+        logger.debug(f"Created new album: {album_title} by {artist_id} (ID: {album_id})")
         return album_id
 
     def _find_containing_music_folder(self, file_path: str) -> Optional[str]:
