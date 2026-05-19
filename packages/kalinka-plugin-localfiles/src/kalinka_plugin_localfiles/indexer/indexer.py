@@ -25,6 +25,7 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..utils.id_generator import generate_va_album_id
 from ..utils.name_utils import album_folder_for_path, clean_display_name
 from ..worker_utils import set_proc_title
 from .id_generator import (
@@ -33,6 +34,15 @@ from .id_generator import (
     generate_track_id,
 )
 from .indexer_db import AsyncIndexerDb
+
+
+# A folder's tracks coalesce into a single V/A compilation album when:
+#   1. they span at least this many distinct artists, AND
+#   2. at least this fraction of tracks have unique artists.
+# Both have to be true so we don't misfire on mistagged albums (e.g.
+# Abbey Road with 2-3 wrong-artist tags out of 17 tracks).
+VA_MIN_DISTINCT_ARTISTS = 4
+VA_MIN_ARTIST_UNIQUENESS = 0.5
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
@@ -134,6 +144,17 @@ class FileIndexer:
         if cleanup_results["tracks"] > 0:
             logger.info(
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
+            )
+
+        # Coalesce V/A folders into single compilation albums. Runs after
+        # cleanup so we don't operate on stale rows, and before notifying
+        # the enricher so it sees the post-coalesce shape.
+        va_results = await self.coalesce_va_folders()
+        if va_results["folders"]:
+            logger.info(
+                f"V/A coalescing: {va_results['folders']} folder(s) merged, "
+                f"{va_results['tracks']} track(s) re-pointed, "
+                f"{va_results['orphans']} orphan album(s) deleted"
             )
 
         # If anything changed and we have an enricher callback, notify it
@@ -541,6 +562,98 @@ class FileIndexer:
                 f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
             )
             return False
+
+    async def coalesce_va_folders(self) -> Dict[str, int]:
+        """Merge per-track albums in V/A folders into one compilation row.
+
+        After the folder-bounded album-ID change, two cases still leave a
+        V/A folder fragmented into many albums:
+
+        * **Compilation with one tag-album per track** (e.g. a Jamendo
+          playlist where each MP3 carries its own original-album tag).
+          Each track hashes to a distinct (folder, title) pair, so the
+          folder ends up with N albums of one track each.
+
+        * **Compilation with the same album tag but cross-artist tags.**
+          The folder-bounded ID already keeps these in one album row;
+          all we need is to flip ``artist_id`` to ``various_artists``
+          so the album doesn't get attributed to whichever track was
+          indexed first.
+
+        Both fall out of the same criterion: a folder whose tracks
+        span ≥``VA_MIN_DISTINCT_ARTISTS`` distinct artists with at
+        least ``VA_MIN_ARTIST_UNIQUENESS`` unique-artist-per-track
+        ratio is treated as V/A; we mint a folder-level album with
+        ``generate_va_album_id`` and re-point its tracks. Orphaned
+        per-track albums are cleaned up at the end.
+
+        Returns counts of (coalesced_folders, repointed_tracks,
+        deleted_orphans).
+        """
+        tracks = await self.db_manager.get_all_tracks()
+        if not tracks:
+            return {"folders": 0, "tracks": 0, "orphans": 0}
+
+        # Group tracks by their album folder.
+        folder_tracks: Dict[str, List[Dict]] = {}
+        for t in tracks:
+            folder = album_folder_for_path(t.get("file_path") or "")
+            if not folder:
+                continue
+            folder_tracks.setdefault(folder, []).append(t)
+
+        coalesced_folders = 0
+        repointed_tracks = 0
+        for folder, ts in folder_tracks.items():
+            distinct_artists = {t["artist_id"] for t in ts if t.get("artist_id")}
+            distinct_artists.discard("unknown_artist")
+            distinct_artists.discard("various_artists")
+            n_artists = len(distinct_artists)
+            n_tracks = len(ts)
+            if n_artists < VA_MIN_DISTINCT_ARTISTS:
+                continue
+            if (n_artists / n_tracks) < VA_MIN_ARTIST_UNIQUENESS:
+                continue
+
+            va_id = generate_va_album_id(folder)
+            title = clean_display_name(os.path.basename(folder)) or "Compilation"
+
+            if not await self.db_manager.get_album_by_id(va_id):
+                await self.db_manager.insert_album(
+                    {
+                        "id": va_id,
+                        "title": title,
+                        "artist_id": "various_artists",
+                        "enriched": 0,
+                        "last_updated": int(time.time()),
+                    }
+                )
+
+            for t in ts:
+                if t["album_id"] != va_id:
+                    await self.db_manager.update_track(
+                        t["id"], {"album_id": va_id}
+                    )
+                    repointed_tracks += 1
+
+            await self.db_manager.update_album_stats(va_id)
+            coalesced_folders += 1
+            logger.info(
+                f"Coalesced V/A folder '{folder}' ({n_tracks} tracks, "
+                f"{n_artists} artists) into album {va_id}"
+            )
+
+        deleted_albums = 0
+        if repointed_tracks > 0:
+            deleted_albums, _ = (
+                await self.db_manager.delete_orphaned_albums_and_artists()
+            )
+
+        return {
+            "folders": coalesced_folders,
+            "tracks": repointed_tracks,
+            "orphans": deleted_albums,
+        }
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries for files that no longer exist in the file system"""
