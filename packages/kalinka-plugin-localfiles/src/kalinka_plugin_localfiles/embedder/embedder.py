@@ -445,9 +445,18 @@ class EmbeddingWorker:
             logger.info("EmbeddingWorker shutting down")
             return
 
-        # Wait for the first nudge or poll cycle before loading models
-        logger.info("Embedder ready (poll=%ds)", poll)
+        # Wait for the first nudge or poll cycle before loading models.
+        # On a fresh restart with an already-indexed library there's
+        # nothing to nudge with, so this sleep is the full poll_interval
+        # — log the duration explicitly so "did the embedder die?" can be
+        # answered from the log alone instead of by ps + strace.
+        logger.info(
+            "Embedder ready; sleeping %ds before first work cycle "
+            "(wakes early on indexer nudge)",
+            poll,
+        )
         await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
+        logger.info("Embedder waking — starting first work cycle")
 
         self._last_work_time = time.monotonic()
 
