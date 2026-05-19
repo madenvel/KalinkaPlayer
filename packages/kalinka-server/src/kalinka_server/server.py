@@ -35,6 +35,7 @@ from kalinka_plugin_sdk.events import PlayQueueEventType
 
 from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
 from .config_model import KalinkaConfig
+from .config_overrides import save_overrides
 from .config_schema_processor import (
     build_enum_options,
     build_presentation,
@@ -61,18 +62,6 @@ from .queue_ws_handler import (
 from .device_ws_handler import (
     handle_websocket_connection as handle_device_websocket_connection,
 )
-
-
-def save_config(config_file: str, config: KalinkaConfig):
-    """Save the configuration to a file."""
-    config_data = config.model_dump(mode="json")
-    # Ensure the directory exists
-    config_dir = os.path.dirname(config_file)
-    if config_dir:  # Only create directory if path is not empty
-        os.makedirs(config_dir, exist_ok=True)
-    with open(config_file, "w") as f:
-        json.dump(config_data, f, indent=2)
-    logger.info(f"Configuration saved to {config_file}")
 
 
 @asynccontextmanager
@@ -109,11 +98,10 @@ async def lifespan(app: FastAPI):
         await internal_modules.shutdown()
 
         # Then shutdown plugins
-        await shutdown(os.path.dirname(app.state.config_file))
+        await shutdown()
 
         app.state.player_context.playqueue_eventbus.close()
         await save_state(app.state.player_context.playqueue_eventbus)
-        save_config(app.state.config_file, app.state.config)
         await app.state.player_context.playqueue.__aexit__(None, None, None)
 
 
@@ -221,11 +209,16 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
     return input_modules
 
 
-async def create_app(config_file, config: KalinkaConfig):
+async def create_app(
+    overrides_file: str,
+    config: KalinkaConfig,
+    overrides: Dict[str, Any],
+):
     app = FastAPI(lifespan=lifespan)
     app.state.config = config
-    app.state.config_file = config_file
-    player_context = await setup(os.path.dirname(config_file), config)
+    app.state.overrides_file = overrides_file
+    app.state.overrides = dict(overrides)
+    player_context = await setup(config, app.state.overrides)
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
 
@@ -969,62 +962,78 @@ async def create_app(config_file, config: KalinkaConfig):
             )
 
         dynamic_paths = app.state.dynamic_paths
+        applied: Dict[str, Any] = {}
 
-        for key, value in changes.items():
-            logger.info("Setting config field %s to %r", key, value)
-            attrs = key.split(".") if isinstance(key, str) else []
-            if not attrs or any(p == "" for p in attrs):
-                raise HTTPException(status_code=400, detail="Invalid config key")
-            if key in dynamic_paths:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"'{key}' is a dynamic (plugin-resolved) field and "
-                    "cannot be written via /server/config",
-                )
-
-            target_config = None
-            if attrs[0] == "base_config":
-                target_config = app.state.config
-                attrs = attrs[1:]
-            elif attrs[0] == "input_modules":
-                if len(attrs) < 3:
+        try:
+            for key, value in changes.items():
+                logger.info("Setting config field %s to %r", key, value)
+                attrs = key.split(".") if isinstance(key, str) else []
+                if not attrs or any(p == "" for p in attrs):
                     raise HTTPException(status_code=400, detail="Invalid config key")
-                module_name = attrs[1]
-                if module_name in modules.prepared_input_modules:
-                    target_config = modules.prepared_input_modules[
-                        module_name
-                    ].plugin_context.config
-                    attrs = attrs[2:]
-            elif attrs[0] == "devices":
-                if len(attrs) < 3:
+                if key in dynamic_paths:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"'{key}' is a dynamic (plugin-resolved) field and "
+                        "cannot be written via /server/config",
+                    )
+
+                target_config = None
+                if attrs[0] == "base_config":
+                    target_config = app.state.config
+                    attrs = attrs[1:]
+                elif attrs[0] == "input_modules":
+                    if len(attrs) < 3:
+                        raise HTTPException(status_code=400, detail="Invalid config key")
+                    module_name = attrs[1]
+                    if module_name in modules.prepared_input_modules:
+                        target_config = modules.prepared_input_modules[
+                            module_name
+                        ].plugin_context.config
+                        attrs = attrs[2:]
+                elif attrs[0] == "devices":
+                    if len(attrs) < 3:
+                        raise HTTPException(status_code=400, detail="Invalid config key")
+                    device_name = attrs[1]
+                    if device_name in modules.prepared_devices:
+                        target_config = modules.prepared_devices[
+                            device_name
+                        ].plugin_context.config
+                        attrs = attrs[2:]
+
+                if target_config is None or not attrs:
                     raise HTTPException(status_code=400, detail="Invalid config key")
-                device_name = attrs[1]
-                if device_name in modules.prepared_devices:
-                    target_config = modules.prepared_devices[
-                        device_name
-                    ].plugin_context.config
-                    attrs = attrs[2:]
+                if attrs[0] == "name":
+                    raise HTTPException(
+                        status_code=400, detail="Cannot modify 'name' field"
+                    )
 
-            if target_config is None or not attrs:
-                raise HTTPException(status_code=400, detail="Invalid config key")
-            if attrs[0] == "name":
-                raise HTTPException(
-                    status_code=400, detail="Cannot modify 'name' field"
+                try:
+                    set_field_value(target_config, attrs, value)
+                except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                    logger.warning("Invalid config key '%s': %s", key, exc)
+                    raise HTTPException(
+                        status_code=400, detail="Invalid config key"
+                    ) from exc
+                applied[key] = value
+                logger.info(
+                    "Set %s to %r, saved: %r",
+                    ".".join(attrs),
+                    value,
+                    get_field_value(target_config, attrs),
                 )
-
-            try:
-                set_field_value(target_config, attrs, value)
-            except (AttributeError, IndexError, TypeError, ValueError) as exc:
-                logger.warning("Invalid config key '%s': %s", key, exc)
-                raise HTTPException(
-                    status_code=400, detail="Invalid config key"
-                ) from exc
-            logger.info(
-                "Set %s to %r, saved: %r",
-                ".".join(attrs),
-                value,
-                get_field_value(target_config, attrs),
-            )
+        finally:
+            # Persist whatever stuck in memory so a restart matches the
+            # live state, even if a later change in the batch was rejected.
+            if applied:
+                app.state.overrides.update(applied)
+                try:
+                    save_overrides(app.state.overrides_file, app.state.overrides)
+                except OSError as exc:
+                    logger.error(
+                        "Failed to persist overrides to %s: %s",
+                        app.state.overrides_file,
+                        exc,
+                    )
 
         return {"message": "Ok", "schema_version": app.state.schema_version}
 

@@ -2,13 +2,13 @@
 """Main entry point for the Kalinka server when run as a module."""
 import argparse
 import asyncio
-import json
 import logging
 from asyncio import CancelledError
 
 import uvicorn
 
 from .config_model import KalinkaConfig
+from .config_overrides import apply_overrides_with_prefix, load_overrides
 from .netutils import get_ip_address
 from .server import create_app
 from .state_keeper import set_state_file
@@ -89,13 +89,8 @@ async def main():
 
     try:
         config = KalinkaConfig()
-        try:
-            with open(args.config, "r") as f:
-                config = KalinkaConfig(**json.load(f))
-        except Exception:
-            logger.warning(
-                f"Config file {args.config} not found or corrupted. Using default configuration."
-            )
+        overrides = load_overrides(args.config)
+        apply_overrides_with_prefix(config, overrides, "base_config.")
 
         if args.state:
             set_state_file(args.state)
@@ -103,7 +98,7 @@ async def main():
         host = get_ip_address(config.server.interface)
         port = config.server.port
         logger.info(f"Starting server on {host}:{port}")
-        app = await create_app(args.config, config)
+        app = await create_app(args.config, config, overrides)
         uvicorn_config = uvicorn.Config(
             app,
             host=host,
