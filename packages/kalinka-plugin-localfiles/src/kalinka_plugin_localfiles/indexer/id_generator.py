@@ -23,13 +23,21 @@ def generate_artist_id(artist_name: str) -> str:
     return f"artist_{hash_obj.hexdigest()[:16]}"
 
 
-def generate_album_id(album_title: str, artist_id: str) -> str:
+def generate_album_id(album_title: str, album_folder: str) -> str:
     """
     Generate a stable ID for an album.
 
+    The folder is part of the key so two physical copies of the same album
+    (e.g. 16/44 and 24/96 rips in sibling directories) get distinct IDs,
+    while a track mistagged with a different artist inside the album folder
+    still collapses into the same album. Disc subdirs (``CD1`` / ``Disc 2``)
+    are stripped from the folder before hashing — see
+    ``album_folder_for_path``.
+
     Args:
         album_title: The title of the album
-        artist_id: The ID of the artist
+        album_folder: The album's folder on disk (already disc-stripped).
+            Tracks belonging to the same album must produce the same folder.
 
     Returns:
         A stable ID string for the album
@@ -37,10 +45,11 @@ def generate_album_id(album_title: str, artist_id: str) -> str:
     if not album_title or album_title == "Unknown Album":
         return "unknown_album"
 
-    key = normalize_for_id(album_title)
-    if not key:
+    title_key = normalize_for_id(album_title)
+    if not title_key:
         return "unknown_album"
-    hash_obj = hashlib.md5(f"{key}{artist_id}".encode("utf-8"))
+    folder_key = album_folder or ""
+    hash_obj = hashlib.md5(f"{folder_key}\0{title_key}".encode("utf-8"))
     return f"album_{hash_obj.hexdigest()[:16]}"
 
 

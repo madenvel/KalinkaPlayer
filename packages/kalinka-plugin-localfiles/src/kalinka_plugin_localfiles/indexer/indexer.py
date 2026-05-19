@@ -25,7 +25,7 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import clean_display_name
+from ..utils.name_utils import album_folder_for_path, clean_display_name
 from ..worker_utils import set_proc_title
 from .id_generator import (
     generate_artist_id,
@@ -317,7 +317,7 @@ class FileIndexer:
 
         raw_album = metadata.get("album", "Unknown Album")
         album_title = clean_display_name(raw_album) or "Unknown Album"
-        album_id = generate_album_id(album_title, artist_id)
+        album_id = generate_album_id(album_title, album_folder_for_path(file_path))
 
         album = await self.db_manager.get_album_by_id(album_id)
         if not album:
