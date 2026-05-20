@@ -139,11 +139,92 @@ def test_pipewire_destination_kept():
     assert "pipewire" in values
 
 
-def test_plughw_label_carries_auto_convert_hint():
+def test_plughw_description_carries_auto_convert_hint():
+    """The plughw variant tags its second-line description with
+    ``auto-convert`` so the device name in the trigger stays clean;
+    the dimmed sheet row still tells the user which entry is which."""
+    out = _build_options(_TYPICAL_HINTS, current_value=None)
+    by_value = {o.value: o for o in out}
+    plug = by_value["plughw:CARD=sofhdadsp,DEV=0"]
+    hw = by_value["hw:CARD=sofhdadsp,DEV=0"]
+    assert plug.description is not None and "auto-convert" in plug.description
+    # The plain hw variant carries no auto-convert tag.
+    assert hw.description is None or "auto-convert" not in hw.description
+    # Auto-convert must not leak back into the trigger label.
+    assert "auto-convert" not in plug.label
+
+
+def test_plughw_label_matches_hw_label():
+    """The hw/plughw pair should share the same trigger label so the
+    bottom-sheet rows look like sibling variants — the only difference
+    is the dimmed ``auto-convert`` description."""
     out = _build_options(_TYPICAL_HINTS, current_value=None)
     by_value = {o.value: o.label for o in out}
-    assert "(auto-convert)" in by_value["plughw:CARD=sofhdadsp,DEV=0"]
-    assert "(auto-convert)" not in by_value["hw:CARD=sofhdadsp,DEV=0"]
+    assert (
+        by_value["hw:CARD=sofhdadsp,DEV=0"]
+        == by_value["plughw:CARD=sofhdadsp,DEV=0"]
+    )
+
+
+def test_driver_id_prefix_stripped_from_label():
+    """ALSA reports the kernel driver name as the long card name on
+    a lot of cards (HDA-SOF, HiFiBerry overlays). It's already
+    encoded in the ``hw:CARD=...`` value, so the label should drop
+    the redundant prefix and read as just the PCM name."""
+    hints = [
+        _FakeHint(
+            name="hw:CARD=sofhdadsp,DEV=0",
+            label="sof-hda-dsp, HDA Analog",
+            ioid="Output",
+        ),
+        _FakeHint(
+            name="hw:CARD=Digi,DEV=0",
+            label="snd_rpi_hifiberry_digi, HiFiBerry Digi+ Pro · "
+            "Direct hardware device without any conversions",
+            ioid="Output",
+        ),
+    ]
+    out = _build_options(hints, current_value=None)
+    by_value = {o.value: o for o in out}
+    assert by_value["hw:CARD=sofhdadsp,DEV=0"].label == "HDA Analog"
+    digi = by_value["hw:CARD=Digi,DEV=0"]
+    assert digi.label == "HiFiBerry Digi+ Pro"
+    assert digi.description == "Direct hardware device without any conversions"
+
+
+def test_duplicate_card_label_halves_collapsed():
+    """Some cards report the same string on both sides of the comma
+    (bcm2835 onboard audio). Collapse the duplicate so the row reads
+    once, not twice."""
+    hints = [
+        _FakeHint(
+            name="hw:CARD=Headphones,DEV=0",
+            label="bcm2835 Headphones, bcm2835 Headphones · Default Audio Device",
+            ioid="Output",
+        ),
+    ]
+    out = _build_options(hints, current_value=None)
+    by_value = {o.value: o for o in out}
+    row = by_value["hw:CARD=Headphones,DEV=0"]
+    assert row.label == "bcm2835 Headphones"
+    assert row.description == "Default Audio Device"
+
+
+def test_human_readable_card_label_left_alone():
+    """When the left half doesn't look like a driver identifier (has
+    spaces or uppercase), keep both halves — that's a real card name
+    plus a codec/PCM name and the user might need both to tell two
+    onboard codecs apart."""
+    hints = [
+        _FakeHint(
+            name="hw:CARD=PCH,DEV=0",
+            label="HDA Intel PCH, ALC257 Analog · Default Audio Device",
+            ioid="Output",
+        ),
+    ]
+    out = _build_options(hints, current_value=None)
+    by_value = {o.value: o for o in out}
+    assert by_value["hw:CARD=PCH,DEV=0"].label == "HDA Intel PCH, ALC257 Analog"
 
 
 def test_saved_value_not_present_is_appended_as_not_connected():
@@ -151,7 +232,10 @@ def test_saved_value_not_present_is_appended_as_not_connected():
     out = _build_options(_TYPICAL_HINTS, current_value=saved)
     last = out[-1]
     assert last.value == saved
-    assert "(not connected)" in last.label
+    # The "not connected" note sits in the description (dim second
+    # line), not the label, so the trigger row shows just the handle.
+    assert last.description == "not connected"
+    assert "not connected" not in last.label
 
 
 def test_saved_value_in_live_list_not_duplicated():
@@ -161,7 +245,7 @@ def test_saved_value_in_live_list_not_duplicated():
     out = _build_options(_TYPICAL_HINTS, current_value=saved)
     values = [o.value for o in out]
     assert values.count(saved) == 1
-    assert not any("(not connected)" in o.label for o in out)
+    assert not any(o.description == "not connected" for o in out)
 
 
 def test_options_are_ordered_deterministically():

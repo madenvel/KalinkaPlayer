@@ -95,10 +95,18 @@ class OptionSpec(BaseModel):
     what the user sees in the dropdown. Splitting them lets the
     stored identity stay stable (system-readable, survives reboot)
     while the human label can vary with hardware description.
+
+    ``description`` is an optional second line — shown dimmed under
+    the label when the dropdown's bottom sheet is open. The collapsed
+    trigger still renders the label alone, so adding context here
+    doesn't lengthen the rest-state row. Used by ALSA to put the
+    PCM-mode description and the ``auto-convert`` / ``not connected``
+    hints below the device name without cluttering the trigger.
     """
 
     value: str
     label: str
+    description: Optional[str] = None
 
 
 class FieldSpec(BaseModel):

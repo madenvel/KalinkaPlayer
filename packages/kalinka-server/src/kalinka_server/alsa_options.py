@@ -38,6 +38,7 @@ preferences behaviour.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Iterable
 
 from .presentation_schema import OptionSpec
@@ -90,21 +91,67 @@ def _is_noisy(name: str) -> bool:
     return False
 
 
-def _label_for(name: str, raw_desc: str) -> str:
-    """Shape a one-line label suitable for the dropdown.
+# The C++ enumerator joins ALSA's multi-line DESC field (card name
+# on line 1, PCM-mode description on line 2) with this exact UTF-8
+# sequence so the wire format is one line per hint. Splitting on the
+# same sequence here recovers the two parts for the two-line dropdown
+# row — line 1 stays as the prominent label, line 2 becomes the
+# dimmed description.
+_DESC_JOIN = " · "  # " · "
 
-    The C++ side already collapsed multi-line ALSA descriptions into
-    a "x · y" string; we only add a short suffix for the plughw
-    variant so the user can distinguish "HDMI 1" from
-    "HDMI 1 (auto-convert)" at a glance.
+
+# Matches snake_case / kebab-case identifiers — the shape ALSA uses
+# when the card's "long name" is just the kernel driver string
+# (``sof-hda-dsp``, ``snd_rpi_hifiberry_digi``). The connection ID is
+# already encoded in the ``hw:CARD=...`` value, so repeating the
+# driver name in the label only adds clutter. Anything with spaces or
+# uppercase characters is treated as a human-readable name and kept.
+_DRIVER_LIKE = re.compile(r"^[a-z0-9][a-z0-9_\-]*$")
+
+
+def _prune_card_label(label: str) -> str:
+    """Strip the redundant driver-id prefix some ALSA cards report.
+
+    ALSA's first DESC line is conventionally ``<card_long_name>,
+    <pcm_name>``. On many drivers (HDA-SOF, HiFiBerry overlays) the
+    long name is the kernel module string, e.g. ``sof-hda-dsp, HDMI
+    1`` — the bit on the right is the part the user actually picks
+    by. When the left side looks like a driver identifier we drop it
+    so the label reads as ``HDMI 1``. When ALSA duplicates the same
+    string on both sides (``bcm2835 Headphones, bcm2835 Headphones``)
+    we collapse to one copy.
     """
-    suffix = " (auto-convert)" if name.startswith("plughw:") else ""
+    parts = [p.strip() for p in label.split(",", 1)]
+    if len(parts) != 2 or not parts[1]:
+        return label
+    left, right = parts
+    if left == right:
+        return left
+    if _DRIVER_LIKE.match(left):
+        return right
+    return label
+
+
+def _label_for(name: str, raw_desc: str) -> tuple[str, str | None]:
+    """Shape a (label, description) pair suitable for the dropdown.
+
+    The label is the short device name that fits in the collapsed
+    trigger row; the description is a second-line detail (PCM mode
+    name, ``auto-convert`` for the plughw variant) shown dimmed when
+    the bottom sheet is open. Returning ``None`` for description lets
+    the renderer drop the second line entirely on terse entries like
+    ``pipewire``.
+    """
     desc = raw_desc.strip() or name
-    # Some descriptions have a trailing ", " from an empty pcm name —
-    # tidy that up so it doesn't render as "Card name, " with a
-    # dangling comma.
-    desc = desc.rstrip(", ").rstrip()
-    return f"{desc}{suffix}"
+    parts = desc.split(_DESC_JOIN, 1)
+    # Some ALSA descriptions have a trailing ", " from an empty pcm
+    # name — tidy each side so it doesn't render as "Card name, "
+    # with a dangling comma.
+    label = _prune_card_label(parts[0].rstrip(", ").rstrip())
+    detail = parts[1].rstrip(", ").rstrip() if len(parts) > 1 else ""
+    if name.startswith("plughw:"):
+        detail = f"{detail} · auto-convert" if detail else "auto-convert"
+    return label, (detail or None)
 
 
 def _build_options(
@@ -116,11 +163,13 @@ def _build_options(
     out: list[OptionSpec] = []
     seen: set[str] = set()
 
-    def add(value: str, label: str) -> None:
+    def add(value: str, label: str, description: str | None = None) -> None:
         if value in seen:
             return
         seen.add(value)
-        out.append(OptionSpec(value=value, label=label))
+        out.append(
+            OptionSpec(value=value, label=label, description=description)
+        )
 
     # 1) Pin the default first, regardless of whether ALSA emitted it.
     add("default", "System default")
@@ -128,8 +177,8 @@ def _build_options(
     # 2) Walk hints. Bucket by category so we can emit deterministic
     #    order: named destinations (pipewire/pulse), then per-card
     #    handles (hw + plughw paired).
-    named: list[tuple[str, str]] = []
-    card_handles: list[tuple[str, str]] = []
+    named: list[tuple[str, str, str | None]] = []
+    card_handles: list[tuple[str, str, str | None]] = []
     for d in raw_devices:
         name = d.name
         if not _is_output(d.ioid):
@@ -137,32 +186,40 @@ def _build_options(
         if name == "default":
             continue
         if name in _NAMED_DESTINATIONS:
-            named.append((name, _label_for(name, d.label or name)))
+            label, detail = _label_for(name, d.label or name)
+            named.append((name, label, detail))
             continue
         if _is_card_handle(name):
-            card_handles.append((name, _label_for(name, d.label)))
+            label, detail = _label_for(name, d.label)
+            card_handles.append((name, label, detail))
             continue
         if _is_noisy(name):
             continue
         # Anything else falls through unfiltered — better to show a
         # rare-but-real device than to silently hide it.
-        card_handles.append((name, _label_for(name, d.label or name)))
+        label, detail = _label_for(name, d.label or name)
+        card_handles.append((name, label, detail))
 
     # Named destinations alphabetised so order doesn't drift between
     # boots if ALSA reorders its hint list.
-    for value, label in sorted(named):
-        add(value, label.title() if value == label else label)
+    for value, label, detail in sorted(named, key=lambda e: e[0]):
+        add(value, label.title() if value == label else label, detail)
 
-    # Card handles: sort by (label) so paired hw/plughw entries land
-    # adjacent to each other on the same card+pcm.
-    for value, label in sorted(card_handles, key=lambda e: (e[1], e[0])):
-        add(value, label)
+    # Card handles: sort by (label, description) so paired hw/plughw
+    # entries land adjacent on the same card+pcm — hw first because
+    # its description sorts before the "… · auto-convert" plughw one.
+    for value, label, detail in sorted(
+        card_handles, key=lambda e: (e[1], e[2] or "", e[0])
+    ):
+        add(value, label, detail)
 
     # 3) If the user's saved value isn't in the live list, append a
     #    synthetic entry so they can see it and switch away without
-    #    losing the original. Mirrors macOS Sound preferences.
+    #    losing the original. Mirrors macOS Sound preferences. The
+    #    "not connected" note goes in description so the trigger row
+    #    still shows the raw handle alone.
     if current_value and current_value not in seen:
-        add(current_value, f"{current_value} (not connected)")
+        add(current_value, current_value, "not connected")
 
     return out
 
