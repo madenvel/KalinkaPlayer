@@ -604,6 +604,7 @@ class FileIndexer:
 
         coalesced_folders = 0
         repointed_tracks = 0
+        va_artist_ensured = False
         for folder, ts in folder_tracks.items():
             distinct_artists = {t["artist_id"] for t in ts if t.get("artist_id")}
             distinct_artists.discard("unknown_artist")
@@ -614,6 +615,23 @@ class FileIndexer:
                 continue
             if (n_artists / n_tracks) < VA_MIN_ARTIST_UNIQUENESS:
                 continue
+
+            # Ensure the sentinel artist row exists before anchoring an
+            # album to it. ``db_schema.init_db`` seeds it on startup, but
+            # the orphan-cleanup pass that runs earlier in ``run_scan``
+            # can delete it (no tracks/albums reference it at that
+            # point), so we re-create it lazily here.
+            if not va_artist_ensured:
+                if not await self.db_manager.get_artist_by_id("various_artists"):
+                    await self.db_manager.insert_artist(
+                        {
+                            "id": "various_artists",
+                            "name": "Various Artists",
+                            "enriched": 0,
+                            "last_updated": int(time.time()),
+                        }
+                    )
+                va_artist_ensured = True
 
             va_id = generate_va_album_id(folder)
             title = clean_display_name(os.path.basename(folder)) or "Compilation"

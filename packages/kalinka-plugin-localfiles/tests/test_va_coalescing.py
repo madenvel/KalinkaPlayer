@@ -49,8 +49,14 @@ class FakeDb:
     async def get_album_by_id(self, album_id: str) -> Optional[Dict]:
         return dict(self.albums[album_id]) if album_id in self.albums else None
 
+    async def get_artist_by_id(self, artist_id: str) -> Optional[Dict]:
+        return dict(self.artists[artist_id]) if artist_id in self.artists else None
+
     async def insert_album(self, data: Dict) -> None:
         self.albums[data["id"]] = dict(data)
+
+    async def insert_artist(self, data: Dict) -> None:
+        self.artists[data["id"]] = dict(data)
 
     async def update_track(self, track_id: str, data: Dict) -> None:
         if track_id in self.tracks:
@@ -309,6 +315,31 @@ async def test_disc_subdirs_share_va_album():
     va_id = generate_va_album_id(parent)  # parent, not the disc subdirs
     for t in db.tracks.values():
         assert t["album_id"] == va_id
+
+
+@pytest.mark.asyncio
+async def test_recreates_various_artists_row_if_missing():
+    """Regression: the orphan-cleanup pass in ``cleanup_stale_tracks``
+    runs *before* coalescing and used to delete the
+    ``various_artists`` sentinel (it had no tracks or albums yet).
+    Coalescing must lazily recreate it so the V/A album it inserts
+    has a real anchor row to join against."""
+    db = FakeDb()
+    # Simulate the post-cleanup state: sentinel got deleted.
+    del db.artists["various_artists"]
+    indexer = _make_indexer(db)
+
+    folder = "/Music/Compilation"
+    for i in range(5):
+        _seed_track(
+            db, f"{folder}/{i:02d}.mp3", artist_name=f"Artist {i}", album_title=f"T{i}"
+        )
+
+    result = await indexer.coalesce_va_folders()
+    assert result["folders"] == 1
+    # The row must exist again so the V/A album anchors to a real artist.
+    assert "various_artists" in db.artists
+    assert db.artists["various_artists"]["name"] == "Various Artists"
 
 
 @pytest.mark.asyncio
