@@ -142,7 +142,8 @@ class AsyncEnricherDb:
             await cursor.execute(
                 """
                 SELECT * FROM artists
-                WHERE enriched = 0 AND id != 'unknown_artist'
+                WHERE enriched = 0
+                  AND id NOT IN ('unknown_artist', 'various_artists')
                 LIMIT ?
             """,
                 (limit,),

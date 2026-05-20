@@ -242,13 +242,16 @@ class AsyncIndexerDb:
                 )
                 deleted_albums = cursor.rowcount
 
-            # Get artists with no tracks or albums
+            # Get artists with no tracks or albums. ``various_artists`` is
+            # excluded alongside ``unknown_artist`` because the V/A
+            # coalescing pass runs *after* this cleanup and needs the
+            # row to exist when it inserts compilation albums.
             await cursor.execute(
                 """
-                SELECT id FROM artists 
+                SELECT id FROM artists
                 WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks)
                 AND id NOT IN (SELECT DISTINCT artist_id FROM albums)
-                AND id != 'unknown_artist'
+                AND id NOT IN ('unknown_artist', 'various_artists')
                 """
             )
             rows = await cursor.fetchall()
