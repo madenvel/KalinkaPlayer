@@ -44,7 +44,6 @@ class ServerConfig(BaseModel):
         title="Network interface",
         json_schema_extra={
             "help": 'Bind to a specific interface or "all"',
-            **_SIMPLE,
         },
     )
     port: int = Field(
