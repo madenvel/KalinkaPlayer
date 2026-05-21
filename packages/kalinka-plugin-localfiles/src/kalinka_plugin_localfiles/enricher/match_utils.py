@@ -5,7 +5,7 @@ the same duration-vs-candidate logic. Keeping it here avoids drift and
 makes the thresholds unit-testable in one place.
 """
 
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 def duration_bonus(
@@ -166,3 +166,37 @@ def parse_mb_track_count(release) -> Optional[int]:
         except (TypeError, ValueError):
             pass
     return total if total > 0 else None
+
+
+def flatten_mb_tracklist(mb_release: Dict) -> List[Dict]:
+    """Return a flat ``[{medium, track, length_s, title, recording_id}, ...]``
+    view of an MB release's tracklist.
+
+    Used by the per-track enricher to find where a local track sits
+    on the matched release. The release must have been fetched with
+    ``includes=["recordings"]``.
+    """
+    flat: List[Dict] = []
+    for medium in mb_release.get("medium-list") or []:
+        try:
+            medium_pos = int(medium.get("position"))
+        except (TypeError, ValueError):
+            continue
+        for tr in medium.get("track-list") or []:
+            try:
+                track_pos = int(tr.get("position"))
+            except (TypeError, ValueError):
+                continue
+            recording = tr.get("recording") or {}
+            title = recording.get("title") or tr.get("title") or ""
+            length = tr.get("length") or recording.get("length")
+            flat.append(
+                {
+                    "medium": medium_pos,
+                    "track": track_pos,
+                    "length_s": parse_mb_length_seconds(length),
+                    "title": title,
+                    "recording_id": recording.get("id"),
+                }
+            )
+    return flat

@@ -9,6 +9,7 @@ from .enricher_plugin import EnricherPlugin
 from .match_utils import (
     album_duration_bonus,
     duration_bonus,
+    flatten_mb_tracklist,
     parse_mb_length_seconds,
     parse_mb_track_count,
     release_total_length_seconds,
@@ -45,6 +46,13 @@ class MusicBrainzPlugin(EnricherPlugin):
         # Enable detailed logging of match results for debugging
         self.debug_matching = config.enricher.plugins.musicbrainz.debug_matching
         self.user_agent = config.enricher.plugins.user_agent
+
+        # Memoised release-detail fetches. Album enrichment seeds this
+        # when it picks a release; per-track enrichment then reads
+        # straight from the cache instead of refetching. Process-
+        # lifetime; never gets large enough to need eviction in
+        # practice (one entry per album we enrich).
+        self._release_cache: Dict[str, Dict] = {}
 
         # Set up MusicBrainz API
         musicbrainzngs.set_useragent(
@@ -447,14 +455,148 @@ class MusicBrainzPlugin(EnricherPlugin):
                 except (ValueError, IndexError):
                     pass
 
+            # Cache the release detail so the per-track enrichment below
+            # (which needs the same tracklist to look up each recording's
+            # disc/track position) doesn't refetch — one extra API call
+            # per album vs N calls per album of N tracks.
+            self._release_cache[release_mbid] = mb_release_data
+
             return {"updates": updates, "mbid": release_mbid}
 
         except Exception as e:
             logger.error(f"Error enriching album {album['title']}: {str(e)}")
             return None
 
+    async def _get_release_detail(self, release_mbid: str) -> Optional[Dict]:
+        """Return the recordings-include release detail for ``release_mbid``.
+
+        Memoised on the plugin instance so per-track enrichment can pull
+        the canonical tracklist without an MB call per track. Album
+        enrichment seeds the cache when it commits to a release, so the
+        common path (enrich one album → enrich its 12-30 tracks) does
+        exactly one extra MB fetch per album.
+        """
+        if not release_mbid:
+            return None
+        cached = self._release_cache.get(release_mbid)
+        if cached is not None:
+            return cached
+        try:
+            details = musicbrainzngs.get_release_by_id(
+                release_mbid, includes=["recordings"]
+            )
+        except Exception as e:
+            logger.debug(
+                f"Could not fetch release {release_mbid} for tracklist lookup: {e}"
+            )
+            return None
+        release = details.get("release") if details else None
+        if release is not None:
+            self._release_cache[release_mbid] = release
+        return release
+
+    async def _lookup_track_in_release(
+        self, track: Dict, release_mbid: str
+    ) -> Optional[Dict]:
+        """Find ``track`` on the matched album's MB release tracklist.
+
+        Builds a ``[{disc, track, length_s, title, recording_id}, ...]``
+        flat view from the release's media, scores each against the
+        local track via ``title_similarity * 100 + duration_bonus``
+        (duration penalty capped to -25; within a single release the
+        unique-slot constraint matters more than the worst-case
+        version-mismatch penalty), and returns the best pick that
+        clears a confidence floor.
+
+        On success, returns the standard ``{"updates": …, "mbid": …}``
+        contract that ``enrich_track`` returns to the enricher pipeline.
+        On no match (low confidence or no release detail), returns
+        ``None`` so the caller can fall back to the global search.
+        """
+        release = await self._get_release_detail(release_mbid)
+        if not release:
+            return None
+        mb_tracks = flatten_mb_tracklist(release)
+        if not mb_tracks:
+            return None
+
+        l_title = track.get("title") or ""
+        l_dur = track.get("duration")
+        best: Optional[Dict] = None
+        best_score = float("-inf")
+        best_similarity = 0.0
+        runner_up_score = float("-inf")
+        for mt in mb_tracks:
+            similarity = self._string_similarity(l_title, mt["title"])
+            dur_score = max(duration_bonus(l_dur, mt["length_s"]), -25.0)
+            score = similarity * 100 + dur_score
+            if score > best_score:
+                runner_up_score = best_score
+                best_score = score
+                best = mt
+                best_similarity = similarity
+            elif score > runner_up_score:
+                runner_up_score = score
+
+        if best is None or best_score < 50.0:
+            return None
+
+        # Ambiguity guard: many releases have nearly-titled tracks
+        # ("In the Flesh?" on disc 1 vs "In the Flesh" on disc 2 of
+        # The Wall — two different songs). Without a guard, a local
+        # title with no duration to disambiguate would silently commit
+        # to whichever iteration order surfaced first.
+        #
+        # The bar is intentionally low: a 1.0-point gap. Real "tie"
+        # cases (identical titles, no duration, no other signal) have
+        # gaps of ~0; suffix-distinct titles like "Part 1" vs "Part 2"
+        # — common on themed albums where MB has every part listed
+        # separately — only differ by a few characters which
+        # SequenceMatcher prices at ~3 points. We want those through.
+        if (
+            runner_up_score != float("-inf")
+            and (best_score - runner_up_score) < 1.0
+        ):
+            logger.info(
+                f"Ambiguous in-release match for '{l_title}': best={best_score:.1f} "
+                f"runner_up={runner_up_score:.1f} — holding as orphan"
+            )
+            return None
+
+        updates: Dict[str, object] = {
+            "disc_number": best["medium"],
+            "track_number": best["track"],
+            "match_score": int(best_score),
+            "match_similarity": round(best_similarity * 100),
+        }
+        if best["recording_id"]:
+            updates["mbid"] = best["recording_id"]
+        if self.debug_matching:
+            logger.debug(
+                f"  In-release: '{l_title}' → ({best['medium']}, {best['track']}) "
+                f"'{best['title']}' score={best_score:.1f} sim={best_similarity:.2f}"
+            )
+        return {"updates": updates, "mbid": best["recording_id"]}
+
     async def enrich_track(self, track: Dict) -> Optional[Dict]:
-        """Enrich track metadata with MusicBrainz data"""
+        """Enrich track metadata with MusicBrainz data.
+
+        Two paths:
+
+          1. **In-release lookup** — when the local album has already
+             been matched to a specific MB release, we pull that
+             release's canonical tracklist and find this track's
+             position via title + duration. This is the only way to
+             recover disc/track positions for vinyl rips whose tags
+             carry a per-side track number and no ``DISCNUMBER`` at
+             all (the Pink Floyd "The Wall" case). The recording's
+             MBID also drops out for free.
+
+          2. **Global search** — the fallback when there's no album
+             MBID to scope the lookup, or no confident in-release
+             match. Behaves as before: search MB recordings globally,
+             rank by combined title / score / duration.
+        """
         try:
             # If artist_name is missing, try to get it from the artist record
             if "artist_name" not in track and "artist_id" in track:
@@ -465,20 +607,42 @@ class MusicBrainzPlugin(EnricherPlugin):
                     logger.error(f"Could not find artist for track: {track['title']}")
                     return None
 
-            # If album_title is missing, try to get it from the album record
-            if "album_title" not in track and "album_id" in track:
+            # Look up the local album row once — we need both its title
+            # (existing fallback) and its MBID (path 1).
+            album_mbid: Optional[str] = None
+            if "album_id" in track:
                 album = await self.db_manager.get_album_by_id(track["album_id"])
                 if album:
-                    track["album_title"] = album["title"]
-                else:
+                    if "album_title" not in track:
+                        track["album_title"] = album["title"]
+                    album_mbid = album.get("mbid")
+                elif "album_title" not in track:
                     logger.error(f"Could not find album for track: {track['title']}")
                     return None
+
+            # ---- Path 1: in-release tracklist lookup ----
+            if album_mbid:
+                in_release = await self._lookup_track_in_release(
+                    track, album_mbid
+                )
+                if in_release is not None:
+                    return in_release
+
+            # Path 2 below queries MB by ``release=track["album_title"]``;
+            # if we got here without a title (no album_id and no
+            # album_title was provided), give up rather than crash.
+            if "album_title" not in track:
+                logger.debug(
+                    f"Track {track.get('id')} has no album_title; "
+                    f"skipping MB recording search"
+                )
+                return None
 
             logger.debug(
                 f"Enriching track: {track['title']} from {track['album_title']}"
             )
 
-            # Search for recording in MusicBrainz with better parameters
+            # ---- Path 2: fallback global recording search ----
             result = musicbrainzngs.search_recordings(
                 track["title"],
                 artistname=track["artist_name"],
