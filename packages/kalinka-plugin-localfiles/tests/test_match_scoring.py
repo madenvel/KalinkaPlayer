@@ -15,6 +15,7 @@ import pytest
 from kalinka_plugin_localfiles.enricher.match_utils import (
     album_duration_bonus,
     duration_bonus,
+    flatten_mb_tracklist,
     parse_mb_length_seconds,
     parse_mb_track_count,
     release_total_length_seconds,
@@ -940,3 +941,328 @@ class TestEnrichAlbumStageB:
         )
         result = await plugin.enrich_album(album)
         assert result is None  # within margin → hold as orphan
+
+
+# ---------------------------------------------------------------------------
+# Tracklist position re-keying from the matched MB release
+# ---------------------------------------------------------------------------
+
+
+def _two_disc_release() -> Dict:
+    """Build an MB release shaped like Pink Floyd's The Wall — two
+    media of 13 tracks each, with continuous within-medium numbering.
+    The user's vinyl rip will have ``B3`` etc. in titles but
+    ``TRACKNUMBER=3`` (within-side), so the matcher has to ignore
+    those and place every track at MB's actual canonical position.
+    """
+    titles_d1 = [
+        ("In the Flesh?", 200000),
+        ("The Thin Ice", 150000),
+        ("Another Brick in the Wall, Part 1", 191000),
+        ("The Happiest Days of Our Lives", 111000),
+        ("Another Brick in the Wall, Part 2", 241000),
+        ("Mother", 334000),
+        ("Goodbye Blue Sky", 170000),
+        ("Empty Spaces", 127000),
+        ("Young Lust", 213000),
+        ("One of My Turns", 215000),
+        ("Don't Leave Me Now", 257000),
+        ("Another Brick in the Wall, Part 3", 78000),
+        ("Goodbye Cruel World", 75000),
+    ]
+    titles_d2 = [
+        ("Hey You", 284000),
+        ("Is There Anybody Out There?", 163000),
+        ("Nobody Home", 207000),
+        ("Vera", 96000),
+        ("Bring the Boys Back Home", 89000),
+        ("Comfortably Numb", 386000),
+        ("The Show Must Go On", 98000),
+        ("In the Flesh", 260000),
+        ("Run Like Hell", 267000),
+        ("Waiting for the Worms", 240000),
+        ("Stop", 32000),
+        ("The Trial", 322000),
+        ("Outside the Wall", 104000),
+    ]
+
+    def medium(pos, titles):
+        return {
+            "position": pos,
+            "track-list": [
+                {
+                    "position": i + 1,
+                    "length": str(length),
+                    "recording": {"id": f"rec-d{pos}-t{i+1}", "title": title},
+                }
+                for i, (title, length) in enumerate(titles)
+            ],
+        }
+
+    return {
+        "id": "rel-the-wall",
+        "title": "The Wall",
+        "medium-list": [medium(1, titles_d1), medium(2, titles_d2)],
+    }
+
+
+def _async_returning(value):
+    """Build an ``AsyncMock``-style coroutine that returns ``value``,
+    so we can wire a fake db_manager method onto a MagicMock-backed
+    plugin instance. ``MagicMock`` doesn't natively know how to be
+    awaited."""
+
+    async def _coro(*_a, **_kw):
+        return value
+
+    return _coro
+
+
+class TestFlattenMbTracklist:
+    def test_flattens_two_disc_release(self):
+        flat = flatten_mb_tracklist(_two_disc_release())
+        assert len(flat) == 26
+        # Disc 1 then disc 2, within-medium positions intact.
+        assert (flat[0]["medium"], flat[0]["track"]) == (1, 1)
+        assert (flat[12]["medium"], flat[12]["track"]) == (1, 13)
+        assert (flat[13]["medium"], flat[13]["track"]) == (2, 1)
+        assert (flat[25]["medium"], flat[25]["track"]) == (2, 13)
+
+    def test_ignores_malformed_positions(self):
+        release = {
+            "medium-list": [
+                {"position": "bad", "track-list": [{"position": 1}]},
+                {
+                    "position": 1,
+                    "track-list": [
+                        {"position": "x", "recording": {"title": "T"}},
+                        {"position": 2, "recording": {"title": "OK"}},
+                    ],
+                },
+            ]
+        }
+        flat = flatten_mb_tracklist(release)
+        assert len(flat) == 1 and flat[0]["title"] == "OK"
+
+    def test_empty_release(self):
+        assert flatten_mb_tracklist({}) == []
+        assert flatten_mb_tracklist({"medium-list": []}) == []
+
+
+class TestMusicBrainzInReleaseTrackLookup:
+    """Per-track lookup inside a known release. Replaces the old
+    batch-match approach with a track-scoped flow: each track's MB
+    enrichment computes its own canonical (disc, track) by consulting
+    the album's MB release tracklist directly."""
+
+    @pytest.mark.asyncio
+    async def test_picks_position_by_title_and_duration(self, monkeypatch):
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_by_id = _async_returning(
+            {"id": "a", "title": "The Wall", "mbid": "rel-the-wall"}
+        )
+        plugin.db_manager.get_artist_by_id = _async_returning(
+            {"id": "ar", "name": "Pink Floyd"}
+        )
+
+        release = _two_disc_release()
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            lambda *a, **kw: {"release": release},
+        )
+
+        # Local "B2 Empty spaces" with tag track_number=2 — sorting by
+        # tag track_number alone groups it with all the other "2"
+        # tracks. Lookup should put it at disc 1, track 8 (within-
+        # medium position on MB's continuous numbering).
+        track = {
+            "id": "t",
+            "title": "B2 Empty spaces",
+            "duration": 124,
+            "album_id": "a",
+            "artist_id": "ar",
+            "track_number": 2,
+            "disc_number": None,
+        }
+        result = await plugin.enrich_track(track)
+        assert result is not None
+        assert result["mbid"] == "rec-d1-t8"
+        assert result["updates"]["disc_number"] == 1
+        assert result["updates"]["track_number"] == 8
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_global_search_when_album_has_no_mbid(
+        self, monkeypatch
+    ):
+        """Without an album MBID, the in-release path is unreachable —
+        the existing global search path takes over."""
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_by_id = _async_returning(
+            {"id": "a", "title": "Some Album", "mbid": None}
+        )
+        plugin.db_manager.get_artist_by_id = _async_returning(
+            {"id": "ar", "name": "Some Artist"}
+        )
+
+        # Mock the global recording search the fallback hits.
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_recordings",
+            lambda *a, **kw: {
+                "recording-list": [
+                    {
+                        "id": "rec-global",
+                        "title": "Track",
+                        "ext:score": "95",
+                        "length": "180000",
+                    }
+                ]
+            },
+        )
+        track = {
+            "id": "t",
+            "title": "Track",
+            "duration": 180,
+            "album_id": "a",
+            "artist_id": "ar",
+        }
+        result = await plugin.enrich_track(track)
+        assert result is not None
+        assert result["mbid"] == "rec-global"
+        # Global search doesn't set disc_number.
+        assert "disc_number" not in result["updates"]
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_in_release_falls_back_to_global(self, monkeypatch):
+        """The Wall has two distinct songs with near-identical titles:
+        "In the Flesh?" on disc 1 and "In the Flesh" on disc 2. A local
+        track titled simply "In the Flesh" with no duration to
+        disambiguate must NOT silently commit to whichever appears
+        first in iteration; the runner-up check should reject and let
+        the global path try."""
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_by_id = _async_returning(
+            {"id": "a", "title": "The Wall", "mbid": "rel-the-wall"}
+        )
+        plugin.db_manager.get_artist_by_id = _async_returning(
+            {"id": "ar", "name": "Pink Floyd"}
+        )
+        release = _two_disc_release()
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            lambda *a, **kw: {"release": release},
+        )
+        # Mock the global fallback so we can detect it being hit.
+        global_called = {"yes": False}
+
+        def fake_search(*a, **kw):
+            global_called["yes"] = True
+            return {"recording-list": []}
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_recordings",
+            fake_search,
+        )
+        # No duration → both "In the Flesh?" and "In the Flesh" score
+        # close on title similarity alone.
+        track = {
+            "id": "t",
+            "title": "In the Flesh",
+            "duration": None,
+            "album_id": "a",
+            "artist_id": "ar",
+        }
+        result = await plugin.enrich_track(track)
+        # The ambiguity guard fired and Path 2 took over (empty result
+        # from the mock = no MB match = None).
+        assert result is None
+        assert global_called["yes"], (
+            "Expected Path 2 (global search) to run after Path 1's "
+            "ambiguity guard rejected"
+        )
+
+    @pytest.mark.asyncio
+    async def test_release_cache_avoids_refetch_per_track(self, monkeypatch):
+        """The first track enrichment for an album triggers a single
+        ``get_release_by_id`` call; subsequent tracks read from the
+        cache. Saves N-1 API calls on a 26-track album."""
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_by_id = _async_returning(
+            {"id": "a", "title": "The Wall", "mbid": "rel-the-wall"}
+        )
+        plugin.db_manager.get_artist_by_id = _async_returning(
+            {"id": "ar", "name": "Pink Floyd"}
+        )
+        release = _two_disc_release()
+
+        fetch_count = {"n": 0}
+
+        def fake_get(rid, includes=None):
+            fetch_count["n"] += 1
+            return {"release": release}
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            fake_get,
+        )
+        for title in ("A1 In the flesh", "A2 The thin ice", "B2 Empty spaces"):
+            await plugin.enrich_track(
+                {
+                    "id": title,
+                    "title": title,
+                    "duration": 180,
+                    "album_id": "a",
+                    "artist_id": "ar",
+                }
+            )
+        assert fetch_count["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_seeds_cache_on_album_enrichment(self, monkeypatch):
+        """When album enrichment fetches the release detail in stage B,
+        the same payload is cached. Per-track lookups for that album
+        then make zero extra MB calls."""
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_by_id = _async_returning(None)
+
+        release = _two_disc_release()
+        search_response = {
+            "release-list": [
+                {
+                    "id": "rel-the-wall",
+                    "title": "The Wall",
+                    "ext:score": "100",
+                    "medium-track-count": "26",
+                }
+            ]
+        }
+        fetch_count = {"n": 0}
+
+        def fake_get(rid, includes=None):
+            fetch_count["n"] += 1
+            return {"release": release}
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_releases",
+            lambda *a, **kw: search_response,
+        )
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            fake_get,
+        )
+
+        album = {
+            "id": "a",
+            "title": "The Wall",
+            "artist_name": "Pink Floyd",
+            "track_count": 26,
+            "duration": 4300,
+        }
+        result = await plugin.enrich_album(album)
+        assert result is not None and result["mbid"] == "rel-the-wall"
+        # Stage B fetched once; that should be cached now.
+        before = fetch_count["n"]
+        assert before == 1
+        # The release detail is reachable via the cache without re-call.
+        cached = await plugin._get_release_detail("rel-the-wall")
+        assert cached is release
+        assert fetch_count["n"] == before  # no refetch
