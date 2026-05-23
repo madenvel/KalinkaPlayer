@@ -167,7 +167,7 @@ class AsyncEnricherDb:
                 """
                 SELECT * FROM artists
                 WHERE enriched = 0
-                  AND id NOT IN ('unknown_artist', 'various_artists')
+                  AND id != 'unknown_artist'
                 LIMIT ?
             """,
                 (limit,),

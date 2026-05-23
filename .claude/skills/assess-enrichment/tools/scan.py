@@ -360,14 +360,18 @@ def scan(db_path: str) -> Dict[str, Any]:
         """
     ).fetchall()
 
-    # Albums already anchored to ``various_artists`` were handled by the
-    # V/A coalescing pass and shouldn't appear in either failure bucket.
+    # The V/A "umbrella album" concept was removed: tracks in V/A
+    # folders are now detached to ``unknown_album`` so they surface
+    # as singles under their real artist. Any leftover album anchored
+    # to the legacy ``various_artists`` sentinel from an older DB is
+    # reported as ``stale_va_albums`` so it's visible (and gets
+    # cleaned up the next time the indexer runs the detach pass).
     mistagging_candidates = []
     va_candidates_cross = []
-    properly_coalesced_va = 0
+    stale_va_albums = 0
     for r in multi_artist_albums:
         if r["artist_id"] == "various_artists":
-            properly_coalesced_va += 1
+            stale_va_albums += 1
             continue
         rec = {
             "album_id": r["id"],
@@ -386,7 +390,7 @@ def scan(db_path: str) -> Dict[str, Any]:
         "tracks_matched_in_unmatched_albums": tracks_matched_in_unmatched_albums,
         "mistagging_candidates": mistagging_candidates,
         "va_albums_to_coalesce": va_candidates_cross,
-        "properly_coalesced_va_albums": properly_coalesced_va,
+        "stale_va_albums": stale_va_albums,
     }
 
     # ---- duration signal ----
@@ -548,10 +552,12 @@ def render_markdown(findings: Dict[str, Any]) -> str:
         f"- V/A compilations to coalesce (≥4 tracks, ≥4 distinct artists): "
         f"**{len(ce['va_albums_to_coalesce'])}**"
     )
-    lines.append(
-        f"- Properly coalesced V/A albums (anchored to `various_artists`): "
-        f"**{ce.get('properly_coalesced_va_albums', 0)}**"
-    )
+    stale = ce.get("stale_va_albums", 0)
+    if stale:
+        lines.append(
+            f"- Stale ``various_artists``-anchored albums (legacy data, "
+            f"will detach on next index): **{stale}**"
+        )
     if ce["mistagging_candidates"][:5]:
         lines.append("")
         lines.append("**Mistagging candidate examples:**")

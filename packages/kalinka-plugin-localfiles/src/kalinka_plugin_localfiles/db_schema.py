@@ -262,12 +262,6 @@ async def init_db(db_path: str) -> None:
             "INSERT OR IGNORE INTO artists (id, name, last_updated) VALUES ('unknown_artist', 'Unknown Artist', ?)",
             (current_time,),
         )
-        # Sentinel artist used by the V/A coalescing pass to anchor
-        # compilation albums where tracks span many distinct artists.
-        await cursor.execute(
-            "INSERT OR IGNORE INTO artists (id, name, last_updated) VALUES ('various_artists', 'Various Artists', ?)",
-            (current_time,),
-        )
         await cursor.execute(
             "INSERT OR IGNORE INTO albums (id, title, artist_id, last_updated) VALUES ('unknown_album', 'Unknown Album', 'unknown_artist', ?)",
             (current_time,),
