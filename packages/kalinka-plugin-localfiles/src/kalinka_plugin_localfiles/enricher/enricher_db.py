@@ -134,6 +134,30 @@ class AsyncEnricherDb:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def reset_failed_to_retry(self) -> Dict[str, int]:
+        """Flip every ``enriched=2`` (FAILED) row back to ``enriched=0`` so
+        the next enrichment pass picks it up.
+
+        Called once at enricher-process startup so that, after the user
+        deploys updated plugin code (or a new MB matcher tier), the
+        already-failed rows get one more chance instead of staying
+        stuck. Bounded to once-per-process: if the enricher is hammered
+        with ``enrich`` commands inside the same lifetime the FAILED
+        rows aren't reset again (that's the caller's responsibility).
+
+        Returns row counts per entity for logging.
+        """
+        counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            for table in ("artists", "albums", "tracks"):
+                await cursor.execute(
+                    f"UPDATE {table} SET enriched = 0 WHERE enriched = 2"
+                )
+                counts[table] = cursor.rowcount or 0
+            await conn.commit()
+        return counts
+
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
         async with self._open() as conn:
