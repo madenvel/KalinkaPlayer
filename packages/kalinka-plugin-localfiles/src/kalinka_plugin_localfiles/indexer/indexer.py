@@ -25,7 +25,6 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
-from ..utils.id_generator import generate_va_album_id
 from ..utils.name_utils import album_folder_for_path, clean_display_name
 from ..worker_utils import set_proc_title
 from .id_generator import (
@@ -146,14 +145,17 @@ class FileIndexer:
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
             )
 
-        # Coalesce V/A folders into single compilation albums. Runs after
-        # cleanup so we don't operate on stale rows, and before notifying
-        # the enricher so it sees the post-coalesce shape.
-        va_results = await self.coalesce_va_folders()
+        # Detach tracks in V/A folders so each track surfaces as a
+        # single under its real artist instead of cluttering the
+        # album list with one-track-per-artist rows. Runs after the
+        # stale-track cleanup so it doesn't operate on rows about to
+        # be removed, and before notifying the enricher so it sees
+        # the post-detach shape.
+        va_results = await self.orphan_va_folder_tracks()
         if va_results["folders"]:
             logger.info(
-                f"V/A coalescing: {va_results['folders']} folder(s) merged, "
-                f"{va_results['tracks']} track(s) re-pointed, "
+                f"V/A folder detach: {va_results['folders']} folder(s), "
+                f"{va_results['tracks']} track(s) re-pointed to unknown_album, "
                 f"{va_results['orphans']} orphan album(s) deleted"
             )
 
@@ -563,31 +565,41 @@ class FileIndexer:
             )
             return False
 
-    async def coalesce_va_folders(self) -> Dict[str, int]:
-        """Merge per-track albums in V/A folders into one compilation row.
+    async def orphan_va_folder_tracks(self) -> Dict[str, int]:
+        """Disassemble per-track albums in V/A folders so each track
+        shows up as a single under its real artist.
 
-        After the folder-bounded album-ID change, two cases still leave a
-        V/A folder fragmented into many albums:
+        Context: the indexer creates one album row per
+        ``(album_folder, normalized_title)`` pair. In a V/A folder
+        where each track carries its own album tag (e.g. a Jamendo
+        playlist), that produces N single-track albums anchored to N
+        different artists — a noisy mess in the album list.
 
-        * **Compilation with one tag-album per track** (e.g. a Jamendo
-          playlist where each MP3 carries its own original-album tag).
-          Each track hashes to a distinct (folder, title) pair, so the
-          folder ends up with N albums of one track each.
+        An earlier version of this method created a synthetic
+        Various-Artists umbrella album and re-pointed all of the
+        folder's tracks at it. That cleaned up the album list but
+        broke artist navigation: a track's ``artist_id`` was still
+        correctly the real artist, but the album was anchored to
+        ``various_artists``, so the artist page found no albums for
+        them and they appeared empty. The album tag is the
+        unreliable signal here; the artist tag is the reliable one.
 
-        * **Compilation with the same album tag but cross-artist tags.**
-          The folder-bounded ID already keeps these in one album row;
-          all we need is to flip ``artist_id`` to ``various_artists``
-          so the album doesn't get attributed to whichever track was
-          indexed first.
+        New behaviour: in a V/A folder we re-point every track's
+        ``album_id`` to the ``unknown_album`` sentinel. The per-track
+        single-track albums then have no referring tracks and are
+        removed by the orphan-cleanup pass. The tracks themselves
+        keep their real ``artist_id`` and surface under their artist
+        via the orphan-tracks fallback in the browse view (see
+        ``LocalFilesInputModuleDb.get_artist_orphan_tracks``).
 
-        Both fall out of the same criterion: a folder whose tracks
-        span ≥``VA_MIN_DISTINCT_ARTISTS`` distinct artists with at
-        least ``VA_MIN_ARTIST_UNIQUENESS`` unique-artist-per-track
-        ratio is treated as V/A; we mint a folder-level album with
-        ``generate_va_album_id`` and re-point its tracks. Orphaned
-        per-track albums are cleaned up at the end.
+        Detection criterion is unchanged: a folder qualifies when
+        its tracks span ≥``VA_MIN_DISTINCT_ARTISTS`` real artists
+        AND the unique-artist-per-track ratio is ≥
+        ``VA_MIN_ARTIST_UNIQUENESS``. That keeps mistagging artifacts
+        (Abbey Road with 2-3 wrong-artist tags out of 17) from
+        flipping to V/A.
 
-        Returns counts of (coalesced_folders, repointed_tracks,
+        Returns counts of (detached_folders, repointed_tracks,
         deleted_orphans).
         """
         tracks = await self.db_manager.get_all_tracks()
@@ -602,13 +614,11 @@ class FileIndexer:
                 continue
             folder_tracks.setdefault(folder, []).append(t)
 
-        coalesced_folders = 0
+        detached_folders = 0
         repointed_tracks = 0
-        va_artist_ensured = False
         for folder, ts in folder_tracks.items():
             distinct_artists = {t["artist_id"] for t in ts if t.get("artist_id")}
             distinct_artists.discard("unknown_artist")
-            distinct_artists.discard("various_artists")
             n_artists = len(distinct_artists)
             n_tracks = len(ts)
             if n_artists < VA_MIN_DISTINCT_ARTISTS:
@@ -616,49 +626,17 @@ class FileIndexer:
             if (n_artists / n_tracks) < VA_MIN_ARTIST_UNIQUENESS:
                 continue
 
-            # Ensure the sentinel artist row exists before anchoring an
-            # album to it. ``db_schema.init_db`` seeds it on startup, but
-            # the orphan-cleanup pass that runs earlier in ``run_scan``
-            # can delete it (no tracks/albums reference it at that
-            # point), so we re-create it lazily here.
-            if not va_artist_ensured:
-                if not await self.db_manager.get_artist_by_id("various_artists"):
-                    await self.db_manager.insert_artist(
-                        {
-                            "id": "various_artists",
-                            "name": "Various Artists",
-                            "enriched": 0,
-                            "last_updated": int(time.time()),
-                        }
-                    )
-                va_artist_ensured = True
-
-            va_id = generate_va_album_id(folder)
-            title = clean_display_name(os.path.basename(folder)) or "Compilation"
-
-            if not await self.db_manager.get_album_by_id(va_id):
-                await self.db_manager.insert_album(
-                    {
-                        "id": va_id,
-                        "title": title,
-                        "artist_id": "various_artists",
-                        "enriched": 0,
-                        "last_updated": int(time.time()),
-                    }
-                )
-
             for t in ts:
-                if t["album_id"] != va_id:
+                if t["album_id"] != "unknown_album":
                     await self.db_manager.update_track(
-                        t["id"], {"album_id": va_id}
+                        t["id"], {"album_id": "unknown_album"}
                     )
                     repointed_tracks += 1
 
-            await self.db_manager.update_album_stats(va_id)
-            coalesced_folders += 1
+            detached_folders += 1
             logger.info(
-                f"Coalesced V/A folder '{folder}' ({n_tracks} tracks, "
-                f"{n_artists} artists) into album {va_id}"
+                f"V/A folder '{folder}' ({n_tracks} tracks, "
+                f"{n_artists} artists): tracks detached to unknown_album"
             )
 
         deleted_albums = 0
@@ -668,7 +646,7 @@ class FileIndexer:
             )
 
         return {
-            "folders": coalesced_folders,
+            "folders": detached_folders,
             "tracks": repointed_tracks,
             "orphans": deleted_albums,
         }

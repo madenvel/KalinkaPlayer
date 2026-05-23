@@ -1,14 +1,22 @@
-"""Tests for the V/A folder coalescing pass.
+"""Tests for the V/A folder *detach* pass (formerly "coalescing").
 
 After the folder-bounded album-ID change, a folder of compilation
 tracks where each track carries its own per-album tag (e.g. a Jamendo
-playlist) still fragments into one album per track. ``coalesce_va_folders``
-collapses those into a single ``various_artists``-anchored album.
+playlist) still fragments into one album per track. The detach pass
+re-points every such track to the ``unknown_album`` sentinel so:
+
+  * the per-track single-track albums get cleaned up as orphans
+  * each track surfaces as a single under its real artist via the
+    orphan-tracks fallback in the browse view
+
+The earlier "coalesce into a Various-Artists umbrella" behaviour was
+rejected because it broke artist navigation: a track's artist_id
+correctly pointed at the real artist, but the album was anchored to
+``various_artists``, so the artist page found no albums for them.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -22,26 +30,25 @@ from kalinka_plugin_localfiles.utils.id_generator import (
     generate_album_id,
     generate_artist_id,
     generate_track_id,
-    generate_va_album_id,
 )
 from kalinka_plugin_localfiles.utils.name_utils import album_folder_for_path
 
 
 class FakeDb:
-    """Minimal in-memory stand-in for AsyncIndexerDb.
-
-    Only the methods ``coalesce_va_folders`` actually calls are
-    implemented. Test setup populates ``tracks`` / ``albums`` /
-    ``artists`` directly to construct the scenario being asserted.
-    """
+    """Minimal in-memory stand-in for AsyncIndexerDb. Only the methods
+    ``orphan_va_folder_tracks`` calls are implemented."""
 
     def __init__(self) -> None:
         self.tracks: Dict[str, Dict] = {}
         self.albums: Dict[str, Dict] = {}
         self.artists: Dict[str, Dict] = {}
-        # Always seed the sentinel artists, mirroring db_schema.init_db.
+        # Seed the only sentinel that survives the V/A rewrite.
         self.artists["unknown_artist"] = {"id": "unknown_artist", "name": "Unknown Artist"}
-        self.artists["various_artists"] = {"id": "various_artists", "name": "Various Artists"}
+        self.albums["unknown_album"] = {
+            "id": "unknown_album",
+            "title": "Unknown Album",
+            "artist_id": "unknown_artist",
+        }
 
     async def get_all_tracks(self) -> List[Dict]:
         return [dict(t) for t in self.tracks.values()]
@@ -85,9 +92,7 @@ class FakeDb:
         orphan_artists = [
             aid
             for aid in list(self.artists)
-            if aid not in live_artist_ids
-            and aid != "unknown_artist"
-            and aid != "various_artists"
+            if aid not in live_artist_ids and aid != "unknown_artist"
         ]
         for aid in orphan_artists:
             del self.artists[aid]
@@ -95,9 +100,8 @@ class FakeDb:
 
 
 def _make_indexer(db: FakeDb) -> FileIndexer:
-    """Build a FileIndexer with the fake DB. Bypasses __init__ because
-    real init resolves music_folders against the filesystem and we don't
-    need it here."""
+    """Build a FileIndexer bypassing the heavy __init__ (which
+    resolves music_folders against the real filesystem)."""
     indexer = FileIndexer.__new__(FileIndexer)
     indexer.db_manager = db  # type: ignore[assignment]
     indexer.music_folders = []
@@ -112,8 +116,6 @@ def _seed_track(
     album_title: str,
     duration: int = 180,
 ) -> Tuple[str, str, str]:
-    """Insert a track + its (artist, album) rows using the production
-    ID schemes. Returns (track_id, artist_id, album_id)."""
     artist_id = generate_artist_id(artist_name)
     folder = album_folder_for_path(file_path)
     album_id = generate_album_id(album_title, folder)
@@ -143,83 +145,85 @@ def _seed_track(
 
 
 # ---------------------------------------------------------------------------
-# The coalescing cases
+# The detach cases
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_jamendo_playlist_coalesces_into_one_va_album():
-    """The motivating case: one folder, many single-track albums whose
-    only thing in common is the parent directory. Should collapse to a
-    single V/A album anchored to ``various_artists``."""
+async def test_jamendo_playlist_tracks_become_singles_under_real_artists():
+    """Motivating case: one folder, many single-track albums each
+    anchored to a different real artist. After detach, every track
+    points at ``unknown_album``, every per-track album is gone, and
+    no Various-Artists row is created — artist navigation now works
+    via the orphan-tracks fallback."""
     db = FakeDb()
     indexer = _make_indexer(db)
 
     folder = "/Music/Playlist - Compilation"
+    real_artist_ids = []
     for i in range(6):
-        _seed_track(
+        _, ar_id, _ = _seed_track(
             db,
             f"{folder}/{i:02d} - track.mp3",
             artist_name=f"Artist {i}",
-            album_title=f"Album {i}",  # each track has its own album tag
+            album_title=f"Album {i}",
         )
+        real_artist_ids.append(ar_id)
 
-    assert len(db.albums) == 6
+    # Pre-state: 6 per-track albums, 6 distinct artists.
+    assert len(db.albums) == 1 + 6  # unknown_album + 6 per-track albums
 
-    result = await indexer.coalesce_va_folders()
+    result = await indexer.orphan_va_folder_tracks()
 
     assert result["folders"] == 1
     assert result["tracks"] == 6
-    # The 6 per-track albums get cleaned up; the new V/A album survives.
     assert result["orphans"] == 6
-    assert len(db.albums) == 1
-
-    va_id = generate_va_album_id(folder)
-    assert va_id in db.albums
-    assert db.albums[va_id]["artist_id"] == "various_artists"
-    # All tracks now point at the V/A album.
+    # All tracks now point to unknown_album.
     for t in db.tracks.values():
-        assert t["album_id"] == va_id
+        assert t["album_id"] == "unknown_album"
+    # The per-track albums are gone; only unknown_album survives.
+    assert set(db.albums) == {"unknown_album"}
+    # No Various-Artists row was created.
+    assert "various_artists" not in db.artists
+    # The real artists are still present so their tracks can be browsed
+    # under them via the orphan-tracks fallback.
+    for ar_id in real_artist_ids:
+        assert ar_id in db.artists
 
 
 @pytest.mark.asyncio
-async def test_normal_album_is_not_coalesced():
-    """A normal single-artist album must be left alone — 1 artist
-    fails the distinct-artists threshold immediately."""
+async def test_normal_album_is_not_detached():
+    """A normal single-artist album must be left alone — only 1
+    distinct real artist, fails the threshold immediately."""
     db = FakeDb()
     indexer = _make_indexer(db)
-
     folder = "/Music/Pink Floyd - Animals"
     for i in range(5):
         _seed_track(
             db, f"{folder}/{i:02d}.flac", artist_name="Pink Floyd", album_title="Animals"
         )
 
-    result = await indexer.coalesce_va_folders()
-
+    result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 0
-    assert result["tracks"] == 0
-    assert len(db.albums) == 1
+    # Tracks still point at the original album.
+    assert all(
+        t["album_id"] != "unknown_album" for t in db.tracks.values()
+    )
 
 
 @pytest.mark.asyncio
-async def test_mistagged_album_is_not_coalesced():
+async def test_mistagged_album_is_not_detached():
     """Abbey Road with two mistagged tracks: 17 tracks, 3 distinct
-    artists. Fails uniqueness ratio (3/17 ≈ 0.18 < 0.5) so should NOT
-    become V/A — the right fix is to clean up the bad tags, not
-    re-anchor the album."""
+    artists. Uniqueness ratio 3/17 ≈ 0.18 fails the 0.5 floor →
+    NOT detached. The fix is to clean up the bad tags, not to
+    nuke the whole album."""
     db = FakeDb()
     indexer = _make_indexer(db)
-
     folder = "/Music/The Beatles - Abbey Road"
     for i in range(15):
         _seed_track(
-            db,
-            f"{folder}/{i:02d}.flac",
-            artist_name="The Beatles",
-            album_title="Abbey Road",
+            db, f"{folder}/{i:02d}.flac", artist_name="The Beatles", album_title="Abbey Road"
         )
-    # Two mistagged tracks
     _seed_track(
         db, f"{folder}/m1.flac", artist_name="Ofra Harnoy", album_title="Abbey Road"
     )
@@ -227,21 +231,20 @@ async def test_mistagged_album_is_not_coalesced():
         db, f"{folder}/m2.flac", artist_name="Bob Nanna", album_title="Abbey Road"
     )
 
-    result = await indexer.coalesce_va_folders()
-
-    assert result["folders"] == 0  # not flipped to V/A
+    result = await indexer.orphan_va_folder_tracks()
+    assert result["folders"] == 0
 
 
 @pytest.mark.asyncio
-async def test_compilation_with_shared_album_tag_gets_va_anchor():
-    """The other V/A pattern: same folder, same album tag, but tracks
-    span many distinct artists (typical "Now That's What I Call X"
-    rip). After my folder-bounded change these already collapse into
-    one album row; coalescing just flips the anchor artist to
-    ``various_artists``."""
+async def test_real_compilation_album_with_shared_tag_also_detaches():
+    """The other V/A pattern: same folder, same album tag, many
+    artists (e.g., 'Now That's What I Call X'). After the folder-
+    bounded change these already share one album row anchored to the
+    first track's artist. Detach still kicks in — the tracks lose
+    their album linkage and surface as singles under each real
+    artist. The umbrella album disappears from the album list."""
     db = FakeDb()
     indexer = _make_indexer(db)
-
     folder = "/Music/Now Thats What I Call 2024"
     artists = ["Artist A", "Artist B", "Artist C", "Artist D", "Artist E"]
     for i, name in enumerate(artists):
@@ -253,47 +256,37 @@ async def test_compilation_with_shared_album_tag_gets_va_anchor():
         )
     # All tracks share the same album row already (same folder + title).
     assert len({t["album_id"] for t in db.tracks.values()}) == 1
-    original_anchor = next(iter(db.albums.values()))["artist_id"]
-    assert original_anchor != "various_artists"  # picked up first-track's artist
+    original_album_id = next(iter(db.tracks.values()))["album_id"]
+    assert original_album_id in db.albums
 
-    result = await indexer.coalesce_va_folders()
-
+    result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 1
-    # The V/A album is a NEW row (under generate_va_album_id), not the
-    # original one — that original is now orphaned and deleted.
-    va_id = generate_va_album_id(folder)
-    assert va_id in db.albums
-    assert db.albums[va_id]["artist_id"] == "various_artists"
-    assert result["orphans"] >= 1
+    # Tracks all moved to unknown_album, the umbrella album was orphaned and deleted.
     for t in db.tracks.values():
-        assert t["album_id"] == va_id
+        assert t["album_id"] == "unknown_album"
+    assert original_album_id not in db.albums
 
 
 @pytest.mark.asyncio
-async def test_threshold_boundary_just_below_passes():
-    """Folder with exactly VA_MIN_DISTINCT_ARTISTS - 1 distinct artists
-    must not coalesce, even if the uniqueness ratio is 1.0."""
+async def test_threshold_boundary_just_below_does_not_detach():
     db = FakeDb()
     indexer = _make_indexer(db)
-
     folder = "/Music/Trio Compilation"
     for i in range(VA_MIN_DISTINCT_ARTISTS - 1):
         _seed_track(
             db, f"{folder}/{i:02d}.flac", artist_name=f"A{i}", album_title=f"T{i}"
         )
-
-    result = await indexer.coalesce_va_folders()
+    result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 0
 
 
 @pytest.mark.asyncio
-async def test_disc_subdirs_share_va_album():
-    """If a V/A compilation is split into Disc 1 / Disc 2 subdirs,
-    ``album_folder_for_path`` already walks up, so all tracks
-    should land in the SAME V/A album."""
+async def test_disc_subdirs_count_under_the_parent_folder():
+    """A V/A compilation split into Disc 1 / Disc 2 subdirs should be
+    detected as a single folder via ``album_folder_for_path`` which
+    walks up disc subdirs."""
     db = FakeDb()
     indexer = _make_indexer(db)
-
     parent = "/Music/Massive Compilation"
     for i in range(3):
         _seed_track(
@@ -309,50 +302,22 @@ async def test_disc_subdirs_share_va_album():
             artist_name=f"Artist {i+10}",
             album_title=f"B{i}",
         )
-
-    result = await indexer.coalesce_va_folders()
+    result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 1
-    va_id = generate_va_album_id(parent)  # parent, not the disc subdirs
     for t in db.tracks.values():
-        assert t["album_id"] == va_id
+        assert t["album_id"] == "unknown_album"
 
 
 @pytest.mark.asyncio
-async def test_recreates_various_artists_row_if_missing():
-    """Regression: the orphan-cleanup pass in ``cleanup_stale_tracks``
-    runs *before* coalescing and used to delete the
-    ``various_artists`` sentinel (it had no tracks or albums yet).
-    Coalescing must lazily recreate it so the V/A album it inserts
-    has a real anchor row to join against."""
-    db = FakeDb()
-    # Simulate the post-cleanup state: sentinel got deleted.
-    del db.artists["various_artists"]
-    indexer = _make_indexer(db)
-
-    folder = "/Music/Compilation"
-    for i in range(5):
-        _seed_track(
-            db, f"{folder}/{i:02d}.mp3", artist_name=f"Artist {i}", album_title=f"T{i}"
-        )
-
-    result = await indexer.coalesce_va_folders()
-    assert result["folders"] == 1
-    # The row must exist again so the V/A album anchors to a real artist.
-    assert "various_artists" in db.artists
-    assert db.artists["various_artists"]["name"] == "Various Artists"
-
-
-@pytest.mark.asyncio
-async def test_unknown_and_various_artists_dont_count_toward_threshold():
-    """Sentinel artists shouldn't inflate the distinct-artist count."""
+async def test_unknown_artist_does_not_count_toward_threshold():
+    """``unknown_artist``-anchored tracks don't inflate the distinct-
+    artist count, so a folder with one real artist plus several
+    untagged tracks doesn't get flipped to V/A."""
     db = FakeDb()
     indexer = _make_indexer(db)
-
     folder = "/Music/Half Tagged"
-    # One real artist, the rest sentinel — should NOT trigger V/A.
     _seed_track(db, f"{folder}/01.mp3", artist_name="Real Artist", album_title="T")
     for i in range(5):
-        # Use the sentinel artist directly (bypass _seed_track).
         track_id = generate_track_id(f"{folder}/u{i}.mp3")
         db.tracks[track_id] = {
             "id": track_id,
@@ -362,6 +327,5 @@ async def test_unknown_and_various_artists_dont_count_toward_threshold():
             "album_id": "unknown_album",
             "duration": 100,
         }
-
-    result = await indexer.coalesce_va_folders()
+    result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 0
