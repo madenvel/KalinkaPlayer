@@ -512,14 +512,16 @@ class LocalFilesInputModule(InputModule):
     def _browse_artist(
         self, id: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """Browse an artist's albums followed by their album-less tracks.
+        """Browse an artist's albums followed by their orphan tracks.
 
-        Album detection (MusicBrainz/AcoustID) sometimes can't attribute a
-        track to a release — typically when only a handful of an album's
-        tracks are present locally. Those tracks land in the
-        ``unknown_album`` bucket and would otherwise be invisible from the
-        artist page. We append them after the real albums so the artist
-        view is complete; pagination spans both collections.
+        Tracks count as "orphan" for this view when their album is
+        anchored to a different artist — either ``unknown_album``
+        (enricher couldn't pick a release) or a V/A compilation
+        anchored to ``various_artists`` (e.g. a Jamendo playlist
+        folder). Without surfacing them, an artist whose only local
+        contributions are on a V/A compilation would appear empty in
+        the UI even though their tracks exist. We append them after
+        the real albums; pagination spans both collections.
         """
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
