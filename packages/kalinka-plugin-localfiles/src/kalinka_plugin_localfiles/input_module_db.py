@@ -547,10 +547,26 @@ class LocalFilesInputModuleDb:
     def get_artist_orphan_tracks(
         self, artist_id: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
-        """Get tracks attributed to an artist that have no resolved album
-        (album_id == 'unknown_album'). These are tracks the enricher could
-        not confidently assign to a release — surface them in the artist
-        view so they remain reachable without a phantom 'Unknown Album'.
+        """Get tracks attributed to an artist whose album is anchored
+        elsewhere, so they wouldn't show up under ``get_artist_albums``.
+
+        Two real cases this catches:
+
+          * ``album_id == 'unknown_album'`` (anchored to
+            ``unknown_artist``) — the enricher couldn't pick a release.
+            Original use case.
+
+          * ``album.artist_id == 'various_artists'`` — a V/A compilation
+            the indexer coalesced. The track's ``artist_id`` correctly
+            points at the real artist, but the album is anchored to
+            the V/A sentinel, so it never surfaces in the
+            albums-by-artist query. Without this, an artist with only
+            tracks-on-compilations (e.g. one of the 59 distinct artists
+            on a Jamendo playlist folder) appears empty in the UI.
+
+        Generalised to ``album.artist_id != track.artist_id`` so any
+        future "track anchored under a different album-owner" case
+        gets picked up too.
         """
         conn = self._get_connection()
         try:
@@ -559,8 +575,9 @@ class LocalFilesInputModuleDb:
             cursor.execute(
                 """
                 SELECT COUNT(*) as count
-                FROM tracks
-                WHERE artist_id = ? AND album_id = 'unknown_album'
+                FROM tracks t
+                JOIN albums a ON t.album_id = a.id
+                WHERE t.artist_id = ? AND a.artist_id != t.artist_id
                 """,
                 (artist_id,),
             )
@@ -572,7 +589,7 @@ class LocalFilesInputModuleDb:
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
-                WHERE t.artist_id = ? AND t.album_id = 'unknown_album'
+                WHERE t.artist_id = ? AND a.artist_id != t.artist_id
                 ORDER BY t.title COLLATE NOCASE
                 LIMIT ? OFFSET ?
                 """,
