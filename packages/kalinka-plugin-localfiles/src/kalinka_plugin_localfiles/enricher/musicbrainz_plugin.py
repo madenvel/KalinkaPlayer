@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__.split(".")[-1])
 ALBUM_MATCH_MIN_MARGIN = 3.0
 
 
+def _same_release_group(a: Dict, b: Dict) -> bool:
+    """Return True when two MB ``release-list`` entries share a
+    release-group MBID. Used by the album ambiguity guard to
+    distinguish "two different albums that happen to score the same"
+    (orphan-hold) from "two physical releases of the same logical
+    album" (commit either)."""
+    a_id = (a.get("release-group") or {}).get("id")
+    b_id = (b.get("release-group") or {}).get("id")
+    return bool(a_id and b_id and a_id == b_id)
+
+
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
@@ -420,10 +431,21 @@ class MusicBrainzPlugin(EnricherPlugin):
             best, best_score, best_similarity, mb_release_data = scored[0]
 
             # Reject ambiguous picks (deluxe vs standard etc.) so the album
-            # stays orphan rather than committing the wrong edition.
+            # stays orphan rather than committing the wrong edition. The
+            # guard fires when the top two are within ``ALBUM_MATCH_MIN_MARGIN``
+            # AND belong to different release-groups — different
+            # release-groups means truly-different albums (the case we
+            # want to catch), but the *same* release-group is just MB
+            # listing CD / vinyl / remaster variants of one logical
+            # album, where picking either is correct enough. Without
+            # this carve-out the guard wrongly orphans common cases
+            # like "Abbey Road" (every reissue scores identically).
             if len(scored) > 1:
-                runner_up_score = scored[1][1]
-                if best_score - runner_up_score < ALBUM_MATCH_MIN_MARGIN:
+                runner_up_cand, runner_up_score, _runner_sim, _runner_rel = scored[1]
+                if (
+                    best_score - runner_up_score < ALBUM_MATCH_MIN_MARGIN
+                    and not _same_release_group(best, runner_up_cand)
+                ):
                     logger.info(
                         f"Ambiguous album match for '{album['title']}': "
                         f"best={best_score:.1f} runner_up={runner_up_score:.1f} — "

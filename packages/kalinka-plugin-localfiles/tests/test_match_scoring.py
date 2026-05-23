@@ -894,6 +894,8 @@ class TestEnrichAlbumStageB:
     async def test_holds_orphan_when_top_candidates_indistinguishable(
         self, monkeypatch
     ):
+        """Two top candidates in DIFFERENT release-groups with
+        identical scores represent genuinely different albums — orphan."""
         plugin = _make_mb_plugin()
         album = {
             "id": "alb1",
@@ -902,7 +904,9 @@ class TestEnrichAlbumStageB:
             "track_count": 12,
             "duration": 3000,
         }
-        # Two releases with effectively identical signals.
+        # Two releases with effectively identical signals but DIFFERENT
+        # release-groups — i.e. two distinct albums that happen to look
+        # alike. Hold as orphan.
         search_response = {
             "release-list": [
                 {
@@ -910,12 +914,14 @@ class TestEnrichAlbumStageB:
                     "title": "Album",
                     "ext:score": "95",
                     "medium-track-count": "12",
+                    "release-group": {"id": "rg-1"},
                 },
                 {
                     "id": "b",
                     "title": "Album",
                     "ext:score": "95",
                     "medium-track-count": "12",
+                    "release-group": {"id": "rg-2"},
                 },
             ]
         }
@@ -941,6 +947,97 @@ class TestEnrichAlbumStageB:
         )
         result = await plugin.enrich_album(album)
         assert result is None  # within margin → hold as orphan
+
+    @pytest.mark.asyncio
+    async def test_commits_when_top_tied_candidates_share_release_group(
+        self, monkeypatch
+    ):
+        """The Abbey Road case: MB has many releases (CD, vinyl,
+        remaster, mono mix, …) for the same logical album. Every
+        candidate scores 135 and they're all in the SAME release-group.
+        The guard should NOT fire — we want to commit one of them
+        rather than orphan a clearly-correct match."""
+        plugin = _make_mb_plugin()
+        album = {
+            "id": "alb1",
+            "title": "Abbey Road",
+            "artist_name": "The Beatles",
+            "track_count": 17,
+            "duration": 2700,
+        }
+        # Three candidates from the SAME release-group (every release
+        # variant lives under the same group MBID). All score 135.
+        search_response = {
+            "release-list": [
+                {
+                    "id": "rel-cd",
+                    "title": "Abbey Road",
+                    "ext:score": "100",
+                    "medium-track-count": "17",
+                    "release-group": {"id": "rg-abbey-road"},
+                },
+                {
+                    "id": "rel-vinyl",
+                    "title": "Abbey Road",
+                    "ext:score": "100",
+                    "medium-track-count": "17",
+                    "release-group": {"id": "rg-abbey-road"},
+                },
+                {
+                    "id": "rel-remaster",
+                    "title": "Abbey Road",
+                    "ext:score": "100",
+                    "medium-track-count": "17",
+                    "release-group": {"id": "rg-abbey-road"},
+                },
+            ]
+        }
+
+        def fake_get(rid, includes=None):
+            return {
+                "release": {
+                    "id": rid,
+                    "title": "Abbey Road",
+                    "date": "1969-09-26",
+                    "medium-list": [
+                        {"track-list": [{"length": "159000"} for _ in range(17)]}
+                    ],
+                }
+            }
+
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.search_releases",
+            lambda *a, **kw: search_response,
+        )
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin.musicbrainzngs.get_release_by_id",
+            fake_get,
+        )
+        result = await plugin.enrich_album(album)
+        assert result is not None, "Expected a commit when tied candidates share release-group"
+        assert result["mbid"] in {"rel-cd", "rel-vinyl", "rel-remaster"}
+        assert result["updates"]["year"] == 1969
+
+    def test_same_release_group_helper(self):
+        from kalinka_plugin_localfiles.enricher.musicbrainz_plugin import (
+            _same_release_group,
+        )
+        assert _same_release_group(
+            {"release-group": {"id": "rg1"}},
+            {"release-group": {"id": "rg1"}},
+        )
+        # Different groups
+        assert not _same_release_group(
+            {"release-group": {"id": "rg1"}},
+            {"release-group": {"id": "rg2"}},
+        )
+        # Missing release-group on either side — fall through to the
+        # ambiguity guard rather than overconfident "they match" claim.
+        assert not _same_release_group(
+            {"release-group": {"id": "rg1"}}, {}
+        )
+        assert not _same_release_group({}, {"release-group": {"id": "rg1"}})
+        assert not _same_release_group({}, {})
 
 
 # ---------------------------------------------------------------------------
