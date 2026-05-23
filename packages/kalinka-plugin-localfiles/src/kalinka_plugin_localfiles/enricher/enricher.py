@@ -417,6 +417,29 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
         return
 
     enricher_instance = MetadataEnricher(config, db_manager)
+
+    # One-time retry of previously-FAILED rows. The enricher subprocess
+    # starts when the main server starts, so a server restart (which is
+    # the natural moment for "we may have new plugin code") flips every
+    # ``enriched=2`` entry back to ``0``. Subsequent enrichment ticks
+    # within the same process lifetime do not reset again — once a row
+    # fails *under the current code*, it stays failed until the next
+    # restart.
+    try:
+        retried = await db_manager.reset_failed_to_retry()
+        total = sum(retried.values())
+        if total:
+            logger.info(
+                "Reset %d previously-FAILED rows for retry: "
+                "%d artists, %d albums, %d tracks",
+                total,
+                retried["artists"],
+                retried["albums"],
+                retried["tracks"],
+            )
+    except Exception as e:
+        logger.warning(f"Failed-row retry reset skipped: {e}")
+
     enricher_tasks = set()
 
     # Process queue commands
