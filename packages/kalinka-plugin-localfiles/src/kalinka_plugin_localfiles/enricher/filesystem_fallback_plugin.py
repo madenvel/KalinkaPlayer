@@ -40,6 +40,15 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     This plugin does NOT set the "enriched" flag to allow other plugins to re-check the data.
     """
 
+    # Match the indexer's V/A detection criteria
+    # (``orphan_va_folder_tracks``). Filesystem fallback skips album
+    # reassignment when the track's folder meets these — otherwise it
+    # would re-anchor V/A-detached tracks to (folder, tag-title)
+    # albums anchored to the first-tagged artist, undoing the detach
+    # and breaking artist navigation again.
+    VA_MIN_DISTINCT_ARTISTS = 4
+    VA_MIN_ARTIST_UNIQUENESS = 0.5
+
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
@@ -55,6 +64,12 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             r"^(\d+)-\s+",  # "1- "
             r"^(\d+)_\s+",  # "1_ "
         ]
+
+        # Per-folder V/A determination, cached for the lifetime of the
+        # plugin instance so we don't re-query the DB for every track.
+        # Cleared between enrichment passes via the natural process
+        # restart (the enricher subprocess is short-lived per pass).
+        self._va_folder_cache: Dict[str, bool] = {}
 
     def can_enrich_artist(self) -> bool:
         """This plugin can enrich artist metadata from folder structure"""
@@ -235,6 +250,42 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         logger.debug(f"Created new album: {album_title} by {artist_id} (ID: {album_id})")
         return album_id
 
+    async def _track_is_in_va_folder(self, file_path: str) -> bool:
+        """Return True when this track's directory looks like a V/A
+        compilation folder by the same criteria the indexer uses to
+        detach tracks (``orphan_va_folder_tracks``):
+
+          * ≥ ``VA_MIN_DISTINCT_ARTISTS`` distinct real artists
+            (``unknown_artist`` excluded) own a track here, AND
+          * the unique-artist-per-track ratio is ≥
+            ``VA_MIN_ARTIST_UNIQUENESS``.
+
+        Cached per folder on the plugin instance so a 69-track V/A
+        folder only triggers two DB queries total, not 138.
+        """
+        if not file_path:
+            return False
+        folder = album_folder_for_path(file_path)
+        if not folder:
+            return False
+        cached = self._va_folder_cache.get(folder)
+        if cached is not None:
+            return cached
+        try:
+            n_artists = await self.db_manager.count_distinct_artists_in_folder(folder)
+            n_tracks = await self.db_manager.count_tracks_in_folder(folder)
+        except Exception as e:
+            logger.debug(f"Could not assess V/A status for {folder}: {e}")
+            self._va_folder_cache[folder] = False
+            return False
+        is_va = (
+            n_artists >= self.VA_MIN_DISTINCT_ARTISTS
+            and n_tracks > 0
+            and (n_artists / n_tracks) >= self.VA_MIN_ARTIST_UNIQUENESS
+        )
+        self._va_folder_cache[folder] = is_va
+        return is_va
+
     def _find_containing_music_folder(self, file_path: str) -> Optional[str]:
         """
         Find which configured music folder contains the given file path.
@@ -411,28 +462,38 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                     f"Updated track artist from {current_artist_id} to {new_artist_id}"
                 )
 
-        # Handle album - only update if current album is unknown
+        # Handle album - only update if current album is unknown,
+        # AND only when the track is NOT in a V/A folder. The indexer's
+        # detach pass deliberately moves V/A-folder tracks to
+        # ``unknown_album``; re-anchoring them here would undo it.
         current_album_id = track.get("album_id", "unknown_album")
         fs_album = fs_metadata.get("album")
         if current_album_id == "unknown_album" and fs_album:
-            # Use the artist_id from the track (either existing or newly updated)
-            artist_id_for_album = updates.get("artist_id", current_artist_id)
-
-            # If we still don't have a valid artist, try to create one from filesystem
-            if artist_id_for_album == "unknown_artist" and fs_artist:
-                artist_id_for_album = await self._find_or_create_artist(fs_artist)
-                updates["artist_id"] = artist_id_for_album
-                changed_items["artists"].add(artist_id_for_album)
-
-            new_album_id = await self._find_or_create_album(
-                fs_album, artist_id_for_album, track["file_path"]
-            )
-            if new_album_id != current_album_id:
-                updates["album_id"] = new_album_id
-                changed_items["albums"].add(new_album_id)
+            if await self._track_is_in_va_folder(track.get("file_path", "")):
                 logger.debug(
-                    f"Updated track album from {current_album_id} to {new_album_id}"
+                    f"Track {track.get('id')} is in a V/A folder; "
+                    f"leaving in unknown_album so it surfaces under its real "
+                    f"artist via the orphan-tracks fallback"
                 )
+            else:
+                # Use the artist_id from the track (either existing or newly updated)
+                artist_id_for_album = updates.get("artist_id", current_artist_id)
+
+                # If we still don't have a valid artist, try to create one from filesystem
+                if artist_id_for_album == "unknown_artist" and fs_artist:
+                    artist_id_for_album = await self._find_or_create_artist(fs_artist)
+                    updates["artist_id"] = artist_id_for_album
+                    changed_items["artists"].add(artist_id_for_album)
+
+                new_album_id = await self._find_or_create_album(
+                    fs_album, artist_id_for_album, track["file_path"]
+                )
+                if new_album_id != current_album_id:
+                    updates["album_id"] = new_album_id
+                    changed_items["albums"].add(new_album_id)
+                    logger.debug(
+                        f"Updated track album from {current_album_id} to {new_album_id}"
+                    )
 
         if updates:
             logger.info(

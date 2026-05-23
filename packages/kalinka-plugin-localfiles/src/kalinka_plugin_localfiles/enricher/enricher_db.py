@@ -158,6 +158,57 @@ class AsyncEnricherDb:
             await conn.commit()
         return counts
 
+    async def count_distinct_artists_in_folder(self, parent_dir: str) -> int:
+        """Return the number of distinct real artists with at least one
+        track whose ``file_path`` is in ``parent_dir`` (non-recursive).
+
+        ``unknown_artist`` is excluded so it doesn't deflate or inflate
+        the count depending on how many untagged tracks happen to be
+        in the folder. Used by ``filesystem_fallback`` to decide
+        whether to leave a track in ``unknown_album`` (V/A folder) or
+        anchor it to a derived album (single-artist folder).
+        """
+        if not parent_dir:
+            return 0
+        # Match "<parent_dir>/<file>" but NOT "<parent_dir>/<subdir>/<file>"
+        # so siblings of the same album folder count but disc subdirs
+        # don't double-count tracks from a separate logical folder.
+        prefix = parent_dir.rstrip("/") + "/"
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT COUNT(DISTINCT artist_id) FROM tracks
+                WHERE file_path LIKE ? AND file_path NOT LIKE ?
+                  AND artist_id != 'unknown_artist'
+                """,
+                (prefix + "%", prefix + "%/%"),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+    async def count_tracks_in_folder(self, parent_dir: str) -> int:
+        """Return the number of tracks whose ``file_path`` is directly
+        in ``parent_dir`` (non-recursive). Companion to
+        ``count_distinct_artists_in_folder`` — together they let
+        callers compute the unique-artist-per-track ratio used by the
+        V/A detection criteria.
+        """
+        if not parent_dir:
+            return 0
+        prefix = parent_dir.rstrip("/") + "/"
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT COUNT(*) FROM tracks
+                WHERE file_path LIKE ? AND file_path NOT LIKE ?
+                """,
+                (prefix + "%", prefix + "%/%"),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
         async with self._open() as conn:
