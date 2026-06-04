@@ -178,41 +178,87 @@ class TestDynamicWeightNormalization:
 
 
 # ---------------------------------------------------------------------------
-# Tests: FTS column weighting via bm25
+# Tests: FTS + rapidfuzz re-ranking
 # ---------------------------------------------------------------------------
 
 
-class TestFtsBm25Weighting:
+async def _insert_fts_rows(db_path: str, rows: list[tuple[str, str, str, str]]) -> None:
+    """Insert (track_id, title, artist_name, album_title) rows into fts_tracks."""
+    async with aiosqlite.connect(db_path) as conn:
+        for tid, title, artist, album in rows:
+            await conn.execute(
+                "INSERT INTO fts_tracks (track_id, title, artist_name, album_title, genre_tags) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (tid, title, artist, album, ""),
+            )
+        await conn.commit()
+
+
+class TestFtsFuzzyRerank:
     @pytest.mark.asyncio
-    async def test_bm25_query_runs(self):
-        """Verify bm25() column weighting doesn't error."""
+    async def test_returns_match(self):
+        """Exact-title query finds the matching track."""
         db_path = os.path.join(tempfile.mkdtemp(), "test.db")
         db = await _setup_db(db_path)
 
-        # Index some tracks
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute(
-                "UPDATE tracks SET enriched = 1, search_indexed_at = NULL"
-            )
-            for tid, title in [("t0", "Yesterday"), ("t1", "Tomorrow"), ("t2", "Yesterday Once More")]:
-                await conn.execute(
-                    "UPDATE tracks SET enriched = 1, search_indexed_at = NULL WHERE id = ?",
-                    (tid,),
-                )
-            await conn.commit()
+        await _insert_fts_rows(db_path, [
+            ("t0", "Yesterday", "Beatles", "Help!"),
+            ("t1", "Tomorrow Never Knows", "Beatles", "Revolver"),
+        ])
 
-        # Manually insert FTS entries
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute(
-                "INSERT INTO fts_tracks (track_id, title, artist_name, album_title, genre_tags) VALUES (?, ?, ?, ?, ?)",
-                ("t0", "Yesterday", "Beatles", "Help!", "rock pop"),
-            )
-            await conn.execute(
-                "INSERT INTO fts_tracks (track_id, title, artist_name, album_title, genre_tags) VALUES (?, ?, ?, ?, ?)",
-                ("t1", "Tomorrow Never Knows", "Beatles", "Revolver", "rock"),
-            )
-            await conn.commit()
+        results = await db.fts_search("yesterday", "yesterday", limit=10)
+        assert [r["track_id"] for r in results] == ["t0"]
 
-        results = await db.fts_search("yesterday", limit=10)
-        assert len(results) >= 1
-        assert results[0]["track_id"] == "t0"
+    @pytest.mark.asyncio
+    async def test_drops_coincidental_single_token_hit(self):
+        """The original AI-search bug: an NL query that incidentally shares
+        one common word ("tonight") with a track title must NOT make the
+        track pass the fuzzy filter."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        db = await _setup_db(db_path)
+
+        await _insert_fts_rows(db_path, [
+            ("t0", "Make Tonight All Mine", "Michael Jackson",
+             "The Best Of Michael Jackson (Disk 2)"),
+            ("t1", "Yesterday", "Beatles", "Help!"),
+        ])
+
+        # "tonight" appears in both query and title but the overall
+        # fuzzy similarity is well below the 72 threshold.
+        results = await db.fts_search(
+            "tonight", "something melancholic for tonight", limit=10,
+        )
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_keeps_typo_match(self):
+        """Single-character typo in a title query still matches via rapidfuzz."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        db = await _setup_db(db_path)
+
+        await _insert_fts_rows(db_path, [
+            ("t0", "Bohemian Rhapsody", "Queen", "A Night At The Opera"),
+        ])
+
+        # FTS5 OR-mode finds it on the correctly-spelled "rhapsody"
+        # token; rapidfuzz then approves the score despite "bohemain".
+        results = await db.fts_search(
+            "rhapsody", "bohemain rhapsody", limit=10,
+        )
+        assert [r["track_id"] for r in results] == ["t0"]
+
+    @pytest.mark.asyncio
+    async def test_min_score_threshold_respected(self):
+        """A high threshold drops borderline matches."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        db = await _setup_db(db_path)
+
+        await _insert_fts_rows(db_path, [
+            ("t0", "Yesterday", "Beatles", "Help!"),
+        ])
+
+        # Threshold above any plausible score: even an exact hit drops.
+        results = await db.fts_search(
+            "yesterday", "yesterday", limit=10, min_score=99,
+        )
+        assert results == []

@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import aiosqlite
+from rapidfuzz import fuzz
 
 from ..config_model import LocalFilesConfig
 
@@ -393,60 +394,86 @@ class AsyncSearcherDb:
     # ------------------------------------------------------------------
 
     async def fts_search(
-        self, query: str, limit: int = 100, fallback_threshold: int = 5
+        self,
+        text_query: str,
+        raw_query: str,
+        limit: int = 100,
+        min_score: int = 72,
+        overfetch: int = 5,
     ) -> list[dict]:
         """
-        Full-text search on the FTS5 table.
-        Returns [{"track_id": str, "rank": float}] sorted by relevance.
+        Full-text search on the FTS5 table, with rapidfuzz re-ranking.
 
-        Uses AND joining by default for precision.  Falls back to OR if
-        AND returns fewer than *fallback_threshold* results.
+        Returns [{"track_id": str, "rank": float}] sorted by relevance,
+        ``rank`` negated so lower is better (matches the convention of
+        the rest of the pipeline).
+
+        FTS5 is used purely as a fast candidate fetcher (OR-mode, broad
+        recall). Each candidate is then scored with
+        ``rapidfuzz.fuzz.WRatio`` against ``title``, ``artist_name``,
+        and ``album_title`` *separately* — the best per-field score
+        wins — and dropped if it falls below ``min_score`` (0–100).
+        Per-field rather than concatenated because WRatio is
+        length-sensitive: a short query ("yesterday") against a long
+        concatenated haystack scores lower than against the title
+        alone. This kills single-token coincidental hits ("tonight"
+        matching "Make Tonight All Mine" for the query "something
+        melancholic for tonight") and is naturally typo-tolerant on
+        the metadata side.
         """
-        if not query.strip():
+        if not text_query.strip():
             return []
 
-        fts_query = _build_fts_query(query, join="AND")
-        logger.info("fts_search: raw=%r built=%r", query, fts_query)
+        fts_query = _build_fts_query(text_query, join="OR")
+        logger.info("fts_search: raw=%r built=%r", text_query, fts_query)
         if not fts_query:
             logger.info("fts_search: query built to empty string — no results")
             return []
 
-        rows = await self._run_fts_query(fts_query, limit)
-
-        # Fall back to OR if AND returns too few results
-        if len(rows) < fallback_threshold:
-            or_query = _build_fts_query(query, join="OR")
-            if or_query and or_query != fts_query:
-                logger.info(
-                    "fts_search: AND returned %d results (< %d); trying OR",
-                    len(rows),
-                    fallback_threshold,
-                )
-                rows = await self._run_fts_query(or_query, limit)
-
-        logger.info("fts_search: %d results", len(rows))
-        return rows
-
-    async def _run_fts_query(self, fts_query: str, limit: int) -> list[dict]:
-        """Execute an FTS5 MATCH query and return results."""
+        candidate_limit = limit * overfetch
         async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             try:
                 cursor = await conn.execute(
                     """
-                    SELECT track_id, bm25(fts_tracks, 0.0, 10.0, 5.0, 3.0, 2.0) AS rank
+                    SELECT track_id, title, artist_name, album_title
                     FROM fts_tracks
                     WHERE fts_tracks MATCH ?
-                    ORDER BY rank
                     LIMIT ?
                     """,
-                    (fts_query, limit),
+                    (fts_query, candidate_limit),
                 )
                 rows = await cursor.fetchall()
             except Exception as e:
                 logger.warning("FTS search failed for query %r: %s", fts_query, e)
                 return []
-        return [{"track_id": row["track_id"], "rank": row["rank"]} for row in rows]
+
+        fuzz_target = raw_query.strip() or text_query
+        scored: list[dict] = []
+        for row in rows:
+            # Score against each field separately and keep the best. A
+            # single concatenated haystack penalises short queries
+            # because WRatio is length-sensitive: e.g. "yesterday" vs
+            # the full "Yesterday | Beatles | Help!" string drags lower
+            # than "yesterday" vs the title field on its own.
+            best = 0
+            for field in (row["title"], row["artist_name"], row["album_title"]):
+                if not field:
+                    continue
+                s = fuzz.WRatio(fuzz_target, field)
+                if s > best:
+                    best = s
+            if best >= min_score:
+                scored.append({"track_id": row["track_id"], "rank": -float(best)})
+
+        scored.sort(key=lambda r: r["rank"])
+        logger.info(
+            "fts_search: %d candidates, %d kept after WRatio>=%d",
+            len(rows),
+            len(scored),
+            min_score,
+        )
+        return scored[:limit]
 
     # ------------------------------------------------------------------
     # Tag lookups (for re-ranking and "songs like this")

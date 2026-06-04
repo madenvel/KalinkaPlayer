@@ -754,7 +754,12 @@ class SearchWorker:
         """FTS5 search leg — returns [{track_id, rank}]."""
         if not parsed.text_query:
             return []
-        return await self.db.fts_search(parsed.text_query, candidate_limit)
+        return await self.db.fts_search(
+            parsed.text_query,
+            parsed.raw,
+            candidate_limit,
+            min_score=self.config.searcher.fts_min_fuzz_score,
+        )
 
     async def _knn_leg(self, query: str, candidate_limit: int) -> list[dict]:
         """CLAP KNN search leg — returns [{track_id, distance}].
