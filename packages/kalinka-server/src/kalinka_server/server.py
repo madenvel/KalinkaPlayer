@@ -222,6 +222,23 @@ async def create_app(
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
 
+    # If any plugin's setup consumed a one-shot override (e.g.
+    # localfiles' ``rescan_on_startup``), persist the reconciled
+    # overrides dict now. Without this the consumed override would
+    # remain in the file and trigger again on the next restart.
+    if modules.overrides_dirty:
+        try:
+            save_overrides(app.state.overrides_file, app.state.overrides)
+            logger.info(
+                "Persisted reconciled overrides to %s", app.state.overrides_file,
+            )
+        except OSError as exc:
+            logger.error(
+                "Failed to persist reconciled overrides to %s: %s",
+                app.state.overrides_file,
+                exc,
+            )
+
     # Plugin classes are fixed for the process lifetime, so the dynamic-
     # field registry and the schema_version are stable. Compute once
     # here and reuse on every request; the alternative (rebuilding on

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, AsyncGenerator, Dict, Generator, Mapping
+from typing import Any, AsyncGenerator, Dict, Generator, Mapping, MutableMapping
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
@@ -94,6 +94,11 @@ class PreparedModuleCollection:
     enabled_input_modules: set[str] = field(default_factory=set)
     enabled_devices: set[str] = field(default_factory=set)
     player_context: PlayerContext | None = None
+    # Set by ``scan_and_setup_plugins`` when a plugin's setup mutated
+    # config fields that came from the overrides file. The caller
+    # (``create_app``) reads this to decide whether to re-persist the
+    # overrides dict so the mutations survive a restart.
+    overrides_dirty: bool = False
 
     def _update_enabled_input_modules(self):
         """Update the set of enabled input module names."""
@@ -161,9 +166,76 @@ class PreparedModuleCollection:
         apply_overrides_with_prefix(config, overrides, f"{prefix}{plugin_name}.")
         return config
 
+    def _reconcile_consumed_overrides(
+        self,
+        plugin_name: str,
+        plugin_class: type[PluginBase],
+        plugin_config: ModuleConfig,
+        overrides: MutableMapping[str, Any],
+    ) -> int:
+        """Sync the overrides dict with any mutations the plugin's setup
+        applied to its in-memory config.
+
+        Plugins are free to mutate fields on ``context.config`` during
+        ``setup()`` — for example, a "do X on next start" toggle that
+        clears itself after firing. Without this reconciliation those
+        mutations would only live in memory: the override loaded from
+        disk would re-fire on the next boot. Compare each override key
+        targeting this plugin against the current in-memory value;
+        update the dict to match, dropping keys whose value reverted
+        to the type default. Returns the number of override entries
+        added, modified, or removed so the caller can decide whether
+        to persist the file.
+        """
+        prefix = (
+            "input_modules."
+            if plugin_class.PLUGIN_TYPE == PluginType.INPUT_MODULE
+            else "devices."
+        ) + plugin_name + "."
+
+        default_config = plugin_class.CONFIG_MODEL()
+
+        def _read(model: ModuleConfig, attrs: list[str]) -> Any:
+            current: Any = model
+            for part in attrs:
+                current = getattr(current, part)
+            return current
+
+        changed = 0
+        for key in list(overrides.keys()):
+            if not key.startswith(prefix):
+                continue
+            attrs = key[len(prefix):].split(".")
+            try:
+                current = _read(plugin_config, attrs)
+                default = _read(default_config, attrs)
+            except (AttributeError, IndexError, TypeError, ValueError):
+                # The override targets a field that no longer exists or
+                # is unreachable on the current model. Leave it alone —
+                # apply_overrides_with_prefix already logged a warning
+                # and skipped it; preserving the entry lets a future
+                # schema revival pick it back up.
+                continue
+            stored = overrides[key]
+            if current == stored:
+                continue
+            if current == default:
+                del overrides[key]
+            else:
+                overrides[key] = current
+            changed += 1
+            logger.info(
+                "Reconciled override %s: %r → %r%s",
+                key,
+                stored,
+                current,
+                " (dropped, matches default)" if current == default else "",
+            )
+        return changed
+
     async def _scan_and_setup_plugins_from_entry_points(
         self,
-        overrides: Mapping[str, Any],
+        overrides: MutableMapping[str, Any],
     ) -> AsyncGenerator[tuple[str, PreparedPlugin], None]:
         """Scan for installed plugins using entry points and setup those matching the specified type."""
 
@@ -187,7 +259,7 @@ class PreparedModuleCollection:
             except Exception as e:
                 logger.error(f"Failed to setup plugin {plugin_name}: {e}", exc_info=True)
                 error_message = str(e)
-                
+
                 # Create a PreparedPlugin with error state even if setup failed
                 if config is not None and plugin_context is not None:
                     prepared_module = PreparedPlugin(
@@ -198,6 +270,18 @@ class PreparedModuleCollection:
                         interface=None,
                         error_message=error_message,
                     )
+
+            # Reconcile overrides regardless of READY/ERROR state: a
+            # plugin that crashed midway through setup may still have
+            # consumed an override before crashing (e.g. localfiles
+            # purges the DB before raising) and we don't want that
+            # consumption to repeat on every restart.
+            if config is not None:
+                changed = self._reconcile_consumed_overrides(
+                    plugin_name, plugin_class, config, overrides
+                )
+                if changed:
+                    self.overrides_dirty = True
 
             if prepared_module is not None:
                 yield plugin_name, prepared_module
@@ -249,12 +333,13 @@ class PreparedModuleCollection:
     async def scan_and_setup_plugins(
         self,
         player_context: PlayerContext,
-        overrides: Mapping[str, Any],
+        overrides: MutableMapping[str, Any],
     ):
         """Scan for input modules from both entry points and legacy filesystem locations."""
 
         # First, scan for input modules using entry points
         self.player_context = player_context
+        self.overrides_dirty = False
         input_modules = {}
         devices = {}
         async for (
@@ -277,13 +362,16 @@ modules = PreparedModuleCollection()
 
 
 async def setup(
-    config: KalinkaConfig, overrides: Mapping[str, Any]
+    config: KalinkaConfig, overrides: MutableMapping[str, Any]
 ) -> PlayerContext:
     """Setup the player components.
 
     ``overrides`` is the user-set config map (loaded from the overrides
     file); only entries whose keys begin with ``input_modules.<name>.``
-    or ``devices.<name>.`` will be applied to plugin configs.
+    or ``devices.<name>.`` will be applied to plugin configs. The dict
+    is mutated in place when a plugin's setup consumes one of its
+    overrides — callers inspect ``modules.overrides_dirty`` afterwards
+    to decide whether to re-persist.
     """
 
     playqueue_eventbus=EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](  # type: ignore[type-var]

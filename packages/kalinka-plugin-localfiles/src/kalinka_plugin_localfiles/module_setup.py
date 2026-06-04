@@ -154,9 +154,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         input_module_db = LocalFilesInputModuleDb(config)
 
-        # If rescan_on_startup was set, LocalFilesInputModuleDb will have reset
-        # it to False on the local copy. Propagate that back to context.config
-        # so the change is persisted to disk when the server saves config on shutdown.
+        # LocalFilesInputModuleDb mutates ``rescan_on_startup = False``
+        # on its local copy after consuming the flag. Mirror that on
+        # ``context.config`` so the server's post-setup reconciliation
+        # sees the in-memory model diverge from the loaded override and
+        # rewrites the overrides file — otherwise the True override
+        # would re-fire on every restart and purge the DB each boot.
         if context.config.rescan_on_startup and not config.rescan_on_startup:
             context.config.rescan_on_startup = False
             logger.info("rescan_on_startup reset to False after purge")
