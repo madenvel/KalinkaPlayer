@@ -158,6 +158,34 @@ def test_apply_skips_unknown_paths_without_raising():
     assert cfg.log_level == "info"
 
 
+def test_apply_coerces_value_to_field_type():
+    """A JSON-decoded string for an int field is coerced, not stored raw."""
+    cfg = _Outer()
+    apply_overrides_with_prefix(
+        cfg, {"base_config.server.port": "9001"}, "base_config."
+    )
+    assert cfg.server.port == 9001
+    assert isinstance(cfg.server.port, int)
+
+
+def test_apply_skips_type_invalid_value_without_raising():
+    """A value that can't coerce to the field type is logged and skipped,
+    leaving the field at its default rather than storing the wrong type."""
+    cfg = _Outer()
+    apply_overrides_with_prefix(
+        cfg,
+        {
+            "base_config.server.port": "not-a-number",
+            "base_config.log_level": "debug",
+        },
+        "base_config.",
+    )
+    # Bad value rejected; field untouched at its default.
+    assert cfg.server.port == 8000
+    # A valid sibling override in the same batch still applies.
+    assert cfg.log_level == "debug"
+
+
 def test_apply_with_no_matching_prefix_is_noop():
     cfg = _Outer()
     apply_overrides_with_prefix(
