@@ -84,7 +84,7 @@ def test_returns_empty_when_subfeatures_enabled_and_deps_present(monkeypatch):
     cfg.embedder.enabled = True
     _set_importable(
         monkeypatch,
-        {"numpy", "essentia", "onnxruntime", "librosa", "tokenizers"},
+        {"numpy", "essentia", "onnxruntime", "soundfile", "soxr", "tokenizers"},
     )
 
     plugin = _plugin_with(cfg)
@@ -124,7 +124,9 @@ def test_embedder_pulls_full_clap_stack(monkeypatch):
 
     plugin = _plugin_with(cfg)
     result = asyncio.run(plugin.required_packages())
-    assert set(result) == {"numpy", "onnxruntime", "librosa", "tokenizers"}
+    assert set(result) == {
+        "numpy", "onnxruntime", "soundfile", "soxr", "tokenizers"
+    }
 
 
 def test_searcher_plus_embedder_dedupes_numpy(monkeypatch):
@@ -142,7 +144,8 @@ def test_searcher_plus_embedder_dedupes_numpy(monkeypatch):
         "numpy",
         "essentia-tensorflow",
         "onnxruntime",
-        "librosa",
+        "soundfile",
+        "soxr",
         "tokenizers",
     }
 
@@ -153,12 +156,12 @@ def test_partial_install_only_lists_missing(monkeypatch):
     cfg = LocalFilesConfig()
     cfg.embedder.enabled = True
     cfg.searcher.enabled = False
-    # numpy + tokenizers are installed; onnxruntime + librosa are not.
+    # numpy + tokenizers installed; onnxruntime + soundfile + soxr are not.
     _set_importable(monkeypatch, {"numpy", "tokenizers"})
 
     plugin = _plugin_with(cfg)
     result = asyncio.run(plugin.required_packages())
-    assert set(result) == {"onnxruntime", "librosa"}
+    assert set(result) == {"onnxruntime", "soundfile", "soxr"}
 
 
 def test_returns_empty_when_setup_never_ran():

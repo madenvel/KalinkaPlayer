@@ -9,6 +9,9 @@ three reconciliation outcomes: keep, update, drop-to-default.
 
 from __future__ import annotations
 
+import enum
+import json
+
 import pytest
 from pydantic import BaseModel, Field
 
@@ -28,9 +31,18 @@ class _Sub(BaseModel):
     threshold: int = Field(default=10)
 
 
+# Plain (non-str) Enum on purpose: ``_Mode.A != "a"`` and json.dumps()
+# rejects it, so a reconciler that doesn't coerce to ``.value`` would
+# both spuriously reconcile and produce a non-serializable overrides dict.
+class _Mode(enum.Enum):
+    A = "a"
+    B = "b"
+
+
 class _FakeConfig(ModuleConfig):
     rescan_on_startup: bool = Field(default=False)
     nested: _Sub = Field(default_factory=_Sub)
+    mode: _Mode = Field(default=_Mode.A)
 
 
 class _FakePlugin(PluginBase):
@@ -114,6 +126,36 @@ def test_ignores_unrelated_plugin_overrides():
         "input_modules.other.rescan_on_startup": True,
         "base_config.log_level": "debug",
     }
+
+
+def test_enum_field_unchanged_does_not_spuriously_reconcile():
+    """An enum override matching the in-memory value must compare equal
+    to its stored ``.value`` string and be left untouched — not flagged
+    as changed because ``_Mode.A != "a"``."""
+    config = _FakeConfig(mode=_Mode.A)
+    overrides = {"input_modules.fake.mode": "a"}
+
+    changed, result = _reconcile(config, overrides)
+
+    assert changed == 0
+    assert result == {"input_modules.fake.mode": "a"}
+    # The dict the server hands to save_overrides() must stay serializable.
+    json.dumps(result)
+
+
+def test_enum_field_change_stored_as_jsonable_value():
+    """When a plugin mutates an enum field, the new value is stored as
+    its JSON-friendly ``.value`` string, not the raw Enum (which would
+    crash the json.dumps in save_overrides)."""
+    config = _FakeConfig(mode=_Mode.B)  # plugin changed it away from default
+    overrides = {"input_modules.fake.mode": "a"}
+
+    changed, result = _reconcile(config, overrides)
+
+    assert changed == 1
+    assert result["input_modules.fake.mode"] == "b"
+    assert not isinstance(result["input_modules.fake.mode"], _Mode)
+    json.dumps(result)
 
 
 def test_handles_unknown_override_key_gracefully():
