@@ -133,14 +133,13 @@ PYBIND11_MODULE(native_player, m) {
 
   m.def("py_dict_to_config", &dict_to_map);
 
-  // ALSA device enumeration — exposed as plain tuples so the Python
-  // side stays free to evolve the option model without re-pinning the
-  // pybind class layout. Each entry is (name, label, ioid) where
-  // `name` is what gets passed back to snd_pcm_open() at playback
-  // time (e.g. "default", "hw:CARD=sofhdadsp,DEV=0"), `label` is the
-  // joined card+pcm description for the UI, and `ioid` is "Output",
-  // "Input", or empty (= both). Filtering to outputs is the caller's
-  // job.
+  // ALSA device enumeration — exposed as AlsaPcmDevice objects with
+  // read-only `name`, `label`, and `ioid` attributes (the Python side
+  // in alsa_options.py reads them by name). `name` is what gets passed
+  // back to snd_pcm_open() at playback time (e.g. "default",
+  // "hw:CARD=sofhdadsp,DEV=0"), `label` is the joined card+pcm
+  // description for the UI, and `ioid` is "Output", "Input", or empty
+  // (= both). Filtering to outputs is the caller's job.
   py::class_<AlsaPcmDevice>(m, "AlsaPcmDevice")
       .def_readonly("name", &AlsaPcmDevice::name)
       .def_readonly("label", &AlsaPcmDevice::label)

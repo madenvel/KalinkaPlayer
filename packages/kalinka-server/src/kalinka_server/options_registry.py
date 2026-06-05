@@ -4,11 +4,13 @@ A handful of settings have a writable enum choice whose option list
 depends on live system state (ALSA devices that come and go on
 hot-plug, network interfaces, COM ports, ...). Hard-coding their
 choices in the schema would either be stale or churn the
-``schema_version`` on every transient hardware change. Instead the
-schema flags the field with ``dynamic_options=True`` and emits an
-empty ``enum_values``; this module keeps a separate map of
-``path -> callable`` whose results are spliced into the
-``GET /server/config`` envelope under ``enum_options[path]``.
+``schema_version`` on every transient hardware change. Instead such a
+field leaves ``enum_values`` empty in the schema (see ``FieldSpec``);
+this module keeps a separate map of ``path -> callable`` whose results
+are spliced into the ``GET /server/config`` envelope under
+``enum_options[path]``. Clients prefer envelope options when present
+and fall back to ``enum_values`` otherwise, so no per-field flag is
+needed.
 
 The resolver is a plain callable (sync or async) that returns a list
 of ``OptionSpec`` dicts. Failures are caught at the registry boundary

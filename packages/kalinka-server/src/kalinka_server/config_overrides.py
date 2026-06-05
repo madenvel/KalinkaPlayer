@@ -17,7 +17,7 @@ import os
 import tempfile
 from typing import Any, Dict, List, Mapping
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -29,7 +29,19 @@ def _set_by_path(model: BaseModel, attrs: List[str], value: Any) -> None:
     current: Any = model
     for part in attrs[:-1]:
         current = getattr(current, part)
-    setattr(current, attrs[-1], value)
+    field = attrs[-1]
+    # Validate/coerce the value against the target field's declared type
+    # before assigning. A plain setattr would silently store a
+    # type-invalid override (e.g. port="abc") as the wrong type and blow
+    # up later in unrelated code; instead let the resulting ValidationError
+    # (a ValueError) propagate so the caller logs and skips it. Coercion
+    # also normalizes JSON-decoded values (e.g. "9001" -> 9001).
+    fields = getattr(type(current), "model_fields", None)
+    if fields is not None and field in fields:
+        annotation = fields[field].annotation
+        if annotation is not None:
+            value = TypeAdapter(annotation).validate_python(value)
+    setattr(current, field, value)
 
 
 def load_overrides(path: str) -> Dict[str, Any]:
