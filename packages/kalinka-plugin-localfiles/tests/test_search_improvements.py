@@ -262,3 +262,82 @@ class TestFtsFuzzyRerank:
             "yesterday", "yesterday", limit=10, min_score=99,
         )
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_exact_artist_match_is_flagged(self):
+        """A query equal to the artist name (case-insensitive) sets the
+        ``exact`` flag; a mere title/album substring match does not."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        db = await _setup_db(db_path)
+
+        await _insert_fts_rows(db_path, [
+            ("t0", "Chariots of Fire", "Vangelis", "The Best of Vangelis CD II"),
+            ("t1", "Vangelis Tribute", "Some Cover Band", "Tributes"),
+        ])
+
+        results = await db.fts_search("vangelis", "vangelis", limit=10)
+        by_id = {r["track_id"]: r for r in results}
+        # Exact artist hit flagged regardless of letter case.
+        assert by_id["t0"]["exact"] is True
+        # Title merely *contains* the token — not an exact field match.
+        assert by_id["t1"]["exact"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: exact lexical matches float above pure CLAP neighbours
+# ---------------------------------------------------------------------------
+
+
+class TestExactMatchFloating:
+    @pytest.mark.asyncio
+    async def test_exact_artist_track_outranks_clap_neighbour(self):
+        """Reproduces the 'vangelis' bug: a track whose artist exactly
+        matches the query must rank above an unrelated track that the
+        CLAP leg considers a close audio neighbour, even though the
+        higher KNN weight would otherwise win the blend."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        config = _make_config(db_path=db_path)
+        await init_db(db_path)
+
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "INSERT INTO artists (id, name) VALUES "
+                "('arV', 'Vangelis'), ('arMJ', 'Michael Jackson')"
+            )
+            await conn.execute(
+                "INSERT INTO albums (id, title, artist_id) VALUES "
+                "('alV', 'The Best of Vangelis CD II', 'arV'), "
+                "('alMJ', 'The Best Of Michael Jackson (Disk 1)', 'arMJ')"
+            )
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, "
+                "album_id, artist_id) VALUES "
+                "('tV', 'Chariots of Fire', 'fV', 'mp3', 1, 'alV', 'arV')"
+            )
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, "
+                "album_id, artist_id) VALUES "
+                "('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'alMJ', 'arMJ')"
+            )
+            await conn.commit()
+
+        await _insert_fts_rows(db_path, [
+            ("tV", "Chariots of Fire", "Vangelis", "The Best of Vangelis CD II"),
+            ("tMJ", "Ben", "Michael Jackson",
+             "The Best Of Michael Jackson (Disk 1)"),
+        ])
+
+        db = AsyncSearcherDb(config)
+        worker = SearchWorker(config, db)
+
+        # Force the CLAP leg to return "Ben" as the nearest neighbour —
+        # the exact situation that put Michael Jackson above Vangelis.
+        async def fake_knn(query, candidate_limit):
+            return [{"track_id": "tMJ", "distance": 0.0}]
+
+        worker._knn_leg = fake_knn
+
+        result = await worker._do_search("vangelis", limit=10)
+        # The exact artist match comes first despite the heavier KNN weight.
+        assert result["tracks"][0] == "tV"
+        assert "tMJ" in result["tracks"]

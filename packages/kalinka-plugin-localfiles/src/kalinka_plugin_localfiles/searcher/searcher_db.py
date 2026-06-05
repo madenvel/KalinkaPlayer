@@ -404,9 +404,12 @@ class AsyncSearcherDb:
         """
         Full-text search on the FTS5 table, with rapidfuzz re-ranking.
 
-        Returns [{"track_id": str, "rank": float}] sorted by relevance,
-        ``rank`` negated so lower is better (matches the convention of
-        the rest of the pipeline).
+        Returns [{"track_id": str, "rank": float, "exact": bool}] sorted
+        by relevance, ``rank`` negated so lower is better (matches the
+        convention of the rest of the pipeline). ``exact`` is True when
+        the query equals one of the track's fields (title / artist /
+        album) case-insensitively — the caller floats those above pure
+        semantic neighbours so an exact artist/album hit always wins.
 
         FTS5 is used purely as a fast candidate fetcher (OR-mode, broad
         recall). Each candidate is then scored with
@@ -449,6 +452,7 @@ class AsyncSearcherDb:
                 return []
 
         fuzz_target = raw_query.strip() or text_query
+        norm_target = fuzz_target.casefold().strip()
         scored: list[dict] = []
         for row in rows:
             # Score against each field separately and keep the best. A
@@ -457,14 +461,23 @@ class AsyncSearcherDb:
             # the full "Yesterday | Beatles | Help!" string drags lower
             # than "yesterday" vs the title field on its own.
             best = 0
+            exact = False
             for field in (row["title"], row["artist_name"], row["album_title"]):
                 if not field:
                     continue
                 s = fuzz.WRatio(fuzz_target, field)
                 if s > best:
                     best = s
+                if field.casefold().strip() == norm_target:
+                    exact = True
             if best >= min_score:
-                scored.append({"track_id": row["track_id"], "rank": -float(best)})
+                scored.append(
+                    {
+                        "track_id": row["track_id"],
+                        "rank": -float(best),
+                        "exact": exact,
+                    }
+                )
 
         scored.sort(key=lambda r: r["rank"])
         logger.info(
