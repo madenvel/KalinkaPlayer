@@ -192,6 +192,34 @@ async def test_jamendo_playlist_tracks_become_singles_under_real_artists():
 
 
 @pytest.mark.asyncio
+async def test_rerun_on_already_detached_folder_is_a_noop():
+    """The detach pass runs on every scan (~every 15 min). Once a V/A
+    folder's tracks are detached, a second run must report no work:
+    ``folders``/``tracks``/``orphans`` all zero. This is what keeps the
+    indexer from re-announcing the same detach in the logs forever."""
+    db = FakeDb()
+    indexer = _make_indexer(db)
+
+    folder = "/Music/Playlist - Compilation"
+    for i in range(6):
+        _seed_track(
+            db,
+            f"{folder}/{i:02d} - track.mp3",
+            artist_name=f"Artist {i}",
+            album_title=f"Album {i}",
+        )
+
+    first = await indexer.orphan_va_folder_tracks()
+    assert first == {"folders": 1, "tracks": 6, "orphans": 6}
+
+    second = await indexer.orphan_va_folder_tracks()
+    assert second == {"folders": 0, "tracks": 0, "orphans": 0}
+    # State is unchanged by the no-op second run.
+    for t in db.tracks.values():
+        assert t["album_id"] == "unknown_album"
+
+
+@pytest.mark.asyncio
 async def test_normal_album_is_not_detached():
     """A normal single-artist album must be left alone — only 1
     distinct real artist, fails the threshold immediately."""

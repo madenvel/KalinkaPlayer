@@ -626,18 +626,29 @@ class FileIndexer:
             if (n_artists / n_tracks) < VA_MIN_ARTIST_UNIQUENESS:
                 continue
 
+            folder_repointed = 0
             for t in ts:
                 if t["album_id"] != "unknown_album":
                     await self.db_manager.update_track(
                         t["id"], {"album_id": "unknown_album"}
                     )
-                    repointed_tracks += 1
+                    folder_repointed += 1
 
-            detached_folders += 1
-            logger.info(
-                f"V/A folder '{folder}' ({n_tracks} tracks, "
-                f"{n_artists} artists): tracks detached to unknown_album"
-            )
+            if folder_repointed:
+                detached_folders += 1
+                repointed_tracks += folder_repointed
+                logger.info(
+                    f"V/A folder '{folder}' ({n_tracks} tracks, "
+                    f"{n_artists} artists): {folder_repointed} track(s) "
+                    f"detached to unknown_album"
+                )
+            else:
+                # Already detached on a prior scan; the detect pass is
+                # idempotent, so don't re-announce the no-op every cycle.
+                logger.debug(
+                    f"V/A folder '{folder}' already detached "
+                    f"({n_tracks} tracks, {n_artists} artists)"
+                )
 
         deleted_albums = 0
         if repointed_tracks > 0:
