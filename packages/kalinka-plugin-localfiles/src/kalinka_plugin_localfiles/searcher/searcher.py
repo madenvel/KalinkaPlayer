@@ -730,7 +730,14 @@ class SearchWorker:
             )
             scored.append((score, tid))
 
-        scored.sort(key=lambda x: -x[0])
+        # Exact lexical matches (query == a track's title / artist /
+        # album) float to the top, ordered among themselves by the
+        # blended score. Without this, the CLAP leg's weight (which
+        # exceeds the FTS weight) lets an unrelated audio neighbour
+        # outrank a track that literally is by the artist you searched
+        # for — e.g. "vangelis" surfacing Michael Jackson above Vangelis.
+        exact_ids = {h["track_id"] for h in fts_hits if h.get("exact")}
+        scored.sort(key=lambda st: (st[1] not in exact_ids, -st[0]))
         top_tracks = scored[:limit]
         track_result = [tid for _, tid in top_tracks]
 
