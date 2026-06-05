@@ -27,6 +27,8 @@ import inspect
 import logging
 from typing import Any, Awaitable, Callable, Union
 
+from pydantic import ValidationError
+
 from .presentation_schema import OptionSpec
 
 
@@ -88,13 +90,25 @@ def _coerce_options(raw: Any) -> list[OptionSpec]:
     for entry in raw or ():
         if isinstance(entry, OptionSpec):
             out.append(entry)
-        elif isinstance(entry, dict):
-            out.append(OptionSpec(**entry))
-        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
-            out.append(OptionSpec(value=str(entry[0]), label=str(entry[1])))
-        else:
+            continue
+        # A malformed entry (e.g. dict missing the required value/label)
+        # makes OptionSpec(...) raise ValidationError. Skip just that
+        # entry rather than letting one bad option take the whole
+        # response down — the registry boundary is meant to be defensive.
+        try:
+            if isinstance(entry, dict):
+                out.append(OptionSpec(**entry))
+            elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                out.append(OptionSpec(value=str(entry[0]), label=str(entry[1])))
+            else:
+                logger.warning(
+                    "Option resolver returned unsupported entry %r; skipping",
+                    entry,
+                )
+        except ValidationError as exc:
             logger.warning(
-                "Option resolver returned unsupported entry %r; skipping",
+                "Option resolver returned invalid entry %r; skipping: %s",
                 entry,
+                exc,
             )
     return out

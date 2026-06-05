@@ -1,3 +1,4 @@
+import enum
 import logging
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
@@ -34,6 +35,22 @@ from .playqueue import PlayQueueImpl
 from kalinka_plugin_sdk.api import PlayQueueController
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def _to_jsonable(value: Any) -> Any:
+    """Coerce a model value into the JSON-friendly form the overrides
+    file stores. Enum-typed fields read back off the model as Enum
+    instances, but the on-disk override is the raw scalar (``.value``):
+    without this the ``==`` comparison would always miss and the Enum
+    would be written straight into the dict, crashing the later
+    ``json.dumps`` in ``save_overrides``. Recurses through lists/dicts."""
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    return value
 
 
 @dataclass
@@ -207,8 +224,8 @@ class PreparedModuleCollection:
                 continue
             attrs = key[len(prefix):].split(".")
             try:
-                current = _read(plugin_config, attrs)
-                default = _read(default_config, attrs)
+                current = _to_jsonable(_read(plugin_config, attrs))
+                default = _to_jsonable(_read(default_config, attrs))
             except (AttributeError, IndexError, TypeError, ValueError):
                 # The override targets a field that no longer exists or
                 # is unreachable on the current model. Leave it alone —

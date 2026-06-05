@@ -334,7 +334,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 srch.state = ModuleHealthState.READY
                 srch.message = ""
 
-        # Embedder: CLAP audio embedding needs numpy + onnxruntime + librosa + tokenizers.
+        # Embedder: CLAP audio embedding needs numpy + onnxruntime +
+        # soundfile + soxr + tokenizers (soundfile/soxr replaced librosa).
         emb = self._subfeatures["embedder"]
         if not config.embedder.enabled:
             emb.state = ModuleHealthState.DISABLED
@@ -344,7 +345,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             for pkg, import_name in (
                 ("numpy", "numpy"),
                 ("onnxruntime", "onnxruntime"),
-                ("librosa", "librosa"),
+                ("soundfile", "soundfile"),
+                ("soxr", "soxr"),
                 ("tokenizers", "tokenizers"),
             ):
                 if not _is_importable(import_name):
@@ -458,11 +460,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             if cfg.searcher.tags.enabled:
                 need("essentia-tensorflow", "essentia")
 
-        # Embedder CLAP pipeline: numpy + the three CLAP-side deps.
+        # Embedder CLAP pipeline: numpy + the CLAP-side deps
+        # (soundfile + soxr handle audio decode/resample, replacing librosa).
         if cfg.embedder.enabled:
             need("numpy", "numpy")
             need("onnxruntime", "onnxruntime")
-            need("librosa", "librosa")
+            need("soundfile", "soundfile")
+            need("soxr", "soxr")
             need("tokenizers", "tokenizers")
 
         return missing

@@ -329,6 +329,27 @@ def test_build_enum_options_skips_resolver_that_raises(caplog):
     assert "raised" in caplog.text
 
 
+def test_build_enum_options_skips_invalid_entry_keeps_rest(caplog):
+    """A single malformed option (missing required fields) is dropped
+    with a warning; the valid options from the same resolver survive."""
+    registry = OptionsRegistry()
+    registry.register(
+        "mixed",
+        lambda: [
+            {"value": "a", "label": "A"},
+            {"label": "no value"},  # missing required `value`
+            {"value": "c", "label": "C"},
+        ],
+    )
+    with caplog.at_level("WARNING"):
+        out = asyncio.run(build_enum_options(registry))
+    assert out["mixed"] == [
+        OptionSpec(value="a", label="A"),
+        OptionSpec(value="c", label="C"),
+    ]
+    assert "invalid entry" in caplog.text
+
+
 def test_build_enum_options_handles_async_resolver():
     registry = OptionsRegistry()
 
