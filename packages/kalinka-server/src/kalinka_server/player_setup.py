@@ -30,7 +30,12 @@ from kalinka_plugin_sdk.plugin import (
 from pydantic import BaseModel, ConfigDict
 
 from .config_model import KalinkaConfig
-from .config_overrides import apply_overrides_with_prefix
+from .config_overrides import (
+    apply_overrides_with_prefix,
+    find_one_shot_overrides,
+    is_one_shot_field,
+    save_overrides,
+)
 from .playqueue import PlayQueueImpl
 from kalinka_plugin_sdk.api import PlayQueueController
 
@@ -116,6 +121,10 @@ class PreparedModuleCollection:
     # (``create_app``) reads this to decide whether to re-persist the
     # overrides dict so the mutations survive a restart.
     overrides_dirty: bool = False
+    # Path of the overrides file, so one-shot triggers can be reset on disk
+    # *before* the owning plugin acts on them (see _consume_one_shot_overrides).
+    # None disables the disk persist (in-memory reset only — used by tests).
+    overrides_file: str | None = None
 
     def _update_enabled_input_modules(self):
         """Update the set of enabled input module names."""
@@ -183,6 +192,82 @@ class PreparedModuleCollection:
         apply_overrides_with_prefix(config, overrides, f"{prefix}{plugin_name}.")
         return config
 
+    def _consume_one_shot_overrides(
+        self,
+        plugin_name: str,
+        plugin_class: type[PluginBase],
+        plugin_config: ModuleConfig,
+        overrides: MutableMapping[str, Any],
+    ) -> None:
+        """Reset any *armed* one-shot triggers for this plugin, persist-first,
+        before its ``setup()`` runs.
+
+        A one-shot field (``json_schema_extra={"one_shot": True}``) is a "do X
+        once on next restart" toggle. We clear it from the overrides — on disk
+        *first* — while leaving the armed value on ``plugin_config`` so the
+        plugin acts this boot. Because the reset is durable before the action,
+        a crash/power-loss mid-action can't make it re-fire next boot. If the
+        reset can't be persisted, we instead *disarm* the in-memory value and
+        skip it this boot, so an action never runs without a durable reset.
+        """
+        prefix = (
+            "input_modules."
+            if plugin_class.PLUGIN_TYPE == PluginType.INPUT_MODULE
+            else "devices."
+        ) + plugin_name + "."
+
+        armed = find_one_shot_overrides(
+            plugin_class.CONFIG_MODEL, prefix, plugin_config, overrides
+        )
+        if not armed:
+            return
+
+        cleared = {k: v for k, v in overrides.items() if k not in set(armed)}
+
+        if self.overrides_file is not None:
+            try:
+                # Persist the reset FIRST; only then does the plugin act.
+                save_overrides(self.overrides_file, cleared)
+            except OSError as exc:
+                logger.error(
+                    "Could not persist one-shot reset to %s; disarming %s this "
+                    "boot so the action doesn't run without a durable reset: %s",
+                    self.overrides_file,
+                    armed,
+                    exc,
+                )
+                default_config = plugin_class.CONFIG_MODEL()
+                for key in armed:
+                    attrs = key[len(prefix):].split(".")
+                    parent = plugin_config
+                    try:
+                        for part in attrs[:-1]:
+                            parent = getattr(parent, part)
+                        default_parent = default_config
+                        for part in attrs[:-1]:
+                            default_parent = getattr(default_parent, part)
+                        setattr(
+                            parent,
+                            attrs[-1],
+                            getattr(default_parent, attrs[-1]),
+                        )
+                    except (AttributeError, IndexError) as disarm_exc:
+                        logger.error(
+                            "Could not disarm one-shot '%s' after a persist "
+                            "failure; it may still act this boot: %s",
+                            key,
+                            disarm_exc,
+                        )
+                return
+
+        for key in armed:
+            overrides.pop(key, None)
+            logger.warning(
+                "One-shot override '%s' armed — consuming it this boot; "
+                "reset persisted.",
+                key,
+            )
+
     def _reconcile_consumed_overrides(
         self,
         plugin_name: str,
@@ -223,6 +308,13 @@ class PreparedModuleCollection:
             if not key.startswith(prefix):
                 continue
             attrs = key[len(prefix):].split(".")
+            # One-shot triggers have their own lifecycle
+            # (_consume_one_shot_overrides). Never reconcile them here: a
+            # transient persist failure leaves the trigger armed on disk for a
+            # retry, and reconcile must not drop it just because the plugin
+            # disarmed the in-memory value.
+            if is_one_shot_field(plugin_class.CONFIG_MODEL, attrs):
+                continue
             try:
                 current = _to_jsonable(_read(plugin_config, attrs))
                 default = _to_jsonable(_read(default_config, attrs))
@@ -268,6 +360,15 @@ class PreparedModuleCollection:
                 config = self._build_module_config(
                     plugin_name, plugin_class, overrides
                 )
+                # Reset armed one-shot triggers on disk *before* the plugin
+                # acts, leaving the armed value on ``config`` for this boot.
+                # Only when the module will actually run (setup() is skipped
+                # for disabled modules) — otherwise the trigger waits, armed,
+                # until the module is enabled rather than being silently lost.
+                if getattr(config, "enabled", True):
+                    self._consume_one_shot_overrides(
+                        plugin_name, plugin_class, config, overrides
+                    )
                 plugin_context = self._make_plugin_context(
                     plugin_name, plugin_class, config
                 )
@@ -351,12 +452,14 @@ class PreparedModuleCollection:
         self,
         player_context: PlayerContext,
         overrides: MutableMapping[str, Any],
+        overrides_file: str | None = None,
     ):
         """Scan for input modules from both entry points and legacy filesystem locations."""
 
         # First, scan for input modules using entry points
         self.player_context = player_context
         self.overrides_dirty = False
+        self.overrides_file = overrides_file
         input_modules = {}
         devices = {}
         async for (
@@ -379,7 +482,9 @@ modules = PreparedModuleCollection()
 
 
 async def setup(
-    config: KalinkaConfig, overrides: MutableMapping[str, Any]
+    config: KalinkaConfig,
+    overrides: MutableMapping[str, Any],
+    overrides_file: str | None = None,
 ) -> PlayerContext:
     """Setup the player components.
 
@@ -412,7 +517,7 @@ async def setup(
         )
 
     # Scan and setup plugins
-    await modules.scan_and_setup_plugins(player_context, overrides)
+    await modules.scan_and_setup_plugins(player_context, overrides, overrides_file)
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))

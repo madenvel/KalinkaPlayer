@@ -154,15 +154,15 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         input_module_db = LocalFilesInputModuleDb(config)
 
-        # LocalFilesInputModuleDb mutates ``rescan_on_startup = False``
-        # on its local copy after consuming the flag. Mirror that on
-        # ``context.config`` so the server's post-setup reconciliation
-        # sees the in-memory model diverge from the loaded override and
-        # rewrites the overrides file — otherwise the True override
-        # would re-fire on every restart and purge the DB each boot.
-        if context.config.rescan_on_startup and not config.rescan_on_startup:
-            context.config.rescan_on_startup = False
-            logger.info("rescan_on_startup reset to False after purge")
+        # "Rebuild library on next restart" is a one-shot trigger: the server
+        # has already reset it (persist-first) before this boot, leaving the
+        # armed value here for us to act on exactly once. Purge before any
+        # worker opens the DB so the indexer rebuilds it from scratch.
+        if config.rescan_on_startup:
+            logger.warning(
+                "Rebuild requested — purging DB and artwork before scan."
+            )
+            input_module_db.purge_all()
 
         # The LocalFilesInputModule will use its own specialized DB
         self._inputmodule = LocalFilesInputModule(

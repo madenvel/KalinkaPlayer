@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import tempfile
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, get_args
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -84,6 +84,78 @@ def save_overrides(path: str, overrides: Mapping[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _read_path(model: BaseModel, attrs: List[str]) -> Any:
+    current: Any = model
+    for part in attrs:
+        current = getattr(current, part)
+    return current
+
+
+def _model_from_annotation(annotation: Any) -> type[BaseModel] | None:
+    """Resolve a field annotation to its BaseModel class, unwrapping
+    Optional/Union (e.g. ``SubModel | None`` → ``SubModel``). None if the
+    annotation isn't (or doesn't wrap) a BaseModel."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    for arg in get_args(annotation):
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            return arg
+    return None
+
+
+def is_one_shot_field(model_cls: type[BaseModel], attrs: List[str]) -> bool:
+    """True if the field at dotted ``attrs`` on ``model_cls`` is declared a
+    one-shot trigger via ``json_schema_extra={"one_shot": True}``.
+
+    A one-shot field is a "do X once on the next restart" toggle: set via the
+    normal config PUT, acted on a single time at startup, then reset by the
+    framework. Walks nested pydantic models (including Optional ones) so
+    ``sub.flag`` works too.
+    """
+    cls: Any = model_cls
+    info = None
+    for part in attrs:
+        fields = getattr(cls, "model_fields", None)
+        if not fields or part not in fields:
+            return False
+        info = fields[part]
+        cls = _model_from_annotation(info.annotation)
+    if info is None:
+        return False
+    extra = info.json_schema_extra
+    return isinstance(extra, dict) and bool(extra.get("one_shot"))
+
+
+def find_one_shot_overrides(
+    model_cls: type[BaseModel],
+    prefix: str,
+    config: BaseModel,
+    overrides: Mapping[str, Any],
+) -> List[str]:
+    """Return the override keys under ``prefix`` that target a one-shot field
+    and are currently *armed* — i.e. their value on ``config`` differs from
+    the field's default.
+
+    Pure (no mutation): the caller resets these persist-first before the
+    plugin acts, so an armed trigger fires at most once and never repeats on
+    the following boot.
+    """
+    default = model_cls()
+    armed: List[str] = []
+    for key in overrides:
+        if not key.startswith(prefix):
+            continue
+        attrs = key[len(prefix):].split(".")
+        if not is_one_shot_field(model_cls, attrs):
+            continue
+        try:
+            if _read_path(config, attrs) != _read_path(default, attrs):
+                armed.append(key)
+        except (AttributeError, IndexError, TypeError):
+            continue
+    return armed
 
 
 def apply_overrides_with_prefix(

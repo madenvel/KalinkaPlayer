@@ -1,0 +1,180 @@
+"""Tests for one-shot config triggers.
+
+Covers detection (``is_one_shot_field`` / ``find_one_shot_overrides``) and the
+persist-first consume on ``PreparedModuleCollection`` — the guarantee that an
+armed "do X on next restart" trigger is reset *before* the plugin acts, so it
+fires at most once and can never re-fire on the following boot.
+"""
+
+from __future__ import annotations
+
+import json
+
+from pydantic import BaseModel, Field
+
+from kalinka_plugin_sdk.module_config import ModuleConfig
+from kalinka_plugin_sdk.plugin import PluginType
+
+from kalinka_server.config_overrides import (
+    find_one_shot_overrides,
+    is_one_shot_field,
+    load_overrides,
+)
+from kalinka_server.player_setup import PreparedModuleCollection
+
+
+class _Nested(BaseModel):
+    flag: bool = Field(default=False, json_schema_extra={"one_shot": True})
+
+
+class _Cfg(ModuleConfig):
+    rebuild: bool = Field(default=False, json_schema_extra={"one_shot": True})
+    plain: bool = Field(default=False)
+    sub: _Nested = Field(default_factory=_Nested)
+
+
+class _Plugin:
+    PLUGIN_TYPE = PluginType.INPUT_MODULE
+    CONFIG_MODEL = _Cfg
+
+
+PREFIX = "input_modules.fake."
+
+
+# ---------------------------------------------------------------------------
+# Detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_one_shot_field_top_level():
+    assert is_one_shot_field(_Cfg, ["rebuild"]) is True
+    assert is_one_shot_field(_Cfg, ["plain"]) is False
+
+
+def test_is_one_shot_field_nested():
+    assert is_one_shot_field(_Cfg, ["sub", "flag"]) is True
+
+
+def test_is_one_shot_field_unknown_path():
+    assert is_one_shot_field(_Cfg, ["nope"]) is False
+    assert is_one_shot_field(_Cfg, ["sub", "nope"]) is False
+
+
+def test_find_one_shot_overrides_returns_only_armed_one_shots():
+    cfg = _Cfg(rebuild=True, plain=True)
+    overrides = {
+        PREFIX + "rebuild": True,  # one-shot, armed
+        PREFIX + "plain": True,  # not one-shot
+        "devices.x.rebuild": True,  # wrong prefix
+    }
+    assert find_one_shot_overrides(_Cfg, PREFIX, cfg, overrides) == [
+        PREFIX + "rebuild"
+    ]
+
+
+def test_find_one_shot_overrides_not_armed_when_value_is_default():
+    cfg = _Cfg(rebuild=False)
+    overrides = {PREFIX + "rebuild": False}
+    assert find_one_shot_overrides(_Cfg, PREFIX, cfg, overrides) == []
+
+
+# ---------------------------------------------------------------------------
+# Consume (persist-first)
+# ---------------------------------------------------------------------------
+
+
+def _collection(overrides_file=None) -> PreparedModuleCollection:
+    c = PreparedModuleCollection()
+    c.overrides_file = overrides_file
+    return c
+
+
+def test_consume_resets_persist_first_and_keeps_armed_value(tmp_path):
+    ofile = str(tmp_path / "ov.json")
+    overrides = {PREFIX + "rebuild": True, PREFIX + "plain": True}
+    with open(ofile, "w") as f:
+        json.dump(overrides, f)
+
+    cfg = _Cfg(rebuild=True, plain=True)
+    live = dict(overrides)
+    _collection(ofile)._consume_one_shot_overrides("fake", _Plugin, cfg, live)
+
+    # Trigger dropped from the live dict and from disk...
+    assert PREFIX + "rebuild" not in live
+    assert PREFIX + "rebuild" not in load_overrides(ofile)
+    # ...other overrides untouched...
+    assert load_overrides(ofile).get(PREFIX + "plain") is True
+    # ...but the armed value stays on config so the plugin acts this boot.
+    assert cfg.rebuild is True
+
+
+def test_consume_is_noop_when_nothing_armed(tmp_path):
+    ofile = str(tmp_path / "ov.json")
+    overrides = {PREFIX + "plain": True}
+    with open(ofile, "w") as f:
+        json.dump(overrides, f)
+
+    cfg = _Cfg(plain=True)
+    live = dict(overrides)
+    _collection(ofile)._consume_one_shot_overrides("fake", _Plugin, cfg, live)
+
+    assert live == {PREFIX + "plain": True}
+
+
+def test_consume_disarms_in_memory_when_persist_fails(monkeypatch):
+    """If the reset can't be persisted, the trigger must NOT fire: the value
+    is disarmed in memory and left armed on disk for a retry next boot."""
+    import kalinka_server.player_setup as ps
+
+    def boom(*a, **k):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(ps, "save_overrides", boom)
+
+    cfg = _Cfg(rebuild=True)
+    live = {PREFIX + "rebuild": True}
+    _collection("/does/not/matter")._consume_one_shot_overrides(
+        "fake", _Plugin, cfg, live
+    )
+
+    # Override left in place (retried next boot) and config disarmed so the
+    # plugin skips the action this boot — never act without a durable reset.
+    assert PREFIX + "rebuild" in live
+    assert cfg.rebuild is False
+
+
+def test_consume_without_file_clears_in_memory(tmp_path):
+    cfg = _Cfg(rebuild=True)
+    live = {PREFIX + "rebuild": True}
+    _collection(None)._consume_one_shot_overrides("fake", _Plugin, cfg, live)
+    assert PREFIX + "rebuild" not in live
+    assert cfg.rebuild is True
+
+
+def test_reconcile_never_touches_one_shot_fields():
+    """One-shot triggers are owned by the consume step. Reconcile (which runs
+    after setup) must leave them alone — otherwise a transient persist failure
+    that disarmed the in-memory value would let reconcile drop the still-armed
+    override, silently losing an un-fired trigger.
+    """
+    # Disarmed in memory (rebuild=False) but the override is still on disk —
+    # the exact post-persist-failure state. Reconcile must NOT drop it.
+    cfg = _Cfg(rebuild=False)
+    overrides = {PREFIX + "rebuild": True}
+    changed = PreparedModuleCollection()._reconcile_consumed_overrides(
+        "fake", _Plugin, cfg, overrides
+    )
+    assert changed == 0
+    assert overrides == {PREFIX + "rebuild": True}
+
+
+def test_is_one_shot_field_walks_optional_nested_model():
+    from typing import Optional
+
+    class _OptNested(BaseModel):
+        flag: bool = Field(default=False, json_schema_extra={"one_shot": True})
+
+    class _OptCfg(ModuleConfig):
+        sub: Optional[_OptNested] = None
+
+    assert is_one_shot_field(_OptCfg, ["sub", "flag"]) is True

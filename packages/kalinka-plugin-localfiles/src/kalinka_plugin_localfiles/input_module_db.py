@@ -20,29 +20,36 @@ class LocalFilesInputModuleDb:
     def __init__(self, config: LocalFilesConfig):
         self.db_path = Path(config.db_path).expanduser().resolve()
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
-        if config.rescan_on_startup:
-            logger.warning(
-                "Rescan on startup is enabled. This will purge the database and rescan all files."
-            )
-            self._purge_database()
-            logger.warning("Cleaning up cached artwork.")
-            self._purge_artwork()
-            logger.info(
-                "Database purged and artwork cache cleared. The database will be rebuilt."
-            )
-            config.rescan_on_startup = False
-
         self.db_state = None
 
+    def purge_all(self):
+        """Delete the database (with its WAL/-shm sidecars) and the artwork
+        cache so the index is rebuilt from scratch.
+
+        Used by the "Rebuild library on next restart" one-shot. Call before
+        any worker opens the DB (i.e. early in setup), so nothing recreates
+        the file mid-purge.
+        """
+        self._purge_database()
+        self._purge_artwork()
+
     def _purge_database(self):
-        """Purge the database by removing the file and reinitializing it."""
-        if self.db_path.exists():
-            try:
-                self.db_path.unlink()
-                logger.info(f"Database purged: {self.db_path}")
-            except OSError as e:
-                logger.error(f"Failed to purge database: {e}")
-        else:
+        """Remove the database file and its WAL/-shm sidecars."""
+        removed = False
+        for sidecar in ("", "-wal", "-shm"):
+            path = (
+                self.db_path
+                if not sidecar
+                else self.db_path.with_name(self.db_path.name + sidecar)
+            )
+            if path.exists():
+                try:
+                    path.unlink()
+                    removed = True
+                    logger.info(f"Removed {path}")
+                except OSError as e:
+                    logger.error(f"Failed to remove {path}: {e}")
+        if not removed:
             logger.info("No existing database to purge.")
 
     def _purge_artwork(self):

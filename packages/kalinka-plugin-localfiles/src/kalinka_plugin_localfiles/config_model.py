@@ -360,9 +360,16 @@ class LocalFilesConfig(ModuleConfig):
     )
     rescan_on_startup: bool = Field(
         default=False,
-        title="Rescan on next restart",
+        title="Rebuild library on next restart",
         json_schema_extra={
-            "help": "Purges the database and rebuilds it on next server restart",
+            "help": (
+                "Purge the index and artwork cache and rescan all files on the "
+                "next server restart. Resets itself once done."
+            ),
+            # One-shot trigger: the framework resets this (persist-first)
+            # before the plugin acts, so it fires at most once per arming.
+            "one_shot": True,
+            **_SIMPLE,
         },
     )
     searcher: SearcherConfig = Field(
