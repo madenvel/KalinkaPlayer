@@ -222,7 +222,8 @@ class PreparedModuleCollection:
         if not armed:
             return
 
-        cleared = {k: v for k, v in overrides.items() if k not in set(armed)}
+        armed_set = set(armed)
+        cleared = {k: v for k, v in overrides.items() if k not in armed_set}
 
         if self.overrides_file is not None:
             try:
@@ -260,12 +261,15 @@ class PreparedModuleCollection:
                         )
                 return
 
+        # When there's no overrides file the reset only lives in memory
+        # (tests); say so rather than implying durability.
+        reset_kind = "reset persisted" if self.overrides_file else "reset in memory only"
         for key in armed:
             overrides.pop(key, None)
             logger.warning(
-                "One-shot override '%s' armed — consuming it this boot; "
-                "reset persisted.",
+                "One-shot override '%s' armed — consuming it this boot; %s.",
                 key,
+                reset_kind,
             )
 
     def _reconcile_consumed_overrides(
