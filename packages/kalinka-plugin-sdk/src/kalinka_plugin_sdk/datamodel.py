@@ -317,6 +317,7 @@ class Track(BaseModel):
         replaygain_peak (Optional[float]): ReplayGain peak value for audio normalization
         replaygain_gain (Optional[float]): ReplayGain gain value for audio normalization
         playlist_track_id (Optional[str]): ID specific to playlist membership
+        unavailable (bool): True when the track's stream URL could not be retrieved and playback skipped it
     """
 
     id: EntityId
