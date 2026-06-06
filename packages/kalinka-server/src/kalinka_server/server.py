@@ -224,10 +224,11 @@ async def create_app(
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
 
-    # If any plugin's setup consumed a one-shot override (e.g.
-    # localfiles' ``rescan_on_startup``), persist the reconciled
-    # overrides dict now. Without this the consumed override would
-    # remain in the file and trigger again on the next restart.
+    # Persist the overrides dict if plugin setup reconciled it — i.e. a
+    # plugin mutated config fields that came from the overrides file, so
+    # ``app.state.overrides`` now diverges from disk. (One-shot triggers
+    # are handled separately, persist-first *before* setup, so they're not
+    # what this covers.)
     if modules.overrides_dirty:
         try:
             save_overrides(app.state.overrides_file, app.state.overrides)
