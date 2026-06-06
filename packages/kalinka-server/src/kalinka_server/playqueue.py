@@ -365,6 +365,11 @@ class PlayQueueImpl(PlayQueueController):
 
     @serialised
     async def play(self, index: Optional[int] = None) -> None:
+        # Index-addressed entry point: reject out-of-range indices instead of
+        # letting _resolve_playable wrap them (which is only intended for the
+        # ±1 boundary stepping done by next()/prev()).
+        if index is not None and index not in range(0, len(self.track_list)):
+            return
         await self._play_unqueued(index)
 
     @serialised
@@ -410,7 +415,9 @@ class PlayQueueImpl(PlayQueueController):
         if len(self.track_list) == 0:
             return
 
-        if index in self.prepared_tracks:
+        # play_next is index-addressed; an out-of-range index is a no-op.
+        # (Prefetch already wraps via _play_next_track_async before calling.)
+        if index not in range(0, len(self.track_list)) or index in self.prepared_tracks:
             return
 
         logger.info(f"Playing next track index={index}")
@@ -834,14 +841,19 @@ class PlayQueueImpl(PlayQueueController):
     async def _resolve_playable(self, start_index, step=1):
         """Find the first playable track from start_index, moving by ``step``.
 
-        Tracks whose URL cannot be retrieved are marked unavailable (so clients
-        can flag them) and skipped. Returns ``(index, track_url)`` for the first
-        track that yields a URL, or ``(None, None)`` if none do in that
-        direction. Already-prepared tracks are returned from cache.
+        ``step`` must be +1 (forward) or -1 (backward); any other value is
+        normalised to one of those so the scan visits each track at most once
+        and never stalls re-fetching the same index. Tracks whose URL cannot be
+        retrieved are marked unavailable (so clients can flag them) and skipped.
+        Returns ``(index, track_url)`` for the first track that yields a URL, or
+        ``(None, None)`` if none do in that direction. Already-prepared tracks
+        are returned from cache.
         """
         n = len(self.track_list)
         if n == 0:
             return None, None
+
+        step = 1 if step >= 0 else -1
 
         index = start_index
         for _ in range(n):

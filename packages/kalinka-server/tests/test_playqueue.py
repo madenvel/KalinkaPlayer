@@ -1369,6 +1369,40 @@ async def test_unavailable_indices_cleared_on_clear(event_emitter, playqueue):
     assert playqueue._unavailable_indices == set()
 
 
+@pytest.mark.asyncio
+async def test_play_out_of_range_index_is_noop(event_emitter, playqueue):
+    """play() with an out-of-range index does nothing (no wrap, no flagging)."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    await playqueue.play(99)
+
+    assert not playqueue.prepared_tracks
+    assert playqueue._unavailable_indices == set()
+    assert not any(
+        isinstance(e, TrackUnavailableEvent)
+        for e in dispatched_events(event_emitter)
+    )
+
+
+@pytest.mark.asyncio
+async def test_play_next_out_of_range_index_is_noop(event_emitter, playqueue):
+    """play_next() with an out-of-range index does nothing."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    event_emitter.reset_mock()
+
+    await playqueue.play_next(99)
+    await playqueue.play_next(-5)
+
+    assert playqueue._unavailable_indices == set()
+    assert not any(
+        isinstance(e, TrackUnavailableEvent)
+        for e in dispatched_events(event_emitter)
+    )
+
+
 def test_playqueue_state_apply_track_unavailable():
     """PlayQueueState.apply toggles the per-track unavailable flag and ignores
     out-of-range indices."""
