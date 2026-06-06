@@ -218,7 +218,9 @@ async def create_app(
     app.state.config = config
     app.state.overrides_file = overrides_file
     app.state.overrides = dict(overrides)
-    player_context = await setup(config, app.state.overrides)
+    player_context = await setup(
+        config, app.state.overrides, app.state.overrides_file
+    )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
 
