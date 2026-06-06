@@ -328,6 +328,9 @@ class Track(BaseModel):
     replaygain_peak: Optional[float] = None
     replaygain_gain: Optional[float] = None
     playlist_track_id: Optional[str] = None
+    # True when the track's stream URL could not be retrieved and playback
+    # skipped it. Surfaced to clients so they can flag the track in the queue.
+    unavailable: bool = False
 
 
 class Owner(BaseModel):

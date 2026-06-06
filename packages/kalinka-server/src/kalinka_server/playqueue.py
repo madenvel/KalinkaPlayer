@@ -29,6 +29,7 @@ from kalinka_plugin_sdk.events import (
     TracksAddedEvent,
     TracksRemovedEvent,
     TrackMovedEvent,
+    TrackUnavailableEvent,
 )
 from kalinka_plugin_sdk.inputmodule import TrackInfo
 
@@ -233,6 +234,10 @@ class PlayQueueImpl(PlayQueueController):
         self._retry_attempted: bool = False
         # Set to True when SOURCE_CHANGED is expected from a retry, to avoid resetting _retry_attempted
         self._retry_pending: bool = False
+        # Indices of tracks whose URL could not be retrieved. Mirrors the
+        # `unavailable` flag clients see; used to emit TrackUnavailableEvent only
+        # on real state changes. Kept in sync with track_list across mutations.
+        self._unavailable_indices: set[int] = set()
 
         self._state_update_task = None
 
@@ -366,20 +371,22 @@ class PlayQueueImpl(PlayQueueController):
     async def play_next(self, index: int) -> None:
         return await self._play_next_unqueued(index)
 
-    async def _play_unqueued(self, index=None):
+    async def _play_unqueued(self, index=None, step=1):
         self._retry_attempted = False
         if len(self.track_list) == 0:
-            return
-
-        if index is not None and index not in range(0, len(self.track_list)):
             return
 
         if index is None:
             index = self.current_track_id
 
-        track_info = await self._setup_track_to_play(index)
+        resolved_index, track_info = await self._resolve_playable(index, step)
         if track_info is None:
+            # Nothing playable in this direction: either we ran off the end of
+            # the queue (normal no-op, as before) or every remaining track
+            # failed to yield a URL — in which case _resolve_playable has
+            # already flagged them. Leave any current playback untouched.
             return
+        index = resolved_index
 
         self._cancel_prefetch_timer()
 
@@ -403,7 +410,7 @@ class PlayQueueImpl(PlayQueueController):
         if len(self.track_list) == 0:
             return
 
-        if index not in range(0, len(self.track_list)) or index in self.prepared_tracks:
+        if index in self.prepared_tracks:
             return
 
         logger.info(f"Playing next track index={index}")
@@ -414,8 +421,14 @@ class PlayQueueImpl(PlayQueueController):
             await self._play_unqueued(index)
             return
 
-        track_info = await self._setup_track_to_play(index)
+        resolved_index, track_info = await self._resolve_playable(index, step=1)
         if track_info is None:
+            return
+        index = resolved_index
+
+        # Skipping unavailable tracks may have landed on one that is already
+        # queued — nothing more to do in that case.
+        if index in self.prepared_tracks:
             return
 
         # If the player stopped while we were awaiting the URL, fall back to a
@@ -442,7 +455,7 @@ class PlayQueueImpl(PlayQueueController):
 
     @serialised
     async def prev(self):
-        await self._play_unqueued(self.current_track_id - 1)
+        await self._play_unqueued(self.current_track_id - 1, step=-1)
 
     @serialised
     async def seek(self, position_ms: int) -> None:
@@ -481,6 +494,12 @@ class PlayQueueImpl(PlayQueueController):
         for idx, stream_info in self.prepared_tracks.items():
             new_prepared[idx + len(tracks) if idx >= insert_at else idx] = stream_info
         self.prepared_tracks = new_prepared
+
+        # Shift unavailable-track indices >= insert_at up by len(tracks)
+        self._unavailable_indices = {
+            idx + len(tracks) if idx >= insert_at else idx
+            for idx in self._unavailable_indices
+        }
 
         # Validate prefetched next track (same pattern as move())
         expected_next = self.current_track_id
@@ -545,6 +564,13 @@ class PlayQueueImpl(PlayQueueController):
             shift = sum(1 for t in tracks if t < key)
             new_prepared[key - shift] = value
         self.prepared_tracks = new_prepared
+
+        # Drop removed indices and shift the rest down to match the new list.
+        self._unavailable_indices = {
+            idx - sum(1 for t in tracks if t < idx)
+            for idx in self._unavailable_indices
+            if idx not in tracks
+        }
 
         self.current_track_id = min(self.current_track_id, len(self.track_list) - 1)
         if self.current_track_id < 0:
@@ -629,6 +655,7 @@ class PlayQueueImpl(PlayQueueController):
         # Clear existing state
         self.track_list.clear()
         self.prepared_tracks.clear()
+        self._unavailable_indices.clear()
         self._cancel_prefetch_timer()
 
         # Pre-restore current_track_id so that _notify_track_change (fired by
@@ -720,6 +747,12 @@ class PlayQueueImpl(PlayQueueController):
             new_prepared[_remap_index(idx, from_index, to_index)] = stream_info
         self.prepared_tracks = new_prepared
 
+        # Remap unavailable-track indices to follow their tracks
+        self._unavailable_indices = {
+            _remap_index(idx, from_index, to_index)
+            for idx in self._unavailable_indices
+        }
+
         # Verify the prefetched "next" track is still the correct one.
         # If the wrong track is queued as next, remove it and re-prefetch.
         expected_next = self.current_track_id
@@ -757,6 +790,7 @@ class PlayQueueImpl(PlayQueueController):
         self.track_player.clear_all()
         self.current_stream_id = None
         self.prepared_tracks.clear()
+        self._unavailable_indices.clear()
         list_len = len(self.track_list)
         self.track_list = []
         self.current_track_id = 0
@@ -786,23 +820,60 @@ class PlayQueueImpl(PlayQueueController):
 
         return progress
 
-    async def _setup_track_to_play(self, index):
-        """Returns a TrackUrl for the given track index, fetching if not already prepared."""
+    async def _fetch_track_url(self, index):
+        """Fetch the stream URL for a track, returning None if retrieval fails."""
         track = self.track_list[index]
-        if index not in self.prepared_tracks:
-            try:
-                track_info = await track.link_retriever()
-            except Exception as e:
-                logger.warning("Failed to retrieve track link: %s", repr(e))
-                self.event_emitter.dispatch(
-                    PlaybackErrorEvent(message="Failed to retrieve track link")
-                )
-                return None
+        try:
+            return await track.link_retriever()
+        except Exception as e:
+            logger.warning(
+                "Failed to retrieve track link for index %d: %s", index, repr(e)
+            )
+            return None
 
-            return track_info
+    async def _resolve_playable(self, start_index, step=1):
+        """Find the first playable track from start_index, moving by ``step``.
 
-        # Return just the TrackUrl part of the (TrackUrl, StreamId) tuple
-        return self.prepared_tracks[index][0]
+        Tracks whose URL cannot be retrieved are marked unavailable (so clients
+        can flag them) and skipped. Returns ``(index, track_url)`` for the first
+        track that yields a URL, or ``(None, None)`` if none do in that
+        direction. Already-prepared tracks are returned from cache.
+        """
+        n = len(self.track_list)
+        if n == 0:
+            return None, None
+
+        index = start_index
+        for _ in range(n):
+            if index < 0 or index >= n:
+                if self.repeat_all:
+                    index %= n
+                else:
+                    return None, None
+            if index in self.prepared_tracks:
+                # Already prepared — its URL is known good.
+                return index, self.prepared_tracks[index][0]
+            track_info = await self._fetch_track_url(index)
+            if track_info is not None:
+                self._set_track_unavailable(index, False)
+                return index, track_info
+            self._set_track_unavailable(index, True)
+            index += step
+        return None, None
+
+    def _set_track_unavailable(self, index, unavailable):
+        """Notify clients of a track availability change (only on real change)."""
+        if unavailable:
+            if index in self._unavailable_indices:
+                return
+            self._unavailable_indices.add(index)
+        else:
+            if index not in self._unavailable_indices:
+                return
+            self._unavailable_indices.discard(index)
+        self.event_emitter.dispatch(
+            TrackUnavailableEvent(index=index, unavailable=unavailable)
+        )
 
     async def _retry_current_track_async(self, position_ms: int) -> None:
         """Re-fetch the URL for the current track and resume from position_ms."""

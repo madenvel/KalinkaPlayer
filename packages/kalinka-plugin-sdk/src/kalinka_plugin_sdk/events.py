@@ -16,6 +16,7 @@ class PlayQueueEventType(Enum):
     TracksAdded = "tracks_added"
     TracksRemoved = "tracks_removed"
     TrackMoved = "track_moved"
+    TrackUnavailable = "track_unavailable"
     PlaybackError = "playback_error"
     PlaybackModeChanged = "playback_mode_changed"
 
@@ -59,6 +60,14 @@ class PlayQueueState(BaseState[PlayQueueEvent]):
             track = track_list.pop(event.from_index)
             track_list.insert(event.to_index, track)
             updates["track_list"] = track_list
+        elif isinstance(event, TrackUnavailableEvent):
+            if not (0 <= event.index < len(self.track_list)):
+                return self
+            track_list = list(self.track_list)
+            track_list[event.index] = track_list[event.index].model_copy(
+                update={"unavailable": event.unavailable}
+            )
+            updates["track_list"] = track_list
         elif isinstance(event, PlaybackModeChangedEvent):
             updates["playback_mode"] = event.mode
         else:
@@ -96,6 +105,14 @@ class TrackMovedEvent(PlayQueueEvent):
 class PlaybackModeChangedEvent(PlayQueueEvent):
     event_type: PlayQueueEventType = PlayQueueEventType.PlaybackModeChanged
     mode: PlaybackMode
+
+
+class TrackUnavailableEvent(PlayQueueEvent):
+    event_type: PlayQueueEventType = PlayQueueEventType.TrackUnavailable
+    index: int
+    # True marks the track as unavailable (URL retrieval failed); False clears
+    # the flag once the track has been streamed successfully again.
+    unavailable: bool = True
 
 
 class PlaybackErrorEvent(PlayQueueEvent):

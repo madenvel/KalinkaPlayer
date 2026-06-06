@@ -19,6 +19,7 @@ from kalinka_plugin_sdk import (
     TracksAddedEvent,
     TracksRemovedEvent,
     TrackMovedEvent,
+    TrackUnavailableEvent,
     RequestMoreTracksEvent,
     EventEmitter,
 )
@@ -1219,3 +1220,178 @@ async def test_add_insert_preserves_valid_prefetch(event_emitter, playqueue):
     # No re-prefetch triggered
     assert playqueue._prefetch_task is None
     assert len(playqueue.track_list) == 5
+
+
+# ── Unavailable-track (link retrieval failure) tests ────────────────────────────
+
+
+async def failing_url():
+    raise KeyError("url")
+
+
+def make_tracks_with_failures(n: int, failing: set[int]) -> list[TrackInfo]:
+    """Create n TrackInfo objects; those at indices in ``failing`` raise on
+    link retrieval."""
+    return [
+        TrackInfo(
+            id=to_track_id(str(i + 1)),
+            metadata=create_track(str(i + 1)),
+            link_retriever=failing_url if i in failing else url1,
+        )
+        for i in range(n)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_playable_skips_failed_track(event_emitter, playqueue):
+    """A track whose URL can't be fetched is marked and skipped; the next
+    playable track is returned."""
+    playqueue.track_list = make_tracks_with_failures(3, {0})
+    event_emitter.reset_mock()
+
+    index, track_url = await playqueue._resolve_playable(0, step=1)
+
+    assert index == 1
+    assert track_url is not None
+    assert playqueue._unavailable_indices == {0}
+    unavailable_events = [
+        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
+    ]
+    assert unavailable_events == [TrackUnavailableEvent(index=0, unavailable=True)]
+
+
+@pytest.mark.asyncio
+async def test_resolve_playable_all_failed_returns_none(event_emitter, playqueue):
+    """When every candidate fails, resolve returns (None, None) and marks all."""
+    playqueue.track_list = make_tracks_with_failures(3, {0, 1, 2})
+    event_emitter.reset_mock()
+
+    index, track_url = await playqueue._resolve_playable(0, step=1)
+
+    assert index is None
+    assert track_url is None
+    assert playqueue._unavailable_indices == {0, 1, 2}
+
+
+@pytest.mark.asyncio
+async def test_resolve_playable_clears_flag_on_success(event_emitter, playqueue):
+    """A previously-unavailable track that now resolves clears its flag."""
+    playqueue.track_list = make_tracks(3)
+    playqueue._unavailable_indices = {0}
+    event_emitter.reset_mock()
+
+    index, track_url = await playqueue._resolve_playable(0, step=1)
+
+    assert index == 0
+    assert track_url is not None
+    assert playqueue._unavailable_indices == set()
+    unavailable_events = [
+        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
+    ]
+    assert unavailable_events == [TrackUnavailableEvent(index=0, unavailable=False)]
+
+
+@pytest.mark.asyncio
+async def test_set_track_unavailable_dedups(event_emitter, playqueue):
+    """Repeated marks/clears only emit an event when the state actually flips."""
+    playqueue.track_list = make_tracks(3)
+    event_emitter.reset_mock()
+
+    playqueue._set_track_unavailable(1, True)
+    playqueue._set_track_unavailable(1, True)
+    playqueue._set_track_unavailable(1, False)
+    playqueue._set_track_unavailable(1, False)
+
+    events = [
+        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
+    ]
+    assert events == [
+        TrackUnavailableEvent(index=1, unavailable=True),
+        TrackUnavailableEvent(index=1, unavailable=False),
+    ]
+    assert playqueue._unavailable_indices == set()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_indices_remap_on_add(event_emitter, playqueue):
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue._unavailable_indices = {1, 2}
+
+    await playqueue.add(make_tracks(2), index=0)
+    await asyncio.sleep(0)
+
+    assert playqueue._unavailable_indices == {3, 4}
+
+
+@pytest.mark.asyncio
+async def test_unavailable_indices_remap_on_remove(event_emitter, playqueue):
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue._unavailable_indices = {2, 3}
+
+    await playqueue.remove([0])
+
+    assert playqueue._unavailable_indices == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_unavailable_indices_dropped_on_remove(event_emitter, playqueue):
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue._unavailable_indices = {1, 3}
+
+    await playqueue.remove([1])
+
+    # Index 1 removed; index 3 shifts down to 2.
+    assert playqueue._unavailable_indices == {2}
+
+
+@pytest.mark.asyncio
+async def test_unavailable_indices_remap_on_move(event_emitter, playqueue):
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue._unavailable_indices = {0}
+
+    await playqueue.move(0, 2)
+
+    assert playqueue._unavailable_indices == {2}
+
+
+@pytest.mark.asyncio
+async def test_unavailable_indices_cleared_on_clear(event_emitter, playqueue):
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue._unavailable_indices = {0, 1}
+
+    await playqueue.clear()
+
+    assert playqueue._unavailable_indices == set()
+
+
+def test_playqueue_state_apply_track_unavailable():
+    """PlayQueueState.apply toggles the per-track unavailable flag and ignores
+    out-of-range indices."""
+    from kalinka_plugin_sdk.datamodel import PlaybackMode
+    from kalinka_plugin_sdk.events import PlayQueueState
+
+    state = PlayQueueState(
+        playback_state=PlaybackState(state=PlayerStateEnum.STOPPED, index=0),
+        track_list=[create_track("1"), create_track("2")],
+        playback_mode=PlaybackMode(
+            shuffle=False, repeat_single=False, repeat_all=False
+        ),
+        seq=0,
+    )
+
+    marked = state.apply(TrackUnavailableEvent(index=1, unavailable=True, seq=1))
+    assert marked.track_list[1].unavailable is True
+    assert marked.track_list[0].unavailable is False
+
+    cleared = marked.apply(TrackUnavailableEvent(index=1, unavailable=False, seq=2))
+    assert cleared.track_list[1].unavailable is False
+
+    unchanged = cleared.apply(
+        TrackUnavailableEvent(index=99, unavailable=True, seq=3)
+    )
+    assert unchanged is cleared
