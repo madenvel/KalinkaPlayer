@@ -67,7 +67,7 @@ This will:
 - Create a Python wheel that includes the native player library
 - Package everything into a Debian package with version matching the wheel
 
-The resulting package will be named `kalinka-player-<version>.<architecture>.deb` where the version matches the one from the Python wheel (e.g., `kalinka-player-1.4.1.dev96+g641eb978a.d20250905.amd64.deb`). The version of the package is taken from the most recent `release-x.y.z` tag with `z` increased by one.
+The resulting package will be named `kalinka-player-<version>.<architecture>.deb` where the version matches the one from the Python wheel (e.g., `kalinka-player-0.1.0.amd64.deb`). The version is derived by `setuptools-scm` from the most recent `kalinka-server-vX.Y.Z` git tag; commits made after that tag produce a development version such as `0.1.1.dev4+g641eb978a`.
 
 
 #### Cleaning Build Artifacts
