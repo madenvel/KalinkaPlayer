@@ -1,253 +1,194 @@
 # What is it?
+
+Website: [kalinkaplayer.com](https://kalinkaplayer.com)
+
 Kalinka is an experimental open-source music system.
 "Kalinka" is a working project name and may be subject to trademark registration.
 
-KalinkaPlayer is a lightweight backend service for music playback on Linux systems (including Raspberry Pi 4+) exposing a REST API for control, library discovery and queue management.
+KalinkaPlayer is a lightweight backend service for music playback on Linux systems (including Raspberry Pi 4+). It exposes a REST + WebSocket API for playback control, library discovery, search and queue management, and is driven by the separate **Kalinka Music App** (a multi-platform Flutter client).
 
-The current focus and most advanced functionality is local file playback. A flexible indexing & enrichment pipeline builds and maintains a rich local music library. Track / album / artist metadata can be augmented using external services (AcoustID fingerprinting, MusicBrainz, Wikidata and others) with a fallback strategy to keep the library usable even when some lookups fail.
+The current focus and most advanced functionality is **local file playback**. A flexible indexing & enrichment pipeline builds and maintains a rich local music library, augmenting track / album / artist metadata using external services (AcoustID fingerprinting, MusicBrainz, Deezer, Wikidata) with a fallback strategy that keeps the library usable even when some lookups fail. On top of that, an optional **AI search** layer embeds your audio with a CLAP model so you can find tracks by natural-language description ("dreamy ambient guitar", "upbeat 80s synth pop").
 
 The target audience: DIY HiFi enthusiasts comfortable with Linux and the command line who want a controllable, efficient audio backend.
 
 # Features
-Core (Local Library):
-- Local files playback (primary, most advanced path)
-  - Indexing of directory trees into an internal database
-  - Metadata enrichment via AcoustID (fingerprints) -> MusicBrainz -> Wikidata (+ pluggable enrichers)
-  - Fallback / defensive enrichment: partial metadata retained even when external services fail
-  - Artwork & basic entity relationship modeling (artists, albums, tracks)
-- Full FLAC & MP3 playback up to 192 kHz / 24‑bit (FLAC limit) with bit‑perfect path where ALSA config permits*
-- Gapless playback (same-format consecutive tracks)
+
+**Core (Local Library)**
+- Local files playback — the primary, most advanced path
+  - Indexing of directory trees into an internal SQLite database
+  - Filesystem watching with an upload-quiescence window so partial/in-progress files aren't indexed
+  - Metadata enrichment pipeline: AcoustID (fingerprints) → MusicBrainz → Deezer → Wikidata, with a filename/path-based fallback
+  - Artwork extraction & caching, plus artist/album/track relationship modeling
+- Full FLAC & MP3 playback up to 192 kHz / 24-bit (FLAC limit) with a bit-perfect path where ALSA config permits\*
+- Gapless playback (consecutive tracks of the same format)
 - Mixed-source queue: seamlessly queue tracks from different sources together
+- Browsing, fuzzy text search, favorites, genres and server-side playlists
 
-Other:
+**AI Search (optional)**
+- Natural-language / semantic search over your library via a CLAP audio↔text embedding model (ONNX, downloaded on first boot)
+- Background **embedder** computes per-track CLAP vectors; results are KNN-retrieved and re-ranked against full-text + metadata signals
+- Optional tag prediction (genre / mood / danceability) via essentia-tensorflow for richer ranking — opt-in, since it pulls large ARM-only wheels
+- Tunable ranking weights and re-embedding versioning exposed through configuration
+- See [`scripts/clap_onnx_release.md`](scripts/clap_onnx_release.md) for the model release/upgrade process
+
+**Other**
 - MusicCast device volume control and automatic power on/off
-- Low CPU & memory footprint; performance‑critical audio engine in C++ with direct ALSA access
+- Low CPU & memory footprint; performance-critical audio engine in C++ with direct ALSA access
 - Runs well on Raspberry Pi 4 (Raspberry Pi OS bullseye tested)
-- Kalinka Music App (separate project) provides multi‑platform control UI
+- Service discovery (zeroconf/SSDP) so the app finds the server automatically
+- Configuration is editable live from the app's Settings (with a "simple" tier of common fields and an expert/`about:config`-style search for everything else)
 
-Maintenance / Utilities:
-- Database purge & restart options (recent additions) for recovery / rebuilding index
+**Maintenance / Utilities**
+- One-shot "rebuild library on next restart" trigger (purge index + artwork cache and rescan)
+- Server restart from the app
 - Structured logging with adjustable verbosity
 
+# Architecture
+
+KalinkaPlayer is a small **core server** (`packages/kalinka-server`) with a modular **plugin** system. The server owns the REST/WebSocket API, queue, playback state and config; plugins provide sources, enrichers and device integrations. The native audio engine is a C++ extension (`packages/kalinka-server/src/native_player`) that talks to ALSA directly.
+
+```
+packages/
+├── kalinka-server            # Core server, REST/WS API, queue, native ALSA player (C++)
+├── kalinka-plugin-sdk        # Shared plugin interface & helpers (mandatory dependency)
+├── kalinka-plugin-localfiles # Local library: indexer, enricher, embedder, searcher (most complete)
+├── kalinka-plugin-musiccast  # Yamaha MusicCast volume/power control
+└── kalinka-plugin-dummydevice# Mock playback device for development/CI
+```
+
+Plugins are ordinary Python packages discovered at runtime via package metadata. You can add or remove functionality without touching the server core. To create your own, start from the cookiecutter template under [`template/cookiecutter-kalinka-plugin/`](template/cookiecutter-kalinka-plugin/) and read its README. Plugin Debian packaging conventions are documented in [`docs/plugin-deb-packaging.md`](docs/plugin-deb-packaging.md).
+
+# API overview
+
+The server exposes a REST API (FastAPI) plus WebSocket channels for live state. Highlights:
+
+| Area      | Endpoints (examples) |
+|-----------|----------------------|
+| Queue     | `GET /queue/list`, `POST /queue/add`, `PUT /queue/{play,pause,next,prev,stop}`, `PUT /queue/current_track/seek`, `PUT /queue/{mode,clear,move}`, `POST /queue/remove` |
+| Browse    | `GET /browse`, `GET /browse/{id}`, `GET /get/{entity_id}`, `GET /genre/list` |
+| Search    | `GET /search/{search_type}/{query}` (fuzzy), `GET /ai_search?query=...` (semantic) |
+| Library   | `GET /favorite/list/{type}`, `PUT /favorite/add/{id}`, playlists (`/playlist/{create,update,delete,list,add_tracks,remove_tracks}`) |
+| Devices   | `GET /device/list`, `GET/PUT /device/{get,set}_volume` |
+| Server    | `GET /server/{config,config/schema,version,modules,optional_packages}`, `PUT /server/{config,restart}`, `GET /indexer/status`, `GET /resource/{file}` |
+| Live      | `WS /queue/ws`, `WS /device/ws`, plus SSE-style `GET /queue/events`, `GET /device/events` |
+
 # Installation
+
 ## Debian Package
 A deb package for arm64 (Raspbian) is provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section.
 
-### Building the Debian Package
-You can build a Debian package for your platform by following these steps:
+### Building Debian packages
+The build produces **separate** `.deb` packages — one for the server and one per plugin — and collects them in the top-level `debs/` directory. Packages are built natively for the platform you build on (no cross-compilation).
 
 #### Prerequisites
 Install the required system dependencies:
 ```bash
-sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
+sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
+  libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
 ```
+Python 3.10+ is required (3.11 if you intend to use the optional tag-prediction wheels).
 
-#### Build Process
+#### Build process
 1. Clone the repository:
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
 ```
-
-2. Set up Python virtual environment:
+2. Set up a Python virtual environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-3. Build the Debian package:
+3. Build everything (server + all plugins) and move the artifacts into `debs/`:
 ```bash
-make build-deb
+make build-all-deb
 ```
-*Or simply use `make` (which calls `build-deb` by default)*
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. Package versions are derived from git tags via setuptools-scm (the most recent `release-x.y.z` tag with `z` incremented).
 
-This will:
-- Build the native C++ audio engine first
-- Create a Python wheel that includes the native player library
-- Package everything into a Debian package with version matching the wheel
-
-The resulting package will be named `kalinka-player-<version>.<architecture>.deb` where the version matches the one from the Python wheel (e.g., `kalinka-player-1.4.1.dev96+g641eb978a.d20250905.amd64.deb`). The version of the package is taken from the most recent `release-x.y.z` tag with `z` increased by one.
-
-
-#### Cleaning Build Artifacts
-To clean up build artifacts:
+#### Cleaning build artifacts
 ```bash
 make clean
 ```
-This removes compiled objects, shared libraries, and generated Debian packages.
+This removes compiled objects, shared libraries and Python build artifacts.
 
 #### Installation
-Install the generated package:
+Install the server first, then the plugins you want:
 ```bash
-sudo dpkg -i kalinka-player-*.deb
-sudo apt-get install -f  # Install any missing dependencies
+sudo dpkg -i debs/kalinka-server_*.deb
+sudo dpkg -i debs/kalinka-plugin-*.deb
+sudo apt-get install -f   # install any missing dependencies
 ```
+At startup `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates `/opt/kalinka/venv` and pip-installs every wheel found under `/opt/kalinka/wheels/`. Plugins ship their wheel there and trigger a server restart, so they're picked up automatically (see [`docs/plugin-deb-packaging.md`](docs/plugin-deb-packaging.md)).
 
-**Note**: The package is built for the platform it's being built on (no cross-compilation).
-
-#### Service Management
+#### Service management
 - Restart: `sudo systemctl restart kalinka.service`
 - Check status: `systemctl status kalinka.service`
 - View logs: `journalctl -u kalinka.service`
 
-# Running from Sources
-## Development Setup
-For development or running directly from sources without creating a package:
+# Running from source (development)
 
-## Prepare Environment
-1. Clone the repository: `git clone https://github.com/madenvel/KalinkaPlayer.git`
-2. Install pre-requisites:
+Use a virtual environment with editable installs so code changes are picked up immediately.
+
+1. Clone and enter the repo, then create/activate a virtualenv:
 ```bash
-sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
-```
-3. Create python virtual environment:
-```bash
+git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
 ```
-4. Build the native player:
+2. Install system prerequisites (same list as above):
 ```bash
-cd packages/kalinka_server/src/native_player
-make
-cd ../
+sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
+  libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
 ```
-**Note**: When building the Debian package with `make build-deb`, this step is automatically handled.
-
-5. Run the server:
+3. Set up the dev environment in one step — this installs the SDK and server editable and builds the native player:
 ```bash
-nohup ./run_server.py &
+make setup-dev
 ```
-The log will be saved to `nohup.out`.
-If you were running the server on Raspberry Pi, you can logout now.
-
-6. Download and install the app (see KalinkaApp project) and goto Settings -> Connection menu - your service should show up under the name you specified. Pick it from the list and tap "Connect".
-7. Enjoy!
-
-# Notes
-* Audio engine uses ALSA directly and relies on its configuration. If automatic resampling is set up, it will likely affect the app but it should still work.
-* I run this on Raspberry Pi 4 with HiFiBerry Digi2 card configured as recommended in their manual. This software would likely work with any card that works with ALSA but there might be issues hence certain quirks could be needed.
-
-## Project structure and modular plugin interface
-
-KalinkaPlayer is designed as a small core server (`packages/kalinka-server`) with a modular plugin system. The server exposes a REST API for control, discovery and queue management while plugins implement source/back-end integrations (local files, streaming services, device integrations) and enrichers.
-
-Plugins live in the `packages/` directory and are simple Python packages that expose a well-defined interface the server loads at runtime. This modular approach lets you add or remove functionality without changing the server core. Typical plugin responsibilities include:
-- Providing a source of tracks / metadata (e.g. local filesystem)
-- Supplying enrichment / metadata lookup hooks
-- Exposing any external device-specific control (volume, power state)
-
-The plugin interface is intentionally lightweight: a plugin package exposes entry points and a small set of classes/functions that the server discovers using Python package metadata (or simple import-time registration). See the `packages/kalinka-plugin-sdk` to get familiar with the plugin interface and check cookiecutter template manual `template/cookiecutter-kalinka-plugin/README.md` to understand the plugin structure.
-
-## Development: run the server from source
-
-Use a virtual environment and install the server in editable mode so changes to server code are picked up immediately.
-
-1. Create and activate a virtualenv (from the repository root):
-
+   (Equivalent to running [`./setup_dev_env.sh`](setup_dev_env.sh).) To also develop a plugin, install it editable too:
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+cd packages/kalinka-plugin-localfiles && pip install -e . && cd -
 ```
-
-2. Install server dependencies in editable mode (this will make `packages/kalinka-server` importable and allow live edits):
-
+   Or install the server and all bundled plugins editable at once:
 ```bash
-cd packages/kalinka-server
-pip install -e .
-pip install -r requirements.txt
-```
-
-3. Build the native player library:
-
-```bash
-cd src/native_player
-make
-```
-
-4. Run the server (foreground for development):
-
-```bash
-kalinka-server --config <config_file>
-```
-
-*Note*: Plugin configuration files will be created in the same directory as the main config.
-
-Notes:
-- Running `pip install -e .` inside `packages/kalinka-server` is recommended for development: it registers the package and entry points without rebuilding wheels.
-- If you modify plugin code under `packages/kalinka-plugin-*`, an editable install of those packages (from their package folders) will also make changes visible immediately. Example:
-
-```bash
-cd packages/kalinka-plugin-localfiles
-pip install -e .
-```
-
-## Building plugins and packages
-
-Each plugin in `packages/` is a normal Python package with a `pyproject.toml` or `setup.py` and includes packaging scripts under `scripts/`. To build a wheel or Debian package for a plugin you can:
-
-- Build a wheel (in the plugin directory):
-
-```bash
-cd packages/kalinka-plugin-localfiles
-scripts/build_wheel.sh
-```
-
-- Build a Debian package (many plugins provide helper scripts):
-
-```bash
-cd packages/kalinka-plugin-localfiles
-./scripts/build_deb.sh
-```
-
-The top-level `Makefile` and `packages/kalinka-server` build scripts also orchestrate building the native player, the server wheel and packaging everything into a `.deb` when building the full project.
-
-## Plugins (included with this repository)
-
-Below is a short description of each plugin included under `packages/`.
-
-- kalinka-plugin-localfiles
-  - Purpose: Core local filesystem playback plugin. It indexes directories of audio files, extracts metadata, and exposes the local library to the server. This plugin implements the most complete set of features (indexing, enrichment, artwork handling, and playback mapping).
-  - Make sure to check plugin settings via the app to properly enable enrichment plugins like Acoustid (required appID which you can get for free in their website)
-
-- kalinka-plugin-musiccast
-  - Purpose: Integration with Yamaha MusicCast devices for device discovery and remote volume/power control. This plugin lets Kalinka control MusicCast receivers (volume, standby) and optionally route playback.
-
-- kalinka-plugin-dummydevice
-  - Purpose: A development / testing plugin that simulates a playback device. Useful for CI, tests and development when hardware is not available. It provides a mock audio sink and basic control endpoints.
-
-- kalinka-plugin-sdk
-  - Purpose: SDK and helper utilities for writing plugins. Includes templates, common interfaces and packaging helpers. Use this when creating new plugins to ensure compatibility with the server. This is a mandatory dependency for any Kalinka plugins.
-
-If you want to create a new plugin, start with the cookiecutter template under `template/cookiecutter-kalinka-plugin/` - please check the manual supplied on how to do that.
-
-## Example: install plugins for development
-
-From the repository root you can install the server and all included plugins editable so you can iterate quickly:
-
-```bash
-source .venv/bin/activate
 cd packages/kalinka-server && pip install -e . && cd -
-for p in packages/kalinka-plugin-*; do
-  (cd "$p" && pip install -e . || true)
-done
+for p in packages/kalinka-plugin-*; do (cd "$p" && pip install -e . || true); done
 ```
+4. Run the server (foreground):
+```bash
+kalinka-server --config kalinka_conf.cfg
+```
+   …or via the Makefile helper: `make run-server`. Per-plugin config files (e.g. `localfiles_config.cfg`) are created alongside the main config. Example config files live in the repo root.
+5. In the Kalinka Music App, go to **Settings → Connection**; the service should appear under the name you configured. Pick it and tap **Connect**.
 
-After installing editable packages, start the server (`kalinka-server --config <config>`) and the server will import available plugins automatically.
+# Configuration & tuning
 
-## How to contribute
+- Most settings are editable live from the app's **Settings** screen and persisted to the `.cfg` files. The server exposes its config schema at `GET /server/config/schema` so the app can render forms.
+- **AI search** is opt-in. Enable the **embedder** (and optionally tag prediction under the searcher) in the localfiles module config. On first run the embedder downloads the CLAP ONNX models to the model directory (default `/var/lib/kalinka/models`) and embeds tracks in the background; watch progress via `GET /indexer/status`.
+- **AcoustID** enrichment needs a free API key from the [AcoustID website](https://acoustid.org/) — set it in the localfiles enricher config.
+- Re-embedding / re-tagging is driven by `current_version` fields in the config; bump them to force a rebuild after a model change. See [`scripts/clap_onnx_release.md`](scripts/clap_onnx_release.md).
+
+# Testing
+
+```bash
+make test
+```
+Runs the SDK and server Python test suites. Most packages also include their own `tests/` directory; the native player has its own C++ test set under `packages/kalinka-server/src/native_player`.
+
+# Contributing
 
 1. Fork the repository and create a feature branch.
-2. Run tests under `packages/*/tests` (most packages include a `tests` directory, `native-player` have its own set of tests written C++).
-3. Open a pull request describing the change and which plugin or server area it affects.
+2. Make changes with editable installs active so they take effect immediately.
+3. Run `make test` (and any package-specific tests for the area you touched).
+4. Open a pull request describing the change and which plugin or server area it affects.
 
-## Quick checklist (developer)
+# Notes
 
-- Clone repo
-- Create venv and activate
-- Install server editable: `cd packages/kalinka-server && pip install -e .`
-- Install any plugin you will develop editable too: `cd packages/kalinka-plugin-localfiles && pip install -e .`
-- Build native player: `cd packages/kalinka-server/src/native_player && make`
-- Run server: `kalinka-server --config <config>` - when in virtual environment and kalinka-server wheel installed locally.
+\* The audio engine uses ALSA directly and relies on its configuration. If automatic resampling is configured it will likely affect the path but should still work.
+
+\* Developed and tested on a Raspberry Pi 4 with a HiFiBerry Digi2 card configured per its manual. It should work with any ALSA-compatible card, though some cards may need extra quirks.
+
+# License
+
+GPL-3.0-or-later. See the `license` field in each package's `pyproject.toml`.
