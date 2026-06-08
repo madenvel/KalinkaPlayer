@@ -80,8 +80,8 @@ native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py",
 
 [tool.setuptools_scm]
 write_to = "src/kalinka_server/_version.py"
-tag_regex = "^kalinka-server-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
-git_describe_command = "git describe --dirty --tags --long --match kalinka-server-v* --always"
+tag_regex = "^kalinka-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match kalinka-v*"
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
 fallback_version = "0.0.0"

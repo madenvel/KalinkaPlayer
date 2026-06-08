@@ -104,7 +104,7 @@ pip install -r requirements.txt
 ```bash
 make build-all-deb
 ```
-You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. Package versions are derived from git tags via setuptools-scm (the most recent `release-x.y.z` tag with `z` incremented).
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. All packages share a single version derived from git tags via setuptools-scm: a `kalinka-vX.Y.Z` tag versions the server and every plugin together (one tag per release).
 
 #### Cleaning build artifacts
 ```bash
