@@ -73,15 +73,21 @@ sudo apt-get install -f  # Fix any dependency issues
 
 ## Version Management
 
-All packages (server and plugins) share a single version, determined automatically from one git tag. To create a new release:
+Versions are determined automatically from git tags via setuptools_scm, on two independent lines:
 
-1. Tag the release (one tag versions everything):
+- **App bundle** (server + first-party plugins) shares one version. To release it, tag once:
 ```bash
 git tag kalinka-v1.2.3
 git push origin kalinka-v1.2.3
 ```
 
-2. The version will be automatically used in builds and service discovery.
+- **Plugin SDK** is versioned independently, and only re-tagged when the SDK changes. Bump the **major** only for a breaking SDK API change, since plugins pin it as `kalinka-plugin-sdk>=N,<N+1`:
+```bash
+git tag kalinka-plugin-sdk-v1.1.0
+git push origin kalinka-plugin-sdk-v1.1.0
+```
+
+The resulting versions are used automatically in builds and service discovery.
 
 ## Configuration
 
