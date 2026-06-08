@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kalinka-plugin-sdk"
-# Held at a fixed 1.0.0 during pre-1.0 development. The SDK is the plugin API
-# contract; plugins pin it by major version (>=1,<2). Bump the major here only
-# for a breaking API change (and then the consumers' <2 bounds).
-version = "1.0.0"
+# Version is the single source of truth in src/kalinka_plugin_sdk/__init__.py
+# (__version__). See [tool.setuptools.dynamic] below. Bump the major there only
+# for a breaking API change (and then the consumers' >=1,<2 bounds).
+dynamic = ["version"]
 description = "Kalinka Plugin SDK for developing input modules and device plugins"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -60,6 +60,9 @@ include-package-data = true
 where = ["src"]
 include = ["kalinka_plugin_sdk*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "kalinka_plugin_sdk.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
