@@ -4,10 +4,8 @@ Kalinka Plugin SDK
 A Software Development Kit for developing input modules and device plugins for the Kalinka Player.
 """
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    __version__ = "1.0.0"
+# Fixed during pre-1.0 development; kept in sync with [project].version in pyproject.toml.
+__version__ = "1.0.0"
 
 from .api import (
     PlayQueueController,

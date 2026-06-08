@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools-scm[toml]>=6.2", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "kalinka-plugin-sdk"
-dynamic = ["version"]
+# Held at a fixed 1.0.0 during pre-1.0 development. The SDK is the plugin API
+# contract; plugins pin it by major version (>=1,<2). Bump the major here only
+# for a breaking API change (and then the consumers' <2 bounds).
+version = "1.0.0"
 description = "Kalinka Plugin SDK for developing input modules and device plugins"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -57,15 +60,6 @@ include-package-data = true
 where = ["src"]
 include = ["kalinka_plugin_sdk*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
-
-[tool.setuptools_scm]
-write_to = "src/kalinka_plugin_sdk/_version.py"
-tag_regex = "^kalinka-plugin-sdk-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
-git_describe_command = "git describe --dirty --tags --long --match kalinka-plugin-sdk-v*"
-version_scheme = "guess-next-dev"
-local_scheme = "node-and-date"
-fallback_version = "1.0.0"
-search_parent_directories = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

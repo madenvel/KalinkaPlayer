@@ -5,7 +5,7 @@ set -euo pipefail
 
 PLUGIN_SLUG="kalinka-plugin-sdk"
 
-echo "Building .deb package for ${PLUGIN_SLUG} using setuptools_scm for version detection"
+echo "Building .deb package for ${PLUGIN_SLUG} (version fixed in pyproject.toml)"
 
 # Clean up previous build
 rm -rf pkgroot/ dist/
