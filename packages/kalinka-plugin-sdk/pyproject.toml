@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kalinka-plugin-sdk"
-# Version is the single source of truth in src/kalinka_plugin_sdk/__init__.py
+# Version is the single source of truth in src/kalinka_plugin_sdk/_version.py
 # (__version__). See [tool.setuptools.dynamic] below. Bump the major there only
 # for a breaking API change (and then the consumers' >=1,<2 bounds).
 dynamic = ["version"]
@@ -62,7 +62,7 @@ include = ["kalinka_plugin_sdk*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
 
 [tool.setuptools.dynamic]
-version = {attr = "kalinka_plugin_sdk.__version__"}
+version = {attr = "kalinka_plugin_sdk._version.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
