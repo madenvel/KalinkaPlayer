@@ -4,7 +4,9 @@ Kalinka Plugin SDK
 A Software Development Kit for developing input modules and device plugins for the Kalinka Player.
 """
 
-# Fixed during pre-1.0 development; kept in sync with [project].version in pyproject.toml.
+# Single source of truth for the SDK version. pyproject.toml reads this via
+# [tool.setuptools.dynamic] (attr). Bump the major only for a breaking API
+# change, then widen the consumers' >=1,<2 pins accordingly.
 __version__ = "1.0.0"
 
 from .api import (
