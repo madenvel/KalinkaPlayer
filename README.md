@@ -104,7 +104,7 @@ pip install -r requirements.txt
 ```bash
 make build-all-deb
 ```
-You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. Versions are derived from git tags via setuptools-scm. The app bundle — the server and the first-party plugins — shares one version from a `kalinka-vX.Y.Z` tag (one tag per release). The plugin SDK is versioned independently from `kalinka-plugin-sdk-vX.Y.Z` tags, since plugins pin it by major version (`>=N,<N+1`) as a compatibility contract.
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is held at a fixed `1.0.0` during pre-1.0 development (plugins pin it `>=1,<2`); bump its major only for a breaking SDK API change.
 
 #### Cleaning build artifacts
 ```bash

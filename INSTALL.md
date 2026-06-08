@@ -73,21 +73,15 @@ sudo apt-get install -f  # Fix any dependency issues
 
 ## Version Management
 
-Versions are determined automatically from git tags via setuptools_scm, on two independent lines:
-
-- **App bundle** (server + first-party plugins) shares one version. To release it, tag once:
+The app bundle (server + first-party plugins) shares a single version, determined automatically from one git tag. To create a release, tag once:
 ```bash
 git tag kalinka-v1.2.3
 git push origin kalinka-v1.2.3
 ```
 
-- **Plugin SDK** is versioned independently, and only re-tagged when the SDK changes. Bump the **major** only for a breaking SDK API change, since plugins pin it as `kalinka-plugin-sdk>=N,<N+1`:
-```bash
-git tag kalinka-plugin-sdk-v1.1.0
-git push origin kalinka-plugin-sdk-v1.1.0
-```
+The plugin SDK is held at a fixed `1.0.0` (set in `packages/kalinka-plugin-sdk/pyproject.toml`) during pre-1.0 development — it has no release tag. Plugins pin it `kalinka-plugin-sdk>=1,<2`; bump its major only for a breaking SDK API change (and then the consumers' `<2` bounds).
 
-The resulting versions are used automatically in builds and service discovery.
+The resulting version is used automatically in builds and service discovery.
 
 ## Configuration
 
