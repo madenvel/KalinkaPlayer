@@ -47,7 +47,7 @@ no effect.
    SDK keeps its own fixed version (e.g. `kalinka-plugin-sdk_1.0.0_all.deb`).
 
 > The version comes from `git describe`, so **build from the tagged commit with
-> a clean tree**. Between tags you'll get dev versions like `0.2.1.dev3+g<sha>`,
+> a clean tree**. Between tags you'll get dev versions like `0.2.1.dev3+g<sha>.dYYYYMMDD`,
 > which is expected for development builds but not for a release.
 
 ---
@@ -56,22 +56,22 @@ no effect.
 
 The SDK version lives in **one place**:
 
-- [`packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/__init__.py`](packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/__init__.py) → `__version__ = "1.0.0"`
+- [`packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py`](packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py) → `__version__ = "1.0.0"`
 
 `pyproject.toml` derives the packaging version from it via
-`[tool.setuptools.dynamic] version = {attr = "kalinka_plugin_sdk.__version__"}`,
+`[tool.setuptools.dynamic] version = {attr = "kalinka_plugin_sdk._version.__version__"}`,
 so you never edit the version in two places.
 
 ### Minor or patch (backward compatible — e.g. `1.0.0` → `1.1.0`)
 Added an API, fixed a bug, nothing removed/changed:
 
-1. Edit `__version__` in `__init__.py`.
+1. Edit `__version__` in `_version.py`.
 2. Done. Consumers pin `>=1,<2`, which already accepts it — no other changes.
 
 ### Major (breaking — e.g. `1.x` → `2.0.0`)
 Removed or changed an existing public API:
 
-1. Edit `__version__` in `__init__.py` to `2.0.0`.
+1. Edit `__version__` in `_version.py` to `2.0.0`.
 2. Widen **every consumer pin** from `<2` to `<3`, i.e. `kalinka-plugin-sdk>=2,<3`:
    - `packages/kalinka-server/pyproject.toml`
    - `packages/kalinka-plugin-localfiles/pyproject.toml`
@@ -82,7 +82,7 @@ Removed or changed an existing public API:
 Find the spots to touch:
 ```bash
 grep -rn 'kalinka-plugin-sdk *[>=<]' packages/*/pyproject.toml   # the 4 consumer pins
-grep -n  '__version__' packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/__init__.py  # the 1 SDK source
+grep -n  '__version__' packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py  # the 1 SDK source
 ```
 
 The SDK ships in the same `make build-all-deb` run as the app bundle; it does
@@ -98,7 +98,7 @@ git tag kalinka-vX.Y.Z && git push origin kalinka-vX.Y.Z
 make build-all-deb                       # -> debs/
 
 # Bump the SDK (minor/patch): edit one line, then rebuild
-$EDITOR packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/__init__.py   # __version__
+$EDITOR packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py   # __version__
 make build-all-deb
 ```
 
@@ -106,7 +106,7 @@ make build-all-deb
 
 - **One tag per release** (`kalinka-v*`). Never tag individual packages.
 - **Clean tree on the tagged commit**, or the version carries a dev/dirty suffix.
-- **SDK = one constant.** Minor/patch touches only `__init__.py`; major also
+- **SDK = one constant.** Minor/patch touches only `_version.py`; major also
   widens the four `>=1,<2` consumer pins.
 - Compatibility is guaranteed **within a major version only** — that's what the
   `>=N,<N+1` pins encode.
