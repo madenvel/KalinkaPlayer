@@ -5,7 +5,7 @@ set -euo pipefail
 
 PLUGIN_SLUG="kalinka-plugin-sdk"
 
-echo "Building .deb package for ${PLUGIN_SLUG} (version fixed in pyproject.toml)"
+echo "Building .deb package for ${PLUGIN_SLUG} (version from src/kalinka_plugin_sdk/__init__.py)"
 
 # Clean up previous build
 rm -rf pkgroot/ dist/
@@ -17,7 +17,7 @@ echo "Building wheel first to detect version..."
 ./scripts/build_wheel.sh
 
 # Extract version from the built wheel filename using sed
-WHEEL_PATH=$(ls dist/*.whl 2>/dev/null | sort -V | tail -1)
+WHEEL_PATH=$(ls dist/*.whl 2>/dev/null | sort -V | tail -1 || true)
 if [ -z "$WHEEL_PATH" ] || [ ! -f "$WHEEL_PATH" ]; then
     echo "Error: No wheel could be built." >&2
     exit 1

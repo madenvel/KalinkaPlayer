@@ -90,7 +90,7 @@ Implements the `ExternalOutputDevice` interface with all required methods for au
 ### Version Management
 This plugin uses **setuptools_scm** for automatic version detection:
 - **Release builds**: A single `kalinka-vX.Y.Z` tag versions this plugin together with the server and the other first-party plugins (the SDK is held at a fixed `1.0.0`, no tag)
-- **Development builds**: setuptools_scm automatically generates dev versions like `1.2.4.dev0+gc1e6070.d20250928`
+- **Development builds**: commits after the latest `kalinka-v*` tag produce a dev version from `git describe`, e.g. `0.1.1.dev4+g1a2b3c4`
 - **Clean releases**: Commit all changes and tag for clean release versions
 
 ### Build Python Wheel

@@ -21,7 +21,7 @@ rm -rf dist/*.whl
 
 python3 -m build --wheel
 
-WHEEL_PATH=$(ls dist/*.whl 2>/dev/null | sort -V | tail -1)
+WHEEL_PATH=$(ls dist/*.whl 2>/dev/null | sort -V | tail -1 || true)
 
 if [ -z "$WHEEL_PATH" ] || [ ! -f "$WHEEL_PATH" ]; then
     echo "Error: No wheel could be built."
