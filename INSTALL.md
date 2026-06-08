@@ -73,12 +73,12 @@ sudo apt-get install -f  # Fix any dependency issues
 
 ## Version Management
 
-The package version is automatically determined from git tags. To create a new release:
+All packages (server and plugins) share a single version, determined automatically from one git tag. To create a new release:
 
-1. Tag the release:
+1. Tag the release (one tag versions everything):
 ```bash
-git tag release-1.2.3
-git push origin release-1.2.3
+git tag kalinka-v1.2.3
+git push origin kalinka-v1.2.3
 ```
 
 2. The version will be automatically used in builds and service discovery.

@@ -35,6 +35,7 @@ test:
 
 ## Helper function to move debs to debs directory
 copy-debs:
+	@rm -rf debs
 	@mkdir -p debs
 	@for dir in packages/*/; do \
 		for deb in "$$dir"/*.deb; do \

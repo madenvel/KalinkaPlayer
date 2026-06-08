@@ -39,9 +39,6 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = {attr = "{{ cookiecutter.plugin_id }}._version.__version__"}
-
 [tool.setuptools_scm]
 write_to = "src/{{ cookiecutter.plugin_id }}/_version.py"
 tag_regex = "^{{ cookiecutter.plugin_name }}-v(?P<version>\\d+\\.\\d+\\.\\d+)$"

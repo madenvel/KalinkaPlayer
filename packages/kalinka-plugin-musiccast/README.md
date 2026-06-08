@@ -89,7 +89,7 @@ Implements the `ExternalOutputDevice` interface with all required methods for au
 
 ### Version Management
 This plugin uses **setuptools_scm** for automatic version detection:
-- **Release builds**: Tag your release with `kalinka-plugin-kalinka-plugin-musiccast-v1.2.3` format
+- **Release builds**: A single repo-wide `kalinka-vX.Y.Z` tag versions this plugin together with the server and all other plugins
 - **Development builds**: setuptools_scm automatically generates dev versions like `1.2.4.dev0+gc1e6070.d20250928`
 - **Clean releases**: Commit all changes and tag for clean release versions
 
