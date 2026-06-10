@@ -26,6 +26,10 @@ coverage.xml
 .pytest_cache
 .hypothesis
 _version.py
+# ...except the SDK's, which is a hand-maintained source file (the SDK no longer
+# uses setuptools_scm), not a generated artifact. It is the single source of
+# truth for the SDK version.
+!packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py
 
 # C/C++ build artifacts
 *.o
