@@ -79,7 +79,7 @@ git tag kalinka-v1.2.3
 git push origin kalinka-v1.2.3
 ```
 
-The plugin SDK is held at a fixed `1.0.0` (the single source of truth is `__version__` in `packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py`; `pyproject.toml` reads it via `[tool.setuptools.dynamic]`) during pre-1.0 development — it has no release tag. Plugins pin it `kalinka-plugin-sdk>=1,<2`; bump its major only for a breaking SDK API change (and then the consumers' `<2` bounds).
+The plugin SDK is versioned independently by its own SemVer (single source of truth: `__version__` in `packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py`, read by `pyproject.toml` via `[tool.setuptools.dynamic]`); it has no git tag. Plugins pin it `kalinka-plugin-sdk>=1,<2`, so backwards-compatible minor/patch bumps don't break them; a major bump is breaking and requires widening the consumers' `<2` bounds.
 
 The resulting version is used automatically in builds and service discovery. See [RELEASING.md](RELEASING.md) for the full release checklist and how to bump the SDK version.
 
