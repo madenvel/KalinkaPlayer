@@ -31,6 +31,9 @@ _version.py
 # truth for the SDK version.
 !packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py
 
+# Downloaded archives (e.g. CLI tarballs); never committed
+*.tar.gz
+
 # C/C++ build artifacts
 *.o
 *.so
