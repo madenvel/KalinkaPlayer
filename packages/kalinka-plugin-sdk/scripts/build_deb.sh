@@ -5,7 +5,7 @@ set -euo pipefail
 
 PLUGIN_SLUG="kalinka-plugin-sdk"
 
-echo "Building .deb package for ${PLUGIN_SLUG} (version from src/kalinka_plugin_sdk/__init__.py)"
+echo "Building .deb package for ${PLUGIN_SLUG} (version from src/kalinka_plugin_sdk/_version.py)"
 
 # Clean up previous build
 rm -rf pkgroot/ dist/

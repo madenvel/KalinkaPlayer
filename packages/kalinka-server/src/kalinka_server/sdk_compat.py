@@ -39,7 +39,9 @@ def _server_sdk_requirement() -> Requirement | None:
         return None
     for raw in declared:
         req = Requirement(raw)
-        if Requirement(raw).name == SDK_DIST and not req.marker:
+        # Skip requirements gated by a marker (e.g. `; extra == "dev"`); only the
+        # unconditional runtime requirement is the one we enforce.
+        if req.name == SDK_DIST and not req.marker:
             return req
     return None
 
