@@ -1,6 +1,6 @@
 import logging
 from .config_model import KalinkaConfig
-from .version import get_version, get_api_version
+from .version import get_version, get_rest_api_version
 
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -60,7 +60,7 @@ def get_service_info(
     """
 
     # Get dynamic version and API version
-    desc = {"kalinka_api_version": get_api_version(), "server_version": get_version()}
+    desc = {"kalinka_api_version": get_rest_api_version(), "server_version": get_version()}
 
     if ip_address is not None:
         # Use the provided IP address (for multi-interface setup)

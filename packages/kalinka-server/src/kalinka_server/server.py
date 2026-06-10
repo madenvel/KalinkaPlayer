@@ -54,7 +54,7 @@ from .optional_packages_registry import (
 from .player_setup import modules, setup, shutdown, ModuleHealthState
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
-from .version import get_api_version, get_version
+from .version import get_rest_api_version, get_version
 from .state_keeper import save_state, restore_state
 from .queue_ws_handler import (
     handle_websocket_connection as handle_queue_websocket_connection,
@@ -769,7 +769,7 @@ async def create_app(
         """Get version information for the server."""
         return {
             "server_version": get_version(),
-            "api_version": get_api_version(),
+            "api_version": get_rest_api_version(),
             "name": "kalinka-player",
         }
 
