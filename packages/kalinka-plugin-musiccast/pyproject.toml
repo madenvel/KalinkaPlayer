@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "kalinka-plugin-sdk>=1.0,<2",
+    "kalinka-plugin-sdk>=1,<2",
     "ssdpy>=0.4.0",
 ]
 

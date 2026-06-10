@@ -10,6 +10,7 @@ import uvicorn
 from .config_model import KalinkaConfig
 from .config_overrides import apply_overrides_with_prefix, load_overrides
 from .netutils import get_ip_address
+from .sdk_compat import IncompatibleSDKError, check_sdk_compatibility
 from .server import create_app
 from .state_keeper import set_state_file
 
@@ -86,6 +87,13 @@ async def main():
 
     # Reduce logging level for httpx - it's too verbose
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # Refuse to run against an incompatible plugin SDK (see sdk_compat.py).
+    try:
+        check_sdk_compatibility()
+    except IncompatibleSDKError as e:
+        logger.error("%s", e)
+        raise SystemExit(1)
 
     try:
         config = KalinkaConfig()
