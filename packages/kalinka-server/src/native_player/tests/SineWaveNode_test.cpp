@@ -82,6 +82,33 @@ TEST_F(SineWaveNodeTest, seekToEnd) {
   EXPECT_EQ(sineWaveNode.getState().state, AudioGraphNodeState::FINISHED);
 }
 
+TEST_F(SineWaveNodeTest, read_left_only) {
+  SineWaveNode sineWaveNode(frequency, duration, 48000, 16,
+                            ToneChannel::Left);
+  std::vector<int16_t> data(20);
+  EXPECT_EQ(sineWaveNode.read(data.data(), 40), 40);
+  for (int i = 0; i < 20; i++) {
+    const auto value =
+        floor(8192 * sin(2 * M_PI * static_cast<double>(frequency) *
+                         floor(i / 2) / 48000.0));
+    // Interleaved stereo: even index = left (tone), odd = right (silent).
+    EXPECT_EQ(data[i], i % 2 == 0 ? value : 0);
+  }
+}
+
+TEST_F(SineWaveNodeTest, read_right_only) {
+  SineWaveNode sineWaveNode(frequency, duration, 48000, 16,
+                            ToneChannel::Right);
+  std::vector<int16_t> data(20);
+  EXPECT_EQ(sineWaveNode.read(data.data(), 40), 40);
+  for (int i = 0; i < 20; i++) {
+    const auto value =
+        floor(8192 * sin(2 * M_PI * static_cast<double>(frequency) *
+                         floor(i / 2) / 48000.0));
+    EXPECT_EQ(data[i], i % 2 == 1 ? value : 0);
+  }
+}
+
 TEST_F(SineWaveNodeTest, seekToEnd_and_back) {
   SineWaveNode sineWaveNode(frequency, duration);
   auto state = waitForStatus(sineWaveNode, AudioGraphNodeState::STREAMING);

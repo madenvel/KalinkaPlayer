@@ -5,16 +5,23 @@
 
 #include <cmath>
 
+// Which channels of the interleaved stereo output carry the tone. Left/Right
+// keep the other channel silent — used by the speaker-test endpoint to verify
+// channel wiring.
+enum class ToneChannel { Both = 0, Left, Right };
+
 class SineWaveNode : public AudioGraphOutputNode {
   size_t position = 0;
   size_t totalDataSize = 0;
   StreamInfo streamInfo;
   int frequency;
+  ToneChannel channel;
 
 public:
   SineWaveNode(int frequency, int durationMs, unsigned int sampleRate = 48000,
-               unsigned int bitsPerSample = 16)
-      : frequency(frequency) {
+               unsigned int bitsPerSample = 16,
+               ToneChannel channel = ToneChannel::Both)
+      : frequency(frequency), channel(channel) {
     totalDataSize = sampleRate * (bitsPerSample >> 3) * 2 * durationMs / 1000;
     streamInfo =
         StreamInfo{.format = {.sampleRate = sampleRate,
@@ -31,9 +38,15 @@ public:
 
     for (size_t i = 0; i < size / 2; i++) {
       size_t pos = i + position / 2;
+      // Interleaved stereo: even sample index = left, odd = right.
+      const bool isRightSample = (pos % 2) != 0;
+      const bool muted = (channel == ToneChannel::Left && isRightSample) ||
+                         (channel == ToneChannel::Right && !isRightSample);
       const auto value =
-          floor(8192 * sin(2 * M_PI * static_cast<double>(frequency) *
-                           floor(pos / 2) / streamInfo.format.sampleRate));
+          muted ? 0.0
+                : floor(8192 * sin(2 * M_PI * static_cast<double>(frequency) *
+                                   floor(pos / 2) /
+                                   streamInfo.format.sampleRate));
       static_cast<int16_t *>(data)[i] = value;
     }
     position += size;
