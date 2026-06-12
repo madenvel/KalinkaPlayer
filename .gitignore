@@ -70,6 +70,9 @@ kalinka-player-*
 config/
 configs/
 # Note: Use *.example extensions for safe template configs
+# ...but GitHub metadata (issue templates, workflows) is safe to track
+!.github/**/*.yml
+!.github/**/*.yaml
 
 # Temporary files
 *.tmp

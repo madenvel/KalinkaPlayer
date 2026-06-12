@@ -1,0 +1,49 @@
+name: 🔊 Server bug report
+description: A problem with the Kalinka server — playback, indexing, tag repair, AI search, plugins
+labels: [bug]
+body:
+  - type: checkboxes
+    attributes:
+      label: Right repo?
+      description: >-
+        The server handles the sound itself (gapless / bit-perfect playback, ALSA, DAC output),
+        library indexing, tag repair, AI mood search results and plugins.
+        If the problem is something you see on a phone or desktop screen — UI glitches, crashes
+        on the device, connection screens — file it on
+        [KalinkaAI](https://github.com/madenvel/KalinkaAI/issues/new/choose) instead.
+      options:
+        - label: This is a server issue, not an app/UI issue
+          required: true
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: false
+  - type: input
+    attributes:
+      label: Kalinka server version
+      placeholder: e.g. 3.0.0
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Hardware & OS
+      placeholder: e.g. Raspberry Pi 4, Raspberry Pi OS 12 (bookworm), Topping E30 DAC over USB
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Relevant server log output, if you have it.
+      render: shell
+    validations:
+      required: false
