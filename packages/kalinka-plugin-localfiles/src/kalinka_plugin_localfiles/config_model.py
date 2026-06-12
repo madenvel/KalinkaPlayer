@@ -320,7 +320,10 @@ class LocalFilesConfig(ModuleConfig):
         default=True, title="Module enabled", json_schema_extra=_SIMPLE,
     )
     music_folders: list[str] = Field(
-        default=["~/Music"],
+        # Created by the kalinka-server postinst, group-writable by kalusr.
+        # Must NOT default to anything under /home: the service used to run
+        # with ProtectHome=yes, and kalusr has no home directory of its own.
+        default=["/srv/kalinka/music"],
         title="Music folders",
         json_schema_extra={"widget": "folder_list", **_SIMPLE},
     )

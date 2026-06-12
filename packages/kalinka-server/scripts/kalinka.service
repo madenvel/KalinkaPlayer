@@ -45,7 +45,11 @@ TimeoutStartSec=infinity
 Restart=on-failure
 
 ProtectSystem=full
-ProtectHome=yes
+# read-only, not yes: pointing music_folders at /home/<user>/Music is the
+# most natural thing for users to do, and with ProtectHome=yes the folder
+# silently appears empty inside the sandbox. Reading home is exactly this
+# service's job; writing there stays blocked.
+ProtectHome=read-only
 NoNewPrivileges=yes
 PrivateTmp=yes
 ReadWritePaths=/var/lib/kalinka /var/log/kalinka /var/cache/kalinka /etc/kalinka
