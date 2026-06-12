@@ -11,6 +11,19 @@ The current focus and most advanced functionality is **local file playback**. A 
 
 The target audience: DIY HiFi enthusiasts comfortable with Linux and the command line who want a controllable, efficient audio backend.
 
+# System requirements
+
+| Configuration | Minimum hardware | Notes |
+|---|---|---|
+| Playback + library (AI search off) | Raspberry Pi 3 / Zero 2 W, or any arm64/amd64 box with **512 MB RAM** | Headless (Lite) OS recommended at 512 MB; enable swap for the initial install and large library scans. 1 GB is comfortable. |
+| With AI search (CLAP) | Raspberry Pi 4B with **4 GB RAM**, or any amd64 machine with 4 GB+ | The embedding model (~285 MB) stays resident in RAM; the initial embedding pass is CPU-heavy and runs in the background — expect it to take a while on large libraries. Allow ~1 GB extra disk for the model. |
+
+A **64-bit OS is required** — packages are built for arm64 and amd64 only.
+On Raspberry Pi that means Raspberry Pi OS (64-bit); the Pi 2, Pi 1 and
+original Pi Zero (32-bit-only CPUs) are not supported. AI search can be
+toggled per install, so you can start small and enable it after moving the
+library to a bigger board.
+
 # Features
 
 **Core (Local Library)**
