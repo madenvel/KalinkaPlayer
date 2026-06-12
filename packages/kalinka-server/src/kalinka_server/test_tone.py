@@ -34,8 +34,18 @@ _COMPLETION_GRACE_S = 5.0
 _POLL_INTERVAL_S = 0.1
 
 # One tone at a time — two concurrent opens of the same exclusive ALSA
-# device would make the second one fail spuriously.
-_tone_lock = asyncio.Lock()
+# device would make the second one fail spuriously. Created lazily from
+# inside a running coroutine rather than at import time, so the lock can
+# never end up bound to a different event loop than the one serving
+# requests.
+_tone_lock: asyncio.Lock | None = None
+
+
+def _get_tone_lock() -> asyncio.Lock:
+    global _tone_lock
+    if _tone_lock is None:
+        _tone_lock = asyncio.Lock()
+    return _tone_lock
 
 
 async def play_test_tone(
@@ -62,7 +72,7 @@ async def play_test_tone(
     if device:
         config["output.alsa.device"] = str(device)
 
-    async with _tone_lock:
+    async with _get_tone_lock():
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _play_blocking, config, channel)
 
