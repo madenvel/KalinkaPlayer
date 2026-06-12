@@ -3,6 +3,7 @@ import importlib.util
 import logging
 import logging.handlers
 import multiprocessing
+import os
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
@@ -294,6 +295,27 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             idx.state = ModuleHealthState.ERROR
             idx.message = "Indexer subprocess failed to start."
 
+        # Music folders: a missing or unreadable folder doesn't crash the
+        # indexer — it just finds nothing — which makes it the most silent
+        # misconfiguration we have. Surface it as a WARNING naming the
+        # offending paths. The check runs inside the service sandbox, so
+        # it also catches paths hidden by systemd hardening.
+        if idx.state == ModuleHealthState.READY:
+            bad_folders = []
+            for folder in config.music_folders:
+                expanded = os.path.expanduser(folder)
+                if not os.path.isdir(expanded) or not os.access(
+                    expanded, os.R_OK | os.X_OK
+                ):
+                    bad_folders.append(folder)
+            if bad_folders:
+                idx.state = ModuleHealthState.WARNING
+                idx.message = (
+                    "Music folder(s) not accessible to the service: "
+                    f"{', '.join(bad_folders)}. Check that the path exists "
+                    "and is readable by the 'kalusr' user."
+                )
+
         # Enricher: DISABLED if config.enricher.enabled is False; else READY
         # (hard dependencies are guaranteed by the plugin's deb).
         enr = self._subfeatures["enricher"]
@@ -374,11 +396,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     async def get_state(self) -> ModuleState:
         """Roll sub-feature states up into a single ModuleState."""
         # The plugin overall is ERROR if any *required* sub-feature is ERROR.
-        # Otherwise WARNING if any non-required sub-feature is ERROR
-        # (something the user might want to fix). Otherwise READY.
+        # Otherwise WARNING if any non-required sub-feature is ERROR or any
+        # sub-feature reports a WARNING (something the user might want to
+        # fix). Otherwise READY.
         any_required_error = False
         any_optional_error = False
         broken_titles: list[str] = []
+        degraded_titles: list[str] = []
         missing_packages: list[str] = []
         seen_packages: set[str] = set()
         for sf in self._subfeatures.values():
@@ -389,6 +413,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 else:
                     any_optional_error = True
                     broken_titles.append(sf.title)
+            elif sf.state == ModuleHealthState.WARNING:
+                degraded_titles.append(sf.title)
             # Aggregate missing-package keys across all sub-features
             # (regardless of state — a DISABLED sub-feature still tells
             # us what the user would need if they re-enable it).
@@ -399,7 +425,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         if any_required_error:
             state = ModuleHealthState.ERROR
-        elif any_optional_error:
+        elif any_optional_error or degraded_titles:
             state = ModuleHealthState.WARNING
         else:
             state = ModuleHealthState.READY
@@ -411,8 +437,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         # One-line summary; the per-sub-feature detail lives in the
         # dynamic status_view fields on the relevant settings sections.
+        parts = []
+        if broken_titles:
+            parts.append(f"{', '.join(broken_titles)} unavailable")
+        if degraded_titles:
+            parts.append(f"{', '.join(degraded_titles)} degraded")
         summary = (
-            f"{', '.join(broken_titles)} unavailable — "
+            f"{'; '.join(parts)} — "
             "open the corresponding section below for details."
         )
         return ModuleState(

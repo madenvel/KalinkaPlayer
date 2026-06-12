@@ -24,6 +24,16 @@ case "$1" in
     echo "[2/4] Create install/config directories"
     install -d -m 0755 "$INSTALL_DIR"
     install -d -m 0750 -o "$USER" -g "$USER" "$CONFIG_DIR"
+    # Default music drop-off folder (matches the localfiles plugin's
+    # music_folders default). World-writable on purpose: any local user
+    # (or SFTP login) can drop music in without sudo — this is a
+    # single-admin appliance, not a multi-tenant box. Setgid keeps new
+    # files in the kalusr group so the service can always read them.
+    # Never touched if it already exists — it's admin territory.
+    if [ ! -d /srv/kalinka/music ]; then
+      install -d -m 0755 /srv/kalinka
+      install -d -m 2777 -o root -g "$USER" /srv/kalinka/music
+    fi
 
     echo "[3/4] Lock down config permissions"
     chown -R "$USER:$USER" "$CONFIG_DIR"
