@@ -56,6 +56,7 @@ from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from .version import get_rest_api_version, get_version
 from .state_keeper import save_state, restore_state
+from .test_tone import VALID_CHANNELS, play_test_tone
 from .queue_ws_handler import (
     handle_websocket_connection as handle_queue_websocket_connection,
 )
@@ -889,6 +890,44 @@ async def create_app(
                 status_code=500, detail="Failed to request restart"
             ) from e
         return {"message": "restarting", "install_queued": accepted}
+
+    @app.post("/server/test_tone")
+    async def server_test_tone(payload: Optional[Dict[str, Any]] = None):
+        """Play a short test tone through the ALSA output (speaker check).
+
+        Body (all fields optional):
+          ``{"channel": "left"|"right"|"both", "device": "<alsa id>"}``
+
+        ``device`` overrides the configured output so the client can test a
+        selection that hasn't been applied yet (the setup wizard stages the
+        ALSA device until its final restart). Any current playback is
+        stopped first — hw: devices are exclusive, and a speaker test in
+        the middle of music would be meaningless anyway. Returns once the
+        tone finished playing (~2 seconds).
+        """
+        payload = payload or {}
+        channel = str(payload.get("channel", "both")).lower()
+        if channel not in VALID_CHANNELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"channel must be one of {list(VALID_CHANNELS)}",
+            )
+        device = payload.get("device")
+        if device is not None and not isinstance(device, str):
+            raise HTTPException(status_code=400, detail="device must be a string")
+
+        # Release the audio device before the tone opens it.
+        await player_context.playqueue.stop()
+        try:
+            await play_test_tone(
+                player_context.playqueue.config, channel=channel, device=device
+            )
+        except (RuntimeError, TimeoutError) as e:
+            logger.error("Test tone failed: %s", e)
+            raise HTTPException(
+                status_code=500, detail=f"Test tone failed: {e}"
+            ) from e
+        return {"message": "Ok", "channel": channel}
 
     @app.get("/server/optional_packages")
     def get_optional_packages():

@@ -8,7 +8,11 @@
 #include "Log.h"
 #include "Mp3StreamDecoder.h"
 #include "PerfMon.h"
+#include "SineWaveNode.h"
 #include "StateMonitor.h"
+
+#include <algorithm>
+#include <cstdlib>
 
 namespace {
 // These numbers can be reduced depending on audio bitness,
@@ -28,6 +32,57 @@ bool isInvalidState(AudioGraphNodeState state) {
          state == AudioGraphNodeState::STOPPED ||
          state == AudioGraphNodeState::ERROR;
 }
+
+// Pseudo-scheme for the speaker test:
+//   tone://<left|right|both>?freq=<hz>&duration_ms=<ms>
+// Generates audio in-process (SineWaveNode) instead of reading a stream, so
+// no decoder is attached. Out-of-range values are clamped, unknown channel
+// names fall back to both.
+struct ToneSpec {
+  int frequency = 440;
+  int durationMs = 2000;
+  ToneChannel channel = ToneChannel::Both;
+};
+
+ToneSpec parseToneUrl(const std::string &url) {
+  ToneSpec spec;
+  std::string rest = url.substr(7); // strip "tone://"
+  std::string query;
+  const auto qpos = rest.find('?');
+  if (qpos != std::string::npos) {
+    query = rest.substr(qpos + 1);
+    rest = rest.substr(0, qpos);
+  }
+  if (rest == "left") {
+    spec.channel = ToneChannel::Left;
+  } else if (rest == "right") {
+    spec.channel = ToneChannel::Right;
+  }
+
+  size_t start = 0;
+  while (start < query.size()) {
+    auto end = query.find('&', start);
+    if (end == std::string::npos) {
+      end = query.size();
+    }
+    const auto kv = query.substr(start, end - start);
+    const auto eq = kv.find('=');
+    if (eq != std::string::npos) {
+      const auto key = kv.substr(0, eq);
+      const int value = std::atoi(kv.substr(eq + 1).c_str());
+      if (key == "freq") {
+        spec.frequency = value;
+      } else if (key == "duration_ms") {
+        spec.durationMs = value;
+      }
+    }
+    start = end + 1;
+  }
+
+  spec.frequency = std::clamp(spec.frequency, 20, 20000);
+  spec.durationMs = std::clamp(spec.durationMs, 100, 10000);
+  return spec;
+}
 } // namespace
 
 struct StreamNodes {
@@ -39,6 +94,18 @@ struct StreamNodes {
   StreamNodes(StreamId id, const std::string &url, const Config &config,
               const AudioFormat format)
       : url(url), id(id) {
+    if (url.substr(0, 7) == "tone://") {
+      // Speaker-test tone, generated in-process — emits PCM frames directly,
+      // so no decoder is attached and `format` is ignored.
+      const auto spec = parseToneUrl(url);
+      spdlog::debug("Creating SineWaveNode: freq={}Hz duration={}ms channel={}",
+                    spec.frequency, spec.durationMs,
+                    static_cast<int>(spec.channel));
+      nodeChain.emplace_back(std::make_shared<SineWaveNode>(
+          spec.frequency, spec.durationMs, 48000u, 16u, spec.channel));
+      return;
+    }
+
     if (url.substr(0, 7) == "file://") {
       // Use FileInputNode for local files
       std::string filePath = url.substr(7);
