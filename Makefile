@@ -51,7 +51,7 @@ kalinka-server-deb:
 	@echo "Building kalinka-server deb package..."
 	@cd packages/kalinka-server && ./scripts/build_deb.sh
 
-## Build all plugin deb packages (SDK, local files, musiccast, dummydevice)
+## Build all plugin deb packages (SDK, local files, musiccast, dummydevice, jamendo)
 kalinka-plugins-deb:
 	@echo "Building plugin deb packages..."
 	@for dir in packages/kalinka-plugin-*; do \
