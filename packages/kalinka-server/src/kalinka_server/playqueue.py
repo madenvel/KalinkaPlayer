@@ -687,10 +687,23 @@ class PlayQueueImpl(PlayQueueController):
             for track in state.track_list:
                 try:
                     track_info = await track_info_retriever(track.id)
-                    track_infos.append(track_info)
                 except Exception as e:
                     logger.warning(f"Failed to retrieve track info for {track.id}: {e}")
                     continue
+
+                # The saved snapshot is authoritative for metadata: a module
+                # may be unable to re-fetch it on restore (e.g. source-side
+                # indexing lag, where the module can still produce a playback
+                # URL but not the title/artist/album). Use the module's
+                # TrackInfo only for playback (link_retriever) and keep the
+                # metadata the queue had when it was saved.
+                track_infos.append(
+                    TrackInfo(
+                        id=track.id,
+                        link_retriever=track_info.link_retriever,
+                        metadata=track,
+                    )
+                )
 
             if track_infos:
                 self._add(track_infos)
