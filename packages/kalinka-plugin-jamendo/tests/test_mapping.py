@@ -140,15 +140,16 @@ async def test_browse_album_paginates_tracks():
 
 
 @pytest.mark.asyncio
-async def test_browse_artist_paginates_albums():
-    # artists/albums nests all albums under one artist; we paginate locally.
-    artist_with_albums = {**ARTIST, "albums": [ALBUM, ALBUM, ALBUM]}
-    m = make_module([artist_with_albums])
-    res = await m.browse(jm.artist_id("10"), offset=2, limit=5)
-    assert res.total == 3
-    assert len(res.items) == 1
-    # No offset/limit forwarded to the API — full album list is fetched.
-    assert "offset" not in m.client.calls[0][1]
+async def test_browse_artist_uses_albums_endpoint():
+    # Artist browse goes through /albums/?artist_id= so cards get the real
+    # trackid-bearing cover; offset/limit are forwarded for native pagination.
+    m = make_module([ALBUM, ALBUM])
+    res = await m.browse(jm.artist_id("10"), offset=5, limit=2)
+    path, params = m.client.calls[0]
+    assert path == "albums"
+    assert params["artist_id"] == "10"
+    assert params["offset"] == 5 and params["limit"] == 2
+    assert res.items[0].album.title == "Mornings"
 
 
 @pytest.mark.asyncio
