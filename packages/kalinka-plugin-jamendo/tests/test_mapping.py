@@ -166,11 +166,11 @@ async def test_get_track_info_falls_back_to_browse_cache():
     client = PathClient({"albums/tracks": [album_with_tracks], "tracks": []})
     m = jm.JamendoInputModule(config, client)
 
-    # Nothing cached yet -> /tracks/ miss -> download-endpoint fallback.
+    # Nothing cached yet -> /tracks/ miss -> storage-origin fallback.
     cold = await m.get_track_info(["100"])
     assert len(cold) == 1
     cold_url = await cold[0].link_retriever()
-    assert cold_url.url == "https://mp3d.jamendo.com/download/track/100/mp32/"
+    assert cold_url.url == "https://prod-1.storage.jamendo.com/?trackid=100&format=mp32"
 
     # Browsing the album warms the cache with the real streaming URL + metadata.
     await m.browse(jm.album_id("5"), 0, 50)
@@ -182,15 +182,16 @@ async def test_get_track_info_falls_back_to_browse_cache():
 
 
 @pytest.mark.asyncio
-async def test_fallback_format_drops_flac_to_lossy():
-    # FLAC isn't on the download endpoint, so the fallback uses a lossy format.
+async def test_fallback_honors_flac():
+    # The storage origin serves flac, so the fallback keeps the configured
+    # format (and the audio/flac mime that selects the FLAC decoder).
     config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.FLAC)
     client = PathClient({"tracks": []})
     m = jm.JamendoInputModule(config, client)
     infos = await m.get_track_info(["999"])
     url = await infos[0].link_retriever()
-    assert url.url == "https://mp3d.jamendo.com/download/track/999/mp32/"
-    assert url.format == "audio/mpeg"
+    assert url.url == "https://prod-1.storage.jamendo.com/?trackid=999&format=flac"
+    assert url.format == "audio/flac"
 
 
 @pytest.mark.asyncio
@@ -206,6 +207,24 @@ async def test_get_track_info_prefers_live_endpoint_over_cache():
     infos = await m.get_track_info(["100"])
     url = await infos[0].link_retriever()
     assert url.url == "https://fresh.example/?trackid=100"
+
+
+@pytest.mark.asyncio
+async def test_fallback_origin_learned_from_live_audio():
+    # The fallback host is not pinned to the seed: it follows whatever origin
+    # the API's real `audio` URLs use. Here a resolved track reports prod-9, so
+    # an unresolved track's fallback must target prod-9 too.
+    live = {
+        **TRACK,
+        "id": "100",
+        "audio": "https://prod-9.storage.jamendo.com/?trackid=100&format=mp32&from=x",
+    }
+    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
+    client = PathClient({"tracks": [live]})
+    m = jm.JamendoInputModule(config, client)
+    infos = await m.get_track_info(["100", "999"])  # 999 unresolved -> fallback
+    fb_url = await infos[1].link_retriever()
+    assert fb_url.url == "https://prod-9.storage.jamendo.com/?trackid=999&format=mp32"
 
 
 @pytest.mark.asyncio
