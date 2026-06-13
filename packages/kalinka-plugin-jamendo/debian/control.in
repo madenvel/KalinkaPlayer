@@ -1,0 +1,9 @@
+Package: kalinka-plugin-jamendo
+Version: @VERSION@
+Section: python
+Priority: optional
+Architecture: all
+Depends: kalinka-plugin-sdk (>= 1.0), kalinka-plugin-sdk (<< 2), python3, ca-certificates
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Description: Kalinka Plugin for Jamendo – Jamendo plugin for Kalinka Music Player
+ Jamendo plugin for Kalinka Music Player
