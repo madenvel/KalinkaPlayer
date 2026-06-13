@@ -105,6 +105,75 @@ async def test_restore_state_batches_track_info_requests(tmp_path, monkeypatch):
     assert restored_ids == [track.id.to_string for track in state.track_list]
 
 
+@pytest.mark.asyncio
+async def test_restore_prefers_saved_metadata_over_module():
+    """On restore the saved snapshot is authoritative for metadata; the module's
+    TrackInfo is used only for its playback link_retriever.
+
+    This is what lets queue entries survive a restart even when a module can
+    only re-resolve a playback URL but not the title/artist/album (e.g. Jamendo
+    tracks whose ids the /tracks/ endpoint temporarily can't resolve)."""
+    from types import SimpleNamespace
+
+    saved = [_make_track("a1", "jamendo"), _make_track("a2", "jamendo")]
+    state = PlayQueueState(
+        playback_state=PlaybackState(state=PlayerStateEnum.STOPPED, index=0),
+        playback_mode=PlaybackMode(
+            shuffle=False, repeat_single=False, repeat_all=False
+        ),
+        track_list=saved,
+    )
+
+    # The module returns *placeholder* metadata (empty title) — simulating a
+    # track it can only resolve a URL for, not real metadata.
+    async def _placeholder_link():
+        return TrackUrl(url="https://example.invalid/fallback.mp3", format="audio/mpeg")
+
+    def _retriever_factory(tid):
+        async def _retrieve(entity_id):
+            return TrackInfo(
+                id=entity_id,
+                metadata=Track(
+                    id=entity_id,
+                    title="",  # placeholder — must NOT win
+                    duration=0,
+                    album=Album(
+                        id=_album_entity("", "jamendo"), title=""
+                    ),
+                ),
+                link_retriever=_placeholder_link,
+            )
+
+        return _retrieve
+
+    added: list[TrackInfo] = []
+    fake_self = SimpleNamespace(
+        track_player=SimpleNamespace(
+            get_state=lambda: SimpleNamespace(state=None), stop=lambda: None
+        ),
+        current_stream_id=None,
+        track_list=[],
+        prepared_tracks={},
+        _unavailable_indices=set(),
+        _cancel_prefetch_timer=lambda: None,
+        current_track_id=0,
+        shuffle=False,
+        repeat_single=False,
+        repeat_all=False,
+        event_emitter=Mock(),
+        _add=lambda infos: added.extend(infos),
+    )
+
+    await PlayQueueImpl.restore_from_state(
+        fake_self, state, _retriever_factory(None)
+    )
+
+    assert [ti.metadata.title for ti in added] == ["track-a1", "track-a2"]
+    # The playback link comes from the module's TrackInfo, not the saved Track.
+    urls = [await ti.link_retriever() for ti in added]
+    assert all(u.url == "https://example.invalid/fallback.mp3" for u in urls)
+
+
 def test_restore_from_state_is_not_queue_wrapped():
     # serialised keeps async methods async; restore should stay undecorated.
     assert inspect.iscoroutinefunction(PlayQueueImpl.restore_from_state)
