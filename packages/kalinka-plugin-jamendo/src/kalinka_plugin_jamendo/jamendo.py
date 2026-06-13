@@ -3,6 +3,7 @@ import logging
 import re
 from collections import OrderedDict
 from typing import List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import PositiveInt
@@ -42,11 +43,19 @@ logger = logging.getLogger(__name__.split(".")[-1])
 SOURCE = "jamendo"
 BASE_URL = "https://api.jamendo.com/v3.0/"
 
-# Jamendo's documented audio-delivery endpoint (the same one the API returns in
-# each track's `audiodownload` field). It resolves a track by id alone — no
-# signed `from` token — and, crucially, works for tracks the /tracks/ endpoint
-# cannot yet resolve. Used as a last-resort fallback in get_track_info.
-DOWNLOAD_URL = "https://mp3d.jamendo.com/download/track/"
+# Seed for the streaming storage origin. The per-track `audio` field the API
+# returns points at this origin with a signed `from` token, but the origin also
+# serves a track addressed by id alone (no token), honours the requested format
+# (including flac), and supports HTTP range requests — making it a solid
+# fallback for tracks the /tracks/ endpoint can't resolve. It's the same host
+# the API hands out, so the native libcurl player streams it fine (unlike the
+# mp3d.jamendo.com download endpoint, which returns a non-range full-file
+# response the player rejects with "Invalid status line").
+#
+# This is only a seed: the module learns the *current* origin from the `audio`
+# URLs the API actually returns (see _remember_origin), so the fallback follows
+# Jamendo if they move off this shard rather than betting on the literal.
+DEFAULT_STREAM_ORIGIN = "https://prod-1.storage.jamendo.com/"
 
 # Jamendo caps page size at 200.
 MAX_LIMIT = 200
@@ -320,10 +329,9 @@ class JamendoInputModule(InputModule):
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
-        # The download fallback endpoint has no lossless tier, so FLAC degrades
-        # to a guaranteed lossy format there.
-        self.fallback_format = "mp32" if self.audio_format == "flac" else self.audio_format
-        self.fallback_mime = FORMAT_MIME[self.fallback_format]
+        # Current streaming origin, learned from real `audio` URLs and used to
+        # build fallback URLs for tracks the /tracks/ endpoint can't resolve.
+        self._stream_origin = DEFAULT_STREAM_ORIGIN
         # Cache of (audio_url, metadata) keyed by track id, populated whenever
         # tracks are listed (browse/search). Jamendo's /tracks/ endpoint lags
         # behind /albums/tracks/ and /playlists/tracks/ for recently published
@@ -334,9 +342,22 @@ class JamendoInputModule(InputModule):
         self._cache_max = 5000
         logger.info("Jamendo audio format: %s", self.audio_format)
 
+    def _remember_origin(self, audio_url: str) -> None:
+        """Track the storage origin (scheme://host/) from a real `audio` URL.
+
+        Keeps the fallback in step with whatever host the API is currently
+        handing out instead of relying on the hardcoded seed forever.
+        """
+        if not audio_url:
+            return
+        parts = urlsplit(audio_url)
+        if parts.scheme and parts.netloc:
+            self._stream_origin = f"{parts.scheme}://{parts.netloc}/"
+
     def _cache_track(self, tid: str, audio_url: str, metadata: Track) -> None:
         if not audio_url:
             return
+        self._remember_origin(audio_url)
         cache = self._track_cache
         cache[tid] = (audio_url, metadata)
         cache.move_to_end(tid)
@@ -603,11 +624,14 @@ class JamendoInputModule(InputModule):
             )
             for track in results:
                 all_tracks[str(track["id"])] = track
+                # Learn the current storage origin so any fallback URLs built
+                # below (tier 3) target the same host the API is handing out.
+                self._remember_origin(track.get("audio", ""))
 
         # Preserve the requested order. Resolution is tried in three tiers:
         #   1. the /tracks/ endpoint  — authoritative, fresh URL + full metadata
         #   2. the browse cache       — warm for the browse->add flow
-        #   3. the download endpoint  — built from the bare id, no metadata,
+        #   3. the storage origin     — URL built from the bare id, no metadata,
         #                               but plays tracks neither (1) nor (2)
         #                               can resolve (e.g. a saved queue restored
         #                               before anything was browsed).
@@ -626,8 +650,8 @@ class JamendoInputModule(InputModule):
         if fallback:
             logger.warning(
                 "Jamendo get_track_info: %d/%d track(s) unresolved via the "
-                "tracks endpoint or browse cache; using the download fallback "
-                "URL (metadata unavailable) for: %s",
+                "tracks endpoint or browse cache; using the storage-origin "
+                "fallback URL (metadata unavailable) for: %s",
                 len(fallback),
                 len(track_ids),
                 fallback,
@@ -662,12 +686,14 @@ class JamendoInputModule(InputModule):
     def _fallback_track_info(self, tid: str) -> TrackInfo:
         """Last-resort TrackInfo built from a bare track id.
 
-        Uses Jamendo's tokenless download endpoint, which resolves tracks the
-        /tracks/ endpoint can't. We have no metadata in this path, so we emit a
-        minimal placeholder Track; the audio still plays.
+        Streams from the storage origin addressed by id alone (no token),
+        honouring the configured format — including flac — and supporting range
+        requests, so it resolves and plays tracks the /tracks/ endpoint can't.
+        We have no metadata in this path, so we emit a minimal placeholder
+        Track; the server keeps the saved queue metadata on restore.
         """
-        url = f"{DOWNLOAD_URL}{tid}/{self.fallback_format}/"
-        mime = self.fallback_mime
+        url = f"{self._stream_origin}?trackid={tid}&format={self.audio_format}"
+        mime = self.audio_mime
 
         async def link_retriever() -> TrackUrl:
             return TrackUrl(url=url, format=mime)
