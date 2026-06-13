@@ -3,7 +3,6 @@ import logging
 import re
 from collections import OrderedDict
 from typing import List, Optional
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import PositiveInt
@@ -43,19 +42,6 @@ logger = logging.getLogger(__name__.split(".")[-1])
 SOURCE = "jamendo"
 BASE_URL = "https://api.jamendo.com/v3.0/"
 
-# Seed for the streaming storage origin. The per-track `audio` field the API
-# returns points at this origin with a signed `from` token, but the origin also
-# serves a track addressed by id alone (no token), honours the requested format
-# (including flac), and supports HTTP range requests — making it a solid
-# fallback for tracks the /tracks/ endpoint can't resolve. It's the same host
-# the API hands out, so the native libcurl player streams it fine (unlike the
-# mp3d.jamendo.com download endpoint, which returns a non-range full-file
-# response the player rejects with "Invalid status line").
-#
-# This is only a seed: the module learns the *current* origin from the `audio`
-# URLs the API actually returns (see _remember_origin), so the fallback follows
-# Jamendo if they move off this shard rather than betting on the literal.
-DEFAULT_STREAM_ORIGIN = "https://prod-1.storage.jamendo.com/"
 
 # Jamendo caps page size at 200.
 MAX_LIMIT = 200
@@ -201,6 +187,43 @@ class JamendoClient:
 
         return rjson.get("results", [])
 
+    async def resolve_audio_url(self, track_id: str, audioformat: str) -> str:
+        """Resolve a track's playable audio URL via the /tracks/file/ endpoint.
+
+        This is the documented audio-delivery endpoint: it 302-redirects to the
+        actual storage URL (tokenised, range-capable). Crucially it resolves a
+        track by id alone and works for tracks the /tracks/ metadata index
+        doesn't return (old or freshly published). We read the redirect target
+        rather than following it, since the native player streams the storage
+        URL directly but does not follow redirects itself.
+        """
+        params = {
+            "client_id": self.client_id,
+            "id": track_id,
+            "audioformat": audioformat,
+        }
+        try:
+            response = await self.session.get(
+                self.base + "tracks/file/", params=params
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("Jamendo tracks/file failed for %s: %s", track_id, exc)
+            return ""
+
+        location = response.headers.get("location")
+        if location:
+            return location
+        # No redirect: either the body already is the audio (use the request
+        # URL) or it's an error page we can't use.
+        if response.is_success:
+            return str(response.request.url)
+        logger.warning(
+            "Jamendo tracks/file for %s returned HTTP %s with no redirect",
+            track_id,
+            response.status_code,
+        )
+        return ""
+
 
 async def get_client(config: JamendoConfig) -> JamendoClient:
     if not config.client_id:
@@ -329,38 +352,20 @@ class JamendoInputModule(InputModule):
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
-        # Current streaming origin, learned from real `audio` URLs and used to
-        # build fallback URLs for tracks the /tracks/ endpoint can't resolve.
-        self._stream_origin = DEFAULT_STREAM_ORIGIN
-        # Cache of (audio_url, metadata) keyed by track id, populated whenever
-        # tracks are listed (browse/search). Jamendo's /tracks/ endpoint lags
-        # behind /albums/tracks/ and /playlists/tracks/ for recently published
-        # tracks — querying such a track id by itself returns nothing even
-        # though it streams fine in album/playlist context. get_track_info
-        # falls back to this cache so adding a fresh album to the queue works.
-        self._track_cache: "OrderedDict[str, tuple[str, Track]]" = OrderedDict()
+        # Cache of track metadata keyed by track id, populated whenever tracks
+        # are listed (browse/search). The /tracks/ metadata endpoint is an
+        # incomplete index — it returns nothing for many valid tracks (old or
+        # freshly published) — so get_track_info reads metadata from here first
+        # and only queries /tracks/ for ids it hasn't already seen. Playback
+        # URLs come from /tracks/file/, which resolves every track by id.
+        self._track_cache: "OrderedDict[str, Track]" = OrderedDict()
         self._cache_max = 5000
         logger.info("Jamendo audio format: %s", self.audio_format)
 
-    def _remember_origin(self, audio_url: str) -> None:
-        """Track the storage origin (scheme://host/) from a real `audio` URL.
-
-        Keeps the fallback in step with whatever host the API is currently
-        handing out instead of relying on the hardcoded seed forever.
-        """
-        if not audio_url:
-            return
-        parts = urlsplit(audio_url)
-        if parts.scheme and parts.netloc:
-            self._stream_origin = f"{parts.scheme}://{parts.netloc}/"
-
-    def _cache_track(self, tid: str, audio_url: str, metadata: Track) -> None:
-        if not audio_url:
-            return
-        self._remember_origin(audio_url)
+    def _cache_track(self, metadata: Track) -> None:
         cache = self._track_cache
-        cache[tid] = (audio_url, metadata)
-        cache.move_to_end(tid)
+        cache[metadata.id.id] = metadata
+        cache.move_to_end(metadata.id.id)
         while len(cache) > self._cache_max:
             cache.popitem(last=False)
 
@@ -609,73 +614,60 @@ class JamendoInputModule(InputModule):
         if not track_ids:
             return []
 
-        # Jamendo accepts multiple ids in a single call, space-separated.
-        all_tracks: dict[str, dict] = {}
-        chunk_size = MAX_LIMIT
-        for i in range(0, len(track_ids), chunk_size):
-            chunk = track_ids[i : i + chunk_size]
+        # Metadata: prefer the cache (populated by the browse/search the user
+        # did to find these tracks — reliable and complete), and only query the
+        # /tracks/ metadata index for ids we haven't seen. That index is
+        # incomplete (returns nothing for many valid tracks), so it's a
+        # best-effort enrichment, not the source of truth.
+        missing = [tid for tid in track_ids if tid not in self._track_cache]
+        fetched: dict[str, Track] = {}
+        for i in range(0, len(missing), MAX_LIMIT):
+            chunk = missing[i : i + MAX_LIMIT]
             results = await self.client.request(
-                "tracks",
-                {
-                    "id": " ".join(chunk),
-                    "limit": len(chunk),
-                    "audioformat": self.audio_format,
-                },
+                "tracks", {"id": " ".join(chunk), "limit": len(chunk)}
             )
             for track in results:
-                all_tracks[str(track["id"])] = track
-                # Learn the current storage origin so any fallback URLs built
-                # below (tier 3) target the same host the API is handing out.
-                self._remember_origin(track.get("audio", ""))
+                meta = self._track_metadata(track)
+                fetched[meta.id.id] = meta
 
-        # Preserve the requested order. Resolution is tried in three tiers:
-        #   1. the /tracks/ endpoint  — authoritative, fresh URL + full metadata
-        #   2. the browse cache       — warm for the browse->add flow
-        #   3. the storage origin     — URL built from the bare id, no metadata,
-        #                               but plays tracks neither (1) nor (2)
-        #                               can resolve (e.g. a saved queue restored
-        #                               before anything was browsed).
+        # Playback URLs always come from /tracks/file/ (resolved lazily at play
+        # time), which handles every track by id regardless of the metadata
+        # index. Tracks with no metadata from cache or /tracks/ get a
+        # placeholder; on a queue restore the server keeps the saved metadata.
         infos: List[TrackInfo] = []
-        fallback: List[str] = []
+        without_metadata: List[str] = []
         for tid in track_ids:
-            if tid in all_tracks:
-                infos.append(self._track_to_track_info(all_tracks[tid]))
-            elif tid in self._track_cache:
-                audio_url, metadata = self._track_cache[tid]
-                infos.append(self._cached_track_info(tid, audio_url, metadata))
+            if tid in self._track_cache:
+                metadata = self._track_cache[tid]
+            elif tid in fetched:
+                metadata = fetched[tid]
             else:
-                infos.append(self._fallback_track_info(tid))
-                fallback.append(tid)
+                metadata = self._placeholder_metadata(tid)
+                without_metadata.append(tid)
+            infos.append(self._make_track_info(tid, metadata))
 
-        if fallback:
+        if without_metadata:
             logger.warning(
-                "Jamendo get_track_info: %d/%d track(s) unresolved via the "
-                "tracks endpoint or browse cache; using the storage-origin "
-                "fallback URL (metadata unavailable) for: %s",
-                len(fallback),
+                "Jamendo get_track_info: no metadata for %d/%d track(s) "
+                "(not in cache or the tracks index); they remain playable via "
+                "the file endpoint: %s",
+                len(without_metadata),
                 len(track_ids),
-                fallback,
+                without_metadata,
             )
         logger.info(
-            "Jamendo get_track_info: resolved %d/%d track(s)",
+            "Jamendo get_track_info: returning %d/%d track(s)",
             len(infos),
             len(track_ids),
         )
         return infos
 
-    def _track_to_track_info(self, track) -> TrackInfo:
-        metadata = self._track_metadata(track)
-        return self._cached_track_info(
-            metadata.id.id, track.get("audio", ""), metadata
-        )
-
-    def _cached_track_info(
-        self, tid: str, audio_url: str, metadata: Track
-    ) -> TrackInfo:
-        mime = self.audio_mime
+    def _make_track_info(self, tid: str, metadata: Track) -> TrackInfo:
+        """Build a TrackInfo whose link resolves via /tracks/file/ at play time."""
 
         async def link_retriever() -> TrackUrl:
-            return TrackUrl(url=audio_url, format=mime)
+            url = await self.client.resolve_audio_url(tid, self.audio_format)
+            return TrackUrl(url=url, format=self.audio_mime)
 
         return TrackInfo(
             id=track_id(tid),
@@ -683,30 +675,12 @@ class JamendoInputModule(InputModule):
             metadata=metadata,
         )
 
-    def _fallback_track_info(self, tid: str) -> TrackInfo:
-        """Last-resort TrackInfo built from a bare track id.
-
-        Streams from the storage origin addressed by id alone (no token),
-        honouring the configured format — including flac — and supporting range
-        requests, so it resolves and plays tracks the /tracks/ endpoint can't.
-        We have no metadata in this path, so we emit a minimal placeholder
-        Track; the server keeps the saved queue metadata on restore.
-        """
-        url = f"{self._stream_origin}?trackid={tid}&format={self.audio_format}"
-        mime = self.audio_mime
-
-        async def link_retriever() -> TrackUrl:
-            return TrackUrl(url=url, format=mime)
-
-        return TrackInfo(
+    def _placeholder_metadata(self, tid: str) -> Track:
+        return Track(
             id=track_id(tid),
-            link_retriever=link_retriever,
-            metadata=Track(
-                id=track_id(tid),
-                title="",
-                duration=0,
-                album=Album(id=album_id(""), title=""),
-            ),
+            title="",
+            duration=0,
+            album=Album(id=album_id(""), title=""),
         )
 
     # ------------------------------------------------------------------
@@ -772,9 +746,10 @@ class JamendoInputModule(InputModule):
         result = []
         for track in tracks:
             meta = self._track_metadata(track, album_meta)
-            # Stash the streaming URL so get_track_info can play this track
-            # even if the /tracks/ endpoint can't resolve its id yet.
-            self._cache_track(meta.id.id, track.get("audio", ""), meta)
+            # Cache metadata so get_track_info can label this track even if the
+            # /tracks/ index can't resolve its id. (Playback always goes through
+            # /tracks/file/, so no URL needs caching.)
+            self._cache_track(meta)
             result.append(
                 BrowseItem(
                     id=meta.id,

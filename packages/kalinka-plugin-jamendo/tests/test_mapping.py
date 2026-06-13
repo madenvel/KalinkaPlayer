@@ -23,6 +23,9 @@ class FakeClient:
         self.calls.append((path, params))
         return self._results
 
+    async def resolve_audio_url(self, track_id, audioformat):
+        return f"https://files.test/{track_id}.{audioformat}"
+
 
 class PathClient:
     """Returns canned results per endpoint path (first path segment)."""
@@ -34,6 +37,9 @@ class PathClient:
     async def request(self, path, params):
         self.calls.append((path, params))
         return self._by_path.get(path, [])
+
+    async def resolve_audio_url(self, track_id, audioformat):
+        return f"https://files.test/{track_id}.{audioformat}"
 
 
 def make_module(results, fmt=JamendoAudioFormat.FLAC):
@@ -154,77 +160,48 @@ async def test_get_track_info_preserves_order_and_url():
     url = await infos[0].link_retriever()
     assert isinstance(url, TrackUrl)
     assert url.format == "audio/flac"
-    assert "trackid=" in url.url
+    # URL is resolved via the file endpoint (the fake returns a files.test URL).
+    assert url.url == "https://files.test/200.flac"
 
 
 @pytest.mark.asyncio
-async def test_get_track_info_falls_back_to_browse_cache():
-    # Simulate Jamendo's indexing lag: albums/tracks returns the track (with
-    # audio), but the /tracks/ endpoint returns nothing for that id.
+async def test_get_track_info_metadata_from_cache_then_index():
+    # Metadata for an id absent from the /tracks/ index still comes through,
+    # because the browse cache supplies it. Playback URLs always resolve via
+    # the file endpoint regardless.
     album_with_tracks = {**ALBUM, "tracks": [TRACK]}
     config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
     client = PathClient({"albums/tracks": [album_with_tracks], "tracks": []})
     m = jm.JamendoInputModule(config, client)
 
-    # Nothing cached yet -> /tracks/ miss -> storage-origin fallback.
+    # Cold: id not in cache and /tracks/ returns nothing -> placeholder metadata,
+    # but still playable via the file endpoint.
     cold = await m.get_track_info(["100"])
-    assert len(cold) == 1
+    assert cold[0].metadata.title == ""
     cold_url = await cold[0].link_retriever()
-    assert cold_url.url == "https://prod-1.storage.jamendo.com/?trackid=100&format=mp32"
+    assert cold_url.url == "https://files.test/100.mp32"
 
-    # Browsing the album warms the cache with the real streaming URL + metadata.
+    # After browsing the album, metadata comes from the cache.
     await m.browse(jm.album_id("5"), 0, 50)
     infos = await m.get_track_info(["100"])
-    assert len(infos) == 1
-    url = await infos[0].link_retriever()
-    assert url.url == TRACK["audio"]
     assert infos[0].metadata.title == "Sunrise"
+    # The /tracks/ index is not even queried for a cached id.
+    assert not any(
+        path == "tracks" for path, _ in client.calls[1:]
+    )
 
 
 @pytest.mark.asyncio
-async def test_fallback_honors_flac():
-    # The storage origin serves flac, so the fallback keeps the configured
-    # format (and the audio/flac mime that selects the FLAC decoder).
+async def test_link_resolves_via_file_endpoint_honoring_format():
+    # The playback URL always comes from /tracks/file/ (here stubbed), honouring
+    # the configured format and its mime (which selects the decoder).
     config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.FLAC)
     client = PathClient({"tracks": []})
     m = jm.JamendoInputModule(config, client)
     infos = await m.get_track_info(["999"])
     url = await infos[0].link_retriever()
-    assert url.url == "https://prod-1.storage.jamendo.com/?trackid=999&format=flac"
+    assert url.url == "https://files.test/999.flac"
     assert url.format == "audio/flac"
-
-
-@pytest.mark.asyncio
-async def test_get_track_info_prefers_live_endpoint_over_cache():
-    # When the /tracks/ endpoint resolves the id, its result wins.
-    fresh = {**TRACK, "audio": "https://fresh.example/?trackid=100"}
-    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
-    client = PathClient(
-        {"albums/tracks": [{**ALBUM, "tracks": [TRACK]}], "tracks": [fresh]}
-    )
-    m = jm.JamendoInputModule(config, client)
-    await m.browse(jm.album_id("5"), 0, 50)  # caches stale audio
-    infos = await m.get_track_info(["100"])
-    url = await infos[0].link_retriever()
-    assert url.url == "https://fresh.example/?trackid=100"
-
-
-@pytest.mark.asyncio
-async def test_fallback_origin_learned_from_live_audio():
-    # The fallback host is not pinned to the seed: it follows whatever origin
-    # the API's real `audio` URLs use. Here a resolved track reports prod-9, so
-    # an unresolved track's fallback must target prod-9 too.
-    live = {
-        **TRACK,
-        "id": "100",
-        "audio": "https://prod-9.storage.jamendo.com/?trackid=100&format=mp32&from=x",
-    }
-    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
-    client = PathClient({"tracks": [live]})
-    m = jm.JamendoInputModule(config, client)
-    infos = await m.get_track_info(["100", "999"])  # 999 unresolved -> fallback
-    fb_url = await infos[1].link_retriever()
-    assert fb_url.url == "https://prod-9.storage.jamendo.com/?trackid=999&format=mp32"
 
 
 @pytest.mark.asyncio
