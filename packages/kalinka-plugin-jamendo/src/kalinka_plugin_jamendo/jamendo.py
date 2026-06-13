@@ -42,6 +42,12 @@ logger = logging.getLogger(__name__.split(".")[-1])
 SOURCE = "jamendo"
 BASE_URL = "https://api.jamendo.com/v3.0/"
 
+# Jamendo's documented audio-delivery endpoint (the same one the API returns in
+# each track's `audiodownload` field). It resolves a track by id alone — no
+# signed `from` token — and, crucially, works for tracks the /tracks/ endpoint
+# cannot yet resolve. Used as a last-resort fallback in get_track_info.
+DOWNLOAD_URL = "https://mp3d.jamendo.com/download/track/"
+
 # Jamendo caps page size at 200.
 MAX_LIMIT = 200
 
@@ -314,6 +320,10 @@ class JamendoInputModule(InputModule):
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
+        # The download fallback endpoint has no lossless tier, so FLAC degrades
+        # to a guaranteed lossy format there.
+        self.fallback_format = "mp32" if self.audio_format == "flac" else self.audio_format
+        self.fallback_mime = FORMAT_MIME[self.fallback_format]
         # Cache of (audio_url, metadata) keyed by track id, populated whenever
         # tracks are listed (browse/search). Jamendo's /tracks/ endpoint lags
         # behind /albums/tracks/ and /playlists/tracks/ for recently published
@@ -594,12 +604,15 @@ class JamendoInputModule(InputModule):
             for track in results:
                 all_tracks[str(track["id"])] = track
 
-        # Preserve the requested order. The /tracks/ endpoint is the
-        # authoritative source, but it lags for freshly published tracks —
-        # fall back to the browse cache (populated by browse/search) so those
-        # still play. Anything resolvable by neither is dropped and logged.
+        # Preserve the requested order. Resolution is tried in three tiers:
+        #   1. the /tracks/ endpoint  — authoritative, fresh URL + full metadata
+        #   2. the browse cache       — warm for the browse->add flow
+        #   3. the download endpoint  — built from the bare id, no metadata,
+        #                               but plays tracks neither (1) nor (2)
+        #                               can resolve (e.g. a saved queue restored
+        #                               before anything was browsed).
         infos: List[TrackInfo] = []
-        unresolved: List[str] = []
+        fallback: List[str] = []
         for tid in track_ids:
             if tid in all_tracks:
                 infos.append(self._track_to_track_info(all_tracks[tid]))
@@ -607,15 +620,17 @@ class JamendoInputModule(InputModule):
                 audio_url, metadata = self._track_cache[tid]
                 infos.append(self._cached_track_info(tid, audio_url, metadata))
             else:
-                unresolved.append(tid)
+                infos.append(self._fallback_track_info(tid))
+                fallback.append(tid)
 
-        if unresolved:
+        if fallback:
             logger.warning(
                 "Jamendo get_track_info: %d/%d track(s) unresolved via the "
-                "tracks endpoint or browse cache and were skipped: %s",
-                len(unresolved),
+                "tracks endpoint or browse cache; using the download fallback "
+                "URL (metadata unavailable) for: %s",
+                len(fallback),
                 len(track_ids),
-                unresolved,
+                fallback,
             )
         logger.info(
             "Jamendo get_track_info: resolved %d/%d track(s)",
@@ -642,6 +657,30 @@ class JamendoInputModule(InputModule):
             id=track_id(tid),
             link_retriever=link_retriever,
             metadata=metadata,
+        )
+
+    def _fallback_track_info(self, tid: str) -> TrackInfo:
+        """Last-resort TrackInfo built from a bare track id.
+
+        Uses Jamendo's tokenless download endpoint, which resolves tracks the
+        /tracks/ endpoint can't. We have no metadata in this path, so we emit a
+        minimal placeholder Track; the audio still plays.
+        """
+        url = f"{DOWNLOAD_URL}{tid}/{self.fallback_format}/"
+        mime = self.fallback_mime
+
+        async def link_retriever() -> TrackUrl:
+            return TrackUrl(url=url, format=mime)
+
+        return TrackInfo(
+            id=track_id(tid),
+            link_retriever=link_retriever,
+            metadata=Track(
+                id=track_id(tid),
+                title="",
+                duration=0,
+                album=Album(id=album_id(""), title=""),
+            ),
         )
 
     # ------------------------------------------------------------------

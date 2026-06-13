@@ -166,16 +166,31 @@ async def test_get_track_info_falls_back_to_browse_cache():
     client = PathClient({"albums/tracks": [album_with_tracks], "tracks": []})
     m = jm.JamendoInputModule(config, client)
 
-    # Nothing cached yet -> /tracks/ miss -> unresolved -> empty.
-    assert await m.get_track_info(["100"]) == []
+    # Nothing cached yet -> /tracks/ miss -> download-endpoint fallback.
+    cold = await m.get_track_info(["100"])
+    assert len(cold) == 1
+    cold_url = await cold[0].link_retriever()
+    assert cold_url.url == "https://mp3d.jamendo.com/download/track/100/mp32/"
 
-    # Browsing the album warms the cache with the streaming URL.
+    # Browsing the album warms the cache with the real streaming URL + metadata.
     await m.browse(jm.album_id("5"), 0, 50)
     infos = await m.get_track_info(["100"])
     assert len(infos) == 1
     url = await infos[0].link_retriever()
     assert url.url == TRACK["audio"]
     assert infos[0].metadata.title == "Sunrise"
+
+
+@pytest.mark.asyncio
+async def test_fallback_format_drops_flac_to_lossy():
+    # FLAC isn't on the download endpoint, so the fallback uses a lossy format.
+    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.FLAC)
+    client = PathClient({"tracks": []})
+    m = jm.JamendoInputModule(config, client)
+    infos = await m.get_track_info(["999"])
+    url = await infos[0].link_retriever()
+    assert url.url == "https://mp3d.jamendo.com/download/track/999/mp32/"
+    assert url.format == "audio/mpeg"
 
 
 @pytest.mark.asyncio
