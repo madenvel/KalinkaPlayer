@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from collections import OrderedDict
 from typing import List, Optional
 
 import httpx
@@ -313,7 +314,24 @@ class JamendoInputModule(InputModule):
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
+        # Cache of (audio_url, metadata) keyed by track id, populated whenever
+        # tracks are listed (browse/search). Jamendo's /tracks/ endpoint lags
+        # behind /albums/tracks/ and /playlists/tracks/ for recently published
+        # tracks — querying such a track id by itself returns nothing even
+        # though it streams fine in album/playlist context. get_track_info
+        # falls back to this cache so adding a fresh album to the queue works.
+        self._track_cache: "OrderedDict[str, tuple[str, Track]]" = OrderedDict()
+        self._cache_max = 5000
         logger.info("Jamendo audio format: %s", self.audio_format)
+
+    def _cache_track(self, tid: str, audio_url: str, metadata: Track) -> None:
+        if not audio_url:
+            return
+        cache = self._track_cache
+        cache[tid] = (audio_url, metadata)
+        cache.move_to_end(tid)
+        while len(cache) > self._cache_max:
+            cache.popitem(last=False)
 
     def module_name(self) -> str:
         return "Jamendo"
@@ -576,24 +594,54 @@ class JamendoInputModule(InputModule):
             for track in results:
                 all_tracks[str(track["id"])] = track
 
-        # Preserve the requested order; drop ids Jamendo didn't return.
-        return [
-            self._track_to_track_info(all_tracks[tid])
-            for tid in track_ids
-            if tid in all_tracks
-        ]
+        # Preserve the requested order. The /tracks/ endpoint is the
+        # authoritative source, but it lags for freshly published tracks —
+        # fall back to the browse cache (populated by browse/search) so those
+        # still play. Anything resolvable by neither is dropped and logged.
+        infos: List[TrackInfo] = []
+        unresolved: List[str] = []
+        for tid in track_ids:
+            if tid in all_tracks:
+                infos.append(self._track_to_track_info(all_tracks[tid]))
+            elif tid in self._track_cache:
+                audio_url, metadata = self._track_cache[tid]
+                infos.append(self._cached_track_info(tid, audio_url, metadata))
+            else:
+                unresolved.append(tid)
+
+        if unresolved:
+            logger.warning(
+                "Jamendo get_track_info: %d/%d track(s) unresolved via the "
+                "tracks endpoint or browse cache and were skipped: %s",
+                len(unresolved),
+                len(track_ids),
+                unresolved,
+            )
+        logger.info(
+            "Jamendo get_track_info: resolved %d/%d track(s)",
+            len(infos),
+            len(track_ids),
+        )
+        return infos
 
     def _track_to_track_info(self, track) -> TrackInfo:
-        audio_url = track.get("audio", "")
+        metadata = self._track_metadata(track)
+        return self._cached_track_info(
+            metadata.id.id, track.get("audio", ""), metadata
+        )
+
+    def _cached_track_info(
+        self, tid: str, audio_url: str, metadata: Track
+    ) -> TrackInfo:
         mime = self.audio_mime
 
         async def link_retriever() -> TrackUrl:
             return TrackUrl(url=audio_url, format=mime)
 
         return TrackInfo(
-            id=track_id(str(track["id"])),
+            id=track_id(tid),
             link_retriever=link_retriever,
-            metadata=self._track_metadata(track),
+            metadata=metadata,
         )
 
     # ------------------------------------------------------------------
@@ -659,6 +707,9 @@ class JamendoInputModule(InputModule):
         result = []
         for track in tracks:
             meta = self._track_metadata(track, album_meta)
+            # Stash the streaming URL so get_track_info can play this track
+            # even if the /tracks/ endpoint can't resolve its id yet.
+            self._cache_track(meta.id.id, track.get("audio", ""), meta)
             result.append(
                 BrowseItem(
                     id=meta.id,

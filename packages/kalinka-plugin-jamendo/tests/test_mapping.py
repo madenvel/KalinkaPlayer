@@ -24,6 +24,18 @@ class FakeClient:
         return self._results
 
 
+class PathClient:
+    """Returns canned results per endpoint path (first path segment)."""
+
+    def __init__(self, by_path):
+        self._by_path = by_path
+        self.calls = []
+
+    async def request(self, path, params):
+        self.calls.append((path, params))
+        return self._by_path.get(path, [])
+
+
 def make_module(results, fmt=JamendoAudioFormat.FLAC):
     config = JamendoConfig(client_id="x", audio_format=fmt)
     module = jm.JamendoInputModule(config, FakeClient(results))
@@ -143,6 +155,42 @@ async def test_get_track_info_preserves_order_and_url():
     assert isinstance(url, TrackUrl)
     assert url.format == "audio/flac"
     assert "trackid=" in url.url
+
+
+@pytest.mark.asyncio
+async def test_get_track_info_falls_back_to_browse_cache():
+    # Simulate Jamendo's indexing lag: albums/tracks returns the track (with
+    # audio), but the /tracks/ endpoint returns nothing for that id.
+    album_with_tracks = {**ALBUM, "tracks": [TRACK]}
+    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
+    client = PathClient({"albums/tracks": [album_with_tracks], "tracks": []})
+    m = jm.JamendoInputModule(config, client)
+
+    # Nothing cached yet -> /tracks/ miss -> unresolved -> empty.
+    assert await m.get_track_info(["100"]) == []
+
+    # Browsing the album warms the cache with the streaming URL.
+    await m.browse(jm.album_id("5"), 0, 50)
+    infos = await m.get_track_info(["100"])
+    assert len(infos) == 1
+    url = await infos[0].link_retriever()
+    assert url.url == TRACK["audio"]
+    assert infos[0].metadata.title == "Sunrise"
+
+
+@pytest.mark.asyncio
+async def test_get_track_info_prefers_live_endpoint_over_cache():
+    # When the /tracks/ endpoint resolves the id, its result wins.
+    fresh = {**TRACK, "audio": "https://fresh.example/?trackid=100"}
+    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
+    client = PathClient(
+        {"albums/tracks": [{**ALBUM, "tracks": [TRACK]}], "tracks": [fresh]}
+    )
+    m = jm.JamendoInputModule(config, client)
+    await m.browse(jm.album_id("5"), 0, 50)  # caches stale audio
+    infos = await m.get_track_info(["100"])
+    url = await infos[0].link_retriever()
+    assert url.url == "https://fresh.example/?trackid=100"
 
 
 @pytest.mark.asyncio
