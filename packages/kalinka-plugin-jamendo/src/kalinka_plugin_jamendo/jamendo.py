@@ -451,24 +451,20 @@ class JamendoInputModule(InputModule):
     async def _browse_artist(
         self, id: str, offset: int, limit: int
     ) -> BrowseItemList:
-        # offset/limit on artists/albums paginate the *artist* list, not the
-        # nested albums — so we fetch the artist's albums and paginate them
-        # client-side (same approach as album tracks / playlist tracks).
-        results = await self.client.request("artists/albums", {"id": id})
-        if not results:
-            return EmptyList(offset, limit)
-        albums = results[0].get("albums", [])
-        # Stamp the parent artist so album cards carry the artist name.
-        artist_name = results[0].get("name")
-        for album in albums:
-            album.setdefault("artist_id", id)
-            album.setdefault("artist_name", artist_name)
-        page = albums[offset : offset + limit]
+        # Use /albums/?artist_id= rather than /artists/albums/: the latter's
+        # nested albums carry only a placeholder cover URL (no representative
+        # trackid, which Jamendo album art is keyed on), so cards showed a
+        # generic icon. /albums/ returns the real trackid-bearing cover, plus
+        # artist_name and native offset/limit pagination over albums.
+        albums = await self.client.request(
+            "albums",
+            {"artist_id": id, "offset": offset, "limit": limit},
+        )
         return BrowseItemList(
             offset=offset,
             limit=limit,
-            total=len(albums),
-            items=self._albums_to_browse_items(page),
+            total=_estimated_total(offset, limit, len(albums)),
+            items=self._albums_to_browse_items(albums),
         )
 
     async def _browse_playlist(
