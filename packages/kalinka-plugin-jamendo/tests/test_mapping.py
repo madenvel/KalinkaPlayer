@@ -206,6 +206,43 @@ async def test_link_resolves_via_file_endpoint_honoring_format():
 
 
 @pytest.mark.asyncio
+async def test_link_raises_when_url_unresolved():
+    # If the file endpoint can't resolve a URL, link_retriever must raise so the
+    # server marks the track unavailable instead of trying to play "".
+    class NoUrlClient(PathClient):
+        async def resolve_audio_url(self, track_id, audioformat):
+            return ""
+
+    config = JamendoConfig(client_id="x", audio_format=JamendoAudioFormat.MP3_VBR)
+    m = jm.JamendoInputModule(config, NoUrlClient({"tracks": []}))
+    infos = await m.get_track_info(["999"])
+    with pytest.raises(RuntimeError):
+        await infos[0].link_retriever()
+
+
+@pytest.mark.asyncio
+async def test_request_degrades_on_non_json(monkeypatch):
+    # A non-JSON body (HTML error page, truncated response) degrades to an empty
+    # result set rather than raising.
+    from kalinka_plugin_jamendo.jamendo import JamendoClient
+
+    client = JamendoClient("x")
+
+    class FakeResp:
+        is_success = True
+
+        def json(self):
+            raise ValueError("not json")
+
+    async def fake_get(url, params=None):
+        return FakeResp()
+
+    monkeypatch.setattr(client.session, "get", fake_get)
+    assert await client.request("tracks", {"id": "1"}) == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_get_playlist():
     m = make_module([PLAYLIST])
     item = await m.get(jm.playlist_id("7"))

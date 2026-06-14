@@ -110,6 +110,10 @@ class RetryTransport(httpx.AsyncHTTPTransport):
             try:
                 response = await super().handle_async_request(request)
                 if 500 <= response.status_code < 600:
+                    # Release the connection before retrying; abandoning the
+                    # response leaks the connection back-pressure under repeated
+                    # 5xx and can eventually stall further requests.
+                    await response.aclose()
                     read_retries += 1
                     await asyncio.sleep(self.backoff_factor * read_retries)
                     logger.warning(
@@ -175,7 +179,13 @@ class JamendoClient:
             )
             return []
 
-        rjson = response.json()
+        try:
+            rjson = response.json()
+        except ValueError as exc:
+            # Truncated body, HTML error page, etc. Degrade to "no results"
+            # rather than breaking browse/search.
+            logger.warning("Jamendo %s returned non-JSON body: %s", path, exc)
+            return []
         headers = rjson.get("headers", {})
         if headers.get("status") != "success":
             logger.warning(
@@ -663,6 +673,13 @@ class JamendoInputModule(InputModule):
 
         async def link_retriever() -> TrackUrl:
             url = await self.client.resolve_audio_url(tid, self.audio_format)
+            if not url:
+                # Raise rather than return an empty URL: the server treats any
+                # non-exception return as playable, so it would try to stream
+                # "". Raising lets it mark the track unavailable and skip it.
+                raise RuntimeError(
+                    f"Could not resolve audio URL for Jamendo track {tid}"
+                )
             return TrackUrl(url=url, format=self.audio_mime)
 
         return TrackInfo(
