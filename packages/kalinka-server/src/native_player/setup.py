@@ -10,6 +10,7 @@ extensions = [
             "Buffer.cpp",
             "AlsaAudioEmitter.cpp",
             "AlsaDeviceEnumeration.cpp",
+            "AlsaVolumeControl.cpp",
             "AudioSampleFormat.cpp",
             "AudioGraphHttpStream.cpp",
             "AudioGraphNode.cpp",

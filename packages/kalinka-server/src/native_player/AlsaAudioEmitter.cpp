@@ -1,4 +1,5 @@
 #include "AlsaAudioEmitter.h"
+#include "AudioSampleFormat.h"
 #include "Log.h"
 #include "PerfMon.h"
 #include "StateMonitor.h"
@@ -120,6 +121,10 @@ size_t AlsaAudioEmitter::seek(size_t positionMs) {
   }
 
   return -1;
+}
+
+void AlsaAudioEmitter::setSoftwareVolume(float gain) {
+  softwareGain.store(gain, std::memory_order_relaxed);
 }
 
 void AlsaAudioEmitter::start() {
@@ -839,8 +844,15 @@ void AlsaAudioEmitter::setLatencyBasedBufferSize(snd_pcm_hw_params_t *params) {
 }
 
 size_t AlsaAudioEmitter::readAndConvertFrames(void *dest, size_t bytes) {
+  const float gain = softwareGain.load(std::memory_order_relaxed);
+
   if (!sampleSubstitute.count(currentStreamAudioFormat.sampleFormat)) {
-    return snd_pcm_bytes_to_frames(pcmHandle, inputNode->read(dest, bytes));
+    size_t bytesRead = inputNode->read(dest, bytes);
+    // Apply software volume in the on-wire format ALSA will play. Unity (the
+    // common case) is a no-op, so bit-perfect playback is preserved.
+    applyGainInPlace(dest, bytesRead, currentStreamAudioFormat.sampleFormat,
+                     gain);
+    return snd_pcm_bytes_to_frames(pcmHandle, bytesRead);
   }
 
   auto sourceFormat = currentStreamAudioFormat.sampleFormat;
@@ -855,6 +867,10 @@ size_t AlsaAudioEmitter::readAndConvertFrames(void *dest, size_t bytes) {
   size_t convertedSamples = convertSampleFormat(
       sampleBuffer.data(), sourceFormat, sampleCount, dest, destFormat, bytes);
   assert(convertedSamples == sampleCount);
+
+  // Gain is applied after format conversion, on the samples handed to ALSA.
+  applyGainInPlace(dest, convertedSamples * sampleSize(destFormat), destFormat,
+                   gain);
 
   auto frames = snd_pcm_bytes_to_frames(
       pcmHandle, snd_pcm_samples_to_bytes(pcmHandle, convertedSamples));

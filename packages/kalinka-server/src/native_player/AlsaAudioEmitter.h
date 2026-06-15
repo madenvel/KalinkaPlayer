@@ -7,6 +7,7 @@
 
 #include <alsa/asoundlib.h>
 
+#include <atomic>
 #include <functional>
 #include <list>
 #include <thread>
@@ -48,6 +49,11 @@ public:
   virtual void pause(bool paused) override;
   virtual size_t seek(size_t positionMs) override;
 
+  // Software volume: linear amplitude gain in [0, 1] applied to outgoing PCM
+  // frames. 1.0 (the default) is a bit-perfect bypass. Thread-safe; the value
+  // is read on the playback worker thread for each conversion.
+  void setSoftwareVolume(float gain);
+
   virtual ~AlsaAudioEmitter();
 
 private:
@@ -68,6 +74,7 @@ private:
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   std::jthread playbackThread;
   std::atomic<bool> isWorkerRunning = false;
+  std::atomic<float> softwareGain = 1.0f;
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
