@@ -1,4 +1,5 @@
 import os
+import time
 import aiosqlite
 import logging
 from contextlib import asynccontextmanager
@@ -216,6 +217,73 @@ class AsyncIndexerDb:
             deleted = cursor.rowcount > 0
             await conn.commit()
             return deleted
+
+    async def get_failure(self, file_path: str) -> Optional[Dict]:
+        """Get the recorded extraction failure for a file path, if any."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT * FROM indexer_failures WHERE file_path = ?",
+                (file_path,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def record_failure(
+        self, file_path: str, file_size: int, modified_time: int, error: str
+    ) -> int:
+        """Record (or update) a metadata-extraction failure for a file.
+
+        ``attempts`` is incremented only while the file is unchanged
+        (same size + mtime); a changed file resets the counter so a
+        still-uploading file is treated as a fresh attempt each time.
+        Returns the resulting attempt count.
+        """
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT file_size, modified_time, attempts "
+                "FROM indexer_failures WHERE file_path = ?",
+                (file_path,),
+            )
+            row = await cursor.fetchone()
+            if (
+                row
+                and row["file_size"] == file_size
+                and row["modified_time"] == modified_time
+            ):
+                attempts = row["attempts"] + 1
+            else:
+                attempts = 1
+            await cursor.execute(
+                """
+                INSERT OR REPLACE INTO indexer_failures
+                    (file_path, file_size, modified_time, error, attempts, last_attempt)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (file_path, file_size, modified_time, error, attempts, int(time.time())),
+            )
+            await conn.commit()
+            return attempts
+
+    async def clear_failure(self, file_path: str) -> None:
+        """Remove any recorded extraction failure for a file path."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "DELETE FROM indexer_failures WHERE file_path = ?", (file_path,)
+            )
+            await conn.commit()
+
+    async def get_failure_paths(self) -> List[str]:
+        """Return all file paths currently in the failure cache."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute("SELECT file_path FROM indexer_failures")
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
 
     async def delete_orphaned_albums_and_artists(self) -> Tuple[int, int]:
         """Delete albums and artists that have no tracks referencing them.

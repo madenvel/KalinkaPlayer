@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""
+Tests for the indexer's broken-file handling (issue #63):
+
+  1. An MP3 with no ID3 header is a valid file and must still be indexed.
+  2. A file whose metadata can't be extracted is parked in a negative
+     cache and not re-read on every scan...
+  3. ...unless it changes (size/mtime), e.g. a still-uploading file, in
+     which case it is retried.
+  4. A later successful index clears the failure record.
+"""
+
+import os
+
+import pytest
+import pytest_asyncio
+
+from mutagen.id3 import ID3NoHeaderError
+
+from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+from kalinka_plugin_localfiles.db_schema import init_db
+from kalinka_plugin_localfiles.indexer import indexer as indexer_mod
+from kalinka_plugin_localfiles.indexer.indexer import FileIndexer
+from kalinka_plugin_localfiles.indexer.indexer_db import AsyncIndexerDb
+
+
+@pytest_asyncio.fixture
+async def indexer(tmp_path):
+    """A FileIndexer backed by a real (temporary) sqlite database."""
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    config = LocalFilesConfig(
+        music_folders=[str(music_dir)],
+        db_path=str(tmp_path / "localfiles.db"),
+        artwork_path=str(tmp_path / "artwork"),
+        quiescence_seconds=0,  # skip the upload-quiescence sleep in tests
+    )
+    await init_db(config.db_path)
+    db = AsyncIndexerDb(config)
+    return FileIndexer(config, db), music_dir
+
+
+def _write(path, data=b"x"):
+    path.write_bytes(data)
+    return str(path)
+
+
+@pytest.mark.asyncio
+async def test_failed_file_is_parked_and_not_reread(indexer, monkeypatch):
+    fi, music_dir = indexer
+    file_path = _write(music_dir / "broken.mp3")
+
+    calls = {"n": 0}
+
+    def fake_extract(_path):
+        calls["n"] += 1
+        return None  # simulate extraction failure
+
+    monkeypatch.setattr(fi, "_extract_metadata", fake_extract)
+
+    # First pass: extraction runs, fails, and is recorded.
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 1
+    failure = await fi.db_manager.get_failure(file_path)
+    assert failure is not None
+    assert failure["attempts"] == 1
+
+    # Second pass (file unchanged): served from the negative cache, the
+    # extractor is NOT invoked again — this is the "retry forever" fix.
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 1
+    assert (await fi.db_manager.get_failure(file_path))["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_changed_file_is_retried(indexer, monkeypatch):
+    fi, music_dir = indexer
+    p = music_dir / "uploading.mp3"
+    file_path = _write(p, b"partial")
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        fi, "_extract_metadata", lambda _p: (calls.__setitem__("n", calls["n"] + 1), None)[1]
+    )
+
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 1
+
+    # File grows (still uploading) -> different size key -> retried, and the
+    # attempt counter resets rather than climbing.
+    _write(p, b"partial-but-bigger-now")
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 2
+    assert (await fi.db_manager.get_failure(file_path))["attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_success_clears_failure(indexer, monkeypatch):
+    fi, music_dir = indexer
+    p = music_dir / "fixed.mp3"
+    file_path = _write(p, b"partial")
+
+    state = {"ok": False}
+
+    def fake_extract(_path):
+        if not state["ok"]:
+            return None
+        return {
+            "format": "audio/mpeg",
+            "duration": 123,
+            "title": "Fixed",
+            "artist": "Some Artist",
+            "album": "Some Album",
+        }
+
+    monkeypatch.setattr(fi, "_extract_metadata", fake_extract)
+
+    assert await fi.process_file(file_path) is None
+    assert await fi.db_manager.get_failure(file_path) is not None
+
+    # Upload completes: bump size so the cache key changes, then succeed.
+    state["ok"] = True
+    _write(p, b"complete-file-contents")
+    changes = await fi.process_file(file_path)
+    assert changes is not None and changes["tracks"]
+    assert await fi.db_manager.get_failure(file_path) is None
+    assert await fi.db_manager.get_track_by_path(file_path) is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_prunes_failures_for_deleted_files(indexer, monkeypatch):
+    fi, music_dir = indexer
+    p = music_dir / "gone.mp3"
+    file_path = _write(p)
+    monkeypatch.setattr(fi, "_extract_metadata", lambda _p: None)
+
+    await fi.process_file(file_path)
+    assert await fi.db_manager.get_failure(file_path) is not None
+
+    os.remove(file_path)
+    await fi.cleanup_stale_tracks()
+    assert await fi.db_manager.get_failure(file_path) is None
+
+
+def test_mp3_without_id3_header_is_supported(monkeypatch):
+    """A tagless MP3 must extract (duration only), not raise."""
+    fi = FileIndexer.__new__(FileIndexer)  # no DB needed for this unit
+
+    class FakeInfo:
+        length = 200.0
+
+    class FakeMP3:
+        def __init__(self, _path):
+            self.info = FakeInfo()
+
+    def fake_id3(*args):
+        if args:  # ID3(file_path) -> no header on disk
+            raise ID3NoHeaderError("no header")
+        return {}  # ID3() -> empty tag set fallback
+
+    monkeypatch.setattr(indexer_mod, "MP3", FakeMP3)
+    monkeypatch.setattr(indexer_mod, "ID3", fake_id3)
+
+    metadata = fi._extract_mp3_metadata("/music/no-tags.mp3", {"format": "audio/mpeg"})
+    assert metadata["duration"] == 200
+    assert "title" not in metadata
+    assert "artist" not in metadata
