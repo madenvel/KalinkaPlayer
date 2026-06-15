@@ -7,10 +7,12 @@ import time
 from typing import List, Dict, Optional, Any, Tuple
 
 from ..config_model import LocalFilesConfig
+from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
+@retry_db_locked
 class AsyncEnricherDb:
     """
     Asynchronous database manager specifically for the metadata enricher.

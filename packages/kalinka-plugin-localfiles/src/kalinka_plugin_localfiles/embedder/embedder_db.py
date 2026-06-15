@@ -17,6 +17,7 @@ from typing import Optional
 import aiosqlite
 
 from ..config_model import LocalFilesConfig
+from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -33,6 +34,7 @@ _VEC_TEXT_TABLES = {
     "artists": ("vec_artists_clap_text", "artist_id"),
 }
 
+@retry_db_locked
 class AsyncEmbedderDb:
     """
     Database manager for the CLAP + Essentia embedding pipeline.
