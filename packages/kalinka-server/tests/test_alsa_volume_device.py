@@ -168,18 +168,25 @@ async def test_set_volume_dispatches_matching_event():
 
 async def test_supported_functions_track_backend():
     bus = _make_bus()
-    supported = AlsaVolumeControlDevice(_FakePlayer(supported=True, backend=_HARDWARE), bus)
-    unsupported = AlsaVolumeControlDevice(_FakePlayer(supported=False, backend=_NONE), bus)
+    try:
+        supported = AlsaVolumeControlDevice(
+            _FakePlayer(supported=True, backend=_HARDWARE), bus
+        )
+        unsupported = AlsaVolumeControlDevice(
+            _FakePlayer(supported=False, backend=_NONE), bus
+        )
 
-    assert supported.supported_functions() == [
-        SupportedFunction.GET_VOLUME,
-        SupportedFunction.SET_VOLUME,
-    ]
-    assert unsupported.supported_functions() == []
+        assert supported.supported_functions() == [
+            SupportedFunction.GET_VOLUME,
+            SupportedFunction.SET_VOLUME,
+        ]
+        assert unsupported.supported_functions() == []
 
-    vol = await supported.get_volume()
-    assert vol.supported is True
-    assert (await unsupported.get_volume()).supported is False
+        vol = await supported.get_volume()
+        assert vol.supported is True
+        assert (await unsupported.get_volume()).supported is False
+    finally:
+        bus.close()
 
 
 async def test_set_volume_noop_when_unsupported():
@@ -335,7 +342,11 @@ async def test_plugin_maps_volume_type_and_builds_via_factory(volume_type, expec
 
 
 async def test_plugin_setup_requires_bind():
-    plugin = AlsaVolumeOutputPlugin()
-    ctx = _Ctx(emitter=_make_bus(), config=AlsaVolumeOutputConfig())
-    with pytest.raises(RuntimeError):
-        await plugin.setup(ctx)  # type: ignore[arg-type]
+    bus = _make_bus()
+    try:
+        plugin = AlsaVolumeOutputPlugin()
+        ctx = _Ctx(emitter=bus, config=AlsaVolumeOutputConfig())
+        with pytest.raises(RuntimeError):
+            await plugin.setup(ctx)  # type: ignore[arg-type]
+    finally:
+        bus.close()

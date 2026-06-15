@@ -86,6 +86,7 @@ AlsaVolumeControl::AlsaVolumeControl(const std::string &deviceName,
   fcntl(wakePipe_[0], F_SETFD, FD_CLOEXEC);
   fcntl(wakePipe_[1], F_SETFD, FD_CLOEXEC);
 
+  monitoringActive_ = true;
   monitorThread_ =
       std::jthread(std::bind_front(&AlsaVolumeControl::monitorLoop, this));
 }
@@ -336,7 +337,7 @@ void AlsaVolumeControl::monitorLoop(std::stop_token token) {
 }
 
 VolumeMonitor::VolumeMonitor(AlsaVolumeControl *control) : control_(control) {
-  if (control_ != nullptr && control_->available()) {
+  if (control_ != nullptr && control_->available() && control_->monitoring()) {
     subscriptionId_ = control_->subscribe([this](int percent) {
       std::lock_guard<std::mutex> lock(mutex_);
       queue_.push(percent);

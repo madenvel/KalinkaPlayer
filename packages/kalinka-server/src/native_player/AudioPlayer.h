@@ -3,6 +3,7 @@
 
 #include <list>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "AlsaAudioEmitter.h"
@@ -84,12 +85,18 @@ private:
   std::list<StreamNodes> streamNodesList;
   StreamId nextStreamId = 0;
 
+  // Guards the volume fields below. The volume API is called off the playback
+  // serial executor (so it stays responsive) and may be reconfigured at
+  // runtime, so volumeMode/softwarePercent/volumeControl can be touched
+  // concurrently — without this lock that is a data race / use-after-free.
+  std::mutex volumeMutex_;
   std::unique_ptr<AlsaVolumeControl> volumeControl;
   // Fixed until configureVolume() runs (i.e. until the local output device is
   // set up) — so by default the player does no volume processing.
   VolumeMode volumeMode = VolumeMode::Fixed;
   int softwarePercent = 100;
 
+  // Requires volumeMutex_ held by the caller.
   VolumeBackend activeBackend() const;
 
   void disconnectAllStreams();

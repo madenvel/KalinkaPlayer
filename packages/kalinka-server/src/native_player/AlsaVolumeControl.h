@@ -55,6 +55,12 @@ public:
   /// True when a usable playback-volume mixer element was found.
   bool available() const { return available_; }
 
+  /// True when the external-change monitor thread is running. It is false when
+  /// the self-pipe could not be created: get/set still work, but no change
+  /// notifications are produced, so a VolumeMonitor must treat this as inert
+  /// rather than block forever waiting for a notify() that never comes.
+  bool monitoring() const { return monitoringActive_; }
+
   /// Current volume in 0..100, or -1 when unavailable.
   int getVolume();
 
@@ -81,6 +87,7 @@ private:
   long rawMin_ = 0;
   long rawMax_ = 0;
   bool available_ = false;
+  bool monitoringActive_ = false;
   int lastNotified_ = -1;
 
   std::mutex subscribersMutex_;

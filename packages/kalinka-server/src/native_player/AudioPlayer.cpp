@@ -187,6 +187,7 @@ AudioPlayer::AudioPlayer(const Config &config)
 
 void AudioPlayer::configureVolume(const std::string &mode,
                                   const std::string &mixerControl) {
+  std::lock_guard<std::mutex> lock(volumeMutex_);
   volumeMode = parseVolumeMode(mode);
   // A hardware mixer handle is only needed for hardware/auto; software and
   // fixed don't touch it.
@@ -197,6 +198,13 @@ void AudioPlayer::configureVolume(const std::string &mode,
   } else {
     volumeControl.reset();
   }
+  // Keep the emitter's software gain consistent with the active backend so a
+  // mode switch (or Auto resolving to hardware) can't leave stale attenuation
+  // behind: only the software backend applies gain; everything else must stay
+  // bit-perfect (unity).
+  audioEmitter->setSoftwareVolume(activeBackend() == VolumeBackend::Software
+                                      ? percentToGain(softwarePercent)
+                                      : 1.0f);
   spdlog::info("AudioPlayer volume configured: mode={}, hardware mixer {}", mode,
                (volumeControl && volumeControl->available()) ? "available"
                                                              : "unavailable");
@@ -265,6 +273,7 @@ VolumeBackend AudioPlayer::activeBackend() const {
 }
 
 VolumeState AudioPlayer::getVolume() {
+  std::lock_guard<std::mutex> lock(volumeMutex_);
   VolumeState state;
   state.max = 100;
   switch (activeBackend()) {
@@ -290,6 +299,7 @@ VolumeState AudioPlayer::getVolume() {
 }
 
 void AudioPlayer::setVolume(int percent) {
+  std::lock_guard<std::mutex> lock(volumeMutex_);
   percent = std::clamp(percent, 0, 100);
   switch (activeBackend()) {
   case VolumeBackend::Hardware:
@@ -309,6 +319,7 @@ void AudioPlayer::setVolume(int percent) {
 }
 
 std::unique_ptr<VolumeMonitor> AudioPlayer::volumeMonitor() {
+  std::lock_guard<std::mutex> lock(volumeMutex_);
   if (activeBackend() == VolumeBackend::Hardware) {
     return std::make_unique<VolumeMonitor>(volumeControl.get());
   }
