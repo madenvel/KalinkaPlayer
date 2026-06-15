@@ -263,6 +263,21 @@ class PlayQueueImpl(PlayQueueController):
         self.track_player.stop()
         self._state_monitor_raw.stop()
 
+    # Output-volume access for the built-in ALSA fallback device. These delegate
+    # to the native AudioPlayer, which decides hardware vs software per
+    # output.alsa.volume_mode. Kept off the serial executor so volume responds
+    # immediately, independent of the playback command lane.
+    def get_output_volume(self):
+        """Native VolumeState (supported/current/max/backend), 0..100 scale."""
+        return self.track_player.get_volume()
+
+    def set_output_volume(self, percent: int) -> None:
+        self.track_player.set_volume(percent)
+
+    def output_volume_monitor(self):
+        """Native VolumeMonitor for external hardware-mixer changes."""
+        return self.track_player.volume_monitor()
+
     async def _state_update_listener_async(self):
         """Listen for state changes using async iterator."""
         try:

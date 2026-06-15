@@ -4,6 +4,7 @@ LDFLAGS = -lm -lasound -lpthread -lcurlpp -lcurl -lFLAC++ -lFLAC -lfmt -lspdlog 
 # List of source files
 SRCS = $(wildcard *.cpp)
 SRCS += ../AlsaAudioEmitter.cpp \
+		../AlsaVolumeControl.cpp \
 		../AudioGraphHttpStream.cpp \
 		../AudioGraphNode.cpp \
 		../AudioPlayer.cpp \

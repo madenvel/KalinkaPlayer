@@ -68,4 +68,13 @@ size_t convertSampleFormat(const void *source, AudioSampleFormat sourceFormat,
                            size_t sourceSamples, void *dest,
                            AudioSampleFormat destFormat, size_t destSizeBytes);
 
+/// @brief Apply a linear gain in place to interleaved samples.
+///
+/// Used by the software-volume path. @p gain is a linear amplitude multiplier:
+/// `gain >= 1.0` is a no-op (so full volume stays bit-perfect), `gain <= 0` mutes.
+/// @p buffer holds samples in the given ALSA on-wire @p format and @p bytes must
+/// be a whole number of samples; partial trailing bytes are left untouched.
+void applyGainInPlace(void *buffer, size_t bytes, AudioSampleFormat format,
+                      float gain);
+
 #endif // AUDIO_SAMPLE_FORMAT_H

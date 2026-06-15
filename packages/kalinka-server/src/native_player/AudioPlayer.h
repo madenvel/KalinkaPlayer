@@ -5,10 +5,11 @@
 #include <memory>
 #include <string>
 
+#include "AlsaAudioEmitter.h"
+#include "AlsaVolumeControl.h"
 #include "Config.h"
 
 struct StreamState;
-class AudioGraphEmitterNode;
 class AudioStreamSwitcher;
 struct StreamNodes;
 class StateMonitor;
@@ -57,12 +58,30 @@ public:
   // Waits for the state change if no new state has been set yet.
   std::unique_ptr<StateMonitor> monitor();
 
+  // Volume control for the currently selected ALSA output, honoring
+  // output.alsa.volume_mode (auto/hardware/software/fixed). Values are 0..100
+  // percent. getVolume() reports supported=false when no backend applies (e.g.
+  // mode=fixed, or mode=hardware on a card with no mixer).
+  VolumeState getVolume();
+  void setVolume(int percent);
+
+  // Monitor external hardware-mixer changes so the UI can track a knob / amixer
+  // / another app. Inert unless the active backend is hardware. Mirrors
+  // monitor() for stream state.
+  std::unique_ptr<VolumeMonitor> volumeMonitor();
+
 private:
   Config config;
-  std::shared_ptr<AudioGraphEmitterNode> audioEmitter;
+  std::shared_ptr<AlsaAudioEmitter> audioEmitter;
   std::shared_ptr<AudioStreamSwitcher> streamSwitcher;
   std::list<StreamNodes> streamNodesList;
   StreamId nextStreamId = 0;
+
+  std::unique_ptr<AlsaVolumeControl> volumeControl;
+  VolumeMode volumeMode = VolumeMode::Auto;
+  int softwarePercent = 100;
+
+  VolumeBackend activeBackend() const;
 
   void disconnectAllStreams();
   void cleanUpFinishedStreams();

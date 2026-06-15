@@ -1,4 +1,5 @@
 #include "AlsaDeviceEnumeration.h"
+#include "AlsaVolumeControl.h"
 #include "AudioGraphNode.h"
 #include "AudioInfo.h"
 #include "AudioPlayer.h"
@@ -104,6 +105,29 @@ PYBIND11_MODULE(native_player, m) {
       .def("is_running", &StateMonitor::isRunning)
       .def("stop", &StateMonitor::stop);
 
+  // Which backend produced a VolumeState; the Python fallback device runs its
+  // external-change listener only for HARDWARE.
+  py::enum_<VolumeBackend>(m, "VolumeBackend")
+      .value("NONE", VolumeBackend::None)
+      .value("HARDWARE", VolumeBackend::Hardware)
+      .value("SOFTWARE", VolumeBackend::Software)
+      .export_values();
+
+  // Percent-scale (0..100) snapshot of the active volume backend.
+  py::class_<VolumeState>(m, "VolumeState")
+      .def_readonly("supported", &VolumeState::supported)
+      .def_readonly("current", &VolumeState::current)
+      .def_readonly("max", &VolumeState::max)
+      .def_readonly("backend", &VolumeState::backend);
+
+  // Blocks in wait() until the hardware mixer changes (knob / amixer / another
+  // app). Mirrors StateMonitor; inert when the active backend isn't hardware.
+  py::class_<VolumeMonitor>(m, "VolumeMonitor")
+      .def("wait", &VolumeMonitor::wait)
+      .def("has_data", &VolumeMonitor::hasData)
+      .def("is_running", &VolumeMonitor::isRunning)
+      .def("stop", &VolumeMonitor::stop);
+
   py::class_<AudioPlayer>(m, "AudioPlayer")
       .def(py::init<const Config &>(), py::arg("config"))
       .def("append", &AudioPlayer::append, py::arg("url"), py::arg("format"))
@@ -114,7 +138,10 @@ PYBIND11_MODULE(native_player, m) {
       .def("resume", &AudioPlayer::resume)
       .def("seek", &AudioPlayer::seek, py::arg("position_ms"))
       .def("get_state", &AudioPlayer::getState)
-      .def("monitor", &AudioPlayer::monitor);
+      .def("monitor", &AudioPlayer::monitor)
+      .def("get_volume", &AudioPlayer::getVolume)
+      .def("set_volume", &AudioPlayer::setVolume, py::arg("volume"))
+      .def("volume_monitor", &AudioPlayer::volumeMonitor);
 
   py::enum_<AudioGraphNodeState>(m, "AudioGraphNodeState")
       .value("ERROR", AudioGraphNodeState::ERROR)

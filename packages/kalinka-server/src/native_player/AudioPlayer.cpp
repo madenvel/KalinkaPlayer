@@ -33,6 +33,14 @@ bool isInvalidState(AudioGraphNodeState state) {
          state == AudioGraphNodeState::ERROR;
 }
 
+// Map a 0..100 percent to a linear amplitude gain for software volume. Cubic
+// gives a roughly perceptual taper (~ -18 dB at 50%) and lands exactly on 1.0
+// at 100%, which AlsaAudioEmitter treats as a bit-perfect bypass.
+float percentToGain(int percent) {
+  const float p = std::clamp(percent, 0, 100) / 100.0f;
+  return p * p * p;
+}
+
 // Pseudo-scheme for the speaker test:
 //   tone://<left|right|both>?freq=<hz>&duration_ms=<ms>
 // Generates audio in-process (SineWaveNode) instead of reading a stream, so
@@ -169,9 +177,17 @@ struct StreamNodes {
 
 AudioPlayer::AudioPlayer(const Config &config)
     : config(config), audioEmitter(std::make_shared<AlsaAudioEmitter>(config)),
-      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
+      streamSwitcher(std::make_shared<AudioStreamSwitcher>()),
+      volumeControl(std::make_unique<AlsaVolumeControl>(
+          value_or(config, "output.alsa.device", std::string("default")),
+          value_or(config, "output.alsa.mixer_control", std::string("")))),
+      volumeMode(parseVolumeMode(
+          value_or(config, "output.alsa.volume_mode", std::string("auto")))) {
   initLogger(value_or(config, "server.log_level", std::string("debug")));
   perfmon_print_periodically(5);
+  spdlog::info("AudioPlayer volume: mode={}, hardware mixer {}",
+               value_or(config, "output.alsa.volume_mode", std::string("auto")),
+               volumeControl->available() ? "available" : "unavailable");
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }
@@ -216,6 +232,76 @@ StreamState AudioPlayer::getState() { return audioEmitter->getState(); }
 
 std::unique_ptr<StateMonitor> AudioPlayer::monitor() {
   return std::make_unique<StateMonitor>(audioEmitter.get());
+}
+
+VolumeBackend AudioPlayer::activeBackend() const {
+  switch (volumeMode) {
+  case VolumeMode::Hardware:
+    return (volumeControl && volumeControl->available())
+               ? VolumeBackend::Hardware
+               : VolumeBackend::None;
+  case VolumeMode::Software:
+    return VolumeBackend::Software;
+  case VolumeMode::Fixed:
+    return VolumeBackend::None;
+  case VolumeMode::Auto:
+  default:
+    return (volumeControl && volumeControl->available())
+               ? VolumeBackend::Hardware
+               : VolumeBackend::Software;
+  }
+}
+
+VolumeState AudioPlayer::getVolume() {
+  VolumeState state;
+  state.max = 100;
+  switch (activeBackend()) {
+  case VolumeBackend::Hardware: {
+    const int v = volumeControl->getVolume();
+    state.supported = v >= 0;
+    state.current = v >= 0 ? v : 0;
+    state.backend = static_cast<int>(VolumeBackend::Hardware);
+    break;
+  }
+  case VolumeBackend::Software:
+    state.supported = true;
+    state.current = softwarePercent;
+    state.backend = static_cast<int>(VolumeBackend::Software);
+    break;
+  case VolumeBackend::None:
+  default:
+    state.supported = false;
+    state.backend = static_cast<int>(VolumeBackend::None);
+    break;
+  }
+  return state;
+}
+
+void AudioPlayer::setVolume(int percent) {
+  percent = std::clamp(percent, 0, 100);
+  switch (activeBackend()) {
+  case VolumeBackend::Hardware:
+    volumeControl->setVolume(percent);
+    break;
+  case VolumeBackend::Software:
+    softwarePercent = percent;
+    audioEmitter->setSoftwareVolume(percentToGain(percent));
+    break;
+  case VolumeBackend::None:
+  default:
+    spdlog::debug("setVolume({}) ignored: no active volume backend "
+                  "(mode=fixed or no hardware mixer)",
+                  percent);
+    break;
+  }
+}
+
+std::unique_ptr<VolumeMonitor> AudioPlayer::volumeMonitor() {
+  if (activeBackend() == VolumeBackend::Hardware) {
+    return std::make_unique<VolumeMonitor>(volumeControl.get());
+  }
+  // Software / fixed: no external source to track — return an inert monitor.
+  return std::make_unique<VolumeMonitor>(nullptr);
 }
 
 void AudioPlayer::disconnectAllStreams() {
