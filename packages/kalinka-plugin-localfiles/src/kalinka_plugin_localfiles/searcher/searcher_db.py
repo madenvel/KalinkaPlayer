@@ -20,6 +20,7 @@ import aiosqlite
 from rapidfuzz import fuzz
 
 from ..config_model import LocalFilesConfig
+from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 _INDEX_BATCH_SIZE = 200
 
 
+@retry_db_locked
 class AsyncSearcherDb:
     """
     Async database layer for the search subprocess.

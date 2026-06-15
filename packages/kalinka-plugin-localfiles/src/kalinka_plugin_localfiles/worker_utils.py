@@ -4,12 +4,87 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import functools
+import inspect
 import logging
 import multiprocessing
 import queue
+import random
+import sqlite3
 from typing import Optional
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+# ---------------------------------------------------------------------------
+# SQLite "database is locked" retry
+# ---------------------------------------------------------------------------
+#
+# The localfiles workers (indexer, enricher, searcher, embedder) run as
+# separate processes that all write the *same* SQLite file. WAL permits one
+# writer at a time, so during a burst — e.g. every scheduled scan cycle wakes
+# several workers at once — a writer can wait past ``busy_timeout`` and surface
+# ``sqlite3.OperationalError: database is locked``. Reopening a fresh
+# connection/transaction and trying again clears the vast majority of these.
+
+# How many times an operation is attempted in total (initial try + retries).
+_DB_LOCK_ATTEMPTS = 3
+# Base backoff; the per-attempt cap grows exponentially from here.
+_DB_LOCK_BASE_DELAY = 0.05
+# Upper bound on any single backoff wait.
+_DB_LOCK_MAX_DELAY = 1.0
+
+
+def _is_locked_error(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
+
+def retry_on_locked(fn):
+    """Wrap an async DB method so it retries on ``database is locked``.
+
+    Tries at most ``_DB_LOCK_ATTEMPTS`` times. Backoff is exponential with
+    *full jitter* (``random.uniform(0, cap)``) so the contending workers don't
+    resynchronise and collide again on the same retry tick. Any non-lock error
+    — or exhausting the attempts — re-raises immediately.
+    """
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        for attempt in range(1, _DB_LOCK_ATTEMPTS + 1):
+            try:
+                return await fn(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                if not _is_locked_error(exc) or attempt == _DB_LOCK_ATTEMPTS:
+                    raise
+                cap = min(_DB_LOCK_MAX_DELAY, _DB_LOCK_BASE_DELAY * 2 ** (attempt - 1))
+                delay = random.uniform(0, cap)
+                logger.warning(
+                    "%s: database is locked (attempt %d/%d), retrying in %.3fs",
+                    fn.__qualname__,
+                    attempt,
+                    _DB_LOCK_ATTEMPTS,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    return wrapper
+
+
+def retry_db_locked(cls):
+    """Class decorator: wrap every public async method with ``retry_on_locked``.
+
+    Only public (non ``_``-prefixed) coroutine methods are wrapped — these own
+    their full connection lifecycle via ``_open()``, so a retry always reopens a
+    clean connection rather than reusing one mid-transaction. Internal helpers
+    (including the ``_open`` context manager and any method handed an existing
+    connection) are left untouched.
+    """
+    for name, member in list(vars(cls).items()):
+        if name.startswith("_"):
+            continue
+        if inspect.iscoroutinefunction(member):
+            setattr(cls, name, retry_on_locked(member))
+    return cls
 
 
 # Linux prctl op for setting the kernel-level process name (visible as
