@@ -122,6 +122,24 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # Negative cache for files whose metadata could not be extracted.
+        # Keyed by path + (size, mtime) so a still-uploading / partially
+        # written file — which changes size or mtime between scans — keeps
+        # missing this cache and is retried, while a stably broken file is
+        # parked and skipped instead of being re-read on every scan.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS indexer_failures (
+                file_path     TEXT PRIMARY KEY,
+                file_size     BIGINT,
+                modified_time INTEGER,
+                error         TEXT,
+                attempts      INTEGER NOT NULL DEFAULT 1,
+                last_attempt  INTEGER
+            )
+            """
+        )
+
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS playlists (

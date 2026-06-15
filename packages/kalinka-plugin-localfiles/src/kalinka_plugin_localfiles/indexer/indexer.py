@@ -15,7 +15,7 @@ from PIL import Image
 
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3
+from mutagen.id3 import ID3, ID3NoHeaderError
 
 try:
     from inotify_simple import INotify, flags
@@ -306,9 +306,32 @@ class FileIndexer:
             logger.debug(f"File unchanged, skipping: {file_path}")
             return None
 
+        # Negative cache: if this exact file (same size + mtime) already
+        # failed extraction, don't re-read it on every scan. A file that is
+        # still being uploaded changes size/mtime between scans, so it keeps
+        # a different key here and is retried until it stabilizes — only a
+        # genuinely broken, unchanging file stays parked.
+        failure = await self.db_manager.get_failure(file_path)
+        if (
+            failure
+            and failure["modified_time"] == modified_time
+            and failure["file_size"] == file_size
+        ):
+            logger.debug(
+                f"Skipping previously failed file (unchanged, "
+                f"{failure['attempts']} attempt(s)): {file_path}"
+            )
+            return None
+
         metadata = await asyncio.to_thread(self._extract_metadata, file_path)
         if not metadata:
-            logger.warning(f"Failed to extract metadata from {file_path}")
+            attempts = await self.db_manager.record_failure(
+                file_path, file_size, modified_time, "metadata extraction failed"
+            )
+            logger.warning(
+                f"Failed to extract metadata from {file_path} "
+                f"(attempt {attempts}); will retry only if the file changes"
+            )
             return None
 
         changes: Dict[str, Optional[str]] = {
@@ -386,6 +409,9 @@ class FileIndexer:
         changes["tracks"] = track_id
 
         await self.db_manager.update_album_stats(album_id)
+        # Successfully indexed — drop any stale failure record (e.g. an
+        # earlier partial upload that has since completed).
+        await self.db_manager.clear_failure(file_path)
         logger.debug(f"Processed file: {file_path}")
         return changes
 
@@ -416,7 +442,14 @@ class FileIndexer:
         """Extract metadata from an MP3 file"""
         try:
             mp3 = MP3(file_path)
-            id3 = ID3(file_path)
+            # A missing ID3 header is a valid, fully supported case — the
+            # audio plays fine, it just has no tags. Fall back to an empty
+            # tag set so the track still gets indexed (title derived from
+            # the filename, Unknown Artist/Album) instead of failing.
+            try:
+                id3 = ID3(file_path)
+            except ID3NoHeaderError:
+                id3 = ID3()
             metadata["duration"] = int(mp3.info.length)
             if "TIT2" in id3:
                 metadata["title"] = str(id3["TIT2"])
@@ -676,6 +709,12 @@ class FileIndexer:
                 track_id = track["id"]
                 await self.db_manager.delete_track(track_id)
                 removed_tracks += 1
+
+        # Drop failure-cache rows for files that have since been deleted,
+        # so the cache doesn't accumulate entries for vanished files.
+        for failed_path in await self.db_manager.get_failure_paths():
+            if not os.path.exists(failed_path):
+                await self.db_manager.clear_failure(failed_path)
 
         removed_albums, removed_artists = (
             await self.db_manager.delete_orphaned_albums_and_artists()
