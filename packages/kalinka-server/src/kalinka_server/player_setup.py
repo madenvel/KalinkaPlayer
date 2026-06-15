@@ -1,5 +1,6 @@
 import enum
 import logging
+import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from typing import Any, AsyncGenerator, Dict, Generator, Mapping, MutableMapping
@@ -36,10 +37,18 @@ from .config_overrides import (
     is_one_shot_field,
     save_overrides,
 )
+from . import state_keeper
+from .alsa_volume_device import AlsaVolumeOutputPlugin
 from .playqueue import PlayQueueImpl
 from kalinka_plugin_sdk.api import PlayQueueController
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def _device_volume_state_path() -> str:
+    """Sibling of the state file, used to persist software-mode volume."""
+    state_dir = os.path.dirname(state_keeper.STATE_FILE)
+    return os.path.join(state_dir or ".", "kalinka_device_volume.json")
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -452,6 +461,68 @@ class PreparedModuleCollection:
             config=config,
         )
 
+    async def _maybe_setup_local_alsa_device(
+        self,
+        devices: dict[str, PreparedPlugin],
+        overrides: Mapping[str, Any],
+    ) -> dict[str, PreparedPlugin]:
+        """Register the built-in local-ALSA volume device as the default output.
+
+        Only when no entry-point output device is enabled — an external device
+        (e.g. MusicCast) takes precedence and the local card steps aside (the
+        native player then plays at unity). Registered first so it's the active
+        device. Its own ``enabled`` flag gates setup: disabled ⇒ no interface ⇒
+        the player stays "fixed"/bit-perfect. ``volume_type`` selects the native
+        backend. It's built-in (not entry-point) because only the play queue can
+        hand it the native player — injected via ``bind``.
+        """
+        if self.player_context is None:
+            return devices
+        if any(p.health_state == ModuleHealthState.READY for p in devices.values()):
+            return devices
+
+        config = self._build_module_config(
+            "local-alsa", AlsaVolumeOutputPlugin, overrides
+        )
+        context = self._make_plugin_context(
+            "local-alsa", AlsaVolumeOutputPlugin, config
+        )
+
+        if not getattr(config, "enabled", True):
+            prepared = PreparedPlugin(
+                plugin_class=AlsaVolumeOutputPlugin,
+                plugin_instance=None,
+                health_state=ModuleHealthState.DISABLED,
+                plugin_context=context,
+                interface=None,
+            )
+            return {"local-alsa": prepared, **devices}
+
+        plugin = AlsaVolumeOutputPlugin()
+        plugin.bind(self.player_context.playqueue, _device_volume_state_path())
+        try:
+            await plugin.setup(context)
+            prepared = PreparedPlugin(
+                plugin_class=AlsaVolumeOutputPlugin,
+                plugin_instance=plugin,
+                health_state=ModuleHealthState.READY,
+                plugin_context=context,
+                interface=plugin.get_interface(),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to set up local ALSA volume device: %s", e, exc_info=True
+            )
+            prepared = PreparedPlugin(
+                plugin_class=AlsaVolumeOutputPlugin,
+                plugin_instance=None,
+                health_state=ModuleHealthState.ERROR,
+                plugin_context=context,
+                interface=None,
+                error_message=str(e),
+            )
+        return {"local-alsa": prepared, **devices}
+
     async def scan_and_setup_plugins(
         self,
         player_context: PlayerContext,
@@ -479,6 +550,7 @@ class PreparedModuleCollection:
         self.prepared_input_modules = {**input_modules}
         self._update_enabled_input_modules()
 
+        devices = await self._maybe_setup_local_alsa_device(devices, overrides)
         self.prepared_devices = {**devices}
         self._update_enabled_devices()
 

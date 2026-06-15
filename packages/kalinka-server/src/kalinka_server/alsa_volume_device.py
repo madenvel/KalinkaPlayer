@@ -1,18 +1,19 @@
-"""Built-in ALSA volume control used as a silent fallback device.
+"""Built-in ALSA volume control, exposed as a local output device.
 
-Unlike the plugin output devices (e.g. MusicCast), this is *not* a plugin: the
-native ``AudioPlayer`` is not reachable from plugins, but the local ALSA output
-is the basic case that must always have working volume. When no external
-output-device plugin is enabled, ``server.py`` uses this object as the active
-``ExternalOutputDevice`` so all ``/device/*`` volume traffic is redirected to
-the selected ALSA card.
+Unlike the entry-point output-device plugins (e.g. MusicCast), the native
+``AudioPlayer`` is not reachable from plugins — but the local ALSA output is the
+basic case that must always have working volume. So this ships in-process as a
+built-in device (``local-alsa``), registered first and used when no other device
+is enabled. ``player_setup`` injects the play queue (which owns the native
+player) via :meth:`AlsaVolumeOutputPlugin.bind`.
 
-Hardware vs software gain is decided natively from ``output.alsa.volume_mode``
-(see AlsaVolumeControl / AudioPlayer): the device just speaks the
-``ExternalOutputDevice`` protocol in 0..100 and bridges native volume state to
-the device event bus. External mixer changes (a hardware knob, ``amixer``,
-another app) are streamed back as ``VolumeChangedEvent`` — the local equivalent
-of MusicCast pushing volume events so the UI slider tracks them.
+The device speaks the ``ExternalOutputDevice`` protocol in 0..100 and bridges
+native volume state to the device event bus. Hardware vs software gain is decided
+natively (see AlsaVolumeControl / AudioPlayer) from the ``volume_type`` chosen on
+the device's settings; disabling the device leaves the player at unity ("fixed",
+bit-perfect). External mixer changes (a hardware knob, ``amixer``, another app)
+are streamed back as ``VolumeChangedEvent`` — the local equivalent of MusicCast
+pushing volume events so the UI slider tracks them.
 """
 
 from __future__ import annotations
@@ -21,7 +22,10 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional, Protocol
+from enum import Enum
+from typing import Any, ClassVar, Optional, Protocol
+
+from pydantic import Field
 
 from kalinka_plugin_sdk.datamodel import DeviceVolume
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
@@ -30,6 +34,8 @@ from kalinka_plugin_sdk.ext_device_events import (
     ExtDeviceState,
     VolumeChangedEvent,
 )
+from kalinka_plugin_sdk.module_config import ModuleConfig
+from kalinka_plugin_sdk.plugin import OutputDevicePlugin, OutputDevicePluginContext
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -40,6 +46,44 @@ _BACKEND_HARDWARE = 1
 # Matches DummyDevice: coalesce bursts (slider drags, monitor echoes) into one
 # event after a short quiet period.
 _DEBOUNCE_SEC = 0.10
+
+
+class AlsaVolumeType(str, Enum):
+    """Active volume-control backend. "fixed" is not here — it's the disabled
+    state of the device (no volume control, bit-perfect)."""
+
+    automatic = "automatic"
+    hardware = "hardware"
+    software = "software"
+
+
+# AlsaVolumeType → native AudioPlayer.configure_volume() mode string.
+_VOLUME_TYPE_TO_MODE = {
+    AlsaVolumeType.automatic: "auto",
+    AlsaVolumeType.hardware: "hardware",
+    AlsaVolumeType.software: "software",
+}
+
+
+class AlsaVolumeOutputConfig(ModuleConfig):
+    """Settings for the built-in local ALSA output: the inherited ``enabled``
+    toggle (disabled ⇒ fixed/bit-perfect) plus the volume-control type."""
+
+    __module_icon__: ClassVar[str] = "speaker_outlined"
+    name: str = Field(default="local-alsa", frozen=True, exclude=True)
+    volume_type: AlsaVolumeType = Field(
+        default=AlsaVolumeType.automatic,
+        title="Volume control type",
+        json_schema_extra={
+            "help": (
+                "Automatic uses the card's hardware mixer when it has one "
+                "(bit-perfect) and otherwise applies software gain. Hardware / "
+                "Software force one of them. Disable this device for a fixed, "
+                "bit-perfect output (control the volume downstream)."
+            ),
+            "importance": "simple",
+        },
+    )
 
 
 class _VolumeStatus(Protocol):
@@ -55,25 +99,27 @@ class _VolumeMonitor(Protocol):
     def stop(self) -> None: ...
 
 
-class VolumeCapablePlayer(Protocol):
-    """The slice of PlayQueueImpl / native AudioPlayer this device relies on."""
+class NativeVolumePlayer(Protocol):
+    """The native ``AudioPlayer`` volume surface this device drives (handed over
+    by ``PlayQueueImpl.create_volume_control_device``). A test double only needs
+    these three methods."""
 
-    def get_output_volume(self) -> _VolumeStatus: ...
-    def set_output_volume(self, percent: int) -> None: ...
-    def output_volume_monitor(self) -> _VolumeMonitor: ...
+    def get_volume(self) -> _VolumeStatus: ...
+    def set_volume(self, volume: int) -> None: ...
+    def volume_monitor(self) -> _VolumeMonitor: ...
 
 
-class AlsaFallbackDevice(ExternalOutputDevice):
+class AlsaVolumeControlDevice(ExternalOutputDevice):
     def __init__(
         self,
-        player: VolumeCapablePlayer,
+        player: NativeVolumePlayer,
         event_emitter,
         *,
         state_path: Optional[str] = None,
     ):
         """
         Args:
-            player: provides native volume get/set + monitor (PlayQueueImpl).
+            player: the native AudioPlayer (volume get/set + monitor).
             event_emitter: the ext-device EventBus (dispatch / set_initial_state).
             state_path: file used to persist the software-mode volume across
                 restarts; ``None`` disables persistence. Hardware volume is
@@ -91,7 +137,7 @@ class AlsaFallbackDevice(ExternalOutputDevice):
         self._shutdown = False
 
     # ------------------------------------------------------------------ lifecycle
-    async def start(self) -> "AlsaFallbackDevice":
+    async def start(self) -> "AlsaVolumeControlDevice":
         status = self._status()
 
         # Software mode owns the value entirely (nothing external sets it), so
@@ -99,7 +145,7 @@ class AlsaFallbackDevice(ExternalOutputDevice):
         if status.supported and status.backend != _BACKEND_HARDWARE:
             restored = self._load_persisted_volume()
             if restored is not None:
-                self._player.set_output_volume(restored)
+                self._player.set_volume(restored)
                 status = self._status()
 
         self._target_volume = status.current
@@ -112,11 +158,11 @@ class AlsaFallbackDevice(ExternalOutputDevice):
         # Only a hardware mixer can change behind our back; software/fixed don't
         # need (and the native monitor won't produce) external events.
         if status.supported and status.backend == _BACKEND_HARDWARE:
-            self._monitor = self._player.output_volume_monitor()
+            self._monitor = self._player.volume_monitor()
             self._monitor_task = asyncio.create_task(self._monitor_async())
 
         logger.info(
-            "ALSA fallback device started (supported=%s, backend=%s, volume=%d)",
+            "Local ALSA volume device started (supported=%s, backend=%s, volume=%d)",
             status.supported,
             status.backend,
             status.current,
@@ -146,7 +192,7 @@ class AlsaFallbackDevice(ExternalOutputDevice):
             logger.debug("set_volume ignored: ALSA volume control not available")
             return
         volume = max(0, min(int(volume), status.max))
-        self._player.set_output_volume(volume)
+        self._player.set_volume(volume)
         self._target_volume = volume
         if status.backend != _BACKEND_HARDWARE:
             self._persist_volume(volume)
@@ -169,7 +215,7 @@ class AlsaFallbackDevice(ExternalOutputDevice):
 
     # ------------------------------------------------------------------ internals
     def _status(self) -> _VolumeStatus:
-        return self._player.get_output_volume()
+        return self._player.get_volume()
 
     @staticmethod
     def _to_device_volume(status: _VolumeStatus) -> DeviceVolume:
@@ -258,3 +304,52 @@ class AlsaFallbackDevice(ExternalOutputDevice):
             return max(0, min(int(data["volume"]), 100))
         except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError):
             return None
+
+
+class AlsaVolumeOutputPlugin(OutputDevicePlugin):
+    """Built-in output device for the local ALSA card.
+
+    Not loaded via entry points — ``player_setup`` constructs it, calls
+    :meth:`bind` to inject the play queue + persistence path (which the plugin
+    context can't carry), then runs the normal ``setup()``/``shutdown()``
+    lifecycle so it participates in the device registry and settings page.
+    """
+
+    REQUIRES_SDK = ">=1.0,<2"
+    PLUGIN_ID = "local-alsa"
+    CONFIG_MODEL = AlsaVolumeOutputConfig
+
+    def __init__(self):
+        self._device: Optional[AlsaVolumeControlDevice] = None
+        # Untyped on purpose: this is the concrete PlayQueueImpl (it carries the
+        # factory), but annotating it as such would import playqueue and create a
+        # cycle. The play queue is injected by player_setup, so Any is fine here.
+        self._playqueue: Any = None
+        self._state_path: Optional[str] = None
+
+    def bind(self, playqueue: Any, state_path: Optional[str]) -> None:
+        self._playqueue = playqueue
+        self._state_path = state_path
+
+    async def setup(self, context: OutputDevicePluginContext) -> None:
+        if self._playqueue is None:
+            raise RuntimeError(
+                "AlsaVolumeOutputPlugin.bind() must be called before setup()"
+            )
+        config = context.config
+        volume_type = getattr(config, "volume_type", AlsaVolumeType.automatic)
+        mode = _VOLUME_TYPE_TO_MODE.get(volume_type, "auto")
+        self._device = self._playqueue.create_volume_control_device(
+            event_emitter=context.emitter,
+            state_path=self._state_path,
+            mode=mode,
+        )
+        await self._device.start()
+
+    async def shutdown(self) -> None:
+        if self._device is not None:
+            await self._device.shutdown()
+        self._device = None
+
+    def get_interface(self) -> Optional[ExternalOutputDevice]:
+        return self._device

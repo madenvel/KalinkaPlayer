@@ -38,13 +38,6 @@ class LogLevel(str, Enum):
     error = "error"
 
 
-class AlsaVolumeMode(str, Enum):
-    auto = "auto"
-    hardware = "hardware"
-    software = "software"
-    fixed = "fixed"
-
-
 class ServerConfig(BaseModel):
     interface: str = Field(
         default="all",
@@ -112,31 +105,6 @@ class AlsaConfig(BaseModel):
         json_schema_extra={
             "widget": "number_slider",
             "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
-        },
-    )
-    volume_mode: AlsaVolumeMode = Field(
-        default=AlsaVolumeMode.auto,
-        title="Volume control",
-        json_schema_extra={
-            "help": (
-                "How the volume slider drives the local output. Auto uses the "
-                "card's hardware mixer when it has one (bit-perfect) and "
-                "otherwise applies software gain. Hardware/Software force one of "
-                "them; Fixed disables volume control for bit-perfect output at a "
-                "fixed level (control volume downstream)."
-            ),
-            **_SIMPLE,
-        },
-    )
-    mixer_control: str = Field(
-        default="",
-        title="Mixer control name",
-        json_schema_extra={
-            "help": (
-                "Override the ALSA mixer element used for hardware volume "
-                "(e.g. 'PCM', 'Digital'). Empty auto-detects "
-                "(Master → PCM → …)."
-            ),
         },
     )
 

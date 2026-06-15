@@ -1,24 +1,27 @@
-"""Tests for the built-in ALSA fallback device (alsa_fallback_device.py).
+"""Tests for the built-in local-ALSA volume device (alsa_volume_device.py).
 
-These exercise the device's contract without any real ALSA hardware: a fake
-``VolumeCapablePlayer`` stands in for PlayQueueImpl / the native AudioPlayer, and
-a real device ``EventBus`` + recorder verify that volume changes become
+These exercise the contract without any real ALSA hardware: a fake native player
+(``get_volume``/``set_volume``/``volume_monitor``) stands in for the native
+AudioPlayer handed over by ``PlayQueueImpl.create_volume_control_device``, and a
+real device ``EventBus`` + recorder verify that volume changes become
 ``VolumeChangedEvent`` instances — the same path server.py's ``/device/*`` routes
 and the device WebSocket use.
 
 Covered:
 - set_volume dispatches a matching VolumeChangedEvent (software backend);
 - supported_functions / get_volume track the backend's `supported` flag;
-- set_volume is a no-op when unsupported (e.g. mode=fixed);
+- set_volume is a no-op when unsupported;
 - an external hardware-mixer change (a knob / amixer) is bridged to the bus;
 - software-mode volume persists and is restored on the next start();
-- hardware mode does NOT write the software-persistence file (the card owns it).
+- hardware mode does NOT write the software-persistence file (the card owns it);
+- the built-in plugin maps volume_type → native mode and builds via the factory.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import threading
 from typing import List, Optional
@@ -35,7 +38,12 @@ from kalinka_plugin_sdk.ext_device_events import (
     VolumeChangedEvent,
 )
 
-from kalinka_server.alsa_fallback_device import AlsaFallbackDevice
+from kalinka_server.alsa_volume_device import (
+    AlsaVolumeControlDevice,
+    AlsaVolumeOutputConfig,
+    AlsaVolumeOutputPlugin,
+    AlsaVolumeType,
+)
 
 # Backend ids mirror native_player.VolumeBackend.
 _HARDWARE = 1
@@ -79,6 +87,8 @@ class _FakeMonitor:
 
 
 class _FakePlayer:
+    """Stands in for the native AudioPlayer's volume surface."""
+
     def __init__(self, *, supported: bool, backend: int, current: int = 50):
         self._supported = supported
         self._backend = backend
@@ -86,14 +96,14 @@ class _FakePlayer:
         self.monitor = _FakeMonitor()
         self.sets: List[int] = []
 
-    def get_output_volume(self) -> _FakeStatus:
+    def get_volume(self) -> _FakeStatus:
         return _FakeStatus(self._supported, self._current, 100, self._backend)
 
-    def set_output_volume(self, percent: int) -> None:
+    def set_volume(self, percent: int) -> None:
         self._current = percent
         self.sets.append(percent)
 
-    def output_volume_monitor(self) -> _FakeMonitor:
+    def volume_monitor(self) -> _FakeMonitor:
         return self.monitor
 
 
@@ -144,7 +154,7 @@ class _VolumeRecorder:
 async def test_set_volume_dispatches_matching_event():
     bus = _make_bus()
     recorder = _VolumeRecorder(bus)
-    device = AlsaFallbackDevice(_FakePlayer(supported=True, backend=_SOFTWARE), bus)
+    device = AlsaVolumeControlDevice(_FakePlayer(supported=True, backend=_SOFTWARE), bus)
     await device.start()
     try:
         await device.set_volume(73)
@@ -158,8 +168,8 @@ async def test_set_volume_dispatches_matching_event():
 
 async def test_supported_functions_track_backend():
     bus = _make_bus()
-    supported = AlsaFallbackDevice(_FakePlayer(supported=True, backend=_HARDWARE), bus)
-    unsupported = AlsaFallbackDevice(_FakePlayer(supported=False, backend=_NONE), bus)
+    supported = AlsaVolumeControlDevice(_FakePlayer(supported=True, backend=_HARDWARE), bus)
+    unsupported = AlsaVolumeControlDevice(_FakePlayer(supported=False, backend=_NONE), bus)
 
     assert supported.supported_functions() == [
         SupportedFunction.GET_VOLUME,
@@ -176,7 +186,7 @@ async def test_set_volume_noop_when_unsupported():
     bus = _make_bus()
     recorder = _VolumeRecorder(bus)
     player = _FakePlayer(supported=False, backend=_NONE)
-    device = AlsaFallbackDevice(player, bus)
+    device = AlsaVolumeControlDevice(player, bus)
     await device.start()
     try:
         await device.set_volume(40)
@@ -192,7 +202,7 @@ async def test_external_hardware_change_is_bridged_to_bus():
     bus = _make_bus()
     recorder = _VolumeRecorder(bus)
     player = _FakePlayer(supported=True, backend=_HARDWARE, current=20)
-    device = AlsaFallbackDevice(player, bus)
+    device = AlsaVolumeControlDevice(player, bus)
     await device.start()
     try:
         # Simulate a knob / amixer move behind the app's back.
@@ -210,7 +220,7 @@ async def test_software_volume_persists_and_restores(tmp_path):
     bus = _make_bus()
 
     player1 = _FakePlayer(supported=True, backend=_SOFTWARE, current=50)
-    device1 = AlsaFallbackDevice(player1, bus, state_path=state_path)
+    device1 = AlsaVolumeControlDevice(player1, bus, state_path=state_path)
     await device1.start()
     await device1.set_volume(35)
     await device1.shutdown()
@@ -219,7 +229,7 @@ async def test_software_volume_persists_and_restores(tmp_path):
 
     # A fresh start (e.g. after restart) restores the persisted level.
     player2 = _FakePlayer(supported=True, backend=_SOFTWARE, current=99)
-    device2 = AlsaFallbackDevice(player2, bus, state_path=state_path)
+    device2 = AlsaVolumeControlDevice(player2, bus, state_path=state_path)
     await device2.start()
     try:
         assert 35 in player2.sets
@@ -233,14 +243,12 @@ async def test_hardware_mode_does_not_write_software_state(tmp_path):
     state_path = str(tmp_path / "device_volume.json")
     bus = _make_bus()
     player = _FakePlayer(supported=True, backend=_HARDWARE, current=10)
-    device = AlsaFallbackDevice(player, bus, state_path=state_path)
+    device = AlsaVolumeControlDevice(player, bus, state_path=state_path)
     await device.start()
     try:
         await device.set_volume(60)
         await asyncio.sleep(DEBOUNCE_SEC + SETTLE_MARGIN)
         # Hardware volume is persisted by the card / alsactl, not by us.
-        import os
-
         assert not os.path.exists(state_path)
     finally:
         await device.shutdown()
@@ -250,7 +258,7 @@ async def test_hardware_mode_does_not_write_software_state(tmp_path):
 async def test_rapid_burst_coalesces_to_final_value():
     bus = _make_bus()
     recorder = _VolumeRecorder(bus)
-    device = AlsaFallbackDevice(_FakePlayer(supported=True, backend=_SOFTWARE), bus)
+    device = AlsaVolumeControlDevice(_FakePlayer(supported=True, backend=_SOFTWARE), bus)
     await device.start()
     try:
         burst = [5, 12, 19, 26, 33, 40, 47, 54, 61, 68, 77]
@@ -264,3 +272,70 @@ async def test_rapid_burst_coalesces_to_final_value():
     finally:
         await device.shutdown()
         bus.close()
+
+
+# --------------------------------------------------------- built-in plugin layer
+
+
+def test_config_exposes_enabled_and_volume_type():
+    cfg = AlsaVolumeOutputConfig()
+    assert cfg.enabled is True
+    assert cfg.volume_type == AlsaVolumeType.automatic
+    # The two user-facing options on the device page.
+    assert {"enabled", "volume_type"} <= set(AlsaVolumeOutputConfig.model_fields)
+
+
+class _FakeQueue:
+    """Stands in for PlayQueueImpl: records the configured mode and hands back a
+    device built against a fake native player."""
+
+    def __init__(self) -> None:
+        self.modes: List[str] = []
+
+    def create_volume_control_device(self, event_emitter, state_path, mode):
+        self.modes.append(mode)
+        return AlsaVolumeControlDevice(
+            _FakePlayer(supported=True, backend=_SOFTWARE),
+            event_emitter,
+            state_path=state_path,
+        )
+
+
+class _Ctx:
+    """Minimal OutputDevicePluginContext stand-in (the plugin only reads
+    `emitter` and `config`)."""
+
+    def __init__(self, emitter, config):
+        self.emitter = emitter
+        self.config = config
+
+
+@pytest.mark.parametrize(
+    "volume_type,expected_mode",
+    [
+        (AlsaVolumeType.automatic, "auto"),
+        (AlsaVolumeType.hardware, "hardware"),
+        (AlsaVolumeType.software, "software"),
+    ],
+)
+async def test_plugin_maps_volume_type_and_builds_via_factory(volume_type, expected_mode):
+    bus = _make_bus()
+    fake_queue = _FakeQueue()
+    plugin = AlsaVolumeOutputPlugin()
+    plugin.bind(fake_queue, None)
+    ctx = _Ctx(emitter=bus, config=AlsaVolumeOutputConfig(volume_type=volume_type))
+
+    await plugin.setup(ctx)  # type: ignore[arg-type]
+    try:
+        assert fake_queue.modes == [expected_mode]
+        assert isinstance(plugin.get_interface(), AlsaVolumeControlDevice)
+    finally:
+        await plugin.shutdown()
+        bus.close()
+
+
+async def test_plugin_setup_requires_bind():
+    plugin = AlsaVolumeOutputPlugin()
+    ctx = _Ctx(emitter=_make_bus(), config=AlsaVolumeOutputConfig())
+    with pytest.raises(RuntimeError):
+        await plugin.setup(ctx)  # type: ignore[arg-type]

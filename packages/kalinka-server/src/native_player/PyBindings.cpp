@@ -139,6 +139,8 @@ PYBIND11_MODULE(native_player, m) {
       .def("seek", &AudioPlayer::seek, py::arg("position_ms"))
       .def("get_state", &AudioPlayer::getState)
       .def("monitor", &AudioPlayer::monitor)
+      .def("configure_volume", &AudioPlayer::configureVolume, py::arg("mode"),
+           py::arg("mixer_control"))
       .def("get_volume", &AudioPlayer::getVolume)
       .def("set_volume", &AudioPlayer::setVolume, py::arg("volume"))
       .def("volume_monitor", &AudioPlayer::volumeMonitor);
