@@ -177,16 +177,21 @@ struct StreamNodes {
 
 AudioPlayer::AudioPlayer(const Config &config)
     : config(config), audioEmitter(std::make_shared<AlsaAudioEmitter>(config)),
-      streamSwitcher(std::make_shared<AudioStreamSwitcher>()),
-      volumeControl(std::make_unique<AlsaVolumeControl>(
-          value_or(config, "output.alsa.device", std::string("default")),
-          value_or(config, "output.alsa.mixer_control", std::string("")))),
-      volumeMode(parseVolumeMode(
-          value_or(config, "output.alsa.volume_mode", std::string("auto")))) {
+      streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
+  // Initialize the shared "native" logger before constructing any member that
+  // logs during construction (AlsaVolumeControl) — otherwise its first lines
+  // escape on spdlog's default logger, using the wrong format and ignoring the
+  // configured level. AlsaAudioEmitter above is silent in its constructor.
   initLogger(value_or(config, "server.log_level", std::string("debug")));
   perfmon_print_periodically(5);
-  spdlog::info("AudioPlayer volume: mode={}, hardware mixer {}",
-               value_or(config, "output.alsa.volume_mode", std::string("auto")),
+
+  const std::string mode =
+      value_or(config, "output.alsa.volume_mode", std::string("auto"));
+  volumeMode = parseVolumeMode(mode);
+  volumeControl = std::make_unique<AlsaVolumeControl>(
+      value_or(config, "output.alsa.device", std::string("default")),
+      value_or(config, "output.alsa.mixer_control", std::string("")));
+  spdlog::info("AudioPlayer volume: mode={}, hardware mixer {}", mode,
                volumeControl->available() ? "available" : "unavailable");
 }
 
