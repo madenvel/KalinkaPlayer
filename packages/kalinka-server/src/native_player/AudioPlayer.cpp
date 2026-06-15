@@ -178,21 +178,28 @@ struct StreamNodes {
 AudioPlayer::AudioPlayer(const Config &config)
     : config(config), audioEmitter(std::make_shared<AlsaAudioEmitter>(config)),
       streamSwitcher(std::make_shared<AudioStreamSwitcher>()) {
-  // Initialize the shared "native" logger before constructing any member that
-  // logs during construction (AlsaVolumeControl) — otherwise its first lines
-  // escape on spdlog's default logger, using the wrong format and ignoring the
-  // configured level. AlsaAudioEmitter above is silent in its constructor.
   initLogger(value_or(config, "server.log_level", std::string("debug")));
   perfmon_print_periodically(5);
+  // Volume handling stays "fixed" (no processing) until the local output device
+  // is set up and calls configureVolume(). Volume settings now live on that
+  // device's module config, not in the global config read here.
+}
 
-  const std::string mode =
-      value_or(config, "output.alsa.volume_mode", std::string("auto"));
+void AudioPlayer::configureVolume(const std::string &mode,
+                                  const std::string &mixerControl) {
   volumeMode = parseVolumeMode(mode);
-  volumeControl = std::make_unique<AlsaVolumeControl>(
-      value_or(config, "output.alsa.device", std::string("default")),
-      value_or(config, "output.alsa.mixer_control", std::string("")));
-  spdlog::info("AudioPlayer volume: mode={}, hardware mixer {}", mode,
-               volumeControl->available() ? "available" : "unavailable");
+  // A hardware mixer handle is only needed for hardware/auto; software and
+  // fixed don't touch it.
+  if (volumeMode == VolumeMode::Hardware || volumeMode == VolumeMode::Auto) {
+    volumeControl = std::make_unique<AlsaVolumeControl>(
+        value_or(config, "output.alsa.device", std::string("default")),
+        mixerControl);
+  } else {
+    volumeControl.reset();
+  }
+  spdlog::info("AudioPlayer volume configured: mode={}, hardware mixer {}", mode,
+               (volumeControl && volumeControl->available()) ? "available"
+                                                             : "unavailable");
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }

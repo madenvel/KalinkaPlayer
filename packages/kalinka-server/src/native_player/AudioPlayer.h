@@ -58,10 +58,17 @@ public:
   // Waits for the state change if no new state has been set yet.
   std::unique_ptr<StateMonitor> monitor();
 
-  // Volume control for the currently selected ALSA output, honoring
-  // output.alsa.volume_mode (auto/hardware/software/fixed). Values are 0..100
+  // (Re)configure volume handling for the currently selected ALSA output.
+  // `mode` is auto/hardware/software/fixed; `mixerControl` overrides the mixer
+  // element (empty = auto-detect). Called when the local output device is set
+  // up so its settings drive the native player; can be called again to change
+  // mode at runtime. Until configured, the player is in "fixed" (no volume
+  // control, bit-perfect) mode.
+  void configureVolume(const std::string &mode, const std::string &mixerControl);
+
+  // Volume control for the currently selected ALSA output. Values are 0..100
   // percent. getVolume() reports supported=false when no backend applies (e.g.
-  // mode=fixed, or mode=hardware on a card with no mixer).
+  // fixed mode, or hardware mode on a card with no mixer).
   VolumeState getVolume();
   void setVolume(int percent);
 
@@ -78,7 +85,9 @@ private:
   StreamId nextStreamId = 0;
 
   std::unique_ptr<AlsaVolumeControl> volumeControl;
-  VolumeMode volumeMode = VolumeMode::Auto;
+  // Fixed until configureVolume() runs (i.e. until the local output device is
+  // set up) — so by default the player does no volume processing.
+  VolumeMode volumeMode = VolumeMode::Fixed;
   int softwarePercent = 100;
 
   VolumeBackend activeBackend() const;

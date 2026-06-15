@@ -33,7 +33,6 @@ from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 
-from .alsa_fallback_device import AlsaFallbackDevice
 from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
 from .config_model import KalinkaConfig
 from .config_overrides import save_overrides
@@ -56,7 +55,6 @@ from .player_setup import modules, setup, shutdown, ModuleHealthState
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from .version import get_rest_api_version, get_version
-from . import state_keeper
 from .state_keeper import save_state, restore_state
 from .test_tone import VALID_CHANNELS, play_test_tone
 from .queue_ws_handler import (
@@ -88,10 +86,6 @@ async def lifespan(app: FastAPI):
         )
         await app.state.player_context.playqueue.__aenter__()
 
-        # Built-in ALSA volume fallback (only when no plugin device is active).
-        if getattr(app.state, "fallback_device", None) is not None:
-            await app.state.fallback_device.start()
-
         yield
 
     except Exception as e:
@@ -105,12 +99,9 @@ async def lifespan(app: FastAPI):
         # Shutdown internal modules first
         await internal_modules.shutdown()
 
-        # Stop the ALSA fallback before the playqueue: its volume monitor holds
-        # a native monitor backed by the AudioPlayer the playqueue owns.
-        if getattr(app.state, "fallback_device", None) is not None:
-            await app.state.fallback_device.shutdown()
-
-        # Then shutdown plugins
+        # Then shutdown plugins — including the built-in local-ALSA device, whose
+        # volume monitor is stopped here (before the playqueue tears down the
+        # native player it references).
         await shutdown()
 
         app.state.player_context.playqueue_eventbus.close()
@@ -313,23 +304,10 @@ async def create_app(
         and isinstance(prepared_device.interface, ExternalOutputDevice)
         else None
     )
-
-    # No external output-device plugin selected: fall back to the built-in ALSA
-    # volume control so the local output still has a working slider. It redirects
-    # get/set to the native AudioPlayer (hardware mixer or software gain per
-    # output.alsa.volume_mode). Started/stopped in the lifespan handler below.
-    app.state.fallback_device = None
-    if device is None:
-        state_dir = os.path.dirname(state_keeper.STATE_FILE)
-        sw_volume_path = os.path.join(
-            state_dir or ".", "kalinka_device_volume.json"
-        )
-        app.state.fallback_device = AlsaFallbackDevice(
-            player_context.playqueue,
-            player_context.ext_device_eventbus,
-            state_path=sw_volume_path,
-        )
-        device = app.state.fallback_device
+    # `device` is the active output-device control — the first enabled device.
+    # That's the built-in local-ALSA volume control unless an external plugin
+    # device (e.g. MusicCast) is enabled; it's None only when even local-alsa is
+    # disabled (in which case the player stays fixed / bit-perfect).
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):
