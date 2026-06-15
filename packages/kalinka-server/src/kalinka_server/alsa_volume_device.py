@@ -64,23 +64,53 @@ _VOLUME_TYPE_TO_MODE = {
     AlsaVolumeType.software: "software",
 }
 
+# Dotted config path of the volume_type field on the built-in local-alsa device.
+VOLUME_TYPE_OPTIONS_PATH = "devices.local-alsa.volume_type"
+
+
+def volume_type_options() -> list[dict]:
+    """Labelled + described choices for the volume_type dropdown, served through
+    the OptionsRegistry (the same mechanism as the ALSA device list) so the
+    settings UI shows a capitalized label with a one-line description per option,
+    instead of the bare enum value."""
+    return [
+        {
+            "value": AlsaVolumeType.automatic.value,
+            "label": "Automatic",
+            "description": "Use the card's hardware mixer when it has one "
+            "(bit-perfect); otherwise apply software gain.",
+        },
+        {
+            "value": AlsaVolumeType.hardware.value,
+            "label": "Hardware",
+            "description": "Always use the card's hardware mixer — bit-perfect, "
+            "but requires a mixer control.",
+        },
+        {
+            "value": AlsaVolumeType.software.value,
+            "label": "Software",
+            "description": "Apply gain in the player. Works on any card, but only "
+            "bit-perfect at full volume.",
+        },
+    ]
+
 
 class AlsaVolumeOutputConfig(ModuleConfig):
     """Settings for the built-in local ALSA output: the inherited ``enabled``
     toggle (disabled ⇒ fixed/bit-perfect) plus the volume-control type."""
 
     __module_icon__: ClassVar[str] = "speaker_outlined"
-    name: str = Field(default="local-alsa", frozen=True, exclude=True)
+    name: str = Field(default="local-alsa", title="Local ALSA Device", frozen=True, exclude=True)
     volume_type: AlsaVolumeType = Field(
         default=AlsaVolumeType.automatic,
         title="Volume control type",
         json_schema_extra={
             "help": (
-                "Automatic uses the card's hardware mixer when it has one "
-                "(bit-perfect) and otherwise applies software gain. Hardware / "
-                "Software force one of them. Disable this device for a fixed, "
-                "bit-perfect output (control the volume downstream)."
+                "How the volume slider drives this output. Disable the device "
+                "instead for a fixed, bit-perfect output (control volume "
+                "downstream)."
             ),
+            "widget": "enum_dropdown",
             "importance": "simple",
         },
     )

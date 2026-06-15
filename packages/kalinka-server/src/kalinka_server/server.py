@@ -34,6 +34,7 @@ from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 
 from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
+from .alsa_volume_device import VOLUME_TYPE_OPTIONS_PATH, volume_type_options
 from .config_model import KalinkaConfig
 from .config_overrides import save_overrides
 from .config_schema_processor import (
@@ -262,6 +263,11 @@ async def create_app(
     app.state.options_registry.register(
         ALSA_DEVICE_PATH,
         make_alsa_resolver(lambda: config.output.alsa.device),
+    )
+    # Static labelled/described choices for the local-alsa volume_type dropdown,
+    # served the same way as the ALSA device list.
+    app.state.options_registry.register(
+        VOLUME_TYPE_OPTIONS_PATH, volume_type_options
     )
     _initial_ok_in = {
         name: m.plugin_context.config
