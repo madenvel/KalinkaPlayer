@@ -1,9 +1,10 @@
+import asyncio
 import enum
 import logging
 import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, AsyncGenerator, Dict, Generator, Mapping, MutableMapping
+from typing import Any, Dict, Generator, Mapping, MutableMapping
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
@@ -358,21 +359,44 @@ class PreparedModuleCollection:
     async def _scan_and_setup_plugins_from_entry_points(
         self,
         overrides: MutableMapping[str, Any],
-    ) -> AsyncGenerator[tuple[str, PreparedPlugin], None]:
-        """Scan for installed plugins using entry points and setup those matching the specified type."""
+    ) -> list[tuple[str, PreparedPlugin]]:
+        """Scan for installed plugins and set them up, overlapping the slow
+        ``setup()`` calls so startup is gated by the slowest plugin rather than
+        the sum of all of them.
 
+        A plugin's ``setup()`` can block for many seconds (a network login, a
+        web-bundle download, spawning subprocesses). Awaiting them one after
+        another — as this used to — serialised every plugin behind the slowest
+        one and delayed the server from accepting connections. We instead fan
+        the ``setup()`` calls out with ``asyncio.gather``.
+
+        The override-mutating work stays sequential to avoid races on the
+        shared ``overrides`` mapping and its on-disk persistence: per-plugin
+        config building and one-shot consumption run *before* the fan-out, and
+        reconciliation runs *after* it. Plugins are returned in entry-point
+        order regardless of which finished first, so the default-module choice
+        (first enabled) stays deterministic.
+        """
+
+        # Phase 1 (sequential, no awaiting): build each plugin's config and
+        # context and consume any armed one-shot overrides before the plugin
+        # acts on them. Touching ``overrides`` here, single-threaded, keeps the
+        # shared mapping race-free.
+        prepared: list[dict[str, Any]] = []
         for plugin_name, plugin_class in self._scan_entry_points():
-
             logger.info(f"Found plugin: {plugin_name}")
-            prepared_module = None
-            error_message = None
-            config = None
-            plugin_context = None
-
+            entry: dict[str, Any] = {
+                "name": plugin_name,
+                "class": plugin_class,
+                "config": None,
+                "context": None,
+                "error": None,
+            }
             try:
                 config = self._build_module_config(
                     plugin_name, plugin_class, overrides
                 )
+                entry["config"] = config
                 # Reset armed one-shot triggers on disk *before* the plugin
                 # acts, leaving the armed value on ``config`` for this boot.
                 # Only when the module will actually run (setup() is skipped
@@ -382,40 +406,77 @@ class PreparedModuleCollection:
                     self._consume_one_shot_overrides(
                         plugin_name, plugin_class, config, overrides
                     )
-                plugin_context = self._make_plugin_context(
+                entry["context"] = self._make_plugin_context(
                     plugin_name, plugin_class, config
                 )
-                prepared_module = await PreparedPlugin.setup(plugin_class, plugin_context)
-
             except Exception as e:
-                logger.error(f"Failed to setup plugin {plugin_name}: {e}", exc_info=True)
-                error_message = str(e)
+                logger.error(
+                    f"Failed to prepare plugin {plugin_name}: {e}", exc_info=True
+                )
+                entry["error"] = str(e)
+            prepared.append(entry)
 
-                # Create a PreparedPlugin with error state even if setup failed
-                if config is not None and plugin_context is not None:
-                    prepared_module = PreparedPlugin(
-                        plugin_class=plugin_class,
-                        plugin_instance=None,
-                        health_state=ModuleHealthState.ERROR,
-                        plugin_context=plugin_context,
-                        interface=None,
-                        error_message=error_message,
-                    )
+        # Phase 2 (concurrent): run the slow setup() calls in parallel. Entries
+        # that failed to build a context in phase 1 are skipped here and handled
+        # as errors below.
+        async def _do_setup(entry: dict[str, Any]):
+            if entry["context"] is None:
+                return None
+            return await PreparedPlugin.setup(entry["class"], entry["context"])
+
+        results = await asyncio.gather(
+            *(_do_setup(entry) for entry in prepared),
+            return_exceptions=True,
+        )
+
+        # Phase 3 (sequential): fold results back into PreparedPlugins,
+        # reconcile consumed overrides, and emit in entry-point order.
+        out: list[tuple[str, PreparedPlugin]] = []
+        for entry, result in zip(prepared, results):
+            plugin_name = entry["name"]
+            prepared_module: PreparedPlugin | None = None
+
+            if isinstance(result, BaseException):
+                logger.error(
+                    f"Failed to setup plugin {plugin_name}: {result}",
+                    exc_info=result,
+                )
+                entry["error"] = str(result)
+            elif result is not None:
+                prepared_module = result
+
+            # Create a PreparedPlugin with error state even if setup failed,
+            # as long as we got far enough to have a config + context.
+            if (
+                prepared_module is None
+                and entry["config"] is not None
+                and entry["context"] is not None
+            ):
+                prepared_module = PreparedPlugin(
+                    plugin_class=entry["class"],
+                    plugin_instance=None,
+                    health_state=ModuleHealthState.ERROR,
+                    plugin_context=entry["context"],
+                    interface=None,
+                    error_message=entry["error"],
+                )
 
             # Reconcile overrides regardless of READY/ERROR state: a
             # plugin that crashed midway through setup may still have
             # consumed an override before crashing (e.g. localfiles
             # purges the DB before raising) and we don't want that
             # consumption to repeat on every restart.
-            if config is not None:
+            if entry["config"] is not None:
                 changed = self._reconcile_consumed_overrides(
-                    plugin_name, plugin_class, config, overrides
+                    plugin_name, entry["class"], entry["config"], overrides
                 )
                 if changed:
                     self.overrides_dirty = True
 
             if prepared_module is not None:
-                yield plugin_name, prepared_module
+                out.append((plugin_name, prepared_module))
+
+        return out
 
     def _make_plugin_context(
         self,
@@ -537,10 +598,10 @@ class PreparedModuleCollection:
         self.overrides_file = overrides_file
         input_modules = {}
         devices = {}
-        async for (
+        for (
             plugin_name,
             prepared_plugin,
-        ) in self._scan_and_setup_plugins_from_entry_points(overrides):
+        ) in await self._scan_and_setup_plugins_from_entry_points(overrides):
             plugin_type = prepared_plugin.plugin_class.PLUGIN_TYPE
             if plugin_type == PluginType.INPUT_MODULE:
                 input_modules[plugin_name] = prepared_plugin
