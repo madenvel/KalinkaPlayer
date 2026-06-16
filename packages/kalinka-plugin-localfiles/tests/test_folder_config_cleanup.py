@@ -116,6 +116,30 @@ async def test_failure_cache_rows_outside_config_are_dropped(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_symlink_escaping_roots_is_not_indexed(tmp_path):
+    # A symlink physically under a configured folder but resolving outside it
+    # must not be indexed — otherwise scan_folder would add it and
+    # cleanup_stale_tracks (which resolves symlinks) would purge it on every
+    # scan, churning the DB.
+    music = tmp_path / "music"
+    outside = tmp_path / "outside"
+    music.mkdir()
+    outside.mkdir()
+    real = outside / "real.mp3"
+    real.write_bytes(b"x")
+    link = music / "link.mp3"
+    link.symlink_to(real)
+
+    fi, _ = _make_indexer(tmp_path, [music])
+    await init_db(fi.db_manager.db_path)
+    fi._extract_metadata = lambda _p: _meta(artist="A", album="AA", title="a")
+    result = await fi.process_file(str(link))
+
+    assert result is None
+    assert await fi.db_manager.get_all_tracks() == []
+
+
+@pytest.mark.asyncio
 async def test_missing_file_inside_config_still_purged(tmp_path):
     keep = tmp_path / "keep"
     fi, _ = _make_indexer(tmp_path, [keep])

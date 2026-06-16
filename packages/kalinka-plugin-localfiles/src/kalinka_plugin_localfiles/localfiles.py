@@ -85,9 +85,11 @@ class LocalFilesInputModule(InputModule):
         self.db_manager = db_manager
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         # Access boundary: only files under a configured music folder may be
-        # served / played. Resolved once here; the module is reconstructed when
-        # the config changes, so a folder dropped from the config stops being
-        # playable even before the indexer purges its rows.
+        # served / played. Captured once here, so it is fixed for the lifetime
+        # of this module instance — a live config edit via PUT /server/config
+        # does not re-run setup(), so the new boundary only takes effect on the
+        # next restart / re-setup (at which point the indexer also purges the
+        # now-out-of-scope rows).
         self._music_folders = expand_music_folders(config.music_folders)
         self._search_request_queue = search_request_queue
         self._search_response_queue = search_response_queue
@@ -606,9 +608,13 @@ class LocalFilesInputModule(InputModule):
                                 f"Track path is outside the configured music "
                                 f"folders: {track_path}"
                             )
-                        if not os.access(track_path, os.R_OK):
+                        if not os.path.exists(track_path):
                             raise FileNotFoundError(
-                                f"Track file is not accessible: {track_path}"
+                                f"Track file no longer exists: {track_path}"
+                            )
+                        if not os.access(track_path, os.R_OK):
+                            raise PermissionError(
+                                f"Track file is not readable: {track_path}"
                             )
                         return TrackUrl(url=f"file://{track_path}", format=track_format)
 
