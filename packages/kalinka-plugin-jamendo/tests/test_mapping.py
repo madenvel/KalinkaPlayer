@@ -140,6 +140,30 @@ async def test_browse_album_paginates_tracks():
 
 
 @pytest.mark.asyncio
+async def test_album_track_inherits_artist_from_album():
+    # Real Jamendo quirk: /albums/tracks nests tracks under the album and the
+    # nested track objects carry NO artist_id/artist_name (the artist lives on
+    # the album). Without the album_meta fallback these tracks reach the
+    # playqueue with an empty artist even though browse shows the album artist.
+    bare_track = {
+        "id": "100",
+        "name": "Sunrise",
+        "duration": "212",
+        "position": "1",
+    }
+    album_with_tracks = {**ALBUM, "tracks": [bare_track]}
+    m = make_module([album_with_tracks])
+    res = await m.browse(jm.album_id("5"), 0, 50)
+    perf = res.items[0].track.performer
+    assert perf.id.id == "10"
+    assert perf.name == "The Band"
+    # And it is cached so a queue-add via get_track_info keeps the artist.
+    infos = await m.get_track_info(["100"])
+    assert infos[0].metadata.performer.id.id == "10"
+    assert infos[0].metadata.performer.name == "The Band"
+
+
+@pytest.mark.asyncio
 async def test_browse_artist_uses_albums_endpoint():
     # Artist browse goes through /albums/?artist_id= so cards get the real
     # trackid-bearing cover; offset/limit are forwarded for native pagination.
