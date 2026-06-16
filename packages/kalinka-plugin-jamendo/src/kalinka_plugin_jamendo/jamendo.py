@@ -736,9 +736,15 @@ class JamendoInputModule(InputModule):
             or track.get("image")
             or album_meta.get("image")
         )
+        # /albums/tracks nests tracks under the album and does not repeat the
+        # artist on each track (it lives on the album object), so fall back to
+        # album_meta. Without this, album tracks reach the playqueue with an
+        # empty artist even though browse shows the album-level artist.
         performer = Artist(
-            id=artist_id(str(track.get("artist_id", ""))),
-            name=track.get("artist_name", ""),
+            id=artist_id(
+                str(track.get("artist_id") or album_meta.get("artist_id") or "")
+            ),
+            name=track.get("artist_name") or album_meta.get("artist_name") or "",
         )
         return Track(
             id=track_id(str(track["id"])),
