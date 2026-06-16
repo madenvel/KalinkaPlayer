@@ -83,6 +83,10 @@ configs/
 # Skill-generated evaluation output (e.g. /assess-ai-search)
 tmp/ai_search_eval/
 tmp/enrichment_assess/
+tmp/mtg_jamendo_eval/
+
+# JamendoMaxCaps dataset puller (scratch; not part of the repo)
+tmp/jamendomaxcaps/
 
 # Log files
 *.log

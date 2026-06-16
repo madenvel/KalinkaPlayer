@@ -5,18 +5,33 @@ description: Measure precision / recall / MRR of Kalinka's CLAP-backed `ai_searc
 
 # assess-ai-search
 
+This skill has **two** benchmarks — pick by what you're asking:
+
+| You want to know… | Use | Ground truth | Where |
+|---|---|---|---|
+| Is the CLAP **retrieval model** good? (stable yardstick for model/encoder/ranking changes) | **MTG-Jamendo canonical benchmark** | official human-curated tags — reliable, library-independent | [`mtg_jamendo/`](mtg_jamendo/README.md) |
+| How good is search on **this user's library**? (coverage + enrichment included) | per-library harness (below) | local tagger + `album_genre` + curated `artist_labels` — only reliable on the dev library | `queries.json` + `tools/` |
+
+The per-library numbers are a conservative floor on an arbitrary library (sparse tags,
+`artist_labels` curated for one collection); the MTG-Jamendo benchmark is the
+trustworthy absolute measure. Both encode with the production ONNX encoder.
+
+---
+
 Reproducible quality benchmark for the AI search in `kalinka-plugin-localfiles`. The skill assumes:
 
-- DB at `/home/envel/kalinka/localfiles.db` (override with `KALINKA_DB`)
+- DB at `~/kalinka/localfiles.db` (override with `KALINKA_DB`)
 - Embeddings already computed (`embedding_clap_audio`, `embedding_clap_text`, `tags_predicted` are populated)
-- `laion_clap` or the ONNX wrapper from `packages/kalinka-plugin-localfiles/src/kalinka_plugin_localfiles/embedder/clap_onnx.py` is importable
+- The **ONNX** CLAP wrapper (`packages/kalinka-plugin-localfiles/src/kalinka_plugin_localfiles/embedder/clap_onnx.py`) is loadable and its model files (`clap_text_encoder.onnx`, `clap_tokenizer.json`) are present in `KALINKA_MODEL_DIR` (default `~/kalinka/models`). **This is mandatory** — the stored vectors are ONNX-encoded; see the encoder note in "Reporting caveats".
 
 The two vector indexes have **different semantics** and the skill measures both:
 
 | Index | Side | What is stored | Used by |
 |---|---|---|---|
 | `vec_tracks_clap` | audio | CLAP audio embedding of the first 10s | `test_ai_search.py` (canonical CLAP retrieval) |
-| `vec_tracks_clap_text` | text | CLAP **text** embedding of the track's title/artist/album string | production `searcher._knn_leg` |
+| `vec_tracks_clap_text` | text | CLAP **text** embedding of the track's title/artist/album string | comparison only (FTS handles metadata lookups) |
+
+Production `searcher._knn_leg` queries the **audio** index (`knn_search_audio` → `vec_tracks_clap`): CLAP is contrastively trained text↔audio, so text-query → audio-embedding is the canonical retrieval direction.
 
 A text query is encoded with the CLAP text encoder and KNN'd against both. Reporting both makes the audio↔text vs text↔text gap visible — that single number drives most of the "should we switch indexes?" decision.
 
@@ -27,7 +42,7 @@ Run all steps in order. Do not skip step 1 or 2 — the report is only meaningfu
 ### 1. Sanity-check the DB
 
 ```bash
-sqlite3 "${KALINKA_DB:-/home/envel/kalinka/localfiles.db}" "
+sqlite3 "${KALINKA_DB:-$HOME/kalinka/localfiles.db}" "
 SELECT
   (SELECT COUNT(*) FROM tracks) AS tracks,
   (SELECT COUNT(*) FROM tracks WHERE embedding_clap_audio IS NOT NULL) AS audio_embedded,
@@ -63,7 +78,7 @@ Artist labels come from `queries.json → artist_labels` — a curated map of we
 
 ```bash
 python .claude/skills/assess-ai-search/tools/evaluate.py \
-  --db        "${KALINKA_DB:-/home/envel/kalinka/localfiles.db}" \
+  --db        "${KALINKA_DB:-$HOME/kalinka/localfiles.db}" \
   --queries   .claude/skills/assess-ai-search/queries.json \
   --truth     tmp/ai_search_eval/ground_truth.jsonl \
   --k         10 \
@@ -105,7 +120,7 @@ After looking at the numbers, walk the checklist below and write findings under 
 
 **B. Index choice (audio vs text)**
 
-CLAP is contrastively trained text↔audio, so a text query naturally retrieves over the **audio** index. Production currently queries the **text** index (`searcher._knn_leg → knn_search_text`). If audio P@10 > text P@10 by ≥0.10 on mood / abstract / instrument queries, flip the production leg.
+CLAP is contrastively trained text↔audio, so a text query naturally retrieves over the **audio** index — which is what production already queries (`searcher._knn_leg → knn_search_audio`). The benchmark confirms audio > text on mood / activity / abstract / instrument (the timbre-driven categories); text only edges ahead on subgenre / era (metadata-word driven, which FTS already covers). So keep the audio leg; do **not** route NL queries through the text vector index — it's lexical and degenerates on sparse metadata (many tracks with empty/"Untitled" text collapse to one near-identical embedding).
 
 The text index is plausibly better for queries that name an artist / album / language explicitly — those should be handled by FTS anyway. Confirm with the per-category gap before recommending the flip.
 
@@ -161,7 +176,7 @@ For meaningful aggregate recall, raise K to `min(50, total_relevant)` or report 
 ### Other gotchas
 
 - Ground truth is heuristic, not curated. A "wrong" hit might actually be relevant — sample 5-10 disagreements by ear when the numbers look surprising. Do not retune weights against a P@10 delta smaller than 0.05 — it's within the noise of the labelling heuristic.
-- The CLAP encoder is non-deterministic across `laion_clap` vs the ONNX wrapper at the 4th decimal. Use the same encoder for all runs in a single comparison; the script picks ONNX when available and falls back to `laion_clap`.
+- **Encode with ONNX, not `laion_clap`.** The stored `vec_tracks_clap*` vectors are generated by the ONNX encoder (`ClapOnnxModel`). `laion_clap` lives in a **different embedding space** — querying ONNX-audio vectors with laion_clap-text vectors is near-random (cross-space KNN, distances ~1.31, ~½ the precision/MRR/lift). This is **not** a 4th-decimal difference. `evaluate.py` defaults to the ONNX encoder; `KALINKA_FORCE_LAION=1` switches to laion_clap only for an explicit, loudly-warned comparison. Older `results.*.json` / baseline reports in `tmp/ai_search_eval/` predate this fix and were produced with laion_clap — treat them as invalid.
 - 6 queries in `queries.json` may have `total_relevant == 0` if the library lacks those genres entirely. These queries always score 0 and drag the mean P@10 down by ~6 pp. Exclude them from the headline (filter `total_relevant > 0`) or annotate them with `"corpus_ood": true` in `queries.json`.
 
 ## Files in this skill
@@ -172,5 +187,6 @@ For meaningful aggregate recall, raise K to `min(50, total_relevant)` or report 
 - `tools/evaluate.py` — encodes queries, runs KNN against both vec indexes directly, computes raw metrics
 - `tools/evaluate_endpoint.py` — same metrics but hits the live `/ai_search` endpoint (full FTS + KNN + re-rank pipeline)
 - `tools/analyze.py` — post-hoc analysis: lift-over-random, recall-at-ceiling, real-wins vs corpus-skew artifacts
+- `mtg_jamendo/` — **canonical library-independent benchmark** (MTG-Jamendo, official tags as ground truth). See [`mtg_jamendo/README.md`](mtg_jamendo/README.md); pipeline is `select_subset.py → fetch_audio.py → embed.py → gen_queries.py → run_eval.py`, artifacts default to `tmp/mtg_jamendo_eval/`.
 
 If a script is missing or out of date relative to the DB schema, regenerate it from this SKILL.md rather than hand-patching — the skill is the source of truth.
