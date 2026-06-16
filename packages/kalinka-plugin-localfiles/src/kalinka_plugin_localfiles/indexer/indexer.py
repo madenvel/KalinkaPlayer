@@ -26,7 +26,12 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import album_folder_for_path, clean_display_name
+from ..utils.name_utils import (
+    album_folder_for_path,
+    clean_display_name,
+    expand_music_folders,
+    path_within_roots,
+)
 from ..worker_utils import set_proc_title
 from .id_generator import (
     generate_artist_id,
@@ -110,10 +115,10 @@ class FileIndexer:
     def __init__(self, config: LocalFilesConfig, db_manager: AsyncIndexerDb):
         self.config = config
         self.db_manager = db_manager
-        # Expand user (~) and resolve absolute paths for music folders
-        self.music_folders = [
-            str(Path(folder).expanduser().resolve()) for folder in config.music_folders
-        ]
+        # Expand user (~) and resolve absolute paths for music folders. This is
+        # the access boundary: only files under one of these are indexed, and
+        # cleanup_stale_tracks purges anything that falls outside them.
+        self.music_folders = expand_music_folders(config.music_folders)
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         self.running = False
         self.lock = asyncio.Lock()
@@ -857,7 +862,16 @@ class FileIndexer:
             )
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
-        """Remove entries for files that no longer exist in the file system"""
+        """Remove entries that are no longer valid for the file system.
+
+        A track is dropped when its file either no longer exists, or falls
+        outside the currently configured music folders. The latter handles a
+        changed folder config: when a parent folder is removed from the
+        config, its files are no longer accessible to this module and must be
+        purged so they aren't served or played. Because ``run_scan`` (and thus
+        this method) runs on startup, the cleanup happens immediately after a
+        restart with the new config.
+        """
         logger.debug("Checking for stale files in the database...")
         all_tracks = await self.db_manager.get_all_tracks()
         removed_tracks = 0
@@ -867,14 +881,23 @@ class FileIndexer:
                 logger.info(
                     f"File no longer exists, removing from database: {file_path}"
                 )
-                track_id = track["id"]
-                await self.db_manager.delete_track(track_id)
+                await self.db_manager.delete_track(track["id"])
+                removed_tracks += 1
+            elif not path_within_roots(file_path, self.music_folders):
+                logger.info(
+                    "File is outside the configured music folders, removing "
+                    f"from database: {file_path}"
+                )
+                await self.db_manager.delete_track(track["id"])
                 removed_tracks += 1
 
-        # Drop failure-cache rows for files that have since been deleted,
-        # so the cache doesn't accumulate entries for vanished files.
+        # Drop failure-cache rows for files that have since been deleted or
+        # moved out of the configured folders, so the cache doesn't accumulate
+        # entries for files this module no longer manages.
         for failed_path in await self.db_manager.get_failure_paths():
-            if not os.path.exists(failed_path):
+            if not os.path.exists(failed_path) or not path_within_roots(
+                failed_path, self.music_folders
+            ):
                 await self.db_manager.clear_failure(failed_path)
 
         removed_albums, removed_artists = (
@@ -962,9 +985,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
         return
 
     try:
-        music_folders = [
-            str(Path(folder).expanduser().resolve()) for folder in config.music_folders
-        ]
+        music_folders = expand_music_folders(config.music_folders)
         logger.info(f"Starting file watcher for folders: {music_folders}")
 
         try:

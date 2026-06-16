@@ -32,6 +32,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
+from .utils.name_utils import expand_music_folders, path_within_roots
 from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -83,6 +84,11 @@ class LocalFilesInputModule(InputModule):
         self.config = config
         self.db_manager = db_manager
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
+        # Access boundary: only files under a configured music folder may be
+        # served / played. Resolved once here; the module is reconstructed when
+        # the config changes, so a folder dropped from the config stops being
+        # playable even before the indexer purges its rows.
+        self._music_folders = expand_music_folders(config.music_folders)
         self._search_request_queue = search_request_queue
         self._search_response_queue = search_response_queue
         self._search_lock = asyncio.Lock()
@@ -587,9 +593,23 @@ class LocalFilesInputModule(InputModule):
                 track = track_dict[track_id_str]
                 track_metadata = self._create_track_metadata(track)
 
-                # Create a link retriever function for this track
+                # Create a link retriever function for this track. It validates
+                # access at play time: the file must still be inside a
+                # configured music folder and readable. Otherwise it raises, and
+                # the play queue surfaces the track as unavailable rather than
+                # handing the player a dead/forbidden path. This guards the
+                # window between a folder-config change and the next index scan.
                 def create_link_retriever(track_path, track_format):
                     async def link_retriever():
+                        if not path_within_roots(track_path, self._music_folders):
+                            raise PermissionError(
+                                f"Track path is outside the configured music "
+                                f"folders: {track_path}"
+                            )
+                        if not os.access(track_path, os.R_OK):
+                            raise FileNotFoundError(
+                                f"Track file is not accessible: {track_path}"
+                            )
                         return TrackUrl(url=f"file://{track_path}", format=track_format)
 
                     return link_retriever
