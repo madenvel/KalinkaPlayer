@@ -207,7 +207,7 @@ class DeviceAutomationConfig(BaseModel):
     )
     auto_off_timeout_seconds: int = Field(
         default=60,
-        title="Pause timeout",
+        title="Pause timeout (seconds)",
         json_schema_extra={
             "help": "Stop playback if paused for this many seconds (0 = disabled)",
             "constraints": {"unit": "s"},

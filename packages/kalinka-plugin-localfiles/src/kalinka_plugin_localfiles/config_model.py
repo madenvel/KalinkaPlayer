@@ -336,8 +336,12 @@ class LocalFilesConfig(ModuleConfig):
     )
     scan_interval_minutes: int = Field(
         default=15,
-        title="Scan interval",
-        json_schema_extra={"constraints": {"unit": "min"}, **_SIMPLE},
+        title="Scan interval (minutes)",
+        json_schema_extra={
+            "help": "How often to rescan the library, in minutes",
+            "constraints": {"unit": "min"},
+            **_SIMPLE,
+        },
     )
     file_watch_enabled: bool = Field(
         default=True,
