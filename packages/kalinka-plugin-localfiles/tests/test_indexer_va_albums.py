@@ -46,12 +46,12 @@ async def _index_folder(fi, folder, artists):
     function bound per-iteration is fine)."""
     folder.mkdir(parents=True, exist_ok=True)
     for i, artist in enumerate(artists):
-        p = str(folder / f"{i:02d} - {artist} - Song {i}.mp3")
-        open(p, "wb").write(b"x")
+        fpath = folder / f"{i:02d} - {artist} - Song {i}.mp3"
+        fpath.write_bytes(b"x")
         fi._extract_metadata = lambda _p, a=artist, n=i: _meta(
             artist=a, title=f"Song {n}"
         )
-        await fi.process_file(p)
+        await fi.process_file(str(fpath))
 
 
 @pytest.mark.asyncio
@@ -123,3 +123,20 @@ async def test_generic_dump_folder_stays_unknown_album(indexer):
     con.close()
     assert va == 0  # no fabricated compilation album
     assert unk == len(artists)  # tracks left loose
+
+
+def test_strip_artist_prefix_requires_a_boundary():
+    f = FileIndexer._strip_artist_prefix
+    assert f("Ratatat Remixes Vol. 2", "Ratatat") == "Remixes Vol. 2"
+    assert f("Massive Attack - Sessions", "Massive Attack") == "Sessions"
+    assert f("Remixes", "Netsky") == "Remixes"  # no prefix -> unchanged
+    assert f("ABBA Gold", "AB") == "ABBA Gold"  # boundary guard, not "BA Gold"
+
+
+@pytest.mark.asyncio
+async def test_va_marked_folder_bypasses_generic_filter(indexer):
+    """An explicit "VA -" marker declares a compilation, so a name that would
+    otherwise be treated as a generic dump (e.g. "Mixes") is still honoured."""
+    fi, music_dir, _ = indexer
+    assert fi._compilation_title(str(music_dir / "VA - Trance Mixes")) == "Trance Mixes"
+    assert fi._compilation_title(str(music_dir / "90s Mixes")) is None  # no marker

@@ -8,7 +8,7 @@ import logging
 import asyncio
 import mimetypes
 import multiprocessing
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pathlib import Path
 
@@ -705,7 +705,6 @@ class FileIndexer:
                 target_id = "unknown_album"
                 dest = "unknown_album"
             else:
-                target_id = generate_album_id(comp_title, folder)
                 parent_artist = await self._parent_artist_for_folder(
                     folder, artist_folders
                 )
@@ -722,6 +721,10 @@ class FileIndexer:
                     if not va_seeded:
                         await self._ensure_various_artists()
                         va_seeded = True
+                # Key the id on the title we actually store, so it honours the
+                # generate_album_id (folder, normalized_title) invariant and
+                # stays stable across re-scans.
+                target_id = generate_album_id(display_title, folder)
                 await self._ensure_compilation_album(target_id, display_title, owner_id)
 
             folder_repointed = 0
@@ -761,17 +764,26 @@ class FileIndexer:
     def _compilation_title(self, folder: str) -> Optional[str]:
         """Album title for a V/A folder, or None if it's a generic dump that
         shouldn't become an album (a top-level ``music`` dir, a personal
-        ``90s Mixes`` pile, etc.)."""
+        ``90s Mixes`` pile, etc.).
+
+        A folder explicitly marked ``VA -`` / ``Various Artists -`` is a
+        declared compilation, so it bypasses the generic-dump heuristic (e.g.
+        ``VA - Trance Mixes`` must not be rejected by the ``mix`` rule)."""
         name = os.path.basename(folder).strip()
-        if not name or _GENERIC_FOLDER_RE.match(name):
+        # Strip the V/A marker first so the heuristic and the title both see
+        # the real name.
+        title = _VA_PREFIX_RE.sub("", name).strip()
+        explicit_va = title != name
+        if not title:
+            return None
+        if not explicit_va and _GENERIC_FOLDER_RE.match(title):
             return None
         # A bare "Disc 1" / "Volume 2" folder is meaningless on its own — most
         # disc subdirs are already collapsed by album_folder_for_path, but for
         # the rest borrow the parent dir for a real title.
-        if _BARE_DISC_RE.match(name):
+        if _BARE_DISC_RE.match(title):
             parent = os.path.basename(os.path.dirname(folder)).strip()
-            name = f"{parent} {name}".strip() if parent else name
-        title = _VA_PREFIX_RE.sub("", name).strip()  # drop a leading "VA - "
+            title = f"{parent} {title}".strip() if parent else title
         return title or None
 
     async def _ensure_various_artists(self) -> None:
@@ -809,10 +821,12 @@ class FileIndexer:
     def _strip_artist_prefix(title: str, artist_name: str) -> str:
         """Drop a leading artist name from a title so it reads cleanly once the
         album is attributed to that artist (``Ratatat Remixes Vol. 2`` ->
-        ``Remixes Vol. 2``). No-op when the title doesn't start with the name."""
+        ``Remixes Vol. 2``). Only strips at a separator/word boundary, so
+        artist ``AB`` does not corrupt ``ABBA Gold``."""
         if title.lower().startswith(artist_name.lower()):
-            rest = title[len(artist_name) :].lstrip(" -–—")
-            return rest or title
+            rest = title[len(artist_name) :]
+            if not rest or rest[0] in " -–—":  # boundary required
+                return rest.lstrip(" -–—") or title
         return title
 
     async def _ensure_compilation_album(
@@ -834,7 +848,12 @@ class FileIndexer:
             )
         elif existing.get("artist_id") != artist_id or existing.get("title") != title:
             await self.db_manager.update_album(
-                album_id, {"artist_id": artist_id, "title": title}
+                album_id,
+                {
+                    "artist_id": artist_id,
+                    "title": title,
+                    "last_updated": int(time.time()),
+                },
             )
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
