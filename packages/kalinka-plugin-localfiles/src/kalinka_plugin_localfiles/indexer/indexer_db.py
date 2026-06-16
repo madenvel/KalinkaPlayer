@@ -138,6 +138,22 @@ class AsyncIndexerDb:
                     f"Filtered out non-existent columns for track {track_id}: {', '.join(filtered_out)}"
                 )
 
+    async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
+        """Update album information (only columns that exist in the table)."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute("PRAGMA table_info(albums)")
+            valid_columns = {row[1] for row in await cursor.fetchall()}
+            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
+            if not filtered_data:
+                logger.debug(f"No valid columns to update for album {album_id}")
+                return
+            fields = [f"{k} = ?" for k in filtered_data]
+            values = list(filtered_data.values()) + [album_id]
+            query = f"UPDATE albums SET {', '.join(fields)} WHERE id = ?"
+            await cursor.execute(query, values)
+            await conn.commit()
+
     async def insert_track(self, data: Dict[str, Any]) -> None:
         """Insert a new track"""
         async with self._open() as conn:

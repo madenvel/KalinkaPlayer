@@ -101,3 +101,6 @@ debs/
 
 # ONNX model files (downloaded from GitHub Releases)
 models/
+
+# temporary files used for evaluation
+tmp/
