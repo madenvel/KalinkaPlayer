@@ -296,6 +296,12 @@ class FileIndexer:
 
         file_size = stat.st_size
         modified_time = int(stat.st_mtime)
+        # Nanosecond mtime for the failure-cache key. With second resolution a
+        # broken file that gets fixed within the same integer second and keeps
+        # the same size would collide on the key and never be retried. The
+        # tracks table deliberately stays on second-resolution modified_time
+        # (it's compared against search_indexed_at in the FTS staleness check).
+        mtime_ns = stat.st_mtime_ns
 
         existing_track = await self.db_manager.get_track_by_path(file_path)
         if (
@@ -314,7 +320,7 @@ class FileIndexer:
         failure = await self.db_manager.get_failure(file_path)
         if (
             failure
-            and failure["modified_time"] == modified_time
+            and failure["modified_time"] == mtime_ns
             and failure["file_size"] == file_size
         ):
             logger.debug(
@@ -326,7 +332,7 @@ class FileIndexer:
         metadata = await asyncio.to_thread(self._extract_metadata, file_path)
         if not metadata:
             attempts = await self.db_manager.record_failure(
-                file_path, file_size, modified_time, "metadata extraction failed"
+                file_path, file_size, mtime_ns, "metadata extraction failed"
             )
             logger.warning(
                 f"Failed to extract metadata from {file_path} "

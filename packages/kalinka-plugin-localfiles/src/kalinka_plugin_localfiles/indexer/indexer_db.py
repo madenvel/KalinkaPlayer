@@ -231,9 +231,13 @@ class AsyncIndexerDb:
             return dict(row) if row else None
 
     async def record_failure(
-        self, file_path: str, file_size: int, modified_time: int, error: str
+        self, file_path: str, file_size: int, mtime_ns: int, error: str
     ) -> int:
         """Record (or update) a metadata-extraction failure for a file.
+
+        ``mtime_ns`` is the nanosecond-resolution mtime (``stat.st_mtime_ns``)
+        so a fixed-but-broken file re-written within the same integer second
+        doesn't collide on the key. Stored in the ``modified_time`` column.
 
         ``attempts`` is incremented only while the file is unchanged
         (same size + mtime); a changed file resets the counter so a
@@ -252,7 +256,7 @@ class AsyncIndexerDb:
             if (
                 row
                 and row["file_size"] == file_size
-                and row["modified_time"] == modified_time
+                and row["modified_time"] == mtime_ns
             ):
                 attempts = row["attempts"] + 1
             else:
@@ -263,7 +267,7 @@ class AsyncIndexerDb:
                     (file_path, file_size, modified_time, error, attempts, last_attempt)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (file_path, file_size, modified_time, error, attempts, int(time.time())),
+                (file_path, file_size, mtime_ns, error, attempts, int(time.time())),
             )
             await conn.commit()
             return attempts

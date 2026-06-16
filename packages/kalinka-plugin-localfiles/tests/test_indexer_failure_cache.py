@@ -142,6 +142,40 @@ async def test_cleanup_prunes_failures_for_deleted_files(indexer, monkeypatch):
     assert await fi.db_manager.get_failure(file_path) is None
 
 
+@pytest.mark.asyncio
+async def test_subsecond_mtime_change_is_retried(indexer, monkeypatch):
+    """A fixed-but-broken file re-written within the same integer second,
+    keeping the same size, must still be retried. The failure-cache key uses
+    nanosecond mtime (stat.st_mtime_ns), not truncated seconds, so it doesn't
+    collide on the second boundary (PR #67 review)."""
+    fi, music_dir = indexer
+    p = music_dir / "samesize.mp3"
+    file_path = _write(p, b"aaaaaaaa")  # 8 bytes
+
+    base_s = 1_700_000_000
+    os.utime(file_path, ns=(base_s * 10**9, base_s * 10**9 + 100_000_000))
+    if os.stat(file_path).st_mtime_ns % 10**9 == 0:
+        pytest.skip("filesystem lacks sub-second mtime resolution")
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        fi, "_extract_metadata",
+        lambda _p: (calls.__setitem__("n", calls["n"] + 1), None)[1],
+    )
+
+    # First pass: fails and is recorded with the +0.10s nanosecond mtime.
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 1
+
+    # Same byte length, same integer second, different nanoseconds (+0.90s).
+    # Second-resolution keys would treat this as "unchanged" and skip it;
+    # the nanosecond key sees a change and retries.
+    p.write_bytes(b"bbbbbbbb")  # still 8 bytes
+    os.utime(file_path, ns=(base_s * 10**9, base_s * 10**9 + 900_000_000))
+    assert await fi.process_file(file_path) is None
+    assert calls["n"] == 2
+
+
 def test_mp3_without_id3_header_is_supported(monkeypatch):
     """A tagless MP3 must extract (duration only), not raise."""
     fi = FileIndexer.__new__(FileIndexer)  # no DB needed for this unit
