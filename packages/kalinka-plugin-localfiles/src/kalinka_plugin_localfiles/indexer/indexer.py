@@ -281,6 +281,16 @@ class FileIndexer:
 
     async def process_file(self, file_path: str) -> Optional[Dict[str, Optional[str]]]:
         """Process a music file and update the database. Returns changed items IDs."""
+        # Access boundary: never index a file whose canonical path escapes the
+        # configured music folders — e.g. a symlink sitting under a watched
+        # folder that resolves elsewhere. Enforced here, using the same
+        # symlink-resolving check as cleanup_stale_tracks, so the scan and the
+        # cleanup agree on what is in scope; otherwise such a file would be
+        # indexed on every scan and purged again, churning the database.
+        if not path_within_roots(file_path, self.music_folders):
+            logger.debug(f"Skipping file outside configured folders: {file_path}")
+            return None
+
         try:
             stat = os.stat(file_path)
         except FileNotFoundError:
