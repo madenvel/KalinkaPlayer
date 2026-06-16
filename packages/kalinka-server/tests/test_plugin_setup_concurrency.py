@@ -29,9 +29,37 @@ class _Config(ModuleConfig):
     enabled: bool = Field(default=True)
 
 
-def _make_plugin(plugin_id: str, *, delay: float = 0.0, fail: bool = False):
+class _Barrier:
+    """Minimal asyncio barrier (``asyncio.Barrier`` is 3.11+, we target 3.8).
+
+    The event loop is single-threaded, so the unguarded counter bump is safe.
+    Each waiter records its arrival; the last to arrive releases everyone. If
+    plugin setup runs sequentially the first (and only) waiter never sees the
+    others arrive and blocks forever — the test's ``wait_for`` turns that
+    deadlock into a clean, deterministic failure instead of a timing flake.
+    """
+
+    def __init__(self, parties: int):
+        self._parties = parties
+        self._count = 0
+        self._released = asyncio.Event()
+
+    async def wait(self):
+        self._count += 1
+        if self._count >= self._parties:
+            self._released.set()
+        await self._released.wait()
+
+
+def _make_plugin(
+    plugin_id: str,
+    *,
+    delay: float = 0.0,
+    fail: bool = False,
+    barrier: "_Barrier | None" = None,
+):
     """Build a fake input-module plugin class whose setup() optionally sleeps
-    (to expose serialisation) and/or raises."""
+    (to expose serialisation), waits on a shared barrier, and/or raises."""
 
     started: list[float] = []
 
@@ -43,6 +71,8 @@ def _make_plugin(plugin_id: str, *, delay: float = 0.0, fail: bool = False):
 
         async def setup(self, context):
             started.append(time.monotonic())
+            if barrier is not None:
+                await barrier.wait()
             if delay:
                 await asyncio.sleep(delay)
             if fail:
@@ -72,18 +102,24 @@ def _collection(plugins) -> PreparedModuleCollection:
 
 @pytest.mark.asyncio
 async def test_setups_run_concurrently():
-    # Three plugins that each sleep 0.2s. Serialised that is ~0.6s; concurrent
-    # is ~0.2s. Assert well under the serial sum.
-    plugins = [_make_plugin(f"p{i}", delay=0.2) for i in range(3)]
+    # Prove overlap with a barrier rather than a wall-clock threshold: every
+    # plugin must enter setup() before any is allowed to leave. If setup were
+    # serialised the first plugin would block at the barrier forever (the
+    # others never start), and wait_for would trip — no timing heuristic, so
+    # no CI flake.
+    barrier = _Barrier(3)
+    plugins = [_make_plugin(f"p{i}", barrier=barrier) for i in range(3)]
     collection = _collection(plugins)
 
-    start = time.monotonic()
-    result = await collection._scan_and_setup_plugins_from_entry_points({})
-    elapsed = time.monotonic() - start
+    result = await asyncio.wait_for(
+        collection._scan_and_setup_plugins_from_entry_points({}), timeout=5
+    )
 
     assert [name for name, _ in result] == ["p0", "p1", "p2"]
     assert all(p.health_state == ModuleHealthState.READY for _, p in result)
-    assert elapsed < 0.45, f"setup did not overlap (took {elapsed:.2f}s)"
+    # Every plugin reached setup() — the barrier could only release if all
+    # three were in flight at once.
+    assert all(len(p._started) == 1 for p in plugins)
 
 
 @pytest.mark.asyncio

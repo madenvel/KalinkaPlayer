@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, Dict, Generator, Mapping, MutableMapping
+from typing import Any, Generator, Mapping, MutableMapping
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
@@ -439,7 +439,7 @@ class PreparedModuleCollection:
             if isinstance(result, BaseException):
                 logger.error(
                     f"Failed to setup plugin {plugin_name}: {result}",
-                    exc_info=result,
+                    exc_info=(type(result), result, result.__traceback__),
                 )
                 entry["error"] = str(result)
             elif result is not None:
