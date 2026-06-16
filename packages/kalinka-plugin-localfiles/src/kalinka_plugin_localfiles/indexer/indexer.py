@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import sys
 import io
 import time
@@ -42,6 +43,22 @@ from .indexer_db import AsyncIndexerDb
 # Abbey Road with 2-3 wrong-artist tags out of 17 tracks).
 VA_MIN_DISTINCT_ARTISTS = 4
 VA_MIN_ARTIST_UNIQUENESS = 0.5
+
+# Folder names that are dumping grounds / structural dirs, not compilations or
+# artists. Used both to keep such folders' tracks loose under unknown_album and
+# to reject them as a parent-artist (e.g. ".../unused/8bit Remixes").
+_GENERIC_FOLDER_RE = re.compile(
+    r"^(music|musik|audio|downloads?|mp3s?|tracks?|songs?|various|"
+    r"streamed_music|unused|unsorted|sorted|misc|miscellaneous|temp|tmp|"
+    r"incoming|untitled|new folder|to ?sort|todo|.*\bmix(?:es)?\b.*)$",
+    re.IGNORECASE,
+)
+# Bare disc/volume folder names that need the parent dir for a meaningful title.
+_BARE_DISC_RE = re.compile(
+    r"^(cd[-_ ]?\d+|disc\s*\d+|disk\s*\d+|volume\s*\d+|vol\.?\s*\d+)$", re.IGNORECASE
+)
+_VA_PREFIX_RE = re.compile(r"^(va|various artists?)\s*[-–—]\s*", re.IGNORECASE)
+VARIOUS_ARTISTS_ID = "various_artists"
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
@@ -145,17 +162,16 @@ class FileIndexer:
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
             )
 
-        # Detach tracks in V/A folders so each track surfaces as a
-        # single under its real artist instead of cluttering the
-        # album list with one-track-per-artist rows. Runs after the
-        # stale-track cleanup so it doesn't operate on rows about to
-        # be removed, and before notifying the enricher so it sees
-        # the post-detach shape.
+        # Coalesce V/A folders into compilation albums (or leave generic
+        # dumps loose under unknown_album). Each track keeps its real artist
+        # and still surfaces under it via the orphan-tracks fallback. Runs
+        # after the stale-track cleanup so it doesn't operate on rows about to
+        # be removed, and before notifying the enricher so it sees the result.
         va_results = await self.orphan_va_folder_tracks()
         if va_results["folders"]:
             logger.info(
-                f"V/A folder detach: {va_results['folders']} folder(s), "
-                f"{va_results['tracks']} track(s) re-pointed to unknown_album, "
+                f"V/A coalesce: {va_results['folders']} folder(s), "
+                f"{va_results['tracks']} track(s) re-pointed, "
                 f"{va_results['orphans']} orphan album(s) deleted"
             )
 
@@ -396,6 +412,9 @@ class FileIndexer:
         track_id = generate_track_id(file_path)
         track_data: Dict[str, Any] = {
             "id": track_id,
+            # Basic fallback only: the raw filename. The enricher's
+            # FilesystemFallbackPlugin detects this (title == basename) and does
+            # the smart "Artist - Title" parsing — keep that boundary intact.
             "title": metadata.get("title", os.path.basename(file_path)),
             "album_id": album_id,
             "artist_id": artist_id,
@@ -605,8 +624,7 @@ class FileIndexer:
             return False
 
     async def orphan_va_folder_tracks(self) -> Dict[str, int]:
-        """Disassemble per-track albums in V/A folders so each track
-        shows up as a single under its real artist.
+        """Coalesce a V/A folder's per-track albums into one compilation album.
 
         Context: the indexer creates one album row per
         ``(album_folder, normalized_title)`` pair. In a V/A folder
@@ -614,22 +632,26 @@ class FileIndexer:
         playlist), that produces N single-track albums anchored to N
         different artists — a noisy mess in the album list.
 
-        An earlier version of this method created a synthetic
-        Various-Artists umbrella album and re-pointed all of the
-        folder's tracks at it. That cleaned up the album list but
-        broke artist navigation: a track's ``artist_id`` was still
-        correctly the real artist, but the album was anchored to
-        ``various_artists``, so the artist page found no albums for
-        them and they appeared empty. The album tag is the
-        unreliable signal here; the artist tag is the reliable one.
+        Behaviour: a qualifying compilation folder is collapsed into a
+        single album anchored to the ``various_artists`` sentinel and
+        titled after the folder (a ``VA -`` prefix is stripped). Each
+        track keeps its real ``artist_id`` and still surfaces under
+        that artist via ``LocalFilesInputModuleDb.get_artist_orphan_tracks``,
+        which returns tracks whose ``album.artist_id != track.artist_id``
+        — so the artist-navigation regression that sank an earlier
+        umbrella-album attempt no longer applies.
 
-        New behaviour: in a V/A folder we re-point every track's
-        ``album_id`` to the ``unknown_album`` sentinel. The per-track
-        single-track albums then have no referring tracks and are
-        removed by the orphan-cleanup pass. The tracks themselves
-        keep their real ``artist_id`` and surface under their artist
-        via the orphan-tracks fallback in the browse view (see
-        ``LocalFilesInputModuleDb.get_artist_orphan_tracks``).
+        Two exceptions to the Various-Artists anchoring:
+          * A generic dumping ground (a top-level ``music`` dir, a
+            personal ``90s Mixes`` pile — see ``_compilation_title``) is
+            *not* a real compilation: its tracks are left loose under
+            ``unknown_album`` and surface under their artists the same way,
+            without inventing a junk album.
+          * A folder under a real artist's directory whose tracks are
+            remixer-credited (e.g. ``.../Netsky/Remixes``) is that
+            artist's own release, so the album is anchored to *them*, not
+            Various Artists — see ``_parent_artist_for_folder``.
+        The orphaned per-track albums are removed by the cleanup pass.
 
         Detection criterion is unchanged: a folder qualifies when
         its tracks span ≥``VA_MIN_DISTINCT_ARTISTS`` real artists
@@ -638,23 +660,30 @@ class FileIndexer:
         (Abbey Road with 2-3 wrong-artist tags out of 17) from
         flipping to V/A.
 
-        Returns counts of (detached_folders, repointed_tracks,
+        Returns counts of (coalesced_folders, repointed_tracks,
         deleted_orphans).
         """
         tracks = await self.db_manager.get_all_tracks()
         if not tracks:
             return {"folders": 0, "tracks": 0, "orphans": 0}
 
-        # Group tracks by their album folder.
+        # Group tracks by their album folder, and track which folders each
+        # artist appears in (used to tell a real artist's remix album from a
+        # genuine various-artists compilation).
         folder_tracks: Dict[str, List[Dict]] = {}
+        artist_folders: Dict[str, Set[str]] = {}
         for t in tracks:
             folder = album_folder_for_path(t.get("file_path") or "")
             if not folder:
                 continue
             folder_tracks.setdefault(folder, []).append(t)
+            aid = t.get("artist_id")
+            if aid:
+                artist_folders.setdefault(aid, set()).add(folder)
 
-        detached_folders = 0
+        coalesced_folders = 0
         repointed_tracks = 0
+        va_seeded = False  # create the Various-Artists sentinel at most once
         for folder, ts in folder_tracks.items():
             distinct_artists = {t["artist_id"] for t in ts if t.get("artist_id")}
             distinct_artists.discard("unknown_artist")
@@ -665,27 +694,55 @@ class FileIndexer:
             if (n_artists / n_tracks) < VA_MIN_ARTIST_UNIQUENESS:
                 continue
 
+            # Decide where the folder's tracks go:
+            #   * generic dump        -> stay loose under unknown_album
+            #   * folder under a real artist (e.g. ".../Netsky/Remixes") whose
+            #     tracks are remixer-credited -> that artist's album (so it
+            #     doesn't masquerade as a Various-Artists compilation)
+            #   * otherwise           -> a Various-Artists compilation album
+            comp_title = self._compilation_title(folder)
+            if comp_title is None:
+                target_id = "unknown_album"
+                dest = "unknown_album"
+            else:
+                target_id = generate_album_id(comp_title, folder)
+                parent_artist = await self._parent_artist_for_folder(
+                    folder, artist_folders
+                )
+                if parent_artist is not None:
+                    owner_id = parent_artist["id"]
+                    display_title = self._strip_artist_prefix(
+                        comp_title, parent_artist["name"]
+                    )
+                    dest = f"album '{display_title}' under {parent_artist['name']}"
+                else:
+                    owner_id = VARIOUS_ARTISTS_ID
+                    display_title = comp_title
+                    dest = f"compilation '{display_title}'"
+                    if not va_seeded:
+                        await self._ensure_various_artists()
+                        va_seeded = True
+                await self._ensure_compilation_album(target_id, display_title, owner_id)
+
             folder_repointed = 0
             for t in ts:
-                if t["album_id"] != "unknown_album":
-                    await self.db_manager.update_track(
-                        t["id"], {"album_id": "unknown_album"}
-                    )
+                # Re-point against target_id (not just "!= unknown_album") so
+                # this also heals DBs detached by the older behaviour.
+                if t["album_id"] != target_id:
+                    await self.db_manager.update_track(t["id"], {"album_id": target_id})
                     folder_repointed += 1
 
             if folder_repointed:
-                detached_folders += 1
+                coalesced_folders += 1
                 repointed_tracks += folder_repointed
                 logger.info(
                     f"V/A folder '{folder}' ({n_tracks} tracks, "
-                    f"{n_artists} artists): {folder_repointed} track(s) "
-                    f"detached to unknown_album"
+                    f"{n_artists} artists): {folder_repointed} track(s) -> {dest}"
                 )
             else:
-                # Already detached on a prior scan; the detect pass is
-                # idempotent, so don't re-announce the no-op every cycle.
+                # Already coalesced on a prior scan; idempotent no-op.
                 logger.debug(
-                    f"V/A folder '{folder}' already detached "
+                    f"V/A folder '{folder}' already coalesced "
                     f"({n_tracks} tracks, {n_artists} artists)"
                 )
 
@@ -696,10 +753,89 @@ class FileIndexer:
             )
 
         return {
-            "folders": detached_folders,
+            "folders": coalesced_folders,
             "tracks": repointed_tracks,
             "orphans": deleted_albums,
         }
+
+    def _compilation_title(self, folder: str) -> Optional[str]:
+        """Album title for a V/A folder, or None if it's a generic dump that
+        shouldn't become an album (a top-level ``music`` dir, a personal
+        ``90s Mixes`` pile, etc.)."""
+        name = os.path.basename(folder).strip()
+        if not name or _GENERIC_FOLDER_RE.match(name):
+            return None
+        # A bare "Disc 1" / "Volume 2" folder is meaningless on its own — most
+        # disc subdirs are already collapsed by album_folder_for_path, but for
+        # the rest borrow the parent dir for a real title.
+        if _BARE_DISC_RE.match(name):
+            parent = os.path.basename(os.path.dirname(folder)).strip()
+            name = f"{parent} {name}".strip() if parent else name
+        title = _VA_PREFIX_RE.sub("", name).strip()  # drop a leading "VA - "
+        return title or None
+
+    async def _ensure_various_artists(self) -> None:
+        """Seed the Various-Artists sentinel artist (compilation albums hang
+        off it; real per-track artists are preserved on the tracks)."""
+        if not await self.db_manager.get_artist_by_id(VARIOUS_ARTISTS_ID):
+            await self.db_manager.insert_artist(
+                {
+                    "id": VARIOUS_ARTISTS_ID,
+                    "name": "Various Artists",
+                    "enriched": 0,
+                    "last_updated": int(time.time()),
+                }
+            )
+
+    async def _parent_artist_for_folder(
+        self, folder: str, artist_folders: Dict[str, Set[str]]
+    ) -> Optional[Dict]:
+        """Return the artist that owns ``folder``'s parent directory when it's
+        a real artist with a catalog *outside* this folder — i.e. the folder
+        is that artist's own remix/mix release, not a true compilation.
+
+        Returns None for generic parents (``music`` etc.) and for netlabels
+        whose only content is this folder (they have no tracks elsewhere).
+        """
+        parent_name = os.path.basename(os.path.dirname(folder)).strip()
+        if not parent_name or _GENERIC_FOLDER_RE.match(parent_name):
+            return None
+        artist_id = generate_artist_id(clean_display_name(parent_name) or parent_name)
+        if not (artist_folders.get(artist_id, set()) - {folder}):
+            return None
+        return await self.db_manager.get_artist_by_id(artist_id)
+
+    @staticmethod
+    def _strip_artist_prefix(title: str, artist_name: str) -> str:
+        """Drop a leading artist name from a title so it reads cleanly once the
+        album is attributed to that artist (``Ratatat Remixes Vol. 2`` ->
+        ``Remixes Vol. 2``). No-op when the title doesn't start with the name."""
+        if title.lower().startswith(artist_name.lower()):
+            rest = title[len(artist_name) :].lstrip(" -–—")
+            return rest or title
+        return title
+
+    async def _ensure_compilation_album(
+        self, album_id: str, title: str, artist_id: str
+    ) -> None:
+        """Create the compilation album, or re-anchor an existing same-id album
+        (process_file may have created it under the first track's artist with a
+        different title)."""
+        existing = await self.db_manager.get_album_by_id(album_id)
+        if not existing:
+            await self.db_manager.insert_album(
+                {
+                    "id": album_id,
+                    "title": title,
+                    "artist_id": artist_id,
+                    "enriched": 0,
+                    "last_updated": int(time.time()),
+                }
+            )
+        elif existing.get("artist_id") != artist_id or existing.get("title") != title:
+            await self.db_manager.update_album(
+                album_id, {"artist_id": artist_id, "title": title}
+            )
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries for files that no longer exist in the file system"""
