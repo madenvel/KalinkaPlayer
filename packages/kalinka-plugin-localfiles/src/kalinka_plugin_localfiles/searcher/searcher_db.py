@@ -173,7 +173,9 @@ class AsyncSearcherDb:
                 SELECT 'track', t.id, 'tags', ?
                 FROM tracks t
                 WHERE t.enriched IN (1, 2)
-                  AND t.album_id != 'unknown_album'
+                  -- Tag unknown-album tracks too (V/A comps, orphan singles);
+                  -- this stage gates clap_audio, which now covers them.
+                  -- unknown_artist tracks stay excluded.
                   AND t.artist_id != 'unknown_artist'
                 """,
                 (tags_version,),

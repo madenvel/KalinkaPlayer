@@ -174,7 +174,12 @@ class TestScheduleNewTagJobs:
 
     @pytest.mark.asyncio
     async def test_schedule_uses_unified_stage(self):
-        """Verify the SQL inserts 'tags' not individual stages."""
+        """Verify the SQL inserts 'tags' and applies the right track filter.
+
+        Enriched tracks are queued — including tracks anchored to the
+        ``unknown_album`` sentinel (V/A comps / orphan singles), which used to be
+        skipped — while un-enriched tracks and ``unknown_artist`` tracks stay out.
+        """
         import aiosqlite
         import tempfile
         import os
@@ -186,27 +191,47 @@ class TestScheduleNewTagJobs:
 
         async with aiosqlite.connect(db_path) as conn:
             await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t1', 't', 'f', 'mp3', 1)"
+                "INSERT INTO artists (id, name) VALUES ('ar1', 'Artist One')"
             )
             await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t2', 't', 'f', 'mp3', 2)"
+                "INSERT INTO albums (id, title, artist_id) VALUES ('al1', 'Album One', 'ar1')"
+            )
+            # enriched, known artist + album -> scheduled
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
+                "VALUES ('t1', 't', 'f1', 'mp3', 1, 'ar1', 'al1')"
             )
             await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched) VALUES ('t3', 't', 'f', 'mp3', 0)"
+                "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
+                "VALUES ('t2', 't', 'f2', 'mp3', 2, 'ar1', 'al1')"
+            )
+            # not enriched -> skipped
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
+                "VALUES ('t3', 't', 'f3', 'mp3', 0, 'ar1', 'al1')"
+            )
+            # enriched, known artist but unknown album -> now scheduled (the fix)
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
+                "VALUES ('t4', 't', 'f4', 'mp3', 1, 'ar1', 'unknown_album')"
+            )
+            # enriched but unknown artist -> still skipped
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
+                "VALUES ('t5', 't', 'f5', 'mp3', 1, 'unknown_artist', 'al1')"
             )
             await conn.commit()
 
         db = AsyncSearcherDb(config)
 
         inserted = await db.schedule_new_tag_jobs(1)
-        assert inserted == 2  # t1 and t2 (enriched), not t3
+        assert inserted == 3  # t1, t2, t4 — not t3 (unenriched) or t5 (unknown_artist)
 
-        # Verify stage name
+        # Verify stage name and exactly which tracks were queued.
         async with aiosqlite.connect(db_path) as conn:
-            cursor = await conn.execute(
-                "SELECT stage FROM embedding_jobs"
-            )
+            cursor = await conn.execute("SELECT entity_id, stage FROM embedding_jobs")
             rows = await cursor.fetchall()
-            stages = [r[0] for r in rows]
-            assert all(s == "tags" for s in stages)
-            assert len(stages) == 2
+        stages = [r[1] for r in rows]
+        entity_ids = {r[0] for r in rows}
+        assert all(s == "tags" for s in stages)
+        assert entity_ids == {"t1", "t2", "t4"}
