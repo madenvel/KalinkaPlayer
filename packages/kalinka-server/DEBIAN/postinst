@@ -27,12 +27,14 @@ case "$1" in
     # Default music drop-off folder (matches the localfiles plugin's
     # music_folders default). World-writable on purpose: any local user
     # (or SFTP login) can drop music in without sudo — this is a
-    # single-admin appliance, not a multi-tenant box. Setgid keeps new
-    # files in the kalusr group so the service can always read them.
+    # single-admin appliance, not a multi-tenant box. Sticky bit so
+    # uploaders can only delete their own files; setgid so new files
+    # land in the kalusr group (note: their mode still follows the
+    # uploader's umask, so the service can't *read* a 0600 drop).
     # Never touched if it already exists — it's admin territory.
+    [ -d /srv/kalinka ] || install -d -m 0755 /srv/kalinka
     if [ ! -d /srv/kalinka/music ]; then
-      install -d -m 0755 /srv/kalinka
-      install -d -m 2777 -o root -g "$USER" /srv/kalinka/music
+      install -d -m 3777 -o root -g "$USER" /srv/kalinka/music
     fi
 
     echo "[3/4] Lock down config permissions"
