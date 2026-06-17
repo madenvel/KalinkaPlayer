@@ -176,9 +176,10 @@ class TestScheduleNewTagJobs:
     async def test_schedule_uses_unified_stage(self):
         """Verify the SQL inserts 'tags' and applies the right track filter.
 
-        Enriched tracks are queued — including tracks anchored to the
-        ``unknown_album`` sentinel (V/A comps / orphan singles), which used to be
-        skipped — while un-enriched tracks and ``unknown_artist`` tracks stay out.
+        Every enriched track is queued — including tracks anchored to the
+        ``unknown_album`` / ``unknown_artist`` sentinels (V/A comps, orphan
+        singles, untagged files), which used to be skipped — while un-enriched
+        tracks stay out.
         """
         import aiosqlite
         import tempfile
@@ -215,7 +216,7 @@ class TestScheduleNewTagJobs:
                 "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
                 "VALUES ('t4', 't', 'f4', 'mp3', 1, 'ar1', 'unknown_album')"
             )
-            # enriched but unknown artist -> still skipped
+            # enriched, unknown artist -> now scheduled (the fix)
             await conn.execute(
                 "INSERT INTO tracks (id, title, file_path, format, enriched, artist_id, album_id) "
                 "VALUES ('t5', 't', 'f5', 'mp3', 1, 'unknown_artist', 'al1')"
@@ -225,7 +226,7 @@ class TestScheduleNewTagJobs:
         db = AsyncSearcherDb(config)
 
         inserted = await db.schedule_new_tag_jobs(1)
-        assert inserted == 3  # t1, t2, t4 — not t3 (unenriched) or t5 (unknown_artist)
+        assert inserted == 4  # t1, t2, t4, t5 — only t3 (unenriched) is skipped
 
         # Verify stage name and exactly which tracks were queued.
         async with aiosqlite.connect(db_path) as conn:
@@ -234,4 +235,4 @@ class TestScheduleNewTagJobs:
         stages = [r[1] for r in rows]
         entity_ids = {r[0] for r in rows}
         assert all(s == "tags" for s in stages)
-        assert entity_ids == {"t1", "t2", "t4"}
+        assert entity_ids == {"t1", "t2", "t4", "t5"}
