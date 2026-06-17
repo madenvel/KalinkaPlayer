@@ -398,11 +398,23 @@ class AsyncEmbedderDb:
     # ------------------------------------------------------------------
 
     async def get_track_metadata_for_embedding(self, track_id: str) -> dict | None:
-        """Return title, artist_name, album_title for a track via JOINs."""
+        """Return title, artist_name, album_title for a track via JOINs.
+
+        The ``unknown_artist`` / ``unknown_album`` sentinel rows resolve through
+        the JOIN to the literal display strings ``"Unknown Artist"`` /
+        ``"Unknown Album"``.  Those are returned empty so the placeholder text is
+        never baked into the CLAP text vector as a noise token — a track with an
+        unknown album is still embedded, just as ``"Artist - Title"`` without the
+        ``"(Unknown Album)"`` suffix.
+        """
         async with self._open() as conn:
             cursor = await conn.execute(
                 """
-                SELECT t.title, ar.name AS artist_name, al.title AS album_title
+                SELECT t.title,
+                       CASE WHEN t.artist_id = 'unknown_artist' THEN ''
+                            ELSE ar.name END AS artist_name,
+                       CASE WHEN t.album_id = 'unknown_album' THEN ''
+                            ELSE al.title END AS album_title
                 FROM tracks t
                 LEFT JOIN artists ar ON t.artist_id = ar.id
                 LEFT JOIN albums  al ON t.album_id  = al.id
