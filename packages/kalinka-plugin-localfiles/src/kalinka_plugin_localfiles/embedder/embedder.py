@@ -240,6 +240,12 @@ class EmbeddingWorker:
             if arid:
                 artist_ids.add(arid)
 
+        # The sentinels are not real entities — mean-pooling unrelated tracks
+        # into a single "Unknown Album"/"Unknown Artist" vector would pollute
+        # album/artist search. Track-level embeddings still cover these tracks.
+        album_ids.discard("unknown_album")
+        artist_ids.discard("unknown_artist")
+
         for album_id in album_ids:
             blobs = await self.db.get_track_embeddings_for_album(album_id)
             if not blobs:
@@ -330,6 +336,11 @@ class EmbeddingWorker:
             arid = await self.db.get_artist_id_for_track(tid)
             if arid:
                 artist_ids.add(arid)
+
+        # Skip the sentinels — "Unknown Album"/"Unknown Artist" are placeholder
+        # rows, not searchable entities.
+        album_ids.discard("unknown_album")
+        artist_ids.discard("unknown_artist")
 
         for album_id in album_ids:
             meta = await self.db.get_album_metadata_for_text_embedding(album_id)
