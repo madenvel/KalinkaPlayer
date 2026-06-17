@@ -147,11 +147,12 @@ class AsyncEmbedderDb:
                     (entity_type, entity_id, stage, model_version)
                 SELECT 'track', t.id, 'clap_audio', ?
                 FROM tracks t
+                -- Embed every enriched track regardless of metadata: the audio
+                -- is metadata-independent, so V/A comps, orphan singles and
+                -- artist-less / fully-untagged tracks are all worth indexing
+                -- rather than silently dropped from search. Sentinels are
+                -- handled downstream (blanked in text, skipped in aggregates).
                 WHERE t.enriched IN (1, 2)
-                  -- Embed unknown-album tracks (V/A comps, orphan singles):
-                  -- the audio is metadata-independent and worth indexing.
-                  -- unknown_artist tracks stay excluded.
-                  AND t.artist_id != 'unknown_artist'
                   AND NOT EXISTS (
                     SELECT 1 FROM embedding_jobs j
                     WHERE j.entity_id = t.id
@@ -176,11 +177,11 @@ class AsyncEmbedderDb:
                     (entity_type, entity_id, stage, model_version)
                 SELECT 'track', t.id, 'clap_text', ?
                 FROM tracks t
+                -- Every enriched track gets a text embedding. The sentinel
+                -- artist/album strings are blanked in
+                -- get_track_metadata_for_embedding, so tracks embed as
+                -- "Artist - Title", "Title (Album)" or a bare "Title".
                 WHERE t.enriched IN (1, 2)
-                  -- Unknown-album tracks embed as "Artist - Title"; the
-                  -- "Unknown Album" sentinel is stripped in
-                  -- get_track_metadata_for_embedding. unknown_artist excluded.
-                  AND t.artist_id != 'unknown_artist'
                 """,
                 (clap_version,),
             )
@@ -406,10 +407,10 @@ class AsyncEmbedderDb:
 
         The ``unknown_artist`` / ``unknown_album`` sentinel rows resolve through
         the JOIN to the literal display strings ``"Unknown Artist"`` /
-        ``"Unknown Album"``.  Those are returned empty so the placeholder text is
-        never baked into the CLAP text vector as a noise token — a track with an
-        unknown album is still embedded, just as ``"Artist - Title"`` without the
-        ``"(Unknown Album)"`` suffix.
+        ``"Unknown Album"``.  Both are returned empty so the placeholder text is
+        never baked into the CLAP text vector as a noise token: tracks embed as
+        ``"Artist - Title"``, ``"Title (Album)"`` or a bare ``"Title"`` depending
+        on which metadata is known.
         """
         async with self._open() as conn:
             cursor = await conn.execute(
@@ -624,11 +625,10 @@ class AsyncEmbedderDb:
     async def get_embedding_coverage(self) -> dict:
         """Return job counts and coverage percentages.
 
-        Jobs for tracks parented to the `unknown_artist` placeholder are
-        excluded, since those rows are never scheduled and would otherwise keep
-        coverage below 100% forever. Unknown-album tracks are counted — they are
-        now scheduled and can reach `done`, so this stays consistent with the
-        scheduling filters.
+        Every enriched track is now scheduled — including the unknown-artist /
+        unknown-album sentinels — so all jobs can reach `done` and no sentinel
+        filter is needed. The JOIN to tracks remains so jobs left behind by
+        deleted tracks are not counted.
         """
         async with self._open() as conn:
             cursor = await conn.execute(
@@ -636,7 +636,6 @@ class AsyncEmbedderDb:
                 SELECT j.stage, j.status, COUNT(*) AS cnt
                 FROM embedding_jobs j
                 JOIN tracks t ON t.id = j.entity_id
-                WHERE t.artist_id != 'unknown_artist'
                 GROUP BY j.stage, j.status
                 """
             )
