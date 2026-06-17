@@ -400,7 +400,6 @@ class EmbeddingWorker:
             try:
                 self._load_clap_model()
                 blob = await loop.run_in_executor(None, self._encode_query, query)
-                self._last_work_time = time.monotonic()
                 response_queue.put({"blob": blob})
             except Exception as e:
                 logger.warning("Text-encode handler error: %s", e)
@@ -469,8 +468,6 @@ class EmbeddingWorker:
         await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
         logger.info("Embedder waking — starting first work cycle")
 
-        self._last_work_time = time.monotonic()
-
         while not shutdown_event.is_set():
             # Schedule new CLAP jobs for tracks with completed tags
             await self.db.schedule_new_jobs(cfg.clap.current_version)
@@ -488,7 +485,6 @@ class EmbeddingWorker:
                         batch_processed = await self._process_clap_batch()
                         if batch_processed:
                             did_work = True
-                            self._last_work_time = time.monotonic()
                         else:
                             break
                     except Exception:
@@ -505,7 +501,6 @@ class EmbeddingWorker:
                         batch_processed = await self._process_clap_text_batch()
                         if batch_processed:
                             did_work = True
-                            self._last_work_time = time.monotonic()
                         else:
                             break
                     except Exception:

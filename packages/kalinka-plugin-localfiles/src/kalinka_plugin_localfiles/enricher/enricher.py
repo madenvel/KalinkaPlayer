@@ -330,9 +330,6 @@ class MetadataEnricher:
             )
             return
 
-        # Collect any entities that need further enrichment
-        entities_for_enrichment = {"artists": set(), "albums": set(), "tracks": set()}
-
         for plugin in self.plugins:
             if not plugin.can_enrich_track():
                 continue
@@ -362,19 +359,10 @@ class MetadataEnricher:
                     logger.debug(f"Track {track['title']} now fully enriched")
                     updated_track["enriched"] = EnrichmentStatus.ENRICHED
 
-                # # Check if plugin identified entities that need further enrichment
-                # if "changed_items" in result:
-                #     for entity_type in ["artists", "albums", "tracks"]:
-                #         if entity_type in result["changed_items"]:
-                #             entities_for_enrichment[entity_type].update(
-                #                 result["changed_items"][entity_type]
-                # )
-
         # After all plugins, if still not fully enriched, mark as failed
         if (
             not is_fully_enriched
             and updated_track.get("enriched") != EnrichmentStatus.ENRICHED
-            and track["id"] not in entities_for_enrichment["tracks"]
         ):
             logger.info(
                 f"Track {track['id']} failed enrichment - missing required fields"
@@ -387,25 +375,6 @@ class MetadataEnricher:
             await self.db_manager.update_track(track["id"], updated_track)
             if "album_id" in updated_track:
                 await self.db_manager.update_album_stats(updated_track["album_id"])
-
-        # If we have entities that need further enrichment, add them to the enricher queue
-        # if any(entities_for_enrichment.values()):
-        #     changed_items = {
-        #         "artists": list(entities_for_enrichment["artists"]),
-        #         "albums": list(entities_for_enrichment["albums"]),
-        #         "tracks": list(entities_for_enrichment["tracks"]),
-        #     }
-
-        #     logger.info(
-        #         f"Queueing additional enrichment for entities from track {track['id']}: "
-        #         f"Artists={len(changed_items['artists'])}, "
-        #         f"Albums={len(changed_items['albums'])}, "
-        #         f"Tracks={len(changed_items['tracks'])}"
-        #     )
-
-        #     # Add to the enricher queue
-        #     global _enricher_queue
-        #     await _enricher_queue.put({"changed_items": changed_items})
 
 
 async def _enricher_worker(config, db_manager: AsyncEnricherDb):
@@ -440,8 +409,6 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     except Exception as e:
         logger.warning(f"Failed-row retry reset skipped: {e}")
 
-    enricher_tasks = set()
-
     # Process queue commands
     while True:
         try:
@@ -469,12 +436,9 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                             pass
 
             except queue.Empty:
-                # No command received in 30 seconds, run periodic enrichment check
-                logger.debug(
-                    "No commands received, checking for new items to enrich..."
-                )
+                # No command in the timeout window; loop and wait again.
+                logger.debug("No enricher commands received; continuing to wait")
                 continue
-                # await enricher_instance.start()
 
             # Small delay to avoid busy waiting
             await asyncio.sleep(0.1)
@@ -484,15 +448,6 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
         except Exception as e:
             logger.exception(f"Error in enricher worker: {str(e)}")
             await asyncio.sleep(5)  # Sleep longer on errors
-
-    running_tasks = list(enricher_tasks)
-    for task in running_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
 
 
 def start_enricher(config, db_manager: AsyncEnricherDb) -> Optional[asyncio.Task]:

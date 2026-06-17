@@ -60,7 +60,7 @@ _MODEL_FILENAMES: dict[str, str] = {
     "clap_tokenizer": "clap_tokenizer.json",
 }
 
-# Audio constants matching laion_clap (non-fusion, HTSAT-tiny)
+# Audio constants matching laion_clap (non-fusion, HTSAT-base)
 _SAMPLE_RATE = 48_000
 _FRAGMENT_SECONDS = 10
 _MAX_SAMPLES = _SAMPLE_RATE * _FRAGMENT_SECONDS  # 480_000 = 10 s at 48 kHz
