@@ -479,131 +479,125 @@ class FileIndexer:
             return None
 
     def _extract_mp3_metadata(self, file_path: str, metadata: Dict) -> Dict:
-        """Extract metadata from an MP3 file"""
+        """Extract metadata from an MP3 file.
+
+        Errors propagate to ``_extract_metadata``, which logs them once.
+        """
+        mp3 = MP3(file_path)
+        # A missing ID3 header is a valid, fully supported case — the
+        # audio plays fine, it just has no tags. Fall back to an empty
+        # tag set so the track still gets indexed (title derived from
+        # the filename, Unknown Artist/Album) instead of failing.
         try:
-            mp3 = MP3(file_path)
-            # A missing ID3 header is a valid, fully supported case — the
-            # audio plays fine, it just has no tags. Fall back to an empty
-            # tag set so the track still gets indexed (title derived from
-            # the filename, Unknown Artist/Album) instead of failing.
+            id3 = ID3(file_path)
+        except ID3NoHeaderError:
+            id3 = ID3()
+        metadata["duration"] = int(mp3.info.length)
+        if "TIT2" in id3:
+            metadata["title"] = str(id3["TIT2"])
+        if "TPE1" in id3:
+            metadata["artist"] = str(id3["TPE1"])
+        if "TALB" in id3:
+            metadata["album"] = str(id3["TALB"])
+        if "TRCK" in id3:
+            track_str = str(id3["TRCK"])
+            if "/" in track_str:
+                track_str = track_str.split("/")[0]
             try:
-                id3 = ID3(file_path)
-            except ID3NoHeaderError:
-                id3 = ID3()
-            metadata["duration"] = int(mp3.info.length)
-            if "TIT2" in id3:
-                metadata["title"] = str(id3["TIT2"])
-            if "TPE1" in id3:
-                metadata["artist"] = str(id3["TPE1"])
-            if "TALB" in id3:
-                metadata["album"] = str(id3["TALB"])
-            if "TRCK" in id3:
-                track_str = str(id3["TRCK"])
-                if "/" in track_str:
-                    track_str = track_str.split("/")[0]
-                try:
-                    metadata["track_number"] = int(track_str)
-                except ValueError:
-                    pass
-            if "TPOS" in id3:
-                disc_str = str(id3["TPOS"])
-                if "/" in disc_str:
-                    disc_str = disc_str.split("/")[0]
-                try:
-                    metadata["disc_number"] = int(disc_str)
-                except ValueError:
-                    pass
-            if "TDRC" in id3:
-                try:
-                    metadata["year"] = int(str(id3["TDRC"]).split("-")[0])
-                except (ValueError, IndexError):
-                    pass
-            if "TCON" in id3:
-                metadata["genre"] = str(id3["TCON"])
-            if "TXXX:replaygain_track_gain" in id3:
-                gain_str = str(id3["TXXX:replaygain_track_gain"])
-                try:
-                    metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
-                except ValueError:
-                    pass
-            if "TXXX:replaygain_track_peak" in id3:
-                peak_str = str(id3["TXXX:replaygain_track_peak"])
-                try:
-                    metadata["replaygain_peak"] = float(peak_str)
-                except ValueError:
-                    pass
-            for tag in ["APIC:", "APIC:Cover", "APIC:CoverFront"]:
-                if tag in id3:
-                    apic = id3[tag]
-                    metadata["album_art"] = apic.data
-                    break
-            return metadata
-        except Exception as e:
-            logger.exception(
-                f"Error extracting MP3 metadata from {file_path}: {str(e)}"
-            )
-            raise
+                metadata["track_number"] = int(track_str)
+            except ValueError:
+                pass
+        if "TPOS" in id3:
+            disc_str = str(id3["TPOS"])
+            if "/" in disc_str:
+                disc_str = disc_str.split("/")[0]
+            try:
+                metadata["disc_number"] = int(disc_str)
+            except ValueError:
+                pass
+        if "TDRC" in id3:
+            try:
+                metadata["year"] = int(str(id3["TDRC"]).split("-")[0])
+            except (ValueError, IndexError):
+                pass
+        if "TCON" in id3:
+            metadata["genre"] = str(id3["TCON"])
+        if "TXXX:replaygain_track_gain" in id3:
+            gain_str = str(id3["TXXX:replaygain_track_gain"])
+            try:
+                metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
+            except ValueError:
+                pass
+        if "TXXX:replaygain_track_peak" in id3:
+            peak_str = str(id3["TXXX:replaygain_track_peak"])
+            try:
+                metadata["replaygain_peak"] = float(peak_str)
+            except ValueError:
+                pass
+        for tag in ["APIC:", "APIC:Cover", "APIC:CoverFront"]:
+            if tag in id3:
+                apic = id3[tag]
+                metadata["album_art"] = apic.data
+                break
+        return metadata
 
     def _extract_flac_metadata(self, file_path: str, metadata: Dict) -> Dict:
-        """Extract metadata from a FLAC file"""
-        try:
-            flac = FLAC(file_path)
-            metadata["duration"] = int(flac.info.length)
-            if "title" in flac:
-                metadata["title"] = flac["title"][0]
-            if "artist" in flac:
-                metadata["artist"] = flac["artist"][0]
-            if "album" in flac:
-                metadata["album"] = flac["album"][0]
-            if "tracknumber" in flac:
-                track_str = flac["tracknumber"][0]
-                if "/" in track_str:
-                    track_str = track_str.split("/")[0]
-                try:
-                    metadata["track_number"] = int(track_str)
-                except ValueError:
-                    pass
-            if "discnumber" in flac:
-                disc_str = flac["discnumber"][0]
-                if "/" in disc_str:
-                    disc_str = disc_str.split("/")[0]
-                try:
-                    metadata["disc_number"] = int(disc_str)
-                except ValueError:
-                    pass
-            if "date" in flac:
-                try:
-                    metadata["year"] = int(flac["date"][0].split("-")[0])
-                except (ValueError, IndexError):
-                    pass
-            if "genre" in flac:
-                metadata["genre"] = flac["genre"][0]
-            if "replaygain_track_gain" in flac:
-                gain_str = flac["replaygain_track_gain"][0]
-                try:
-                    metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
-                except ValueError:
-                    pass
-            if "replaygain_track_peak" in flac:
-                peak_str = flac["replaygain_track_peak"][0]
-                try:
-                    metadata["replaygain_peak"] = float(peak_str)
-                except ValueError:
-                    pass
-            pictures = flac.pictures
-            if pictures:
-                for pic in pictures:
-                    if pic.type == 3:  # Cover (front)
-                        metadata["album_art"] = pic.data
-                        break
-                else:
-                    metadata["album_art"] = pictures[0].data
-            return metadata
-        except Exception as e:
-            logger.exception(
-                f"Error extracting FLAC metadata from {file_path}: {str(e)}"
-            )
-            raise
+        """Extract metadata from a FLAC file.
+
+        Errors propagate to ``_extract_metadata``, which logs them once.
+        """
+        flac = FLAC(file_path)
+        metadata["duration"] = int(flac.info.length)
+        if "title" in flac:
+            metadata["title"] = flac["title"][0]
+        if "artist" in flac:
+            metadata["artist"] = flac["artist"][0]
+        if "album" in flac:
+            metadata["album"] = flac["album"][0]
+        if "tracknumber" in flac:
+            track_str = flac["tracknumber"][0]
+            if "/" in track_str:
+                track_str = track_str.split("/")[0]
+            try:
+                metadata["track_number"] = int(track_str)
+            except ValueError:
+                pass
+        if "discnumber" in flac:
+            disc_str = flac["discnumber"][0]
+            if "/" in disc_str:
+                disc_str = disc_str.split("/")[0]
+            try:
+                metadata["disc_number"] = int(disc_str)
+            except ValueError:
+                pass
+        if "date" in flac:
+            try:
+                metadata["year"] = int(flac["date"][0].split("-")[0])
+            except (ValueError, IndexError):
+                pass
+        if "genre" in flac:
+            metadata["genre"] = flac["genre"][0]
+        if "replaygain_track_gain" in flac:
+            gain_str = flac["replaygain_track_gain"][0]
+            try:
+                metadata["replaygain_gain"] = float(gain_str.replace(" dB", ""))
+            except ValueError:
+                pass
+        if "replaygain_track_peak" in flac:
+            peak_str = flac["replaygain_track_peak"][0]
+            try:
+                metadata["replaygain_peak"] = float(peak_str)
+            except ValueError:
+                pass
+        pictures = flac.pictures
+        if pictures:
+            for pic in pictures:
+                if pic.type == 3:  # Cover (front)
+                    metadata["album_art"] = pic.data
+                    break
+            else:
+                metadata["album_art"] = pictures[0].data
+        return metadata
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
         """Save artwork images in different sizes"""
@@ -716,6 +710,7 @@ class FileIndexer:
             #     doesn't masquerade as a Various-Artists compilation)
             #   * otherwise           -> a Various-Artists compilation album
             comp_title = self._compilation_title(folder)
+            album_reanchored = False
             if comp_title is None:
                 target_id = "unknown_album"
                 dest = "unknown_album"
@@ -740,7 +735,9 @@ class FileIndexer:
                 # generate_album_id (folder, normalized_title) invariant and
                 # stays stable across re-scans.
                 target_id = generate_album_id(display_title, folder)
-                await self._ensure_compilation_album(target_id, display_title, owner_id)
+                album_reanchored = await self._ensure_compilation_album(
+                    target_id, display_title, owner_id
+                )
 
             folder_repointed = 0
             for t in ts:
@@ -750,13 +747,27 @@ class FileIndexer:
                     await self.db_manager.update_track(t["id"], {"album_id": target_id})
                     folder_repointed += 1
 
-            if folder_repointed:
+            # A folder counts as coalesced when tracks moved OR an existing
+            # shared-tag album was re-anchored to Various Artists in place
+            # (no re-point needed, but still real work worth reporting).
+            if folder_repointed or album_reanchored:
                 coalesced_folders += 1
                 repointed_tracks += folder_repointed
-                logger.info(
-                    f"V/A folder '{folder}' ({n_tracks} tracks, "
-                    f"{n_artists} artists): {folder_repointed} track(s) -> {dest}"
-                )
+                # The tracks now belong to target_id; recompute its
+                # track_count/duration (the compilation album was created
+                # without them, and any source albums are about to be deleted).
+                if target_id != "unknown_album":
+                    await self.db_manager.update_album_stats(target_id)
+                if folder_repointed:
+                    logger.info(
+                        f"V/A folder '{folder}' ({n_tracks} tracks, "
+                        f"{n_artists} artists): {folder_repointed} track(s) -> {dest}"
+                    )
+                else:
+                    logger.info(
+                        f"V/A folder '{folder}' ({n_tracks} tracks, "
+                        f"{n_artists} artists): re-anchored album -> {dest}"
+                    )
             else:
                 # Already coalesced on a prior scan; idempotent no-op.
                 logger.debug(
@@ -846,10 +857,14 @@ class FileIndexer:
 
     async def _ensure_compilation_album(
         self, album_id: str, title: str, artist_id: str
-    ) -> None:
+    ) -> bool:
         """Create the compilation album, or re-anchor an existing same-id album
         (process_file may have created it under the first track's artist with a
-        different title)."""
+        different title).
+
+        Returns True if the album was created or re-anchored this call, False if
+        it already matched (so a re-scan can tell real work from a no-op).
+        """
         existing = await self.db_manager.get_album_by_id(album_id)
         if not existing:
             await self.db_manager.insert_album(
@@ -861,7 +876,8 @@ class FileIndexer:
                     "last_updated": int(time.time()),
                 }
             )
-        elif existing.get("artist_id") != artist_id or existing.get("title") != title:
+            return True
+        if existing.get("artist_id") != artist_id or existing.get("title") != title:
             await self.db_manager.update_album(
                 album_id,
                 {
@@ -870,6 +886,8 @@ class FileIndexer:
                     "last_updated": int(time.time()),
                 },
             )
+            return True
+        return False
 
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries that are no longer valid for the file system.
@@ -1209,7 +1227,7 @@ async def stop_file_watcher() -> bool:
 def start_file_watcher(config: LocalFilesConfig) -> Optional[asyncio.Task]:
     """Start the file watcher process in a background task if enabled"""
     global _file_watcher_task, _file_watcher_stop_event
-    if config.file_watch_enabled == False:
+    if not config.file_watch_enabled:
         logger.info("File watcher is disabled in config.")
         return None
 

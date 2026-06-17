@@ -22,6 +22,7 @@ class AsyncEnricherDb:
     def __init__(self, config: LocalFilesConfig):
         self.db_path = Path(config.db_path).expanduser().resolve()
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
+        self._columns_cache: Dict[str, set] = {}
 
         # Ensure directories exist
         db_dir = os.path.dirname(self.db_path)
@@ -295,122 +296,49 @@ class AsyncEnricherDb:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows], total
 
-    async def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
-        """Update artist information"""
+    async def _table_columns(self, conn, table: str) -> set:
+        """Return the column names for *table*, cached (schema is static)."""
+        cached = self._columns_cache.get(table)
+        if cached is not None:
+            return cached
+        cursor = await conn.execute(f"PRAGMA table_info({table})")
+        columns = {row[1] for row in await cursor.fetchall()}  # name at index 1
+        self._columns_cache[table] = columns
+        return columns
+
+    async def _update(self, table: str, entity_id: str, data: Dict[str, Any]) -> None:
+        """Update a row by id, ignoring keys that aren't real columns."""
         async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.cursor()
-
-            # Get artist table column names
-            await cursor.execute("PRAGMA table_info(artists)")
-            rows = await cursor.fetchall()
-            valid_columns = {row["name"] for row in rows}
-
-            # Filter out data keys that don't exist in the artists table
+            valid_columns = await self._table_columns(conn, table)
             filtered_data = {k: v for k, v in data.items() if k in valid_columns}
-
             if not filtered_data:
-                logger.debug(f"No valid columns to update for artist {artist_id}")
+                logger.debug(f"No valid columns to update for {table} {entity_id}")
                 return
 
-            # Build the SET clause with only valid columns
-            fields = []
-            values = []
-            for key, value in filtered_data.items():
-                fields.append(f"{key} = ?")
-                values.append(value)
-
-            # Add artist_id to the values
-            values.append(artist_id)
-
-            query = f"UPDATE artists SET {', '.join(fields)} WHERE id = ?"
-            await cursor.execute(query, values)
+            fields = [f"{key} = ?" for key in filtered_data]
+            values = list(filtered_data.values()) + [entity_id]
+            query = f"UPDATE {table} SET {', '.join(fields)} WHERE id = ?"
+            await conn.execute(query, values)
             await conn.commit()
 
-            # Log if any fields were filtered out
-            filtered_out = set(data.keys()) - valid_columns
+            filtered_out = set(data) - valid_columns
             if filtered_out:
                 logger.debug(
-                    f"Filtered out non-existent columns for artist {artist_id}: {', '.join(filtered_out)}"
+                    f"Filtered out non-existent columns for {table} {entity_id}: "
+                    f"{', '.join(filtered_out)}"
                 )
+
+    async def update_artist(self, artist_id: str, data: Dict[str, Any]) -> None:
+        """Update artist information"""
+        await self._update("artists", artist_id, data)
 
     async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
         """Update album information"""
-        async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.cursor()
-
-            # Get album table column names
-            await cursor.execute("PRAGMA table_info(albums)")
-            rows = await cursor.fetchall()
-            valid_columns = {row["name"] for row in rows}
-
-            # Filter out data keys that don't exist in the albums table
-            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
-
-            if not filtered_data:
-                logger.debug(f"No valid columns to update for album {album_id}")
-                return
-
-            # Build the SET clause with only valid columns
-            fields = []
-            values = []
-            for key, value in filtered_data.items():
-                fields.append(f"{key} = ?")
-                values.append(value)
-
-            # Add album_id to the values
-            values.append(album_id)
-
-            query = f"UPDATE albums SET {', '.join(fields)} WHERE id = ?"
-            await cursor.execute(query, values)
-            await conn.commit()
-
-            # Log if any fields were filtered out
-            filtered_out = set(data.keys()) - valid_columns
-            if filtered_out:
-                logger.debug(
-                    f"Filtered out non-existent columns for album {album_id}: {', '.join(filtered_out)}"
-                )
+        await self._update("albums", album_id, data)
 
     async def update_track(self, track_id: str, data: Dict[str, Any]) -> None:
         """Update track information"""
-        async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            cursor = await conn.cursor()
-
-            # Get track table column names
-            await cursor.execute("PRAGMA table_info(tracks)")
-            rows = await cursor.fetchall()
-            valid_columns = {row["name"] for row in rows}
-
-            # Filter out data keys that don't exist in the tracks table
-            filtered_data = {k: v for k, v in data.items() if k in valid_columns}
-
-            if not filtered_data:
-                logger.debug(f"No valid columns to update for track {track_id}")
-                return
-
-            # Build the SET clause with only valid columns
-            fields = []
-            values = []
-            for key, value in filtered_data.items():
-                fields.append(f"{key} = ?")
-                values.append(value)
-
-            # Add track_id to the values
-            values.append(track_id)
-
-            query = f"UPDATE tracks SET {', '.join(fields)} WHERE id = ?"
-            await cursor.execute(query, values)
-            await conn.commit()
-
-            # Log if any fields were filtered out
-            filtered_out = set(data.keys()) - valid_columns
-            if filtered_out:
-                logger.debug(
-                    f"Filtered out non-existent columns for track {track_id}: {', '.join(filtered_out)}"
-                )
+        await self._update("tracks", track_id, data)
 
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration)"""

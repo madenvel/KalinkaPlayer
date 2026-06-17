@@ -37,7 +37,7 @@ _VEC_TEXT_TABLES = {
 @retry_db_locked
 class AsyncEmbedderDb:
     """
-    Database manager for the CLAP + Essentia embedding pipeline.
+    Database manager for the CLAP embedding pipeline.
     All methods are async and open their own short-lived connections.
     """
 
@@ -243,29 +243,6 @@ class AsyncEmbedderDb:
             await conn.commit()
 
         return [dict(r) for r in rows]
-
-    async def complete_tags_job(
-        self, job_id: int, track_id: str, tags_json: str
-    ) -> None:
-        """Mark tags job done and write tags_predicted to the track."""
-        async with self._open() as conn:
-            await conn.execute(
-                """
-                UPDATE tracks
-                SET tags_predicted = json_patch(COALESCE(tags_predicted, '{}'), ?)
-                WHERE id = ?
-                """,
-                (tags_json, track_id),
-            )
-            await conn.execute(
-                """
-                UPDATE embedding_jobs
-                SET status = 'done', error = NULL, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (job_id,),
-            )
-            await conn.commit()
 
     async def complete_clap_job(
         self, job_id: int, track_id: str, blob: bytes, version: int

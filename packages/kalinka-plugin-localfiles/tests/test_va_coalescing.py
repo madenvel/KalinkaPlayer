@@ -1,18 +1,20 @@
-"""Tests for the V/A folder *detach* pass (formerly "coalescing").
+"""Tests for the V/A folder *coalesce* pass (``orphan_va_folder_tracks``).
 
-After the folder-bounded album-ID change, a folder of compilation
-tracks where each track carries its own per-album tag (e.g. a Jamendo
-playlist) still fragments into one album per track. The detach pass
-re-points every such track to the ``unknown_album`` sentinel so:
+A folder of compilation tracks where each track carries its own per-album
+tag (e.g. a Jamendo playlist) fragments into one album per track. The
+coalesce pass collapses a qualifying folder into a single album:
 
-  * the per-track single-track albums get cleaned up as orphans
-  * each track surfaces as a single under its real artist via the
-    orphan-tracks fallback in the browse view
+  * a real compilation -> a Various-Artists album titled after the folder
+    (``VA -`` prefix stripped); the per-track albums are cleaned up as orphans
+  * a folder under a real artist (remixer-credited tracks) -> that artist's album
+  * a generic dump (``music/``, ``90s Mixes``) -> tracks left loose under
+    ``unknown_album``, no fabricated album
 
-The earlier "coalesce into a Various-Artists umbrella" behaviour was
-rejected because it broke artist navigation: a track's artist_id
-correctly pointed at the real artist, but the album was anchored to
-``various_artists``, so the artist page found no albums for them.
+Each track keeps its real ``artist_id`` and still surfaces under that artist
+via ``get_artist_orphan_tracks`` (album.artist_id != track.artist_id), so the
+artist-navigation regression that sank the *earlier* umbrella-album attempt no
+longer applies. An earlier iteration instead detached such tracks to
+``unknown_album``; that behaviour was superseded by the coalesce pass.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ import pytest
 from kalinka_plugin_localfiles.indexer.indexer import (
     FileIndexer,
     VA_MIN_DISTINCT_ARTISTS,
+    VARIOUS_ARTISTS_ID,
 )
 from kalinka_plugin_localfiles.utils.id_generator import (
     generate_album_id,
@@ -68,6 +71,10 @@ class FakeDb:
     async def update_track(self, track_id: str, data: Dict) -> None:
         if track_id in self.tracks:
             self.tracks[track_id].update(data)
+
+    async def update_album(self, album_id: str, data: Dict) -> None:
+        if album_id in self.albums:
+            self.albums[album_id].update(data)
 
     async def update_album_stats(self, album_id: str) -> None:
         if album_id not in self.albums:
@@ -150,21 +157,22 @@ def _seed_track(
 
 
 @pytest.mark.asyncio
-async def test_jamendo_playlist_tracks_become_singles_under_real_artists():
+async def test_jamendo_playlist_tracks_coalesce_into_one_va_album():
     """Motivating case: one folder, many single-track albums each
-    anchored to a different real artist. After detach, every track
-    points at ``unknown_album``, every per-track album is gone, and
-    no Various-Artists row is created — artist navigation now works
-    via the orphan-tracks fallback."""
+    anchored to a different real artist. After coalescing, every track
+    points at one Various-Artists album titled after the folder, the
+    per-track albums are gone, and the VA sentinel artist is created.
+    Each track keeps its real artist_id so it still browses under that
+    artist via the orphan-tracks fallback."""
     db = FakeDb()
     indexer = _make_indexer(db)
 
-    folder = "/Music/Playlist - Compilation"
+    base = "/Music/Playlist - Compilation"
     real_artist_ids = []
     for i in range(6):
         _, ar_id, _ = _seed_track(
             db,
-            f"{folder}/{i:02d} - track.mp3",
+            f"{base}/{i:02d} - track.mp3",
             artist_name=f"Artist {i}",
             album_title=f"Album {i}",
         )
@@ -173,18 +181,27 @@ async def test_jamendo_playlist_tracks_become_singles_under_real_artists():
     # Pre-state: 6 per-track albums, 6 distinct artists.
     assert len(db.albums) == 1 + 6  # unknown_album + 6 per-track albums
 
+    folder = album_folder_for_path(f"{base}/00 - track.mp3")
+    va_album_id = generate_album_id("Playlist - Compilation", folder)
+
     result = await indexer.orphan_va_folder_tracks()
 
     assert result["folders"] == 1
     assert result["tracks"] == 6
     assert result["orphans"] == 6
-    # All tracks now point to unknown_album.
+    # All tracks now point to the single VA compilation album.
     for t in db.tracks.values():
-        assert t["album_id"] == "unknown_album"
-    # The per-track albums are gone; only unknown_album survives.
-    assert set(db.albums) == {"unknown_album"}
-    # No Various-Artists row was created.
-    assert "various_artists" not in db.artists
+        assert t["album_id"] == va_album_id
+    # The per-track albums are gone; only unknown_album + the VA album survive.
+    assert set(db.albums) == {"unknown_album", va_album_id}
+    # The VA album is anchored to Various Artists, titled after the folder,
+    # and its stats reflect the coalesced tracks.
+    va_album = db.albums[va_album_id]
+    assert va_album["artist_id"] == VARIOUS_ARTISTS_ID
+    assert va_album["title"] == "Playlist - Compilation"
+    assert va_album["track_count"] == 6
+    # The Various-Artists sentinel artist was created.
+    assert VARIOUS_ARTISTS_ID in db.artists
     # The real artists are still present so their tracks can be browsed
     # under them via the orphan-tracks fallback.
     for ar_id in real_artist_ids:
@@ -192,22 +209,25 @@ async def test_jamendo_playlist_tracks_become_singles_under_real_artists():
 
 
 @pytest.mark.asyncio
-async def test_rerun_on_already_detached_folder_is_a_noop():
-    """The detach pass runs on every scan (~every 15 min). Once a V/A
-    folder's tracks are detached, a second run must report no work:
+async def test_rerun_on_already_coalesced_folder_is_a_noop():
+    """The coalesce pass runs on every scan (~every 15 min). Once a V/A
+    folder is coalesced, a second run must report no work:
     ``folders``/``tracks``/``orphans`` all zero. This is what keeps the
-    indexer from re-announcing the same detach in the logs forever."""
+    indexer from re-announcing the same coalesce in the logs forever."""
     db = FakeDb()
     indexer = _make_indexer(db)
 
-    folder = "/Music/Playlist - Compilation"
+    base = "/Music/Playlist - Compilation"
     for i in range(6):
         _seed_track(
             db,
-            f"{folder}/{i:02d} - track.mp3",
+            f"{base}/{i:02d} - track.mp3",
             artist_name=f"Artist {i}",
             album_title=f"Album {i}",
         )
+
+    folder = album_folder_for_path(f"{base}/00 - track.mp3")
+    va_album_id = generate_album_id("Playlist - Compilation", folder)
 
     first = await indexer.orphan_va_folder_tracks()
     assert first == {"folders": 1, "tracks": 6, "orphans": 6}
@@ -216,7 +236,7 @@ async def test_rerun_on_already_detached_folder_is_a_noop():
     assert second == {"folders": 0, "tracks": 0, "orphans": 0}
     # State is unchanged by the no-op second run.
     for t in db.tracks.values():
-        assert t["album_id"] == "unknown_album"
+        assert t["album_id"] == va_album_id
 
 
 @pytest.mark.asyncio
@@ -264,13 +284,14 @@ async def test_mistagged_album_is_not_detached():
 
 
 @pytest.mark.asyncio
-async def test_real_compilation_album_with_shared_tag_also_detaches():
+async def test_real_compilation_album_with_shared_tag_is_reanchored_in_place():
     """The other V/A pattern: same folder, same album tag, many
     artists (e.g., 'Now That's What I Call X'). After the folder-
     bounded change these already share one album row anchored to the
-    first track's artist. Detach still kicks in — the tracks lose
-    their album linkage and surface as singles under each real
-    artist. The umbrella album disappears from the album list."""
+    first track's artist. No track needs re-pointing, but the shared
+    album is re-anchored in place to Various Artists — counted as one
+    coalesced folder, with the album kept (not deleted) and its tracks
+    intact."""
     db = FakeDb()
     indexer = _make_indexer(db)
     folder = "/Music/Now Thats What I Call 2024"
@@ -288,11 +309,20 @@ async def test_real_compilation_album_with_shared_tag_also_detaches():
     assert original_album_id in db.albums
 
     result = await indexer.orphan_va_folder_tracks()
-    assert result["folders"] == 1
-    # Tracks all moved to unknown_album, the umbrella album was orphaned and deleted.
+    # No re-point (tracks already on the target album), but the in-place
+    # re-anchor counts as one coalesced folder.
+    assert result == {"folders": 1, "tracks": 0, "orphans": 0}
+    # The shared album survives, re-anchored to Various Artists, tracks intact.
+    assert original_album_id in db.albums
+    assert db.albums[original_album_id]["artist_id"] == VARIOUS_ARTISTS_ID
+    assert db.albums[original_album_id]["track_count"] == 5
     for t in db.tracks.values():
-        assert t["album_id"] == "unknown_album"
-    assert original_album_id not in db.albums
+        assert t["album_id"] == original_album_id
+    assert VARIOUS_ARTISTS_ID in db.artists
+
+    # Re-running is an idempotent no-op (album already correctly anchored).
+    second = await indexer.orphan_va_folder_tracks()
+    assert second == {"folders": 0, "tracks": 0, "orphans": 0}
 
 
 @pytest.mark.asyncio
@@ -330,10 +360,15 @@ async def test_disc_subdirs_count_under_the_parent_folder():
             artist_name=f"Artist {i+10}",
             album_title=f"B{i}",
         )
+    folder = album_folder_for_path(f"{parent}/Disc 1/00.flac")
+    va_album_id = generate_album_id("Massive Compilation", folder)
+
     result = await indexer.orphan_va_folder_tracks()
     assert result["folders"] == 1
+    # Both discs collapse into one VA album under the parent folder.
     for t in db.tracks.values():
-        assert t["album_id"] == "unknown_album"
+        assert t["album_id"] == va_album_id
+    assert db.albums[va_album_id]["artist_id"] == VARIOUS_ARTISTS_ID
 
 
 @pytest.mark.asyncio

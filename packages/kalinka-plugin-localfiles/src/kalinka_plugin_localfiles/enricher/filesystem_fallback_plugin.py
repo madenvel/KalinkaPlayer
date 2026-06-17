@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -197,7 +198,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                     "id": artist_id,
                     "name": artist_name,
                     "enriched": 0,
-                    "last_updated": int(__import__("time").time()),
+                    "last_updated": int(time.time()),
                 }
             )
             logger.debug(f"Created new artist: {artist_name} (ID: {artist_id})")
@@ -244,7 +245,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                 "title": album_title,
                 "artist_id": artist_id,
                 "enriched": 0,
-                "last_updated": int(__import__("time").time()),
+                "last_updated": int(time.time()),
             }
         )
         logger.debug(f"Created new album: {album_title} by {artist_id} (ID: {album_id})")

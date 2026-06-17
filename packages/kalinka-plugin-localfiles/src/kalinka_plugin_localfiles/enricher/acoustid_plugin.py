@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import time
@@ -607,8 +608,13 @@ class AcoustIdPlugin(EnricherPlugin):
                 f"Fingerprinting track: {track.get('title', 'Unknown')} - {track.get('file_path')}"
             )
 
-            # Generate fingerprint
-            fingerprint, duration = self._generate_fingerprint(track["file_path"])
+            # Generate fingerprint. ``_generate_fingerprint`` (fpcalc
+            # subprocess) and ``_lookup_fingerprint`` (HTTP + rate-limit
+            # sleep) are blocking, so run them off the event loop to avoid
+            # stalling the enricher's other coroutines.
+            fingerprint, duration = await asyncio.to_thread(
+                self._generate_fingerprint, track["file_path"]
+            )
             if not fingerprint or not duration:
                 logger.debug(
                     f"Could not generate fingerprint for {track.get('file_path')}"
@@ -616,7 +622,9 @@ class AcoustIdPlugin(EnricherPlugin):
                 return None
 
             # Look up fingerprint
-            results = self._lookup_fingerprint(fingerprint, duration)
+            results = await asyncio.to_thread(
+                self._lookup_fingerprint, fingerprint, duration
+            )
             if not results:
                 logger.debug(f"No AcoustID matches for {track.get('file_path')}")
                 return None
