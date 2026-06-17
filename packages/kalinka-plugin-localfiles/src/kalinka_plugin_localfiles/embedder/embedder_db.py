@@ -624,9 +624,11 @@ class AsyncEmbedderDb:
     async def get_embedding_coverage(self) -> dict:
         """Return job counts and coverage percentages.
 
-        Jobs for tracks parented to the `unknown_album`/`unknown_artist`
-        placeholders are excluded, since those rows are intentionally never
-        enriched and would otherwise keep coverage below 100% forever.
+        Jobs for tracks parented to the `unknown_artist` placeholder are
+        excluded, since those rows are never scheduled and would otherwise keep
+        coverage below 100% forever. Unknown-album tracks are counted — they are
+        now scheduled and can reach `done`, so this stays consistent with the
+        scheduling filters.
         """
         async with self._open() as conn:
             cursor = await conn.execute(
@@ -634,8 +636,7 @@ class AsyncEmbedderDb:
                 SELECT j.stage, j.status, COUNT(*) AS cnt
                 FROM embedding_jobs j
                 JOIN tracks t ON t.id = j.entity_id
-                WHERE t.album_id != 'unknown_album'
-                  AND t.artist_id != 'unknown_artist'
+                WHERE t.artist_id != 'unknown_artist'
                 GROUP BY j.stage, j.status
                 """
             )
