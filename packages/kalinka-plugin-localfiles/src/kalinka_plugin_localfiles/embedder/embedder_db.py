@@ -148,7 +148,9 @@ class AsyncEmbedderDb:
                 SELECT 'track', t.id, 'clap_audio', ?
                 FROM tracks t
                 WHERE t.enriched IN (1, 2)
-                  AND t.album_id != 'unknown_album'
+                  -- Embed unknown-album tracks (V/A comps, orphan singles):
+                  -- the audio is metadata-independent and worth indexing.
+                  -- unknown_artist tracks stay excluded.
                   AND t.artist_id != 'unknown_artist'
                   AND NOT EXISTS (
                     SELECT 1 FROM embedding_jobs j
@@ -175,7 +177,9 @@ class AsyncEmbedderDb:
                 SELECT 'track', t.id, 'clap_text', ?
                 FROM tracks t
                 WHERE t.enriched IN (1, 2)
-                  AND t.album_id != 'unknown_album'
+                  -- Unknown-album tracks embed as "Artist - Title"; the
+                  -- "Unknown Album" sentinel is stripped in
+                  -- get_track_metadata_for_embedding. unknown_artist excluded.
                   AND t.artist_id != 'unknown_artist'
                 """,
                 (clap_version,),
