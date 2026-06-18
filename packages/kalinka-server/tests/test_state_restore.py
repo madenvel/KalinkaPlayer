@@ -14,6 +14,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.events import PlayQueueState
 from kalinka_plugin_sdk.inputmodule import TrackInfo, TrackUrl
+from kalinka_serialized import ResolutionSlot
 from kalinka_server import state_keeper
 from kalinka_server.playqueue import PlayQueueImpl
 
@@ -148,9 +149,10 @@ async def test_restore_prefers_saved_metadata_over_module():
 
     added: list[TrackInfo] = []
     fake_self = SimpleNamespace(
-        track_player=SimpleNamespace(
+        _track_player=SimpleNamespace(
             get_state=lambda: SimpleNamespace(state=None), stop=lambda: None
         ),
+        _resolution=ResolutionSlot(),
         current_stream_id=None,
         track_list=[],
         prepared_tracks={},

@@ -10,7 +10,12 @@ from kalinka_serialized.serial_executor import interrupt
 from .alsa_volume_device import AlsaVolumeControlDevice
 from .config_model import KalinkaConfig
 
-from kalinka_serialized import SerialExecutor, serialised, with_serial_executor
+from kalinka_serialized import (
+    ResolutionSlot,
+    SerialExecutor,
+    serialised,
+    with_serial_executor,
+)
 
 from kalinka_plugin_sdk.datamodel import (
     EntityId,
@@ -72,6 +77,11 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # };
 
 PREFETCH_TIME_MS = 5000
+
+# Upper bound for a single link_retriever() call. Plugins set their own (smaller)
+# HTTP timeouts; this is a backstop so a misbehaving plugin can never pin the
+# resolution slot indefinitely. Generous enough to allow one in-plugin retry.
+LINK_RETRIEVAL_TIMEOUT_S = 8
 
 
 def _remap_index(idx: int, from_index: int, to_index: int) -> int:
@@ -240,6 +250,9 @@ class PlayQueueImpl(PlayQueueController):
         # on real state changes. Kept in sync with track_list across mutations.
         self._unavailable_indices: set[int] = set()
 
+        # Single in-flight URL resolution; see "Off-lane URL resolution" below.
+        self._resolution = ResolutionSlot()
+
         self._state_update_task = None
 
     async def __aenter__(self):
@@ -252,6 +265,7 @@ class PlayQueueImpl(PlayQueueController):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Stop the play queue and cleanup resources."""
+        self._resolution.supersede()
         self._terminate()
         if self._state_update_task:
             self._state_update_task.cancel()
@@ -334,24 +348,38 @@ class PlayQueueImpl(PlayQueueController):
                 return
             self._cancel_prefetch_timer()
         elif new_state.state == AudioGraphNodeState.FINISHED:
-            # Only auto-play next if no streams are already queued.
-            # Non-empty prepared_tracks means a manual switch already appended
-            # a new stream — SOURCE_CHANGED will handle the transition.
-            if self._prefetch_task is None and not self.prepared_tracks:
-                await self._play_unqueued(self.current_track_id + 1)
+            # Only auto-play next if no streams are already queued and no
+            # resolution is already in flight (a manual switch). Non-empty
+            # prepared_tracks means a manual switch already appended a new
+            # stream — SOURCE_CHANGED will handle the transition.
+            if (
+                self._prefetch_task is None
+                and not self.prepared_tracks
+                and not self._resolution.active
+            ):
+                target = self.current_track_id + 1
+                self._begin_resolution(
+                    target,
+                    resolve=lambda: self._resolve_playable(target, 1),
+                    next_step=self._play_resolved,
+                )
         elif new_state.state == AudioGraphNodeState.STOPPED:
             # The prefetch may have completed and appended a stream just as the
             # native player ran out of time and stopped.  If a stream is already
             # queued and the player is still stopped (i.e. play_next hasn't
-            # restarted it yet), do a full _play_unqueued so the remove+append
-            # cycle kicks the player back into motion.
+            # restarted it yet), kick the player back into motion.
             if (
                 self.prepared_tracks
+                and not self._resolution.active
                 and self._track_player.get_state().state == AudioGraphNodeState.STOPPED
             ):
                 next_idx = next(iter(self.prepared_tracks))
-                await self._play_unqueued(next_idx)
-                return  # new playback started; its own state events will follow
+                self._begin_resolution(
+                    next_idx,
+                    resolve=lambda: self._resolve_playable(next_idx, 1),
+                    next_step=self._play_resolved,
+                )
+                return  # resolution started; its own state events will follow
             self._cancel_prefetch_timer()
         elif new_state.state == AudioGraphNodeState.STREAMING:
             self._setup_prefetch_timer(new_state)
@@ -387,35 +415,120 @@ class PlayQueueImpl(PlayQueueController):
         # ±1 boundary stepping done by next()/prev()).
         if index is not None and index not in range(0, len(self.track_list)):
             return
-        await self._play_unqueued(index)
+        if len(self.track_list) == 0:
+            return
+        target = self.current_track_id if index is None else index
+        self._begin_resolution(
+            target,
+            resolve=lambda: self._resolve_playable(target, 1),
+            next_step=self._play_resolved,
+        )
 
     @serialised
     async def play_next(self, index: int) -> None:
-        return await self._play_next_unqueued(index)
-
-    async def _play_unqueued(self, index=None, step=1):
-        self._retry_attempted = False
+        # play_next is index-addressed; an out-of-range or already-queued index
+        # is a no-op. (Prefetch wraps via _play_next_track_async before calling.)
         if len(self.track_list) == 0:
             return
-
-        if index is None:
-            index = self.current_track_id
-
-        resolved_index, track_info = await self._resolve_playable(index, step)
-        if track_info is None:
-            # Nothing playable in this direction: either we ran off the end of
-            # the queue (normal no-op, as before) or every remaining track
-            # failed to yield a URL — in which case _resolve_playable has
-            # already flagged them. Leave any current playback untouched.
+        if index not in range(0, len(self.track_list)) or index in self.prepared_tracks:
             return
-        index = resolved_index
+        logger.info(f"Prefetching next track index={index}")
+        self._begin_resolution(
+            index,
+            resolve=lambda: self._resolve_playable(index, 1),
+            next_step=self._prefetch_resolved,
+            cancel_prefetch=False,  # this *is* the prefetch; don't cancel its timer
+        )
 
-        self._cancel_prefetch_timer()
+    # ------------------------------------------------------------------
+    # Off-lane URL resolution
+    #
+    # link_retriever() is the only slow (network) operation in the playqueue.
+    # Running it inside the serial executor would freeze every other command and
+    # the state-update interrupt lane while a streaming plugin times out. So each
+    # command splits in two: a serialised entry point that kicks off the (slow)
+    # ``resolve`` off the lane, and a serialised ``next_step`` that applies the
+    # result back on the lane once the URL is in hand. Only one resolution runs
+    # at a time; a new one cancels the previous, which then returns silently
+    # (no TrackUnavailableEvent).
+    # ------------------------------------------------------------------
 
-        # Remove any prefetched streams.
+    def _begin_resolution(
+        self,
+        target: int,
+        resolve: Callable[[], Awaitable],
+        next_step: Callable[[int, object], Awaitable[None]],
+        cancel_prefetch: bool = True,
+    ) -> None:
+        """Cancel any in-flight resolution and start a new one. Returns at once.
+
+        ``resolve`` runs the URL fetch off the serial lane; ``next_step`` is a
+        serialised method invoked with ``(gen, result)`` to apply it. Must be
+        called from the serial (or interrupt) lane so the cancel + swap of the
+        single resolution slot is atomic with respect to other commands.
+        """
+        if cancel_prefetch:
+            self._cancel_prefetch_timer()
+        self._resolution.start(
+            lambda gen: self._drive_resolution(gen, resolve, next_step),
+            target=target,
+        )
+
+    async def _drive_resolution(self, gen, resolve, next_step) -> None:
+        """Run ``resolve`` off-lane, then hand its result to ``next_step``.
+
+        Cancellation (a superseding command or an affecting structural mutation)
+        propagates out silently: no events are emitted and nothing is applied.
+        """
+        try:
+            result = await resolve()
+            await next_step(gen, result)
+        except Exception:
+            # CancelledError (a superseding command or affecting mutation) is a
+            # BaseException and propagates silently; only real errors are logged.
+            logger.exception("URL resolution task failed")
+
+    def _accept_scan(self, gen: int, result):
+        """Fence a scan result, flag the failed indices, return the playable
+        ``(index, track_info)`` to apply — or None if superseded / nothing
+        playable. Runs on the lane (called from a serialised next_step)."""
+        if not self._resolution.is_current(gen):
+            return None
+        self._resolution.finish(gen)
+        index, track_info, failed = result
+        # Flag failures only now, on the lane, so the marks (and their dedup
+        # state) stay consistent with mutations that remap _unavailable_indices.
+        for i in failed:
+            self._set_track_unavailable(i, True)
+        if track_info is None or index is None:
+            return None
+        self._set_track_unavailable(index, False)
+        return index, track_info
+
+    @serialised
+    async def _play_resolved(self, gen, result) -> None:
+        playable = self._accept_scan(gen, result)
+        if playable is not None:
+            self._apply_play(*playable)
+
+    @serialised
+    async def _prefetch_resolved(self, gen, result) -> None:
+        playable = self._accept_scan(gen, result)
+        if playable is not None:
+            self._apply_prefetch(*playable)
+
+    def _clear_prepared_streams(self) -> None:
+        """Remove every prefetched native stream and empty the prepared map."""
         for _, (_, stream_id) in list(self.prepared_tracks.items()):
             self._track_player.remove(stream_id)
         self.prepared_tracks.clear()
+
+    def _apply_play(self, index: int, track_info) -> None:
+        """Replace current playback with the already-resolved track."""
+        self._retry_attempted = False
+        self._cancel_prefetch_timer()
+
+        self._clear_prepared_streams()
 
         # Append new stream — auto-starts. prepared_tracks is non-empty so the
         # FINISHED handler (triggered by the removals above) will not auto-play.
@@ -428,39 +541,15 @@ class PlayQueueImpl(PlayQueueController):
             self._track_player.remove(self.current_stream_id)
             self.current_stream_id = None
 
-    async def _play_next_unqueued(self, index):
-        if len(self.track_list) == 0:
-            return
-
-        # play_next is index-addressed; an out-of-range index is a no-op.
-        # (Prefetch already wraps via _play_next_track_async before calling.)
-        if index not in range(0, len(self.track_list)) or index in self.prepared_tracks:
-            return
-
-        logger.info(f"Playing next track index={index}")
-
-        # If the player is already stopped, skip straight to _play_unqueued to
-        # avoid a wasteful append+remove cycle.
-        if self._track_player.get_state().state == AudioGraphNodeState.STOPPED:
-            await self._play_unqueued(index)
-            return
-
-        resolved_index, track_info = await self._resolve_playable(index, step=1)
-        if track_info is None:
-            return
-        index = resolved_index
-
-        # Skipping unavailable tracks may have landed on one that is already
-        # queued — nothing more to do in that case.
+    def _apply_prefetch(self, index: int, track_info) -> None:
+        """Append the already-resolved track as the upcoming stream."""
+        # Resolution may have landed on a now-queued index, or the player may
+        # have stopped while we were fetching — fall back to a full replace.
         if index in self.prepared_tracks:
             return
-
-        # If the player stopped while we were awaiting the URL, fall back to a
-        # full _play_unqueued so the remove+append cycle restarts it.
         if self._track_player.get_state().state == AudioGraphNodeState.STOPPED:
-            await self._play_unqueued(index)
+            self._apply_play(index, track_info)
             return
-
         stream_id = self._track_player.append(
             track_info.url, mime_to_format(track_info.format)
         )
@@ -475,11 +564,25 @@ class PlayQueueImpl(PlayQueueController):
 
     @serialised
     async def next(self):
-        await self._play_unqueued(self.current_track_id + 1)
+        if len(self.track_list) == 0:
+            return
+        target = self.current_track_id + 1
+        self._begin_resolution(
+            target,
+            resolve=lambda: self._resolve_playable(target, 1),
+            next_step=self._play_resolved,
+        )
 
     @serialised
     async def prev(self):
-        await self._play_unqueued(self.current_track_id - 1, step=-1)
+        if len(self.track_list) == 0:
+            return
+        target = self.current_track_id - 1
+        self._begin_resolution(
+            target,
+            resolve=lambda: self._resolve_playable(target, -1),
+            next_step=self._play_resolved,
+        )
 
     @serialised
     async def seek(self, position_ms: int) -> None:
@@ -501,6 +604,10 @@ class PlayQueueImpl(PlayQueueController):
         insert_at = len(self.track_list) if index is None else index
         # Clamp to valid range
         insert_at = max(0, min(insert_at, len(self.track_list)))
+
+        # An insertion at or before the index a resolution is fetching shifts
+        # that target, so the in-flight resolution must be cancelled.
+        self._resolution.cancel_if(lambda target: insert_at <= target)
 
         was_empty = len(self.track_list) == 0
         old_current_track_id = self.current_track_id
@@ -525,21 +632,7 @@ class PlayQueueImpl(PlayQueueController):
             for idx in self._unavailable_indices
         }
 
-        # Validate prefetched next track (same pattern as move())
-        expected_next = self.current_track_id
-        if not self.repeat_single:
-            expected_next += 1
-        if self.repeat_all and expected_next >= len(self.track_list):
-            expected_next = 0
-
-        for idx in list(self.prepared_tracks.keys()):
-            if idx == self.current_track_id:
-                continue
-            if idx != expected_next:
-                _, stream_id = self.prepared_tracks.pop(idx)
-                self._track_player.remove(stream_id)
-                self._cancel_prefetch_timer()
-                self._prefetch_task = asyncio.create_task(self._play_next_track_async())
+        self._revalidate_prefetched_next()
 
         self.event_emitter.dispatch(
             TracksAddedEvent(
@@ -562,6 +655,10 @@ class PlayQueueImpl(PlayQueueController):
     @serialised
     async def remove(self, tracks: list[int]):
         prev_track_id = self.current_track_id
+
+        # Removing the resolution target, or any track before it (which shifts
+        # it down), invalidates the in-flight resolution.
+        self._resolution.cancel_if(lambda target: any(t <= target for t in tracks))
 
         tracks.sort(reverse=True)
         for track in tracks:
@@ -673,6 +770,7 @@ class PlayQueueImpl(PlayQueueController):
         was_already_stopped = (
             self._track_player.get_state().state == AudioGraphNodeState.STOPPED
         )
+        self._resolution.supersede()
         self._track_player.stop()
         self.current_stream_id = None
 
@@ -768,6 +866,11 @@ class PlayQueueImpl(PlayQueueController):
         if to_index not in range(0, len(self.track_list)):
             return
 
+        # A move re-indexes everything between from_index and to_index; if the
+        # resolution target falls in that span its index changes, so cancel it.
+        lo, hi = min(from_index, to_index), max(from_index, to_index)
+        self._resolution.cancel_if(lambda target: lo <= target <= hi)
+
         # Reorder the track list
         track = self.track_list.pop(from_index)
         self.track_list.insert(to_index, track)
@@ -790,22 +893,7 @@ class PlayQueueImpl(PlayQueueController):
             for idx in self._unavailable_indices
         }
 
-        # Verify the prefetched "next" track is still the correct one.
-        # If the wrong track is queued as next, remove it and re-prefetch.
-        expected_next = self.current_track_id
-        if not self.repeat_single:
-            expected_next += 1
-        if self.repeat_all and expected_next >= len(self.track_list):
-            expected_next = 0
-
-        for idx in list(self.prepared_tracks.keys()):
-            if idx == self.current_track_id:
-                continue
-            if idx != expected_next:
-                _, stream_id = self.prepared_tracks.pop(idx)
-                self._track_player.remove(stream_id)
-                self._cancel_prefetch_timer()
-                self._prefetch_task = asyncio.create_task(self._play_next_track_async())
+        self._revalidate_prefetched_next()
 
         self.event_emitter.dispatch(
             TrackMovedEvent(from_index=from_index, to_index=to_index)
@@ -823,6 +911,7 @@ class PlayQueueImpl(PlayQueueController):
         was_already_stopped = (
             self._track_player.get_state().state == AudioGraphNodeState.STOPPED
         )
+        self._resolution.supersede()
         self._cancel_prefetch_timer()
         self._track_player.clear_all()
         self.current_stream_id = None
@@ -858,10 +947,17 @@ class PlayQueueImpl(PlayQueueController):
         return progress
 
     async def _fetch_track_url(self, index):
-        """Fetch the stream URL for a track, returning None if retrieval fails."""
-        track = self.track_list[index]
+        """Fetch the stream URL for a track, returning None if retrieval fails.
+
+        Bounded by LINK_RETRIEVAL_TIMEOUT_S so a plugin that ignores its own
+        HTTP timeout can never pin the resolution slot indefinitely. Runs
+        off-lane, so a slow fetch never blocks the serial executor.
+        """
         try:
-            return await track.link_retriever()
+            track = self.track_list[index]
+            return await asyncio.wait_for(
+                track.link_retriever(), timeout=LINK_RETRIEVAL_TIMEOUT_S
+            )
         except Exception as e:
             logger.warning(
                 "Failed to retrieve track link for index %d: %s", index, repr(e)
@@ -871,17 +967,19 @@ class PlayQueueImpl(PlayQueueController):
     async def _resolve_playable(self, start_index, step=1):
         """Find the first playable track from start_index, moving by ``step``.
 
-        ``step`` must be +1 (forward) or -1 (backward); any other value is
-        normalised to one of those so the scan visits each track at most once
-        and never stalls re-fetching the same index. Tracks whose URL cannot be
-        retrieved are marked unavailable (so clients can flag them) and skipped.
-        Returns ``(index, track_url)`` for the first track that yields a URL, or
-        ``(None, None)`` if none do in that direction. Already-prepared tracks
-        are returned from cache.
+        Pure I/O: runs off the serial lane and performs no state mutation or
+        event dispatch — the caller's commit step records which indices failed
+        (so they can be flagged) and which one succeeded. ``step`` must be +1
+        (forward) or -1 (backward); any other value is normalised so the scan
+        visits each track at most once. Returns ``(index, track_url, failed)``
+        for the first track that yields a URL (``failed`` lists the indices that
+        did not), or ``(None, None, failed)`` if none do in that direction.
+        Already-prepared tracks are returned from cache.
         """
         n = len(self.track_list)
+        failed: list[int] = []
         if n == 0:
-            return None, None
+            return None, None, failed
 
         step = 1 if step >= 0 else -1
 
@@ -891,17 +989,16 @@ class PlayQueueImpl(PlayQueueController):
                 if self.repeat_all:
                     index %= n
                 else:
-                    return None, None
+                    return None, None, failed
             if index in self.prepared_tracks:
                 # Already prepared — its URL is known good.
-                return index, self.prepared_tracks[index][0]
+                return index, self.prepared_tracks[index][0], failed
             track_info = await self._fetch_track_url(index)
             if track_info is not None:
-                self._set_track_unavailable(index, False)
-                return index, track_info
-            self._set_track_unavailable(index, True)
+                return index, track_info, failed
+            failed.append(index)
             index += step
-        return None, None
+        return None, None, failed
 
     def _set_track_unavailable(self, index, unavailable):
         """Notify clients of a track availability change (only on real change)."""
@@ -918,34 +1015,50 @@ class PlayQueueImpl(PlayQueueController):
         )
 
     async def _retry_current_track_async(self, position_ms: int) -> None:
-        """Re-fetch the URL for the current track and resume from position_ms."""
-        track_index = self.current_track_id
-        track = self.track_list[track_index]
+        """Re-fetch the current track's URL off-lane and resume from position_ms.
 
-        try:
-            track_info = await track.link_retriever()
-        except Exception as e:
-            logger.warning("Retry: failed to retrieve track link: %s", repr(e))
+        Called from the state-update interrupt lane on an HTTP stream error. The
+        fetch must not run here (it would block the interrupt lane and stall all
+        state updates), so it is delegated to the off-lane resolver. Unlike
+        play/next, retry targets exactly the current track (single fetch, no
+        skipping) and reports failure as a PlaybackErrorEvent.
+        """
+        index = self.current_track_id
+        self._begin_resolution(
+            index,
+            resolve=lambda: self._fetch_track_url(index),
+            next_step=lambda gen, track_info: self._retry_resolved(
+                gen, index, track_info, position_ms
+            ),
+        )
+
+    @serialised
+    async def _retry_resolved(self, gen, index, track_info, position_ms) -> None:
+        if not self._resolution.is_current(gen):
+            return
+        self._resolution.finish(gen)
+        if track_info is None:
             self.event_emitter.dispatch(
                 PlaybackErrorEvent(message="Failed to retrieve track link on retry")
             )
             return
+        self._apply_retry(index, track_info, position_ms)
 
+    def _apply_retry(self, index: int, track_info, position_ms: int) -> None:
+        """Re-append the already-resolved current track and seek to position_ms."""
         self._cancel_prefetch_timer()
 
         if self.current_stream_id is not None:
             self._track_player.remove(self.current_stream_id)
             self.current_stream_id = None
 
-        for _, (_, stream_id) in list(self.prepared_tracks.items()):
-            self._track_player.remove(stream_id)
-        self.prepared_tracks.clear()
+        self._clear_prepared_streams()
 
         self._retry_pending = True
         stream_id = self._track_player.append(
             track_info.url, mime_to_format(track_info.format)
         )
-        self.prepared_tracks[track_index] = (track_info, stream_id)
+        self.prepared_tracks[index] = (track_info, stream_id)
 
         if position_ms > 0:
             self._track_player.seek(position_ms)
@@ -983,14 +1096,31 @@ class PlayQueueImpl(PlayQueueController):
             logger.debug("Prefetch timer cancelled")
             raise
 
-    async def _play_next_track_async(self):
-        next_track_id = self.current_track_id
+    def _next_index(self) -> int:
+        """The index that should play after the current track, honoring the
+        repeat modes (repeat_single stays put; repeat_all wraps to 0)."""
+        nxt = self.current_track_id
         if not self.repeat_single:
-            next_track_id += 1
-        if self.repeat_all and next_track_id >= len(self.track_list):
-            next_track_id = 0
+            nxt += 1
+        if self.repeat_all and nxt >= len(self.track_list):
+            nxt = 0
+        return nxt
 
-        await self.play_next(next_track_id)
+    def _revalidate_prefetched_next(self) -> None:
+        """After a structural change, drop any prefetched stream that is no
+        longer the correct next track and re-prefetch the right one."""
+        expected_next = self._next_index()
+        for idx in list(self.prepared_tracks.keys()):
+            if idx == self.current_track_id:
+                continue
+            if idx != expected_next:
+                _, stream_id = self.prepared_tracks.pop(idx)
+                self._track_player.remove(stream_id)
+                self._cancel_prefetch_timer()
+                self._prefetch_task = asyncio.create_task(self._play_next_track_async())
+
+    async def _play_next_track_async(self):
+        await self.play_next(self._next_index())
 
     def _cancel_prefetch_timer(self):
         if self._prefetch_task is not None:

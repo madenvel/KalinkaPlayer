@@ -1244,51 +1244,56 @@ def make_tracks_with_failures(n: int, failing: set[int]) -> list[TrackInfo]:
 
 @pytest.mark.asyncio
 async def test_resolve_playable_skips_failed_track(event_emitter, playqueue):
-    """A track whose URL can't be fetched is marked and skipped; the next
-    playable track is returned."""
+    """A track whose URL can't be fetched is collected in ``failed`` and skipped;
+    the next playable track is returned. The pure resolver mutates no state and
+    dispatches no events (the commit step flags failures)."""
     playqueue.track_list = make_tracks_with_failures(3, {0})
     event_emitter.reset_mock()
 
-    index, track_url = await playqueue._resolve_playable(0, step=1)
+    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index == 1
     assert track_url is not None
-    assert playqueue._unavailable_indices == {0}
-    unavailable_events = [
-        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
-    ]
-    assert unavailable_events == [TrackUnavailableEvent(index=0, unavailable=True)]
+    assert failed == [0]
+    # Resolver is pure: no flagging, no events.
+    assert playqueue._unavailable_indices == set()
+    assert not any(
+        isinstance(e, TrackUnavailableEvent) for e in dispatched_events(event_emitter)
+    )
 
 
 @pytest.mark.asyncio
 async def test_resolve_playable_all_failed_returns_none(event_emitter, playqueue):
-    """When every candidate fails, resolve returns (None, None) and marks all."""
+    """When every candidate fails, resolve returns (None, None, all-indices)."""
     playqueue.track_list = make_tracks_with_failures(3, {0, 1, 2})
     event_emitter.reset_mock()
 
-    index, track_url = await playqueue._resolve_playable(0, step=1)
+    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index is None
     assert track_url is None
-    assert playqueue._unavailable_indices == {0, 1, 2}
+    assert failed == [0, 1, 2]
+    # Resolver does not mutate flag state; the commit step would.
+    assert playqueue._unavailable_indices == set()
 
 
 @pytest.mark.asyncio
-async def test_resolve_playable_clears_flag_on_success(event_emitter, playqueue):
-    """A previously-unavailable track that now resolves clears its flag."""
+async def test_resolve_playable_success_reports_no_failures(event_emitter, playqueue):
+    """A track that resolves on the first try yields an empty ``failed`` list and
+    leaves flag state untouched (clearing is the commit's job)."""
     playqueue.track_list = make_tracks(3)
     playqueue._unavailable_indices = {0}
     event_emitter.reset_mock()
 
-    index, track_url = await playqueue._resolve_playable(0, step=1)
+    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index == 0
     assert track_url is not None
-    assert playqueue._unavailable_indices == set()
-    unavailable_events = [
-        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
-    ]
-    assert unavailable_events == [TrackUnavailableEvent(index=0, unavailable=False)]
+    assert failed == []
+    assert playqueue._unavailable_indices == {0}
+    assert not any(
+        isinstance(e, TrackUnavailableEvent) for e in dispatched_events(event_emitter)
+    )
 
 
 @pytest.mark.asyncio
@@ -1401,6 +1406,132 @@ async def test_play_next_out_of_range_index_is_noop(event_emitter, playqueue):
         isinstance(e, TrackUnavailableEvent)
         for e in dispatched_events(event_emitter)
     )
+
+
+# ── Off-lane URL resolution semantics ───────────────────────────────────────────
+#
+# These verify the *wiring* between PlayQueueImpl and its ResolutionSlot. They use
+# a never-resolving link_retriever so resolution stays in flight and nothing ever
+# commits to the native player — keeping the real AudioPlayer untouched. The slot
+# mechanics themselves are unit-tested in test_resolution_slot.py; end-to-end
+# playback (commit → native append) is covered by the streaming tests above.
+
+
+async def _never_resolves():
+    """A link_retriever that blocks until its resolution task is cancelled."""
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_play_does_not_block_on_url_resolution(playqueue):
+    """play() returns at once while the URL is still being fetched, and the
+    serial command lane stays free for other commands."""
+    playqueue.track_list = [
+        TrackInfo(
+            id=to_track_id("1"),
+            metadata=create_track("1"),
+            link_retriever=_never_resolves,
+        )
+    ]
+
+    await playqueue.play(0)
+    assert playqueue._resolution.active  # in flight, not yet committed
+
+    # Lane is free: another serialised call resolves promptly despite the
+    # in-flight (blocked) resolution.
+    state = await asyncio.wait_for(playqueue.get_playback_state(), timeout=1)
+    assert state is not None
+
+
+@pytest.mark.asyncio
+async def test_failed_play_emits_unavailable_event(event_emitter, playqueue):
+    """A play that runs to completion and fails to resolve flags the track."""
+    playqueue.track_list = make_tracks_with_failures(1, {0})
+    event_emitter.reset_mock()
+
+    await playqueue.play(0)
+    await asyncio.sleep(0.05)
+
+    unavailable = [
+        e for e in dispatched_events(event_emitter) if isinstance(e, TrackUnavailableEvent)
+    ]
+    assert unavailable == [TrackUnavailableEvent(index=0, unavailable=True)]
+    assert playqueue._unavailable_indices == {0}
+
+
+@pytest.mark.asyncio
+async def test_superseded_play_suppresses_unavailable_event(event_emitter, playqueue):
+    """A play whose resolution is superseded by a newer play fails silently:
+    no TrackUnavailableEvent for the abandoned track."""
+    playqueue.track_list = [
+        TrackInfo(
+            id=to_track_id("1"),
+            metadata=create_track("1"),
+            link_retriever=_never_resolves,
+        ),
+        TrackInfo(
+            id=to_track_id("2"),
+            metadata=create_track("2"),
+            link_retriever=_never_resolves,
+        ),
+    ]
+    event_emitter.reset_mock()
+
+    await playqueue.play(0)
+    assert playqueue._resolution.target == 0
+    await playqueue.play(1)  # supersedes the index-0 resolution
+    await asyncio.sleep(0.05)
+
+    assert playqueue._resolution.target == 1  # the newer play won
+    assert not any(
+        isinstance(e, TrackUnavailableEvent) and e.index == 0
+        for e in dispatched_events(event_emitter)
+    )
+    assert 0 not in playqueue._unavailable_indices
+
+
+@pytest.mark.asyncio
+async def test_structural_mutation_on_target_cancels_resolution(event_emitter, playqueue):
+    """Removing a track at/before the resolution target cancels it silently."""
+    tracks = make_tracks(4)
+    tracks[2] = TrackInfo(
+        id=to_track_id("slow"),
+        metadata=create_track("slow"),
+        link_retriever=_never_resolves,
+    )
+    playqueue.track_list = tracks
+    event_emitter.reset_mock()
+
+    await playqueue.play(2)
+    assert playqueue._resolution.active
+
+    await playqueue.remove([0])  # index 0 <= target 2 → affected
+    assert not playqueue._resolution.active  # cancelled
+
+    await asyncio.sleep(0.05)
+    assert not any(
+        isinstance(e, TrackUnavailableEvent)
+        for e in dispatched_events(event_emitter)
+    )
+
+
+@pytest.mark.asyncio
+async def test_structural_mutation_after_target_keeps_resolution(playqueue):
+    """A removal entirely after the resolution target leaves it running."""
+    tracks = make_tracks(4)
+    tracks[0] = TrackInfo(
+        id=to_track_id("slow"),
+        metadata=create_track("slow"),
+        link_retriever=_never_resolves,
+    )
+    playqueue.track_list = tracks
+
+    await playqueue.play(0)
+    assert playqueue._resolution.active
+
+    await playqueue.remove([3])  # index 3 > target 0 → unaffected
+    assert playqueue._resolution.active
+    assert playqueue._resolution.target == 0
 
 
 def test_playqueue_state_apply_track_unavailable():
