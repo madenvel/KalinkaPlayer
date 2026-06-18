@@ -84,11 +84,6 @@ class TagsConfig(BaseModel):
 
 
 class EmbedderClapConfig(BaseModel):
-    model_name: str = Field(
-        default="lukewys/laion_clap (music_audioset_epoch_15)",
-        title="CLAP model name",
-        json_schema_extra={"help": "HuggingFace model ID"},
-    )
     ckpt_path: str = Field(
         default="",
         title="Override model path",
