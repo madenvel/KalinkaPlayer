@@ -1,3 +1,4 @@
+from .resolution_slot import ResolutionSlot
 from .serial_executor import (
     DeadlockError,
     SerialExecutor,
@@ -10,6 +11,7 @@ from .serial_executor import (
 __version__ = "0.1.0"
 __all__ = [
     "DeadlockError",
+    "ResolutionSlot",
     "SerialExecutor",
     "StateWatcher",
     "interrupt",

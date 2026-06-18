@@ -98,8 +98,11 @@ def catalog_id(id: str) -> EntityId:
 
 
 class RetryTransport(httpx.AsyncHTTPTransport):
-    def __init__(self, read_retries=3, **kwargs):
+    def __init__(self, read_retries=2, **kwargs):
         super().__init__(**kwargs)
+        # read_retries is the total number of attempts (1 initial + N-1 retries).
+        # Kept low so a request fails fast when the server has no internet —
+        # otherwise the playqueue's resolution slot stays occupied far too long.
         self.read_retries = read_retries
         self.backoff_factor = 0.5
 
@@ -150,8 +153,11 @@ class JamendoClient:
         self.client_id = client_id
         self.base = BASE_URL
         self.session = httpx.AsyncClient(
-            transport=RetryTransport(read_retries=3, retries=3),
-            timeout=10,
+            # 2 attempts (1 initial + 1 retry), 3s per attempt. RetryTransport
+            # already retries connect failures, so httpx-level retries=0 avoids
+            # multiplying the worst-case wait.
+            transport=RetryTransport(read_retries=2, retries=0),
+            timeout=3,
         )
         self.session.headers.update(
             {
