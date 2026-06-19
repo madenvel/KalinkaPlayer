@@ -1250,10 +1250,11 @@ async def test_resolve_playable_skips_failed_track(event_emitter, playqueue):
     playqueue.track_list = make_tracks_with_failures(3, {0})
     event_emitter.reset_mock()
 
-    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
+    index, track_url, track_ref, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index == 1
     assert track_url is not None
+    assert track_ref is playqueue.track_list[1]
     assert failed == [0]
     # Resolver is pure: no flagging, no events.
     assert playqueue._unavailable_indices == set()
@@ -1268,10 +1269,11 @@ async def test_resolve_playable_all_failed_returns_none(event_emitter, playqueue
     playqueue.track_list = make_tracks_with_failures(3, {0, 1, 2})
     event_emitter.reset_mock()
 
-    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
+    index, track_url, track_ref, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index is None
     assert track_url is None
+    assert track_ref is None
     assert failed == [0, 1, 2]
     # Resolver does not mutate flag state; the commit step would.
     assert playqueue._unavailable_indices == set()
@@ -1285,10 +1287,11 @@ async def test_resolve_playable_success_reports_no_failures(event_emitter, playq
     playqueue._unavailable_indices = {0}
     event_emitter.reset_mock()
 
-    index, track_url, failed = await playqueue._resolve_playable(0, step=1)
+    index, track_url, track_ref, failed = await playqueue._resolve_playable(0, step=1)
 
     assert index == 0
     assert track_url is not None
+    assert track_ref is playqueue.track_list[0]
     assert failed == []
     assert playqueue._unavailable_indices == {0}
     assert not any(
@@ -1532,6 +1535,41 @@ async def test_structural_mutation_after_target_keeps_resolution(playqueue):
     await playqueue.remove([3])  # index 3 > target 0 → unaffected
     assert playqueue._resolution.active
     assert playqueue._resolution.target == 0
+
+
+@pytest.mark.asyncio
+async def test_accept_scan_rejects_shifted_index(playqueue):
+    """The commit re-validates the resolved index against the track that was
+    actually fetched. A multi-step scan can resolve an index *past* the start
+    target, and a concurrent add/remove/move in the (target, resolved] band
+    slips past cancel_if (whose predicate keys on the start target). _accept_scan
+    must then bail rather than bind the URL to the now-different track."""
+    captured = {}
+
+    async def _record_gen(gen):
+        captured["gen"] = gen
+
+    url = TrackUrl(url="http://x/1.flac", format="FLAC")
+    tracks = make_tracks(3)
+    playqueue.track_list = list(tracks)
+    resolved_ref = tracks[1]  # the track whose link produced `url`
+
+    # Arm a live resolution generation targeting index 1.
+    playqueue._resolution.start(_record_gen, target=1)
+    await asyncio.sleep(0)
+    gen = captured["gen"]
+
+    # Index still holds the fetched track → accepted.
+    assert playqueue._accept_scan(gen, (1, url, resolved_ref, [])) == (1, url)
+
+    # Re-arm (the accept above called finish()).
+    playqueue._resolution.start(_record_gen, target=1)
+    await asyncio.sleep(0)
+    gen = captured["gen"]
+
+    # A different track now sits at index 1 (a concurrent reindex) → must bail.
+    playqueue.track_list[1] = make_tracks(1)[0]
+    assert playqueue._accept_scan(gen, (1, url, resolved_ref, [])) is None
 
 
 def test_playqueue_state_apply_track_unavailable():

@@ -495,12 +495,19 @@ class PlayQueueImpl(PlayQueueController):
         if not self._resolution.is_current(gen):
             return None
         self._resolution.finish(gen)
-        index, track_info, failed = result
+        index, track_info, track_ref, failed = result
         # Flag failures only now, on the lane, so the marks (and their dedup
         # state) stay consistent with mutations that remap _unavailable_indices.
         for i in failed:
             self._set_track_unavailable(i, True)
         if track_info is None or index is None:
+            return None
+        # A multi-step scan can resolve an index *past* the start target, and a
+        # structural edit in the (target, index] band isn't covered by
+        # cancel_if (its predicate keys on the start target). Re-validate that
+        # the resolved index still points at the track we fetched; if it shifted
+        # under us, bail silently and let the next command re-resolve.
+        if index >= len(self.track_list) or self.track_list[index] is not track_ref:
             return None
         self._set_track_unavailable(index, False)
         return index, track_info
@@ -971,15 +978,17 @@ class PlayQueueImpl(PlayQueueController):
         event dispatch — the caller's commit step records which indices failed
         (so they can be flagged) and which one succeeded. ``step`` must be +1
         (forward) or -1 (backward); any other value is normalised so the scan
-        visits each track at most once. Returns ``(index, track_url, failed)``
-        for the first track that yields a URL (``failed`` lists the indices that
-        did not), or ``(None, None, failed)`` if none do in that direction.
+        visits each track at most once. Returns
+        ``(index, track_url, track_ref, failed)`` for the first track that yields
+        a URL — ``track_ref`` is the TrackInfo whose link produced the URL, so
+        the commit can detect a concurrent reindex — or
+        ``(None, None, None, failed)`` if none do in that direction.
         Already-prepared tracks are returned from cache.
         """
         n = len(self.track_list)
         failed: list[int] = []
         if n == 0:
-            return None, None, failed
+            return None, None, None, failed
 
         step = 1 if step >= 0 else -1
 
@@ -989,16 +998,21 @@ class PlayQueueImpl(PlayQueueController):
                 if self.repeat_all:
                     index %= n
                 else:
-                    return None, None, failed
+                    return None, None, None, failed
             if index in self.prepared_tracks:
                 # Already prepared — its URL is known good.
-                return index, self.prepared_tracks[index][0], failed
+                return index, self.prepared_tracks[index][0], self.track_list[index], failed
+            # Capture the track ref before awaiting: _fetch_track_url reads the
+            # same self.track_list[index] before its own await, so this is the
+            # exact track the resolved URL belongs to even if the list shifts
+            # during the await.
+            track_ref = self.track_list[index]
             track_info = await self._fetch_track_url(index)
             if track_info is not None:
-                return index, track_info, failed
+                return index, track_info, track_ref, failed
             failed.append(index)
             index += step
-        return None, None, failed
+        return None, None, None, failed
 
     def _set_track_unavailable(self, index, unavailable):
         """Notify clients of a track availability change (only on real change)."""
