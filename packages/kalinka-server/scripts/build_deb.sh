@@ -38,9 +38,23 @@ if [ -z "$WHEEL_VERSION" ]; then
 fi
 
 
+# Identify the platform we're building on (e.g. debian-13, ubuntu-24.04,
+# fedora-44). The server deb is platform-specific: it carries a compiled
+# extension linked against this distro's library sonames, so a Debian-built
+# deb and an Ubuntu-built deb are not interchangeable even at the same arch.
+# Encode the platform in the filename so the right artifact is obvious.
+# (The arch-independent _all plugin/SDK debs are pure Python and stay
+# unsuffixed — they install on any platform.)
+PLATFORM="unknown"
+if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    PLATFORM="${ID:-unknown}-${VERSION_ID:-${VERSION_CODENAME:-unknown}}"
+fi
+
 WHEEL_BASENAME=$(basename "$WHEEL_PATH")
 TARGET_DIR="kalinka-server-$WHEEL_VERSION"
-TARGET_FILE="$TARGET_DIR.$ARCH.deb"
+TARGET_FILE="$TARGET_DIR.$PLATFORM.$ARCH.deb"
 
 echo "Using wheel: $WHEEL_BASENAME"
 echo "Building Debian package with version: $WHEEL_VERSION"
@@ -50,7 +64,38 @@ echo "Target file: $TARGET_FILE"
 mkdir -p "$TARGET_DIR"
 cp -r DEBIAN "$TARGET_DIR"
 
-sed "s/@ARCH@/$ARCH/; s/@VERSION@/$WHEEL_VERSION/; s/@PYTHON_VERSION@/$PYTHON_VERSION/g; s/@PYTHON_VERSION_UPPER@/$PYTHON_VERSION_UPPER/g" DEBIAN/control.in > "$TARGET_DIR/DEBIAN/control"
+# Resolve the native extension's shared-library dependencies.
+#
+# Prefer dpkg-shlibdeps run against the compiled .so: it maps the libraries
+# the extension actually links to the packages that provide them on *this*
+# Debian release, so the Depends are correct whether we build on Bookworm,
+# Trixie, etc. (their sonames differ, e.g. libfmt9 vs libfmt10). Fall back to
+# a static, hand-maintained list when dpkg-shlibdeps isn't available — e.g.
+# local builds on a non-Debian distro — so those keep working unchanged.
+STATIC_LIBDEPS="libcurlpp0, libcurl4, libflac++10, libflac12, libasound2, libspdlog1.10, libfmt9, libstdc++6, libc6, libgcc-s1, libnghttp2-14, libidn2-0, libssl3, libgssapi-krb5-2, zlib1g, libogg0, libunistring2, libkrb5-3, libk5crypto3, libcom-err2, libkrb5support0, libkeyutils1, libselinux1, libpcre2-8-0"
+SHLIBDEPS=""
+if command -v dpkg-shlibdeps > /dev/null 2>&1 && command -v unzip > /dev/null 2>&1; then
+    SHLIB_WORK=$(mktemp -d)
+    if unzip -o -q "$(readlink -f "$WHEEL_PATH")" '*.so' -d "$SHLIB_WORK" 2>/dev/null; then
+        SHLIB_SO=$(find "$SHLIB_WORK" -name '*.so' | head -1)
+        if [ -n "$SHLIB_SO" ]; then
+            # dpkg-shlibdeps insists on a debian/control in the working dir.
+            mkdir -p "$SHLIB_WORK/debian"
+            printf 'Source: kalinka-server\n\nPackage: kalinka-server\nArchitecture: any\nDepends: ${shlibs:Depends}\n' > "$SHLIB_WORK/debian/control"
+            SHLIBDEPS=$( cd "$SHLIB_WORK" && dpkg-shlibdeps -O --ignore-missing-info "$SHLIB_SO" 2>/dev/null | sed -n 's/^shlibs:Depends=//p' )
+        fi
+    fi
+    rm -rf "$SHLIB_WORK"
+fi
+if [ -n "$SHLIBDEPS" ]; then
+    echo "Library deps (dpkg-shlibdeps): $SHLIBDEPS"
+else
+    echo "dpkg-shlibdeps unavailable; using static library deps"
+    SHLIBDEPS="$STATIC_LIBDEPS"
+fi
+
+sed "s/@ARCH@/$ARCH/; s/@VERSION@/$WHEEL_VERSION/; s/@PYTHON_VERSION@/$PYTHON_VERSION/g; s/@PYTHON_VERSION_UPPER@/$PYTHON_VERSION_UPPER/g" DEBIAN/control.in \
+    | sed "s|@SHLIBDEPS@|$SHLIBDEPS|" > "$TARGET_DIR/DEBIAN/control"
 rm "$TARGET_DIR/DEBIAN/control.in"
 
 mkdir -p "$TARGET_DIR/opt/kalinka/wheels"
