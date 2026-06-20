@@ -1,0 +1,136 @@
+name: Release
+
+# Builds the app-bundle .deb packages and publishes them to the GitHub release
+# for a `kalinka-v*` tag.
+#
+# - Triggered automatically when a `kalinka-v*` tag is pushed, or manually
+#   (workflow_dispatch) against an already-existing tag — handy for publishing a
+#   release that was cut by hand.
+# - Each architecture builds inside the container that matches its deployment
+#   target, so the compiled extension links the right library sonames and the
+#   Depends are correct for that distro:
+#     * arm64 -> debian:trixie  (Raspberry Pi OS / Debian 13; stock g++ 14
+#                                compiles the native extension's --std=c++23)
+#     * amd64 -> ubuntu:24.04   (stock g++ 13 also handles --std=c++23)
+#   Both run on free GitHub-hosted runners (no QEMU, no physical Pi).
+# - The arm64 job runs `make build-all-deb`, which also produces the
+#   arch-independent (_all) plugin + SDK debs; the amd64 job builds only the
+#   arch-specific server deb so the _all packages aren't duplicated.
+#
+# See RELEASING.md for the versioning model (one tag versions the whole bundle).
+
+on:
+  push:
+    tags:
+      - 'kalinka-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing kalinka-v* tag to build and publish'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # arm64 builds the server deb AND the arch-independent _all packages.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            container: debian:trixie
+            make_target: build-all-deb
+          # amd64 builds only the arch-specific server deb, for Ubuntu.
+          - arch: amd64
+            runner: ubuntu-24.04
+            container: ubuntu:24.04
+            make_target: kalinka-server-deb
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      PIP_BREAK_SYSTEM_PACKAGES: "1"
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential make git ca-certificates unzip dpkg-dev \
+            python3 python3-dev python3-pip python3-venv \
+            libcurlpp-dev libcurl4-openssl-dev libflac++-dev libasound2-dev \
+            libspdlog-dev libfmt-dev
+          # build/setuptools-scm/pybind11 for wheel builds; pydantic is needed
+          # by the localfiles plugin's build-time optional_packages export.
+          pip install --upgrade build setuptools-scm pybind11 pydantic
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0   # full history + tags so setuptools_scm sees the tag
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build .deb packages
+        run: make ${{ matrix.make_target }}
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          # build-all-deb collects into debs/; the server-only build leaves its
+          # deb in the package directory.
+          [ -d debs ] && find debs -name '*.deb' -exec cp -n {} out/ \; || true
+          find packages -maxdepth 2 -name '*.deb' -exec cp -n {} out/ \; || true
+          echo "Built packages:"
+          ls -l out/
+          echo "--- server Depends (sanity) ---"
+          for d in out/kalinka-server-*.deb; do
+            [ -f "$d" ] && { echo "$d:"; dpkg-deb -f "$d" Depends; }
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.arch }}
+          path: out/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather debs
+        run: |
+          mkdir -p release
+          find artifacts -name '*.deb' -exec cp -n {} release/ \;
+          echo "Release assets:"
+          ls -l release/
+
+      - name: Create / update release and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF_NAME}"
+          echo "Publishing $TAG"
+          # Create the release if it doesn't exist yet (idempotent: re-runs and
+          # builds for a hand-cut release just fall through to upload).
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Kalinka ${TAG#kalinka-v}" \
+              --generate-notes
+          fi
+          gh release upload "$TAG" release/*.deb --clobber --repo "$GITHUB_REPOSITORY"
