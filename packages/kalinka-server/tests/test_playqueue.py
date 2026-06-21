@@ -933,6 +933,74 @@ async def test_retry_is_skipped_for_non_http_errors(playqueue):
     playqueue._retry_current_track_async.assert_not_called()
 
 
+def _finished_state():
+    return SimpleNamespace(
+        state=AudioGraphNodeState.FINISHED,
+        error=None,
+        position=1000,
+        timestamp=time.monotonic_ns(),
+        stream_info=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_teardown_finished_does_not_autoadvance(playqueue):
+    """A FINISHED emitted by tearing the graph down (clear()/clear_all()
+    disconnects the last node) must NOT auto-advance to current_track_id + 1.
+
+    Regression: clearing then immediately re-adding a queue used to play index 1
+    ("the next track") because the teardown FINISHED was processed after the new
+    tracks were added, with current_track_id reset to 0. The guard is that there
+    is no live current stream (current_stream_id is None) during a teardown.
+    """
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    playqueue.current_stream_id = None  # teardown: nothing is playing
+    playqueue.prepared_tracks.clear()
+    playqueue._begin_resolution = Mock()
+
+    await playqueue._process_state_update(_finished_state())
+
+    playqueue._begin_resolution.assert_not_called()
+    assert playqueue.current_track_id == 0
+
+
+@pytest.mark.asyncio
+async def test_natural_finished_autoadvances(playqueue):
+    """A FINISHED from a track running to its end (live current stream, no
+    prefetched next) still auto-advances to the next index."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    playqueue.current_stream_id = 123  # a live, playing stream just finished
+    playqueue.prepared_tracks.clear()
+    playqueue._begin_resolution = Mock()
+
+    await playqueue._process_state_update(_finished_state())
+
+    playqueue._begin_resolution.assert_called_once()
+    assert playqueue._begin_resolution.call_args.args[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_while_playing_does_not_autoadvance(event_emitter, playqueue):
+    """End-to-end: clear() while a stream is current must not leave a resolution
+    in flight that would start the next track."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    playqueue.current_stream_id = 123
+
+    await playqueue.clear()
+    # The teardown FINISHED lands on the interrupt lane after clear() returns.
+    await playqueue._process_state_update(_finished_state())
+
+    assert playqueue.track_list == []
+    assert playqueue.current_track_id == 0
+    assert not playqueue._resolution.active
+
+
 @pytest.mark.asyncio
 async def test_move_unrelated_tracks_no_state_change_event(event_emitter, playqueue):
     """Moving tracks that don't affect the current index emits only TrackMovedEvent."""

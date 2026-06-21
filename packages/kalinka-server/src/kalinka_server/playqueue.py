@@ -352,8 +352,16 @@ class PlayQueueImpl(PlayQueueController):
             # resolution is already in flight (a manual switch). Non-empty
             # prepared_tracks means a manual switch already appended a new
             # stream — SOURCE_CHANGED will handle the transition.
+            #
+            # current_stream_id is None only when there is no track actually
+            # playing — i.e. this FINISHED came from tearing the graph down
+            # (clear()/clear_all() disconnects the last node and the switcher
+            # emits FINISHED), not from a track running to its end. Advancing
+            # then would spuriously start current_track_id + 1 (index 1 of a
+            # freshly-added queue), so require a live current stream.
             if (
-                self._prefetch_task is None
+                self.current_stream_id is not None
+                and self._prefetch_task is None
                 and not self.prepared_tracks
                 and not self._resolution.active
             ):
@@ -920,8 +928,11 @@ class PlayQueueImpl(PlayQueueController):
         )
         self._resolution.supersede()
         self._cancel_prefetch_timer()
-        self._track_player.clear_all()
+        # Null the current stream *before* clear_all(): tearing the graph down
+        # makes the switcher emit FINISHED, and the FINISHED handler keys off
+        # current_stream_id to tell a teardown from a real track-completion.
         self.current_stream_id = None
+        self._track_player.clear_all()
         self.prepared_tracks.clear()
         self._unavailable_indices.clear()
         list_len = len(self.track_list)
