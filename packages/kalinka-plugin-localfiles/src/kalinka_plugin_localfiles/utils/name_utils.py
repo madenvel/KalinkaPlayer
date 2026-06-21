@@ -120,6 +120,20 @@ def path_within_roots(file_path: str, roots: Iterable[str]) -> bool:
     return False
 
 
+def fold_diacritics(name: str) -> str:
+    """Strip diacritics while preserving case, spacing, and punctuation.
+
+    NFKD-decompose and drop combining marks so "Női Kabát" folds to
+    "Noi Kabat". Unlike :func:`normalize_for_id` the surface form is
+    otherwise intact; used by the searcher re-rank to compare an unaccented
+    query against accented metadata.
+    """
+    if not name:
+        return ""
+    n = unicodedata.normalize("NFKD", name)
+    return "".join(c for c in n if not unicodedata.combining(c))
+
+
 def normalize_for_id(name: str) -> str:
     """Aggressive normalization used only for ID hashing.
 
