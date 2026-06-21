@@ -1,5 +1,7 @@
+import os
 from typing import ClassVar
 from pydantic import BaseModel, Field
+from kalinka_plugin_sdk import paths
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
@@ -155,7 +157,7 @@ class SearcherConfig(BaseModel):
         default=3, title="Max attempts per tag job",
     )
     model_dir: str = Field(
-        default="/var/lib/kalinka/models",
+        default_factory=lambda: os.path.join(paths.state_dir(), "models"),
         title="Model directory",
         json_schema_extra={"widget": "path"},
     )
@@ -216,7 +218,7 @@ class EmbedderConfig(BaseModel):
         default=3, title="Max attempts per embedding job",
     )
     model_dir: str = Field(
-        default="/var/lib/kalinka/models",
+        default_factory=lambda: os.path.join(paths.state_dir(), "models"),
         title="Model directory",
         json_schema_extra={"widget": "path"},
     )
@@ -315,20 +317,20 @@ class LocalFilesConfig(ModuleConfig):
         default=True, title="Module enabled", json_schema_extra=_SIMPLE,
     )
     music_folders: list[str] = Field(
-        # Created by the kalinka-server postinst, group-writable by kalusr.
-        # Must NOT default to anything under /home: the service used to run
-        # with ProtectHome=yes, and kalusr has no home directory of its own.
-        default=["/srv/kalinka/music"],
+        # Starter placeholder; users repoint this at their real library. Under
+        # /srv (world-writable drop-off, provisioned by the deb postinst) — not
+        # /home (kalusr has none) nor the kalusr-only state dir. See media_dir().
+        default_factory=lambda: [paths.media_dir()],
         title="Music folders",
         json_schema_extra={"widget": "folder_list", **_SIMPLE},
     )
     db_path: str = Field(
-        default="/var/lib/kalinka/localfiles.db",
+        default_factory=lambda: os.path.join(paths.state_dir(), "localfiles.db"),
         title="Database path",
         json_schema_extra={"widget": "path"},
     )
     artwork_path: str = Field(
-        default="/var/cache/kalinka/artwork",
+        default_factory=lambda: os.path.join(paths.cache_dir(), "artwork"),
         title="Artwork cache path",
         json_schema_extra={"widget": "path"},
     )

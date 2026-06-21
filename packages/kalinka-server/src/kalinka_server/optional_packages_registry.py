@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from kalinka_plugin_sdk import OptionalPackageSpec
+from kalinka_plugin_sdk import paths
 
 from .player_setup import PreparedPlugin
 
@@ -30,9 +31,10 @@ from .player_setup import PreparedPlugin
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
-# Default state file locations. Kept overridable for tests.
-PENDING_INSTALLS_PATH = Path("/var/lib/kalinka/pending_installs.json")
-LAST_INSTALL_PATH = Path("/var/lib/kalinka/last_install.json")
+# Default state file locations (under $KALINKA_PREFIX, default /var/lib/kalinka).
+# Kept overridable for tests.
+PENDING_INSTALLS_PATH = Path(paths.state_dir()) / "pending_installs.json"
+LAST_INSTALL_PATH = Path(paths.state_dir()) / "last_install.json"
 PENDING_SCHEMA_VERSION = 1
 
 

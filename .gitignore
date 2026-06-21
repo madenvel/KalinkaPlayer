@@ -55,6 +55,7 @@ native_player/*.so
 # Project specific
 kalinka_conf.yaml
 kalinka_state.json
+kalinka_device_volume.json
 test
 bin/
 native_test

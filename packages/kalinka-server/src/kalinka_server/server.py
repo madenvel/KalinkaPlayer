@@ -32,6 +32,7 @@ from kalinka_plugin_sdk.ext_device import DeviceVolume, ExternalOutputDevice
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
+from kalinka_plugin_sdk import paths
 
 from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
 from .alsa_volume_device import VOLUME_TYPE_OPTIONS_PATH, volume_type_options
@@ -893,7 +894,7 @@ async def create_app(
         # path unit fires the (root-owned) kalinka-restart.service oneshot,
         # which runs `systemctl restart kalinka.service`. We exit only when
         # systemd sends SIGTERM, letting the lifespan teardown run normally.
-        trigger = Path("/run/kalinka/restart-request")
+        trigger = Path(paths.run_dir()) / "restart-request"
         try:
             trigger.parent.mkdir(parents=True, exist_ok=True)
             trigger.touch()
