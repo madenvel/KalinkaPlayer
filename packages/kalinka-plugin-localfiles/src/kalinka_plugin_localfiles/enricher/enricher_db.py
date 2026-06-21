@@ -11,6 +11,9 @@ from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+# Key under which the enrichment fingerprint is stored in ``enricher_state``.
+ENRICHMENT_FINGERPRINT_KEY = "enrichment_fingerprint"
+
 
 @retry_db_locked
 class AsyncEnricherDb:
@@ -137,27 +140,81 @@ class AsyncEnricherDb:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    @staticmethod
+    async def _reset_failed_rows(cursor) -> Dict[str, int]:
+        """Flip every ``enriched=2`` (FAILED) row back to ``enriched=0``
+        on the given cursor (no commit). Returns per-entity row counts."""
+        counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
+        for table in ("artists", "albums", "tracks"):
+            await cursor.execute(f"UPDATE {table} SET enriched = 0 WHERE enriched = 2")
+            counts[table] = cursor.rowcount or 0
+        return counts
+
     async def reset_failed_to_retry(self) -> Dict[str, int]:
         """Flip every ``enriched=2`` (FAILED) row back to ``enriched=0`` so
-        the next enrichment pass picks it up.
-
-        Called once at enricher-process startup so that, after the user
-        deploys updated plugin code (or a new MB matcher tier), the
-        already-failed rows get one more chance instead of staying
-        stuck. Bounded to once-per-process: if the enricher is hammered
-        with ``enrich`` commands inside the same lifetime the FAILED
-        rows aren't reset again (that's the caller's responsibility).
+        the next enrichment pass picks it up. Unconditional — see
+        :meth:`reset_failed_for_fingerprint` for the gated variant the
+        enricher actually uses at startup.
 
         Returns row counts per entity for logging.
         """
-        counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
         async with self._open() as conn:
             cursor = await conn.cursor()
-            for table in ("artists", "albums", "tracks"):
-                await cursor.execute(
-                    f"UPDATE {table} SET enriched = 0 WHERE enriched = 2"
-                )
-                counts[table] = cursor.rowcount or 0
+            counts = await self._reset_failed_rows(cursor)
+            await conn.commit()
+        return counts
+
+    async def get_enrichment_fingerprint(self) -> Optional[str]:
+        """Return the enrichment fingerprint stored on the previous run,
+        or ``None`` if none has been recorded yet."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT value FROM enricher_state WHERE key = ?",
+                (ENRICHMENT_FINGERPRINT_KEY,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def reset_failed_for_fingerprint(
+        self, fingerprint: str
+    ) -> Optional[Dict[str, int]]:
+        """Gated FAILED-row reset, run once at enricher-process startup.
+
+        Reset previously-FAILED rows back to NOT_ENRICHED *only* when
+        ``fingerprint`` differs from the one recorded on the last run
+        (or none is recorded yet — first run after this feature ships,
+        or a fresh DB), then persist ``fingerprint``. The fingerprint
+        encodes the active plugin set, each plugin's
+        ``ENRICHER_VERSION``, and its match-affecting config (see
+        ``MetadataEnricher.compute_fingerprint``), so a reset happens
+        exactly when the enrichment setup changed in a way that could
+        flip a FAILED row to enriched — not on every restart.
+
+        Read, reset and store run in a single transaction so a crash
+        can't leave the fingerprint advanced while the rows stay FAILED.
+
+        Returns the per-entity reset counts when a reset happened, or
+        ``None`` when the fingerprint was unchanged and FAILED rows were
+        left intact.
+        """
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT value FROM enricher_state WHERE key = ?",
+                (ENRICHMENT_FINGERPRINT_KEY,),
+            )
+            row = await cursor.fetchone()
+            stored = row[0] if row else None
+            if stored == fingerprint:
+                return None
+
+            counts = await self._reset_failed_rows(cursor)
+            await cursor.execute(
+                "INSERT INTO enricher_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (ENRICHMENT_FINGERPRINT_KEY, fingerprint),
+            )
             await conn.commit()
         return counts
 

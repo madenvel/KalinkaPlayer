@@ -2,6 +2,7 @@
 import multiprocessing
 import asyncio
 import enum
+import json
 import logging
 import queue
 import signal
@@ -92,6 +93,31 @@ class MetadataEnricher:
         logger.info(
             f"Loaded {len(self.plugins)} enrichment plugins: {[p.__class__.__name__ for p in self.plugins]}"
         )
+
+    def compute_fingerprint(self) -> str:
+        """Stable signature of the *active* enrichment setup.
+
+        Built from ``self.plugins`` in load order — so it captures which
+        plugins are enabled and in what order (first match wins), each
+        one's ``ENRICHER_VERSION`` (bumped when its matching code
+        changes), and its ``config_signature()`` (match-affecting config
+        such as MB thresholds or whether an AcoustID key is set).
+
+        Only enabled plugins contribute, which is the whole point:
+        bumping the version of, or reconfiguring, a plugin the user has
+        *disabled* leaves the fingerprint untouched and so triggers no
+        needless retry sweep. The fingerprint changing is the signal
+        that previously-FAILED rows deserve another attempt.
+        """
+        components = [
+            {
+                "name": p.__class__.__name__,
+                "version": p.ENRICHER_VERSION,
+                "config": p.config_signature(),
+            }
+            for p in self.plugins
+        ]
+        return json.dumps(components, sort_keys=True)
 
     async def start(self):
         """Start the enricher process for general enrichment"""
@@ -387,21 +413,27 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
 
     enricher_instance = MetadataEnricher(config, db_manager)
 
-    # One-time retry of previously-FAILED rows. The enricher subprocess
-    # starts when the main server starts, so a server restart (which is
-    # the natural moment for "we may have new plugin code") flips every
-    # ``enriched=2`` entry back to ``0``. Subsequent enrichment ticks
-    # within the same process lifetime do not reset again — once a row
-    # fails *under the current code*, it stays failed until the next
-    # restart.
+    # One-time, *gated* retry of previously-FAILED rows. A plain restart
+    # no longer re-hammers MusicBrainz/Deezer for rows that will fail
+    # identically: FAILED rows are re-opened only when the enrichment
+    # fingerprint changed since the last run — i.e. a plugin was
+    # enabled/disabled/reordered, a plugin's ENRICHER_VERSION was bumped
+    # (new matcher code), or a match-affecting config field changed (an
+    # AcoustID key added, an MB threshold lowered). The first run after
+    # this ships has no stored fingerprint, so it resets once and then
+    # settles.
     try:
-        retried = await db_manager.reset_failed_to_retry()
-        total = sum(retried.values())
-        if total:
+        fingerprint = enricher_instance.compute_fingerprint()
+        retried = await db_manager.reset_failed_for_fingerprint(fingerprint)
+        if retried is None:
             logger.info(
-                "Reset %d previously-FAILED rows for retry: "
-                "%d artists, %d albums, %d tracks",
-                total,
+                "Enrichment fingerprint unchanged; leaving FAILED rows as-is"
+            )
+        else:
+            logger.info(
+                "Enrichment setup changed; reset %d previously-FAILED rows for "
+                "retry: %d artists, %d albums, %d tracks",
+                sum(retried.values()),
                 retried["artists"],
                 retried["albums"],
                 retried["tracks"],

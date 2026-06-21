@@ -41,6 +41,8 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     This plugin does NOT set the "enriched" flag to allow other plugins to re-check the data.
     """
 
+    ENRICHER_VERSION = 1
+
     # Match the indexer's V/A detection criteria
     # (``orphan_va_folder_tracks``). Filesystem fallback skips album
     # reassignment when the track's folder meets these — otherwise it

@@ -5,6 +5,27 @@ from typing import Dict, Optional
 class EnricherPlugin(abc.ABC):
     """Base class for enricher plugins"""
 
+    # Bump in a subclass whenever its enrichment logic changes in a way
+    # that could turn a previous FAILED into a success (a new matcher
+    # tier, a bug fix, a looser heuristic). It feeds the enrichment
+    # fingerprint (see ``MetadataEnricher.compute_fingerprint``); a bump
+    # re-opens previously-FAILED rows on the next restart. Scoped per
+    # plugin, so bumping a plugin the user has *disabled* changes
+    # nothing — it never enters the fingerprint.
+    ENRICHER_VERSION: int = 1
+
+    def config_signature(self) -> Dict:
+        """Config fields that affect match *outcomes*, folded into the
+        enrichment fingerprint so a change re-opens previously-FAILED
+        rows on restart.
+
+        Return only fields that can change whether an entity enriches
+        successfully (thresholds, an API key becoming available) — not
+        cosmetic ones like debug logging. Default: nothing
+        outcome-affecting.
+        """
+        return {}
+
     @abc.abstractmethod
     def can_enrich_artist(self) -> bool:
         """Whether this plugin can enrich artist metadata"""
