@@ -141,44 +141,44 @@ At startup `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates `/o
 
 # Running from source (development)
 
-Use a virtual environment with editable installs so code changes are picked up immediately.
+`make dev-setup` + `make dev-run` get you a running server from a source checkout — no root, no systemd, and nothing written to the system's `/etc` or `/var`. Everything lives in a per-user "fakeroot" under `$KALINKA_PREFIX` (default `~/kalinka`), and the editable installs mean Python edits are picked up on the next restart.
 
-1. Clone and enter the repo, then create/activate a virtualenv:
+The dev venv is pinned to **Python 3.11** to match production — the optional AI packages (CLAP search, tag prediction) ship wheels for the prod interpreter, so a different version may fail to install them. `make dev-setup` creates the venv with `python3.11` and refuses to proceed against any other version.
+
+1. Clone the repo and install the system prerequisites (including Python 3.11):
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
-python3 -m venv .venv
-source .venv/bin/activate
+sudo apt install python3.11 python3.11-venv python3.11-dev g++ libasound2-dev \
+  libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev build-essential
 ```
-2. Install system prerequisites (same list as above):
+   If your `python3.11` lives elsewhere, pass it explicitly: `make dev-setup PYTHON=/path/to/python3.11`.
+2. One-step setup. Creates a virtualenv at `.venv` with Python 3.11 (or **reuses an already-active `$VIRTUAL_ENV`** — it never makes a second venv), installs the SDK, server and all bundled plugins editable, builds the native player, and seeds the fakeroot directory tree plus a default config:
 ```bash
-sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
-  libcurlpp-dev libspdlog-dev libfmt-dev python3-dev
+make dev-setup
 ```
-3. Set up the dev environment in one step — this installs the SDK and server editable and builds the native player:
+3. Run the server in the foreground (Ctrl-C to stop):
 ```bash
-make setup-dev
+make dev-run
 ```
-   (Equivalent to running [`./setup_dev_env.sh`](setup_dev_env.sh).) To also develop a plugin, install it editable too:
+   It prints where everything lives and tees output to a log file, so you have logs to grep instead of only stdout:
+   - config:        `~/kalinka/etc/kalinka/kalinka_conf.cfg`
+   - state & DB:     `~/kalinka/var/lib/kalinka/`
+   - logs:          `~/kalinka/var/log/kalinka/server.log`
+   - music drop-off: `~/kalinka/srv/kalinka/music`
+
+   Forward server flags with `ARGS` (e.g. `make dev-run ARGS=--debug`), and relocate the whole tree with `make dev-run KALINKA_PREFIX=/path/to/root`.
+4. **Restart to pick up changes.** Python edits go live on restart — either click **Restart** in the app (this works without systemd: `dev-run` watches the restart trigger in the fakeroot and relaunches) or Ctrl-C and re-run `make dev-run`. After editing C++ under `native_player`, rebuild the extension first, then restart:
 ```bash
-cd packages/kalinka-plugin-localfiles && pip install -e . && cd -
+make dev-rebuild-native
 ```
-   Or install the server and all bundled plugins editable at once:
-```bash
-cd packages/kalinka-server && pip install -e . && cd -
-for p in packages/kalinka-plugin-*; do (cd "$p" && pip install -e . || true); done
-```
-4. Run the server (foreground):
-```bash
-kalinka-server --config kalinka_conf.cfg
-```
-   …or via the Makefile helper: `make run-server`. Per-plugin config files (e.g. `localfiles_config.cfg`) are created alongside the main config. Example config files live in the repo root.
+   Enabling an optional feature (AI search / tag prediction) in **Settings** and hitting **Restart** also just works: `dev-run` installs the requested optional packages into the venv before relaunching — the same flow `kalinka.service` runs at boot in production.
 5. In the Kalinka Music App, go to **Settings → Connection**; the service should appear under the name you configured. Pick it and tap **Connect**.
 
 # Configuration & tuning
 
 - Most settings are editable live from the app's **Settings** screen and persisted to the `.cfg` files. The server exposes its config schema at `GET /server/config/schema` so the app can render forms.
-- **AI search** is opt-in. Enable the **embedder** (and optionally tag prediction under the searcher) in the localfiles module config. On first run the embedder downloads the CLAP ONNX models to the model directory (default `/var/lib/kalinka/models`) and embeds tracks in the background; watch progress via `GET /indexer/status`.
+- **AI search** is opt-in. Enable the **embedder** (and optionally tag prediction under the searcher) in the localfiles module config. On first run the embedder downloads the CLAP ONNX models to the model directory (default `/var/lib/kalinka/models`, or `$KALINKA_PREFIX/var/lib/kalinka/models` when running from source) and embeds tracks in the background; watch progress via `GET /indexer/status`.
 - **AcoustID** enrichment needs a free API key from the [AcoustID website](https://acoustid.org/) — set it in the localfiles enricher config.
 - Re-embedding / re-tagging is driven by `current_version` fields in the config; bump them to force a rebuild after a model change. See [`scripts/clap_onnx_release.md`](scripts/clap_onnx_release.md).
 

@@ -37,6 +37,8 @@ dependencies = [
     "pillow>=9.0.0",
     "aiosqlite>=0.17.0",
     "netifaces>=0.11.0",
+    "packaging>=21.0",
+    "rapidfuzz>=2.0.0",
     "kalinka-plugin-sdk>=1,<2",
 ]
 dynamic = ["version"]

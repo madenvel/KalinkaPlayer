@@ -3,9 +3,12 @@
 import argparse
 import asyncio
 import logging
+import os
 from asyncio import CancelledError
 
 import uvicorn
+
+from kalinka_plugin_sdk import paths
 
 from .config_model import KalinkaConfig
 from .config_overrides import apply_overrides_with_prefix, load_overrides
@@ -59,13 +62,14 @@ def parse_args():
     parser.add_argument(
         "--config",
         action="store",
-        default="kalinka_conf.cfg",
-        help="Config file location",
+        default=os.path.join(paths.etc_dir(), "kalinka_conf.cfg"),
+        help="Config file location (default: <KALINKA_PREFIX>/etc/kalinka/kalinka_conf.cfg)",
     )
     parser.add_argument(
         "--state",
         action="store",
-        help="State file location",
+        default=os.path.join(paths.state_dir(), "kalinka_state.json"),
+        help="State file location (default: <KALINKA_PREFIX>/var/lib/kalinka/kalinka_state.json)",
     )
     parser.add_argument(
         "--debug",
