@@ -282,6 +282,26 @@ class TestFtsFuzzyRerank:
         # Title merely *contains* the token — not an exact field match.
         assert by_id["t1"]["exact"] is False
 
+    @pytest.mark.asyncio
+    async def test_ascii_query_matches_accented_artist(self):
+        """An ASCII-folded query ("noi kabat") finds an accented artist
+        ("Női Kabát"). Without diacritic folding in the rapidfuzz re-rank
+        the raw WRatio (~56) falls below the 72 threshold and the candidate
+        is dropped even though FTS matched it. See issue #61."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        db = await _setup_db(db_path)
+
+        await _insert_fts_rows(db_path, [
+            ("t0", "Valami", "Női Kabát", "Best Of"),
+            ("t1", "Yesterday", "Beatles", "Help!"),
+        ])
+
+        results = await db.fts_search("noi kabat", "noi kabat", limit=10)
+        by_id = {r["track_id"]: r for r in results}
+        assert "t0" in by_id
+        # Diacritic-folded equality also sets the exact-artist flag.
+        assert by_id["t0"]["exact"] is True
+
 
 # ---------------------------------------------------------------------------
 # Tests: exact lexical matches float above pure CLAP neighbours

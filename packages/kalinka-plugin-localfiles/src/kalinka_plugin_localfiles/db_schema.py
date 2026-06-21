@@ -263,15 +263,18 @@ async def init_db(db_path: str) -> None:
         # FTS5 full-text search
         # ---------------------------------------------------------------
 
-        # Drop legacy contentless fts_tracks table if present
+        # Rebuild fts_tracks when its definition is stale — a legacy
+        # contentless table, or a tokenizer predating remove_diacritics 2.
+        # The index_batch poller repopulates after the index reset.
         row = await cursor.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_tracks'"
         )
         existing_sql = await row.fetchone()
-        if existing_sql and "content=''" in (existing_sql[0] or ""):
-            logger.warning(
-                "Detected contentless fts_tracks table — dropping and rebuilding"
-            )
+        existing_def = (existing_sql[0] if existing_sql else "") or ""
+        if existing_def and (
+            "content=''" in existing_def or "remove_diacritics 2" not in existing_def
+        ):
+            logger.warning("Detected stale fts_tracks definition — dropping and rebuilding")
             await cursor.execute("DROP TABLE IF EXISTS fts_tracks")
             await cursor.execute("UPDATE tracks SET search_indexed_at = NULL")
 
@@ -283,7 +286,7 @@ async def init_db(db_path: str) -> None:
                 artist_name,
                 album_title,
                 genre_tags,
-                tokenize='porter unicode61'
+                tokenize='porter unicode61 remove_diacritics 2'
             )
             """
         )

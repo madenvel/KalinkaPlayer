@@ -20,6 +20,7 @@ import aiosqlite
 from rapidfuzz import fuzz
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import fold_diacritics
 from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -454,7 +455,10 @@ class AsyncSearcherDb:
                 return []
 
         fuzz_target = raw_query.strip() or text_query
-        norm_target = fuzz_target.casefold().strip()
+        # Diacritic-fold both sides so an ASCII query ("noi kabat") isn't
+        # dropped by the re-rank against accented metadata ("Női Kabát").
+        folded_target = fold_diacritics(fuzz_target)
+        norm_target = folded_target.casefold().strip()
         scored: list[dict] = []
         for row in rows:
             # Score against each field separately and keep the best. A
@@ -467,10 +471,11 @@ class AsyncSearcherDb:
             for field in (row["title"], row["artist_name"], row["album_title"]):
                 if not field:
                     continue
-                s = fuzz.WRatio(fuzz_target, field)
+                folded_field = fold_diacritics(field)
+                s = fuzz.WRatio(folded_target, folded_field)
                 if s > best:
                     best = s
-                if field.casefold().strip() == norm_target:
+                if folded_field.casefold().strip() == norm_target:
                     exact = True
             if best >= min_score:
                 scored.append(
