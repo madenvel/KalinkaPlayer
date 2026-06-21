@@ -7,8 +7,16 @@ import time
 from pathlib import Path
 
 from .config_model import LocalFilesConfig
+from .utils.name_utils import fold_diacritics
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+def _sql_fold(value: Optional[str]) -> str:
+    """SQLite-callable diacritic fold, so ``LIKE`` matching is accent-insensitive
+    (``Oxygene`` finds ``Oxygène``). Registered as a deterministic function on
+    every connection."""
+    return fold_diacritics(value or "")
 
 
 class LocalFilesInputModuleDb:
@@ -69,6 +77,7 @@ class LocalFilesInputModuleDb:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
+        conn.create_function("fold", 1, _sql_fold, deterministic=True)
         return conn
 
     def _is_database_functional(self) -> Dict[str, Any]:
@@ -305,7 +314,7 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{query}%"
+            search_term = f"%{fold_diacritics(query)}%"
 
             # Get total count
             cursor.execute(
@@ -313,7 +322,7 @@ class LocalFilesInputModuleDb:
                 SELECT COUNT(*) as count FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
-                WHERE t.title LIKE ? OR a.title LIKE ? OR ar.name LIKE ?
+                WHERE fold(t.title) LIKE ? OR fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
             """,
                 (search_term, search_term, search_term),
             )
@@ -326,7 +335,7 @@ class LocalFilesInputModuleDb:
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
-                WHERE t.title LIKE ? OR a.title LIKE ? OR ar.name LIKE ?
+                WHERE fold(t.title) LIKE ? OR fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
                 ORDER BY t.title
                 LIMIT ? OFFSET ?
             """,
@@ -344,14 +353,14 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{query}%"
+            search_term = f"%{fold_diacritics(query)}%"
 
             # Get total count
             cursor.execute(
                 """
                 SELECT COUNT(*) as count FROM albums a
                 JOIN artists ar ON a.artist_id = ar.id
-                WHERE a.title LIKE ? OR ar.name LIKE ?
+                WHERE fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
             """,
                 (search_term, search_term),
             )
@@ -363,7 +372,7 @@ class LocalFilesInputModuleDb:
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
                 JOIN artists ar ON a.artist_id = ar.id
-                WHERE a.title LIKE ? OR ar.name LIKE ?
+                WHERE fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
                 ORDER BY a.title
                 LIMIT ? OFFSET ?
             """,
@@ -381,11 +390,11 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{query}%"
+            search_term = f"%{fold_diacritics(query)}%"
 
             # Get total count
             cursor.execute(
-                "SELECT COUNT(*) as count FROM artists WHERE name LIKE ?",
+                "SELECT COUNT(*) as count FROM artists WHERE fold(name) LIKE ?",
                 (search_term,),
             )
             total = cursor.fetchone()["count"]
@@ -394,7 +403,7 @@ class LocalFilesInputModuleDb:
             cursor.execute(
                 """
                 SELECT * FROM artists
-                WHERE name LIKE ?
+                WHERE fold(name) LIKE ?
                 ORDER BY name
                 LIMIT ? OFFSET ?
             """,
@@ -774,13 +783,13 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{query}%"
+            search_term = f"%{fold_diacritics(query)}%"
 
             # Get total count
             cursor.execute(
                 """
                 SELECT COUNT(*) as count FROM playlists
-                WHERE name LIKE ? OR description LIKE ?
+                WHERE fold(name) LIKE ? OR fold(description) LIKE ?
                 """,
                 (search_term, search_term),
             )
@@ -790,7 +799,7 @@ class LocalFilesInputModuleDb:
             cursor.execute(
                 """
                 SELECT * FROM playlists
-                WHERE name LIKE ? OR description LIKE ?
+                WHERE fold(name) LIKE ? OR fold(description) LIKE ?
                 ORDER BY name
                 LIMIT ? OFFSET ?
                 """,
