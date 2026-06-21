@@ -1,12 +1,17 @@
-"""Tests for the once-per-process FAILED-row retry reset.
+"""Tests for the unconditional FAILED-row retry reset primitive.
 
 Background: a track that gets through the enricher pipeline without
 hitting all of ``TRACK_REQUIRED_FIELDS`` is marked ``enriched=2``
 (FAILED) and the next pass skips it. After plugin code is updated (a
 new matcher tier, a bug fix), those rows would stay stuck forever
 without intervention. ``AsyncEnricherDb.reset_failed_to_retry`` flips
-every FAILED row back to ``0`` and is called once at enricher worker
-startup, so a server restart is the natural trigger.
+every FAILED row back to ``0``.
+
+The enricher worker doesn't call this directly at startup anymore — it
+calls the *gated* ``reset_failed_for_fingerprint`` so an unchanged
+setup doesn't re-hammer the providers (see
+``test_enricher_fingerprint_retry.py``). This primitive is still the
+shared building block and is tested here in isolation.
 """
 
 from __future__ import annotations

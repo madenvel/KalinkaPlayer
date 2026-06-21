@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class WikidataPlugin(EnricherPlugin):
     """Wikidata enrichment plugin for artist images"""
 
+    ENRICHER_VERSION = 1
+
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager

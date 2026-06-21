@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
 
+    ENRICHER_VERSION = 1
+
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
@@ -37,6 +39,14 @@ class AcoustIdPlugin(EnricherPlugin):
 
         # Match confidence thresholds (0-1.0)
         self.min_score_threshold = 0.7  # Minimum score to consider a match valid
+
+    def config_signature(self) -> Dict:
+        # Without a key every lookup short-circuits, so the plugin is
+        # effectively inert; the moment a key is configured it can start
+        # resolving tracks that previously FAILED. Presence is what
+        # changes outcomes — the key value itself isn't recorded (no
+        # secret in the fingerprint).
+        return {"api_key_present": bool(self.api_key)}
 
     def _wait_for_rate_limit(self):
         """Wait to respect rate limits"""

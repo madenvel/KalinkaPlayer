@@ -28,6 +28,8 @@ class DeezerPlugin(EnricherPlugin):
     distributed software without proper licensing from Deezer.
     """
 
+    ENRICHER_VERSION = 1
+
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager

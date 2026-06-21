@@ -243,6 +243,23 @@ async def init_db(db_path: str) -> None:
             )
 
         # ---------------------------------------------------------------
+        # Enricher state (key/value)
+        # ---------------------------------------------------------------
+        # Small grab-bag of enricher-owned scalars. Currently holds the
+        # "enrichment fingerprint" — a signature of the active plugin
+        # set / versions / match-affecting config — used to decide
+        # whether a restart should re-open previously-FAILED rows.
+
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS enricher_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
+
+        # ---------------------------------------------------------------
         # FTS5 full-text search
         # ---------------------------------------------------------------
 

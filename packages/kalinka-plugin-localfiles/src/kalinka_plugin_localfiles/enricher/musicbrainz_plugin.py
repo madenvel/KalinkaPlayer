@@ -40,6 +40,8 @@ def _same_release_group(a: Dict, b: Dict) -> bool:
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
+    ENRICHER_VERSION = 1
+
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
@@ -71,6 +73,18 @@ class MusicBrainzPlugin(EnricherPlugin):
             self.user_agent.split("/")[1].split(" ")[0],
             self.user_agent.split(" ", 1)[1].strip("()"),
         )
+
+    def config_signature(self) -> Dict:
+        # Thresholds and the string-similarity floor decide whether a
+        # candidate is accepted, so changing any of them can flip a
+        # FAILED row to enriched. ``debug_matching`` is logging-only and
+        # deliberately excluded.
+        return {
+            "artist_threshold": self.artist_threshold,
+            "album_threshold": self.album_threshold,
+            "track_threshold": self.track_threshold,
+            "string_similarity": self.string_similarity_threshold,
+        }
 
     def _normalize_string(self, text: str) -> str:
         """Normalize string for comparison by removing special characters and lowercasing"""
