@@ -16,6 +16,8 @@ import time
 
 import aiosqlite
 
+from .embedding_utils import CLAP_EMBED_FORMAT_VERSION
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 _CLAP_DIMS = 512
@@ -317,25 +319,74 @@ async def init_db(db_path: str) -> None:
 
 
 async def _init_vec_tables(db_path: str) -> None:
-    """Try to load sqlite-vec and create CLAP vector tables."""
+    """Load sqlite-vec and create CLAP vector tables, migrating older formats.
+
+    vec0 columns are typed. Legacy builds stored ``float[512]``; we now store
+    ``int8[512]``. On a format mismatch (PRAGMA user_version) we drop the typed
+    vec tables and clear the embedding blobs; the bumped
+    ``embedder.clap.current_version`` reschedules the jobs that recompute them.
+    Until they refill, a typed-mismatch MATCH raises and the search layer reads
+    it as "no vector hits" — KNN search is empty but never crashes.
+    """
     try:
         import sqlite_vec
+    except Exception as e:
+        logger.warning("sqlite-vec not available (%s); KNN search disabled", e)
+        return
 
+    try:
         async with aiosqlite.connect(db_path) as conn:
+            await conn.execute("PRAGMA busy_timeout=5000")
             await conn.enable_load_extension(True)
             await conn.load_extension(sqlite_vec.loadable_path())
             await conn.enable_load_extension(False)
 
             cursor = await conn.cursor()
+            await cursor.execute("PRAGMA user_version")
+            row = await cursor.fetchone()
+            fmt = row[0] if row else 0
+            if fmt != CLAP_EMBED_FORMAT_VERSION:
+                if fmt != 0:
+                    logger.warning(
+                        "CLAP embedding format v%d -> v%d: dropping vector tables "
+                        "and clearing stored embeddings for recompute",
+                        fmt,
+                        CLAP_EMBED_FORMAT_VERSION,
+                    )
+                # Drop the typed vec0 tables (DROP needs the loaded extension)
+                # so they are recreated below with the new dtype.
+                for vec_table, _pk in _VEC_AUDIO_TABLES + _VEC_TEXT_TABLES:
+                    await cursor.execute(f"DROP TABLE IF EXISTS {vec_table}")
+                # Clear stale embedding blobs so the embedder recomputes them and
+                # mean-pooled aggregates never mix old- and new-format vectors.
+                await cursor.execute(
+                    "UPDATE tracks SET embedding_clap_audio = NULL, "
+                    "embedding_clap_text = NULL, embedding_version = 0, "
+                    "embedded_at = NULL"
+                )
+                await cursor.execute(
+                    "UPDATE albums SET embedding_clap = NULL, "
+                    "embedding_clap_text = NULL"
+                )
+                await cursor.execute(
+                    "UPDATE artists SET embedding_clap = NULL, "
+                    "embedding_clap_text = NULL"
+                )
+                # PRAGMA can't be parameterised; the value is a trusted constant.
+                await cursor.execute(
+                    f"PRAGMA user_version = {int(CLAP_EMBED_FORMAT_VERSION)}"
+                )
+                await conn.commit()
+
             for vec_table, pk_col in _VEC_AUDIO_TABLES + _VEC_TEXT_TABLES:
                 await cursor.execute(
                     f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS {vec_table}
-                    USING vec0({pk_col} TEXT PRIMARY KEY, embedding float[{_CLAP_DIMS}])
+                    USING vec0({pk_col} TEXT PRIMARY KEY, embedding int8[{_CLAP_DIMS}])
                     """
                 )
             await conn.commit()
 
-        logger.info("sqlite-vec extension loaded; CLAP vector tables ready")
+        logger.info("sqlite-vec extension loaded; CLAP int8 vector tables ready")
     except Exception as e:
-        logger.warning("sqlite-vec not available (%s); KNN search disabled", e)
+        logger.warning("sqlite-vec vec table init failed (%s); KNN search disabled", e)

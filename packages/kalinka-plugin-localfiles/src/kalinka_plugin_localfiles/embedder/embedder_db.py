@@ -88,23 +88,19 @@ class AsyncEmbedderDb:
         entity_id: str,
         blob: bytes,
     ) -> None:
-        """Upsert into sqlite-vec table using update-first semantics.
+        """Upsert into a sqlite-vec int8 table via delete-then-insert.
 
-        sqlite-vec virtual tables can raise UNIQUE errors with INSERT OR REPLACE,
-        so we do UPDATE first, then INSERT OR IGNORE, then UPDATE again to handle
-        races between concurrent writers.
+        vec0 int8 columns can't be UPDATEd (sqlite-vec only accepts float32 on
+        UPDATE) and INSERT OR REPLACE hits a UNIQUE error on the vec0 PK, so we
+        DELETE then INSERT — safe to do non-atomically as the embedder is the
+        only writer. ``blob`` is int8 bytes; vec0 requires the ``vec_int8()``
+        wrapper (a raw blob is rejected as a type mismatch).
         """
-        update_sql = f"UPDATE {table} SET embedding = ? WHERE {pk_col} = ?"
-        insert_sql = (
-            f"INSERT OR IGNORE INTO {table} ({pk_col}, embedding) VALUES (?, ?)"
+        await conn.execute(f"DELETE FROM {table} WHERE {pk_col} = ?", (entity_id,))
+        await conn.execute(
+            f"INSERT INTO {table} ({pk_col}, embedding) VALUES (?, vec_int8(?))",
+            (entity_id, blob),
         )
-
-        cursor = await conn.execute(update_sql, (blob, entity_id))
-        if cursor.rowcount:
-            return
-
-        await conn.execute(insert_sql, (entity_id, blob))
-        await conn.execute(update_sql, (blob, entity_id))
 
     # ------------------------------------------------------------------
     # Job lifecycle
@@ -579,7 +575,7 @@ class AsyncEmbedderDb:
                 cursor = await conn.cursor()
                 await cursor.execute(
                     f"SELECT {pk_col}, distance FROM {table}"
-                    f" WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                    f" WHERE embedding MATCH vec_int8(?) ORDER BY distance LIMIT ?",
                     (blob, limit),
                 )
                 rows = await cursor.fetchall()

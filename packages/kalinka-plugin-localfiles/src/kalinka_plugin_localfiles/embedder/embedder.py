@@ -28,7 +28,7 @@ import time
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
-from ..embedding_utils import encode_embedding, normalise
+from ..embedding_utils import decode_embedding, encode_embedding, normalise
 from ..pip_utils import ensure_package
 from ..worker_utils import set_proc_title, sleep_interruptible
 from .embedder_db import AsyncEmbedderDb
@@ -149,7 +149,7 @@ class EmbeddingWorker:
             return None
 
     def _encode_query(self, query: str) -> Optional[bytes]:
-        """Encode a text query with CLAP. Returns float32 bytes or None."""
+        """Encode a text query with CLAP. Returns int8 embedding bytes or None."""
         if not self._clap_available:
             return None
         try:
@@ -251,7 +251,7 @@ class EmbeddingWorker:
             if not blobs:
                 continue
             try:
-                vecs = [np.frombuffer(b, dtype=np.float32) for b in blobs]
+                vecs = [decode_embedding(b) for b in blobs]
                 mean_vec = normalise(np.mean(vecs, axis=0))
                 await self.db.update_album_embedding(
                     album_id, encode_embedding(mean_vec)
@@ -266,7 +266,7 @@ class EmbeddingWorker:
             if not blobs:
                 continue
             try:
-                vecs = [np.frombuffer(b, dtype=np.float32) for b in blobs]
+                vecs = [decode_embedding(b) for b in blobs]
                 mean_vec = normalise(np.mean(vecs, axis=0))
                 await self.db.update_artist_embedding(
                     artist_id, encode_embedding(mean_vec)

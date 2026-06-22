@@ -96,7 +96,7 @@ class AsyncSearcherDb:
                 await self._load_vec(conn)
                 cursor = await conn.execute(
                     "SELECT track_id, distance FROM vec_tracks_clap_text"
-                    " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                    " WHERE embedding MATCH vec_int8(?) ORDER BY distance LIMIT ?",
                     (query_blob, limit),
                 )
                 rows = await cursor.fetchall()
@@ -117,7 +117,7 @@ class AsyncSearcherDb:
                 await self._load_vec(conn)
                 cursor = await conn.execute(
                     "SELECT track_id, distance FROM vec_tracks_clap"
-                    " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                    " WHERE embedding MATCH vec_int8(?) ORDER BY distance LIMIT ?",
                     (query_blob, limit),
                 )
                 rows = await cursor.fetchall()
