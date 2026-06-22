@@ -194,3 +194,39 @@ async def test_int8_query_against_float_db_returns_empty():
         await sdb._check_vec_available()
         res = await sdb.knn_search_audio(encode_embedding(_unit_vec(7)), limit=5)
         assert res == []  # type mismatch is swallowed -> no results, no crash
+
+
+@pytest.mark.asyncio
+async def test_coverage_counts_only_latest_version():
+    """A version bump leaves superseded jobs behind; coverage must report one
+    row per track (latest model_version), not sum across versions."""
+    with tempfile.TemporaryDirectory() as d:
+        db = os.path.join(d, "cov.db")
+        await init_db(db)
+        async with aiosqlite.connect(db) as conn:
+            for i in range(3):
+                await conn.execute(
+                    "INSERT INTO tracks (id, title, file_path, format, enriched) "
+                    "VALUES (?, ?, ?, 'mp3', 1)",
+                    (f"t{i}", f"Song {i}", f"f{i}"),
+                )
+            # Old (superseded) v3 jobs, all done, plus current v4 jobs mid-recompute.
+            for i in range(3):
+                await conn.execute(
+                    "INSERT INTO embedding_jobs (entity_type, entity_id, stage, "
+                    "status, model_version) VALUES ('track', ?, 'clap_audio', 'done', 3)",
+                    (f"t{i}",),
+                )
+            for i, status in enumerate(["done", "done", "pending"]):
+                await conn.execute(
+                    "INSERT INTO embedding_jobs (entity_type, entity_id, stage, "
+                    "status, model_version) VALUES ('track', ?, 'clap_audio', ?, 4)",
+                    (f"t{i}", status),
+                )
+            await conn.commit()
+
+        cov = await AsyncEmbedderDb(_config(db)).get_embedding_coverage()
+        audio = cov["clap_audio"]
+        assert audio["total"] == 3  # not 6 — only the latest version is counted
+        assert audio["done"] == 2 and audio["pending"] == 1
+        assert audio["coverage_pct"] == pytest.approx(66.7, abs=0.1)

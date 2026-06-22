@@ -602,6 +602,12 @@ class AsyncEmbedderDb:
         unknown-album sentinels — so all jobs can reach `done` and no sentinel
         filter is needed. The JOIN to tracks remains so jobs left behind by
         deleted tracks are not counted.
+
+        Only the latest ``model_version`` per stage is counted. A version bump
+        (e.g. the float32 -> int8 switch) leaves the superseded jobs behind, and
+        summing across versions would double the totals; counting just the
+        current version reports one row per track and shows true progress while
+        a recompute is still draining.
         """
         async with self._open() as conn:
             cursor = await conn.execute(
@@ -609,6 +615,11 @@ class AsyncEmbedderDb:
                 SELECT j.stage, j.status, COUNT(*) AS cnt
                 FROM embedding_jobs j
                 JOIN tracks t ON t.id = j.entity_id
+                WHERE j.model_version = (
+                    SELECT MAX(j2.model_version)
+                    FROM embedding_jobs j2
+                    WHERE j2.stage = j.stage
+                )
                 GROUP BY j.stage, j.status
                 """
             )
