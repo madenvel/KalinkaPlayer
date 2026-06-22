@@ -99,7 +99,11 @@ class EmbedderClapConfig(BaseModel):
         default=512, frozen=True, title="Embedding dimensions"
     )
     current_version: int = Field(
-        default=3,
+        # v4: float32 -> int8 vectors. Keys embedding_jobs.model_version to
+        # reschedule the embed jobs; independent of (and need not match)
+        # embedding_utils.CLAP_EMBED_FORMAT_VERSION, which handles the on-disk
+        # vec-table format. A stored-format change must bump both.
+        default=4,
         title="Model version",
         json_schema_extra={"help": "Increment to force re-embedding"},
     )
