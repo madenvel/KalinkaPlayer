@@ -46,6 +46,25 @@ def _load_clap_onnx_module():
     return mod
 
 
+def _load_embedding_utils():
+    """Import embedding_utils by file path (avoids the package __init__).
+
+    embedding_utils only imports numpy lazily, so it loads cleanly standalone.
+    Used for the production int8 quantization (encode_embedding) so eval queries
+    match the stored int8 vectors.
+    """
+    import importlib.util
+
+    path = (Path(__file__).resolve().parents[4] / "packages"
+            / "kalinka-plugin-localfiles" / "src" / "kalinka_plugin_localfiles"
+            / "embedding_utils.py")
+    spec = importlib.util.spec_from_file_location("embedding_utils_standalone", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["embedding_utils_standalone"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def load_clap_encoder() -> Callable[[str], bytes]:
     """Return a callable str -> 512-float L2-normalised bytes blob.
 
@@ -60,12 +79,17 @@ def load_clap_encoder() -> Callable[[str], bytes]:
     """
     import numpy as np
 
+    # Stored vectors are int8-quantized (CLAP_EMBED_FORMAT_VERSION >= 2). The
+    # query must land on the same fixed grid as production — reuse the package's
+    # encoder (loaded by path to skip the package __init__, like clap_onnx).
+    _eu = _load_embedding_utils()
+
     def _normalise_blob(vec) -> bytes:
         v = np.asarray(vec, dtype=np.float32)
         n = float(np.linalg.norm(v))
         if n > 0:
             v = v / n
-        return v.tobytes()
+        return _eu.encode_embedding(v)  # -> int8 bytes
 
     if os.environ.get("KALINKA_FORCE_LAION") == "1":
         import laion_clap  # type: ignore
@@ -123,7 +147,7 @@ def open_db(path: str) -> sqlite3.Connection:
 def knn(conn: sqlite3.Connection, table: str, blob: bytes, k: int) -> list[tuple[str, float]]:
     rows = conn.execute(
         f"SELECT track_id, distance FROM {table}"
-        " WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+        " WHERE embedding MATCH vec_int8(?) ORDER BY distance LIMIT ?",
         (blob, k),
     ).fetchall()
     return [(r[0], r[1]) for r in rows]
