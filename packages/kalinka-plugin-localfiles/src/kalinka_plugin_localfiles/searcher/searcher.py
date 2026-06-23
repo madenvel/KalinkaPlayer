@@ -641,7 +641,6 @@ class SearchWorker:
         FTS is no longer blended into the semantic ranking; the AI sections
         are purely semantic.
         """
-        empty: dict = {"tracks": [], "albums": [], "artists": [], "best_match": []}
         cfg = self.config.searcher
         self._track_meta_cache: dict[str, dict] = {}
 
