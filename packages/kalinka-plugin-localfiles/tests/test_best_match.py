@@ -159,3 +159,30 @@ class TestRealScorer:
         assert result[0].id == "ar1"
         assert all(e.score >= best_match.RAPIDFUZZ_CUTOFF for e in result)
         assert "t1" not in {e.id for e in result}
+
+    def test_ascii_query_matches_accented_name(self):
+        # Diacritic folding: an ASCII query finds an accented artist name.
+        candidates = [
+            Entity(id="ar1", type="artist", name="Női Kabát"),
+            Entity(id="ar2", type="artist", name="The Beatles"),
+        ]
+
+        result = assemble_best_match(candidates, "noi kabat")
+
+        assert [e.id for e in result] == ["ar1"]
+
+    def test_custom_cutoff_and_max_results(self):
+        candidates = [
+            Entity(id="a", type="artist", name="Exact Name"),
+            Entity(id="b", type="album", name="Exact Name Deluxe", artist_id="a"),
+            Entity(id="c", type="track", name="Totally Different", album_id="b",
+                   artist_id="a"),
+        ]
+
+        # A near-impossible cutoff keeps only the exact-ish hit; max_results=1
+        # truncates before redundancy removal.
+        result = assemble_best_match(
+            candidates, "Exact Name", cutoff=99, max_results=1
+        )
+
+        assert [e.id for e in result] == ["a"]
