@@ -17,10 +17,8 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import aiosqlite
-from rapidfuzz import fuzz
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import fold_diacritics
 from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -395,105 +393,6 @@ class AsyncSearcherDb:
     # ------------------------------------------------------------------
     # FTS5 search
     # ------------------------------------------------------------------
-
-    async def fts_search(
-        self,
-        text_query: str,
-        raw_query: str,
-        limit: int = 100,
-        min_score: int = 72,
-        overfetch: int = 5,
-    ) -> list[dict]:
-        """
-        Full-text search on the FTS5 table, with rapidfuzz re-ranking.
-
-        Returns [{"track_id": str, "rank": float, "exact": bool}] sorted
-        by relevance, ``rank`` negated so lower is better (matches the
-        convention of the rest of the pipeline). ``exact`` is True when
-        the query equals one of the track's fields (title / artist /
-        album) case-insensitively — the caller floats those above pure
-        semantic neighbours so an exact artist/album hit always wins.
-
-        FTS5 is used purely as a fast candidate fetcher (OR-mode, broad
-        recall). Each candidate is then scored with
-        ``rapidfuzz.fuzz.WRatio`` against ``title``, ``artist_name``,
-        and ``album_title`` *separately* — the best per-field score
-        wins — and dropped if it falls below ``min_score`` (0–100).
-        Per-field rather than concatenated because WRatio is
-        length-sensitive: a short query ("yesterday") against a long
-        concatenated haystack scores lower than against the title
-        alone. This kills single-token coincidental hits ("tonight"
-        matching "Make Tonight All Mine" for the query "something
-        melancholic for tonight") and is naturally typo-tolerant on
-        the metadata side.
-        """
-        if not text_query.strip():
-            return []
-
-        fts_query = _build_fts_query(text_query, join="OR")
-        logger.info("fts_search: raw=%r built=%r", text_query, fts_query)
-        if not fts_query:
-            logger.info("fts_search: query built to empty string — no results")
-            return []
-
-        candidate_limit = limit * overfetch
-        async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            try:
-                cursor = await conn.execute(
-                    """
-                    SELECT track_id, title, artist_name, album_title
-                    FROM fts_tracks
-                    WHERE fts_tracks MATCH ?
-                    LIMIT ?
-                    """,
-                    (fts_query, candidate_limit),
-                )
-                rows = await cursor.fetchall()
-            except Exception as e:
-                logger.warning("FTS search failed for query %r: %s", fts_query, e)
-                return []
-
-        fuzz_target = raw_query.strip() or text_query
-        # Diacritic-fold both sides so an ASCII query ("noi kabat") isn't
-        # dropped by the re-rank against accented metadata ("Női Kabát").
-        folded_target = fold_diacritics(fuzz_target)
-        norm_target = folded_target.casefold().strip()
-        scored: list[dict] = []
-        for row in rows:
-            # Score against each field separately and keep the best. A
-            # single concatenated haystack penalises short queries
-            # because WRatio is length-sensitive: e.g. "yesterday" vs
-            # the full "Yesterday | Beatles | Help!" string drags lower
-            # than "yesterday" vs the title field on its own.
-            best = 0
-            exact = False
-            for field in (row["title"], row["artist_name"], row["album_title"]):
-                if not field:
-                    continue
-                folded_field = fold_diacritics(field)
-                s = fuzz.WRatio(folded_target, folded_field)
-                if s > best:
-                    best = s
-                if folded_field.casefold().strip() == norm_target:
-                    exact = True
-            if best >= min_score:
-                scored.append(
-                    {
-                        "track_id": row["track_id"],
-                        "rank": -float(best),
-                        "exact": exact,
-                    }
-                )
-
-        scored.sort(key=lambda r: r["rank"])
-        logger.info(
-            "fts_search: %d candidates, %d kept after WRatio>=%d",
-            len(rows),
-            len(scored),
-            min_score,
-        )
-        return scored[:limit]
 
     async def search_entity_candidates(
         self, text_query: str, limit: int = 100
