@@ -29,16 +29,21 @@ from typing import Optional
 
 from rapidfuzz import fuzz
 
+from ..utils.name_utils import fold_diacritics
+
 # ---------------------------------------------------------------------------
 # Tunable constants
 # ---------------------------------------------------------------------------
 
 # Inclusion threshold (rapidfuzz score, 0-100).  These surface as "BEST MATCH"
 # at the very top, so err higher rather than lower: a weak match shown as the
-# best result is worse than showing nothing.  Start ~70 and tune.
+# best result is worse than showing nothing.  Start ~70 and tune.  The runtime
+# pipeline overrides this from config (searcher.best_match_min_fuzz_score);
+# this is the in-code default and the value the unit tests pin to.
 RAPIDFUZZ_CUTOFF: float = 70.0
 
-# Maximum number of entities in the BEST MATCH block.
+# Maximum number of entities in the BEST MATCH block.  Overridden at runtime by
+# config (searcher.best_match_max_results).
 MAX_RESULTS: int = 6
 
 # Scorer applied to (query, entity.name).  WRatio is robust to word-order and
@@ -74,25 +79,35 @@ class Entity:
 # ---------------------------------------------------------------------------
 
 
-def assemble_best_match(candidates: list[Entity], query: str) -> list[Entity]:
-    """Score, cut off, sort, truncate to MAX_RESULTS, then remove album/artist-
-    dominated redundancies.
+def assemble_best_match(
+    candidates: list[Entity],
+    query: str,
+    *,
+    cutoff: float = RAPIDFUZZ_CUTOFF,
+    max_results: int = MAX_RESULTS,
+) -> list[Entity]:
+    """Score, cut off, sort, truncate to ``max_results``, then remove album/
+    artist-dominated redundancies.
 
-    Returns 0..MAX_RESULTS entities, score-descending, exactly as produced (no
-    re-sort or regroup by type).  An empty list means the UI renders no BEST
-    MATCH section.
+    Returns 0..``max_results`` entities, score-descending, exactly as produced
+    (no re-sort or regroup by type).  An empty list means the UI renders no
+    BEST MATCH section.  ``cutoff`` / ``max_results`` default to the module
+    constants and are overridden from config by the search pipeline.
     """
-    # Step 1 — score every candidate; discard below the cutoff.
+    # Step 1 — score every candidate; discard below the cutoff.  Both sides are
+    # diacritic-folded so an ASCII query ("noi kabat") still matches accented
+    # names ("Női Kabát") — consistent with the FTS re-rank elsewhere.
+    folded_query = fold_diacritics(query)
     survivors: list[Entity] = []
     for entity in candidates:
-        entity.score = SCORER(query, entity.name)
-        if entity.score >= RAPIDFUZZ_CUTOFF:
+        entity.score = SCORER(folded_query, fold_diacritics(entity.name))
+        if entity.score >= cutoff:
             survivors.append(entity)
 
-    # Step 2 — sort by score descending, keep the top MAX_RESULTS.  This is
+    # Step 2 — sort by score descending, keep the top ``max_results``.  This is
     # "the list" the redundancy rules operate on.
     survivors.sort(key=lambda e: e.score, reverse=True)
-    the_list = survivors[:MAX_RESULTS]
+    the_list = survivors[:max_results]
 
     # Step 3 — remove redundancy.  Index by id+type so lookups are exact and a
     # track and its same-named album/artist never collide.
