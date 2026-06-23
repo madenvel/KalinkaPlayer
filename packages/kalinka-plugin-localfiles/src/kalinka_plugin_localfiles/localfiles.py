@@ -130,13 +130,21 @@ class LocalFilesInputModule(InputModule):
                 logger.warning("ai_search: timed out waiting for searcher response")
                 return EmptyList(offset, limit)
         logger.info(
-            "ai_search: response — %d tracks, %d albums, %d artists",
+            "ai_search: response — %d best-match, %d tracks, %d albums, %d artists",
+            len(ids.get("best_match", [])),
             len(ids.get("tracks", [])),
             len(ids.get("albums", [])),
             len(ids.get("artists", [])),
         )
 
         sections: List[BrowseItem] = []
+
+        # BEST MATCH (literal/navigational FTS hits) renders first, as a single
+        # flat list ordered by score — above the semantic AI suggestions.
+        best_match_section = self._build_best_match_section(ids.get("best_match", []))
+        if best_match_section is not None:
+            sections.append(best_match_section)
+
         for entity_type, fetch_fn, create_fn, name, preview_content in [
             (
                 "tracks",
@@ -193,6 +201,71 @@ class LocalFilesInputModule(InputModule):
             limit=limit,
             total=len(sections),
             items=sections[offset : offset + limit],
+        )
+
+    def _build_best_match_section(
+        self, entities: List[Dict]
+    ) -> Optional[BrowseItem]:
+        """Build the BEST MATCH section: a single flat list of mixed entity
+        types (track / album / artist) in the order the searcher returned
+        them (rapidfuzz score, highest first).
+
+        ``entities`` is the searcher's ``best_match`` payload — ``{"id",
+        "type"}`` dicts. Returns None when empty so the UI renders no header.
+        """
+        if not entities:
+            return None
+
+        # Batch-fetch per type, then reassemble in the original score order.
+        builders = {
+            ("track", row["id"]): self._create_track_browse_item(row)
+            for row in self.db_manager.get_tracks_by_ids(
+                [e["id"] for e in entities if e["type"] == "track"]
+            )
+        }
+        builders.update(
+            {
+                ("album", row["id"]): self._create_album_browse_item(row)
+                for row in self.db_manager.get_albums_by_ids(
+                    [e["id"] for e in entities if e["type"] == "album"]
+                )
+            }
+        )
+        builders.update(
+            {
+                ("artist", row["id"]): self._create_artist_browse_item(row)
+                for row in self.db_manager.get_artists_by_ids(
+                    [e["id"] for e in entities if e["type"] == "artist"]
+                )
+            }
+        )
+
+        rows = [
+            builders[(e["type"], e["id"])]
+            for e in entities
+            if (e["type"], e["id"]) in builders
+        ]
+        if not rows:
+            return None
+
+        cat = catalog_id("best_match")
+        return BrowseItem(
+            id=cat,
+            name="BEST MATCH",
+            can_browse=False,
+            can_add=False,
+            catalog=Catalog(
+                id=cat,
+                title="BEST MATCH",
+                # Mixed entity types in one ranked list: a neutral CATALOG
+                # content hint, TILE so each row shows its own icon + subname.
+                preview_config=Preview(
+                    type=PreviewType.TILE,
+                    content_type=PreviewContentType.CATALOG,
+                    items_count=len(rows),
+                ),
+            ),
+            sections=rows,
         )
 
     async def search(
