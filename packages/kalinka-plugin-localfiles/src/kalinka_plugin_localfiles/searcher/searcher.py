@@ -40,6 +40,7 @@ from typing import Optional
 from ..config_model import LocalFilesConfig
 from ..pip_utils import ensure_package
 from ..worker_utils import set_proc_title, sleep_interruptible
+from .best_match import Entity, assemble_best_match
 from .genre_labels import label_for_index
 from .query_parser import ParsedQuery, parse_query
 from .searcher_db import AsyncSearcherDb
@@ -627,8 +628,20 @@ class SearchWorker:
     # ------------------------------------------------------------------
 
     async def _do_search(self, query: str, limit: int) -> dict:
-        """Handle one search request end-to-end (FTS + KNN in parallel)."""
-        empty: dict = {"tracks": [], "albums": [], "artists": []}
+        """Handle one search request end-to-end.
+
+        Two independent legs run in parallel and are returned side by side,
+        not merged:
+
+          * BEST MATCH — literal/navigational FTS over artist/album/track
+            names (``assemble_best_match``). Surfaced as its own top section.
+          * Semantic — CLAP KNN audio neighbours, tag re-ranked. Drives the
+            AI suggestion sections (tracks/albums/artists).
+
+        FTS is no longer blended into the semantic ranking; the AI sections
+        are purely semantic.
+        """
+        empty: dict = {"tracks": [], "albums": [], "artists": [], "best_match": []}
         cfg = self.config.searcher
         self._track_meta_cache: dict[str, dict] = {}
 
@@ -645,57 +658,49 @@ class SearchWorker:
         if parsed.is_similar_query and parsed.similar_to_track_id:
             return await self._do_similar_search(parsed, limit)
 
-        # --- Run FTS and KNN in parallel ---
-        fts_coro = self._fts_leg(parsed, cfg.fts_candidate_limit)
+        # --- Run the BEST MATCH (FTS) and semantic (KNN) legs in parallel ---
+        best_match_coro = self._best_match_leg(parsed)
         knn_coro = self._knn_leg(query, cfg.knn_candidate_limit)
-        fts_hits, knn_hits = await asyncio.gather(fts_coro, knn_coro)
+        best_match, knn_hits = await asyncio.gather(best_match_coro, knn_coro)
 
         logger.info(
-            "_do_search: FTS=%d hits, KNN=%d hits",
-            len(fts_hits),
+            "_do_search: BEST MATCH=%d, KNN=%d hits",
+            len(best_match),
             len(knn_hits),
         )
 
-        # Tag fallback — only when both FTS and KNN returned nothing
-        # AND the tag pipeline is active. With tags disabled we leave the
-        # result empty rather than reaching into stale tag predictions.
+        # Semantic tag fallback — only when the KNN leg returned nothing AND
+        # the tag pipeline is active. Ranks purely by genre-tag overlap. (FTS
+        # no longer participates; literal matches surface via BEST MATCH.)
         tag_fallback_used = False
-        if not fts_hits and not knn_hits:
-            if (
-                cfg.tags.enabled
-                and parsed.has_tag_constraints
-                and parsed.genres
-            ):
-                tag_track_ids = await self.db.get_similar_tracks_by_tags(
-                    parsed.genres, cfg.fts_candidate_limit
-                )
-                logger.info(
-                    "_do_search: tag fallback returned %d tracks", len(tag_track_ids)
-                )
-                fts_hits = [{"track_id": tid, "rank": -1.0} for tid in tag_track_ids]
-                tag_fallback_used = bool(tag_track_ids)
+        has_knn = bool(knn_hits)
+        if (
+            not has_knn
+            and cfg.tags.enabled
+            and parsed.has_tag_constraints
+            and parsed.genres
+        ):
+            tag_track_ids = await self.db.get_similar_tracks_by_tags(
+                parsed.genres, cfg.fts_candidate_limit
+            )
+            logger.info(
+                "_do_search: tag fallback returned %d tracks", len(tag_track_ids)
+            )
+            knn_hits = [{"track_id": tid, "distance": 0.0} for tid in tag_track_ids]
+            tag_fallback_used = bool(tag_track_ids)
 
-        if not fts_hits and not knn_hits:
-            logger.info("_do_search: no hits — returning empty")
+        if not knn_hits:
+            # No semantic results; BEST MATCH may still be non-empty.
+            logger.info("_do_search: no semantic hits")
             self._log_tag_contribution_summary(
                 "_do_search", parsed, [], {}, tag_fallback_used=False
             )
-            return empty
+            return {"tracks": [], "albums": [], "artists": [], "best_match": best_match}
 
-        # --- Merge candidate sets ---
-        # Build FTS score map (normalised 0-1, higher is better)
-        fts_map: dict[str, float] = {}
-        if fts_hits:
-            ranks = [h["rank"] for h in fts_hits]
-            min_rank = min(ranks)
-            max_rank = max(ranks)
-            rank_range = max_rank - min_rank if max_rank != min_rank else 1.0
-            for h in fts_hits:
-                fts_map[h["track_id"]] = 1.0 - (h["rank"] - min_rank) / rank_range
-
-        # Build KNN score map (normalised 0-1, higher is better)
+        # KNN score map (normalised 0-1, higher is better). Skipped on the
+        # tag-fallback path, where distances are synthetic and uniform.
         knn_map: dict[str, float] = {}
-        if knn_hits:
+        if has_knn:
             dists = [h["distance"] for h in knn_hits]
             min_dist = min(dists)
             max_dist = max(dists)
@@ -703,12 +708,7 @@ class SearchWorker:
             for h in knn_hits:
                 knn_map[h["track_id"]] = 1.0 - (h["distance"] - min_dist) / dist_range
 
-        # Union of all candidate track IDs
-        all_track_ids = list(
-            dict.fromkeys(
-                [h["track_id"] for h in fts_hits] + [h["track_id"] for h in knn_hits]
-            )
-        )
+        all_track_ids = list(dict.fromkeys(h["track_id"] for h in knn_hits))
 
         tags_map = await self.db.get_tracks_tags_bulk(all_track_ids)
         self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(
@@ -717,27 +717,19 @@ class SearchWorker:
 
         scored: list[tuple[float, str]] = []
         for tid in all_track_ids:
-            fts_norm = fts_map.get(tid, 0.0)
             knn_norm = knn_map.get(tid, 0.0)
             track_tags = tags_map.get(tid)
             score = self._score_track(
                 parsed,
-                fts_norm,
+                0.0,
                 knn_norm,
                 track_tags,
-                has_fts_hits=bool(fts_hits),
-                has_knn_hits=bool(knn_hits),
+                has_fts_hits=False,
+                has_knn_hits=has_knn,
             )
             scored.append((score, tid))
 
-        # Exact lexical matches (query == a track's title / artist /
-        # album) float to the top, ordered among themselves by the
-        # blended score. Without this, the CLAP leg's weight (which
-        # exceeds the FTS weight) lets an unrelated audio neighbour
-        # outrank a track that literally is by the artist you searched
-        # for — e.g. "vangelis" surfacing Michael Jackson above Vangelis.
-        exact_ids = {h["track_id"] for h in fts_hits if h.get("exact")}
-        scored.sort(key=lambda st: (st[1] not in exact_ids, -st[0]))
+        scored.sort(key=lambda st: -st[0])
         top_tracks = scored[:limit]
         track_result = [tid for _, tid in top_tracks]
 
@@ -755,18 +747,46 @@ class SearchWorker:
             "tracks": track_result,
             "albums": album_ids,
             "artists": artist_ids,
+            "best_match": best_match,
         }
 
-    async def _fts_leg(self, parsed: ParsedQuery, candidate_limit: int) -> list[dict]:
-        """FTS5 search leg — returns [{track_id, rank}]."""
+    async def _best_match_leg(self, parsed: ParsedQuery) -> list[dict]:
+        """BEST MATCH leg — literal/navigational FTS over entity names.
+
+        Builds artist/album/track candidates from FTS recall and runs the
+        pure ``assemble_best_match`` algorithm (score, cut off, truncate,
+        collapse album/artist redundancies). Returns an ordered list of
+        ``{"id", "type"}`` dicts, highest rapidfuzz score first.
+
+        Scored against the raw query, not the genre/mood-stripped text
+        query: BEST MATCH answers "take me to the thing I named", which is
+        a property of the whole typed string.
+        """
         if not parsed.text_query:
             return []
-        return await self.db.fts_search(
-            parsed.text_query,
-            parsed.raw,
-            candidate_limit,
-            min_score=self.config.searcher.fts_min_fuzz_score,
+        cfg = self.config.searcher
+        rows = await self.db.search_entity_candidates(
+            parsed.text_query, cfg.fts_candidate_limit
         )
+        if not rows:
+            return []
+        candidates = [
+            Entity(
+                id=r["id"],
+                type=r["type"],
+                name=r["name"],
+                album_id=r.get("album_id"),
+                artist_id=r.get("artist_id"),
+            )
+            for r in rows
+        ]
+        best = assemble_best_match(
+            candidates,
+            parsed.raw,
+            cutoff=cfg.best_match_min_fuzz_score,
+            max_results=cfg.best_match_max_results,
+        )
+        return [{"id": e.id, "type": e.type} for e in best]
 
     async def _knn_leg(self, query: str, candidate_limit: int) -> list[dict]:
         """CLAP KNN search leg — returns [{track_id, distance}].
@@ -810,8 +830,11 @@ class SearchWorker:
         When tags are off the function returns empty rather than
         falling through to a CLAP-only similar path — keeping the
         toggle as a single switch for the whole tag pipeline.
+
+        "Songs like this" has no text query, so there is no BEST MATCH
+        block — the result always carries an empty ``best_match``.
         """
-        empty: dict = {"tracks": [], "albums": [], "artists": []}
+        empty: dict = {"tracks": [], "albums": [], "artists": [], "best_match": []}
 
         if not self.config.searcher.tags.enabled:
             logger.info(
@@ -931,6 +954,7 @@ class SearchWorker:
             "tracks": track_result,
             "albums": album_ids,
             "artists": artist_ids,
+            "best_match": [],
         }
 
     # ------------------------------------------------------------------
@@ -960,8 +984,10 @@ class SearchWorker:
                 t0 = time.monotonic()
                 result = await self._do_search(req["query"], req.get("limit", 20))
                 logger.info(
-                    "Search '%s': %d tracks, %d albums, %d artists in %.3fs",
+                    "Search '%s': %d best-match, %d tracks, %d albums, "
+                    "%d artists in %.3fs",
                     req["query"],
+                    len(result.get("best_match", [])),
                     len(result.get("tracks", [])),
                     len(result.get("albums", [])),
                     len(result.get("artists", [])),
@@ -969,7 +995,7 @@ class SearchWorker:
                 )
             except Exception as e:
                 logger.error("Search handler error: %s", e, exc_info=True)
-                result = {"tracks": [], "albums": [], "artists": []}
+                result = {"tracks": [], "albums": [], "artists": [], "best_match": []}
 
             search_response_queue.put(result)
 
