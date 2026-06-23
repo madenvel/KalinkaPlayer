@@ -367,17 +367,17 @@ class TestBestMatchCandidates:
 
 
 # ---------------------------------------------------------------------------
-# Tests: exact lexical matches float above pure CLAP neighbours
+# Tests: BEST MATCH is separate from the semantic (CLAP) sections
 # ---------------------------------------------------------------------------
 
 
-class TestExactMatchFloating:
+class TestBestMatchSeparation:
     @pytest.mark.asyncio
-    async def test_exact_artist_track_outranks_clap_neighbour(self):
-        """Reproduces the 'vangelis' bug: a track whose artist exactly
-        matches the query must rank above an unrelated track that the
-        CLAP leg considers a close audio neighbour, even though the
-        higher KNN weight would otherwise win the blend."""
+    async def test_exact_match_goes_to_best_match_not_ai_tracks(self):
+        """The 'vangelis' case: the exact artist match surfaces in the
+        BEST MATCH block (literal/navigational), while the AI ``tracks``
+        section is purely semantic — the CLAP neighbour "Ben". FTS is no
+        longer blended into the semantic ranking, so the two never mix."""
         db_path = os.path.join(tempfile.mkdtemp(), "test.db")
         config = _make_config(db_path=db_path)
         await init_db(db_path)
@@ -413,14 +413,17 @@ class TestExactMatchFloating:
         db = AsyncSearcherDb(config)
         worker = SearchWorker(config, db)
 
-        # Force the CLAP leg to return "Ben" as the nearest neighbour —
-        # the exact situation that put Michael Jackson above Vangelis.
+        # Force the CLAP leg to return "Ben" as the nearest neighbour.
         async def fake_knn(query, candidate_limit):
             return [{"track_id": "tMJ", "distance": 0.0}]
 
         worker._knn_leg = fake_knn
 
         result = await worker._do_search("vangelis", limit=10)
-        # The exact artist match comes first despite the heavier KNN weight.
-        assert result["tracks"][0] == "tV"
-        assert "tMJ" in result["tracks"]
+
+        # BEST MATCH leads with the exact artist hit; the album collapses
+        # into it (artist dominates) and the unrelated track is cut off.
+        assert result["best_match"][0] == {"id": "arV", "type": "artist"}
+        # The semantic section is CLAP-only — no FTS bleed-through.
+        assert result["tracks"] == ["tMJ"]
+        assert "tV" not in result["tracks"]
