@@ -217,28 +217,18 @@ class LocalFilesInputModule(InputModule):
             return None
 
         # Batch-fetch per type, then reassemble in the original score order.
-        builders = {
-            ("track", row["id"]): self._create_track_browse_item(row)
-            for row in self.db_manager.get_tracks_by_ids(
-                [e["id"] for e in entities if e["type"] == "track"]
-            )
-        }
-        builders.update(
-            {
-                ("album", row["id"]): self._create_album_browse_item(row)
-                for row in self.db_manager.get_albums_by_ids(
-                    [e["id"] for e in entities if e["type"] == "album"]
-                )
-            }
-        )
-        builders.update(
-            {
-                ("artist", row["id"]): self._create_artist_browse_item(row)
-                for row in self.db_manager.get_artists_by_ids(
-                    [e["id"] for e in entities if e["type"] == "artist"]
-                )
-            }
-        )
+        builders: Dict[tuple, BrowseItem] = {}
+        for entity_type, fetch_fn, create_fn in (
+            ("track", self.db_manager.get_tracks_by_ids,
+             self._create_track_browse_item),
+            ("album", self.db_manager.get_albums_by_ids,
+             self._create_album_browse_item),
+            ("artist", self.db_manager.get_artists_by_ids,
+             self._create_artist_browse_item),
+        ):
+            ids = [e["id"] for e in entities if e["type"] == entity_type]
+            for row in fetch_fn(ids):
+                builders[(entity_type, row["id"])] = create_fn(row)
 
         rows = [
             builders[(e["type"], e["id"])]
