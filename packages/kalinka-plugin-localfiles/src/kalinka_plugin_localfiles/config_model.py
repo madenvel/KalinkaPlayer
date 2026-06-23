@@ -193,6 +193,30 @@ class SearcherConfig(BaseModel):
     max_results: int = Field(
         default=20, title="Max results per entity type",
     )
+    # --- BEST MATCH (literal/navigational FTS block shown above AI search) ---
+    # Expert-only: these surface as the top "BEST MATCH" section, so the
+    # defaults err on the strict side. A weak match shown as the "best"
+    # result is worse than showing nothing.
+    best_match_min_fuzz_score: int = Field(
+        default=70, ge=0, le=100,
+        title="BEST MATCH minimum rapidfuzz score (0–100)",
+        json_schema_extra={
+            "help": (
+                "Inclusion threshold for the top BEST MATCH block. Higher = "
+                "fewer, more confident literal matches. Mirrors RAPIDFUZZ_CUTOFF."
+            ),
+        },
+    )
+    best_match_max_results: int = Field(
+        default=6, ge=1, le=50,
+        title="BEST MATCH max results",
+        json_schema_extra={
+            "help": (
+                "Maximum entities in the BEST MATCH block (before "
+                "album/artist redundancy removal). Mirrors MAX_RESULTS."
+            ),
+        },
+    )
 
 
 class EmbedderConfig(BaseModel):
