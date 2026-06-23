@@ -165,9 +165,6 @@ class SearcherConfig(BaseModel):
         title="Model directory",
         json_schema_extra={"widget": "path"},
     )
-    weight_fts: float = Field(
-        default=0.35, ge=0.0, le=1.0, title="FTS rank weight",
-    )
     weight_knn: float = Field(
         default=0.45, ge=0.0, le=1.0, title="CLAP KNN similarity weight",
     )
@@ -182,10 +179,6 @@ class SearcherConfig(BaseModel):
     )
     fts_candidate_limit: int = Field(
         default=100, title="Max FTS candidates before re-ranking",
-    )
-    fts_min_fuzz_score: int = Field(
-        default=72, ge=0, le=100,
-        title="Minimum rapidfuzz WRatio for FTS hits (0–100)",
     )
     knn_candidate_limit: int = Field(
         default=50, title="Max KNN candidates before re-ranking",

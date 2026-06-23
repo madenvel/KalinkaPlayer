@@ -171,6 +171,22 @@ class TestRealScorer:
 
         assert [e.id for e in result] == ["ar1"]
 
+    def test_drops_coincidental_single_token_hit(self):
+        # An NL query that incidentally shares one common word ("tonight")
+        # with a title must not clear the cutoff. (Ported from the old FTS
+        # re-rank suite — the behaviour now lives in WRatio + the cutoff.)
+        candidates = [
+            Entity(id="t", type="track", name="Make Tonight All Mine"),
+        ]
+        result = assemble_best_match(candidates, "something melancholic for tonight")
+        assert result == []
+
+    def test_keeps_typo_match(self):
+        # A single-character typo still clears the cutoff via WRatio.
+        candidates = [Entity(id="t", type="track", name="Bohemian Rhapsody")]
+        result = assemble_best_match(candidates, "bohemain rhapsody")
+        assert [e.id for e in result] == ["t"]
+
     def test_custom_cutoff_and_max_results(self):
         candidates = [
             Entity(id="a", type="artist", name="Exact Name"),

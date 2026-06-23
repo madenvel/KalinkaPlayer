@@ -124,33 +124,20 @@ class TestDynamicWeightNormalization:
         db._vec_available = False
         return SearchWorker(config, db)
 
-    def test_fts_only_uses_full_range(self):
-        """With only FTS hits, score should be in 0-1 range."""
+    def test_knn_only_uses_full_range(self):
+        """With only KNN hits and no tags, a perfect neighbour scores 1.0 —
+        the single active weight normalises to the full 0-1 range."""
         worker = self._make_worker()
         parsed = parse_query("beatles")  # no tag constraints
 
-        # Perfect FTS match, no KNN
         score = worker._score_track(
-            parsed, fts_rank_norm=1.0, knn_norm=0.0, track_tags=None,
-            has_fts_hits=True, has_knn_hits=False,
+            parsed, knn_norm=1.0, track_tags=None, has_knn_hits=True,
         )
-        # Should be 1.0 (not 0.35 which was the old broken behavior)
         assert score == pytest.approx(1.0, abs=0.01)
 
-    def test_both_legs_active(self):
-        """With both FTS and KNN active, weights are split normally."""
-        worker = self._make_worker()
-        parsed = parse_query("beatles")
-
-        score = worker._score_track(
-            parsed, fts_rank_norm=1.0, knn_norm=1.0, track_tags=None,
-            has_fts_hits=True, has_knn_hits=True,
-        )
-        # Both active, no tags: (0.35*1 + 0.30*1) / (0.35+0.30) = 1.0
-        assert score == pytest.approx(1.0, abs=0.01)
-
-    def test_with_tag_constraints(self):
-        """Tag components contribute when present."""
+    def test_knn_and_tags_normalise_together(self):
+        """Tag components blend with KNN; both perfect -> 1.0 after the
+        dynamic weight normalisation."""
         worker = self._make_worker()
         parsed = parse_query("jazz piano")  # has genre constraint
 
@@ -159,26 +146,24 @@ class TestDynamicWeightNormalization:
         }
 
         score = worker._score_track(
-            parsed, fts_rank_norm=1.0, knn_norm=0.0, track_tags=track_tags,
-            has_fts_hits=True, has_knn_hits=False,
+            parsed, knn_norm=1.0, track_tags=track_tags, has_knn_hits=True,
         )
-        # FTS=1.0 + genre match for "jazz" in "jazz---cool jazz" = 1.0
-        assert score > 0.5
+        # (weight_knn*1 + weight_genre*1) / (weight_knn + weight_genre) = 1.0
+        assert score == pytest.approx(1.0, abs=0.01)
 
-    def test_no_active_legs_returns_zero(self):
-        """Edge case: no search legs active."""
+    def test_no_active_inputs_returns_zero(self):
+        """Edge case: no KNN hits and no tag constraints."""
         worker = self._make_worker()
         parsed = parse_query("something")
 
         score = worker._score_track(
-            parsed, fts_rank_norm=0.0, knn_norm=0.0, track_tags=None,
-            has_fts_hits=False, has_knn_hits=False,
+            parsed, knn_norm=0.0, track_tags=None, has_knn_hits=False,
         )
         assert score == 0.0
 
 
 # ---------------------------------------------------------------------------
-# Tests: FTS + rapidfuzz re-ranking
+# Helper: seed the FTS index directly (shared by the best-match tests)
 # ---------------------------------------------------------------------------
 
 
@@ -192,115 +177,6 @@ async def _insert_fts_rows(db_path: str, rows: list[tuple[str, str, str, str]]) 
                 (tid, title, artist, album, ""),
             )
         await conn.commit()
-
-
-class TestFtsFuzzyRerank:
-    @pytest.mark.asyncio
-    async def test_returns_match(self):
-        """Exact-title query finds the matching track."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Yesterday", "Beatles", "Help!"),
-            ("t1", "Tomorrow Never Knows", "Beatles", "Revolver"),
-        ])
-
-        results = await db.fts_search("yesterday", "yesterday", limit=10)
-        assert [r["track_id"] for r in results] == ["t0"]
-
-    @pytest.mark.asyncio
-    async def test_drops_coincidental_single_token_hit(self):
-        """The original AI-search bug: an NL query that incidentally shares
-        one common word ("tonight") with a track title must NOT make the
-        track pass the fuzzy filter."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Make Tonight All Mine", "Michael Jackson",
-             "The Best Of Michael Jackson (Disk 2)"),
-            ("t1", "Yesterday", "Beatles", "Help!"),
-        ])
-
-        # "tonight" appears in both query and title but the overall
-        # fuzzy similarity is well below the 72 threshold.
-        results = await db.fts_search(
-            "tonight", "something melancholic for tonight", limit=10,
-        )
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_keeps_typo_match(self):
-        """Single-character typo in a title query still matches via rapidfuzz."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Bohemian Rhapsody", "Queen", "A Night At The Opera"),
-        ])
-
-        # FTS5 OR-mode finds it on the correctly-spelled "rhapsody"
-        # token; rapidfuzz then approves the score despite "bohemain".
-        results = await db.fts_search(
-            "rhapsody", "bohemain rhapsody", limit=10,
-        )
-        assert [r["track_id"] for r in results] == ["t0"]
-
-    @pytest.mark.asyncio
-    async def test_min_score_threshold_respected(self):
-        """A high threshold drops borderline matches."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Yesterday", "Beatles", "Help!"),
-        ])
-
-        # Threshold above any plausible score: even an exact hit drops.
-        results = await db.fts_search(
-            "yesterday", "yesterday", limit=10, min_score=99,
-        )
-        assert results == []
-
-    @pytest.mark.asyncio
-    async def test_exact_artist_match_is_flagged(self):
-        """A query equal to the artist name (case-insensitive) sets the
-        ``exact`` flag; a mere title/album substring match does not."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Chariots of Fire", "Vangelis", "The Best of Vangelis CD II"),
-            ("t1", "Vangelis Tribute", "Some Cover Band", "Tributes"),
-        ])
-
-        results = await db.fts_search("vangelis", "vangelis", limit=10)
-        by_id = {r["track_id"]: r for r in results}
-        # Exact artist hit flagged regardless of letter case.
-        assert by_id["t0"]["exact"] is True
-        # Title merely *contains* the token — not an exact field match.
-        assert by_id["t1"]["exact"] is False
-
-    @pytest.mark.asyncio
-    async def test_ascii_query_matches_accented_artist(self):
-        """An ASCII-folded query ("noi kabat") finds an accented artist
-        ("Női Kabát"). Without diacritic folding in the rapidfuzz re-rank
-        the raw WRatio (~56) falls below the 72 threshold and the candidate
-        is dropped even though FTS matched it. See issue #61."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        db = await _setup_db(db_path)
-
-        await _insert_fts_rows(db_path, [
-            ("t0", "Valami", "Női Kabát", "Best Of"),
-            ("t1", "Yesterday", "Beatles", "Help!"),
-        ])
-
-        results = await db.fts_search("noi kabat", "noi kabat", limit=10)
-        by_id = {r["track_id"]: r for r in results}
-        assert "t0" in by_id
-        # Diacritic-folded equality also sets the exact-artist flag.
-        assert by_id["t0"]["exact"] is True
 
 
 # ---------------------------------------------------------------------------

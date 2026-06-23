@@ -475,18 +475,18 @@ class SearchWorker:
     def _score_track(
         self,
         parsed: ParsedQuery,
-        fts_rank_norm: float,
         knn_norm: float,
         track_tags: dict | None,
-        has_fts_hits: bool = True,
         has_knn_hits: bool = True,
     ) -> float:
         """
-        Compute a combined relevance score for a single track.
+        Compute a combined relevance score for a single track from the
+        semantic (CLAP KNN) leg and the predicted-tag components.
 
-        Weights are dynamically normalised based on which search legs
-        actually contributed results, so scores always use the full 0–1
-        range regardless of CLAP availability.
+        Weights are dynamically normalised based on which inputs actually
+        contributed, so scores always use the full 0–1 range regardless of
+        CLAP availability. Literal/text matching is handled separately by
+        the BEST MATCH path and never enters this blend.
 
         ``cfg.tags.enabled`` gates the entire tag pipeline — both
         prediction (handled elsewhere) and search-time scoring. When
@@ -507,8 +507,6 @@ class SearchWorker:
 
         # Build weighted sum only from active components
         components: list[tuple[float, float]] = []
-        if has_fts_hits:
-            components.append((cfg.weight_fts, fts_rank_norm))
         if has_knn_hits:
             components.append((cfg.weight_knn, knn_norm))
         if tags_active:
@@ -720,10 +718,8 @@ class SearchWorker:
             track_tags = tags_map.get(tid)
             score = self._score_track(
                 parsed,
-                0.0,
                 knn_norm,
                 track_tags,
-                has_fts_hits=False,
                 has_knn_hits=has_knn,
             )
             scored.append((score, tid))
@@ -913,10 +909,8 @@ class SearchWorker:
             knn_norm = knn_map.get(tid, 0.0)
             score = self._score_track(
                 synth,
-                0.0,
                 knn_norm,
                 track_tags,
-                has_fts_hits=False,
                 has_knn_hits=bool(knn_map),
             )
             scored.append((score, tid))
