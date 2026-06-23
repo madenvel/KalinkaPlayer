@@ -304,6 +304,69 @@ class TestFtsFuzzyRerank:
 
 
 # ---------------------------------------------------------------------------
+# Tests: BEST MATCH entity-candidate recall
+# ---------------------------------------------------------------------------
+
+
+class TestBestMatchCandidates:
+    @pytest.mark.asyncio
+    async def test_expands_tracks_into_typed_entities(self):
+        """FTS recall yields a track candidate per row plus the de-duplicated
+        album and artist, each carrying its own name and relationships."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        config = _make_config(db_path=db_path)
+        await init_db(db_path)
+
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "INSERT INTO artists (id, name) VALUES ('arP', 'The Piano Guys')"
+            )
+            await conn.execute(
+                "INSERT INTO albums (id, title, artist_id) VALUES "
+                "('alP', 'The Piano Guys', 'arP')"
+            )
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, "
+                "album_id, artist_id) VALUES "
+                "('t1', 'A Thousand Years', 'f1', 'mp3', 1, 'alP', 'arP'), "
+                "('t2', 'Beethoven Symphony', 'f2', 'mp3', 1, 'alP', 'arP')"
+            )
+            await conn.commit()
+
+        await _insert_fts_rows(db_path, [
+            ("t1", "A Thousand Years", "The Piano Guys", "The Piano Guys"),
+            ("t2", "Beethoven Symphony", "The Piano Guys", "The Piano Guys"),
+        ])
+
+        db = AsyncSearcherDb(config)
+        candidates = await db.search_entity_candidates("piano", limit=50)
+
+        by_type: dict[str, list[dict]] = {"track": [], "album": [], "artist": []}
+        for c in candidates:
+            by_type[c["type"]].append(c)
+
+        # Two tracks, one deduped album, one deduped artist.
+        assert {c["id"] for c in by_type["track"]} == {"t1", "t2"}
+        assert [c["id"] for c in by_type["album"]] == ["alP"]
+        assert [c["id"] for c in by_type["artist"]] == ["arP"]
+
+        # Relationships carried for the redundancy rules; no scoring done here.
+        track = next(c for c in by_type["track"] if c["id"] == "t1")
+        assert track["album_id"] == "alP" and track["artist_id"] == "arP"
+        assert by_type["album"][0]["artist_id"] == "arP"
+        assert all("score" not in c for c in candidates)
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_empty(self):
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        config = _make_config(db_path=db_path)
+        await init_db(db_path)
+        db = AsyncSearcherDb(config)
+        assert await db.search_entity_candidates("nonexistent", limit=50) == []
+        assert await db.search_entity_candidates("", limit=50) == []
+
+
+# ---------------------------------------------------------------------------
 # Tests: exact lexical matches float above pure CLAP neighbours
 # ---------------------------------------------------------------------------
 

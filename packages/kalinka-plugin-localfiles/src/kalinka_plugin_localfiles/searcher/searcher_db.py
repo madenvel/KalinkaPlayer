@@ -495,6 +495,101 @@ class AsyncSearcherDb:
         )
         return scored[:limit]
 
+    async def search_entity_candidates(
+        self, text_query: str, limit: int = 100
+    ) -> list[dict]:
+        """Gather artist / album / track candidates for the BEST MATCH block.
+
+        FTS5 OR-recall over the track index, expanded into typed entities:
+        each matched track row yields a track candidate plus (de-duplicated)
+        its album and artist. This is *broad recall only* — rapidfuzz scoring,
+        the cutoff, and album/artist redundancy removal all happen in
+        :func:`assemble_best_match`, so no score is computed here.
+
+        Returns entity dicts ``{id, type, name, album_id, artist_id}`` where
+        ``type`` is one of ``"track" | "album" | "artist"``.
+        """
+        if not text_query.strip():
+            return []
+
+        fts_query = _build_fts_query(text_query, join="OR")
+        if not fts_query:
+            return []
+
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            try:
+                cursor = await conn.execute(
+                    """
+                    SELECT t.id AS track_id, t.title AS track_title,
+                           t.album_id, t.artist_id,
+                           al.title AS album_title, ar.name AS artist_name
+                    FROM fts_tracks f
+                    JOIN tracks t ON t.id = f.track_id
+                    LEFT JOIN albums  al ON t.album_id  = al.id
+                    LEFT JOIN artists ar ON t.artist_id = ar.id
+                    WHERE fts_tracks MATCH ?
+                    LIMIT ?
+                    """,
+                    (fts_query, limit),
+                )
+                rows = await cursor.fetchall()
+            except Exception as e:
+                logger.warning(
+                    "best-match candidate fetch failed for %r: %s", fts_query, e
+                )
+                return []
+
+        candidates: list[dict] = []
+        seen_albums: set[str] = set()
+        seen_artists: set[str] = set()
+        for row in rows:
+            # One track candidate per matched row (track_ids are unique).
+            if row["track_title"]:
+                candidates.append(
+                    {
+                        "id": row["track_id"],
+                        "type": "track",
+                        "name": row["track_title"],
+                        "album_id": row["album_id"],
+                        "artist_id": row["artist_id"],
+                    }
+                )
+            aid = row["album_id"]
+            if aid and aid not in seen_albums and row["album_title"]:
+                seen_albums.add(aid)
+                candidates.append(
+                    {
+                        "id": aid,
+                        "type": "album",
+                        "name": row["album_title"],
+                        "album_id": None,
+                        "artist_id": row["artist_id"],
+                    }
+                )
+            arid = row["artist_id"]
+            if arid and arid not in seen_artists and row["artist_name"]:
+                seen_artists.add(arid)
+                candidates.append(
+                    {
+                        "id": arid,
+                        "type": "artist",
+                        "name": row["artist_name"],
+                        "album_id": None,
+                        "artist_id": None,
+                    }
+                )
+
+        logger.info(
+            "search_entity_candidates: %d rows -> %d candidates "
+            "(%d albums, %d artists)",
+            len(rows),
+            len(candidates),
+            len(seen_albums),
+            len(seen_artists),
+        )
+        return candidates
+
     # ------------------------------------------------------------------
     # Tag lookups (for re-ranking and "songs like this")
     # ------------------------------------------------------------------
