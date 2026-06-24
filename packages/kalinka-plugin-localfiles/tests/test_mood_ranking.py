@@ -204,6 +204,28 @@ class TestQueryToVa:
         assert conf > 0.9
 
     @pytest.mark.asyncio
+    async def test_nn_threshold_one_no_div_by_zero(self):
+        # nn_threshold == 1.0 with an exact-cosine match must not divide by zero.
+        config = LocalFilesConfig(db_path=_db_path())
+        config.searcher.mood.nn_threshold = 1.0
+        db = AsyncSearcherDb(config)
+        w = _make_worker(config, db)
+        q = np.zeros(512, dtype=np.float32)
+        q[1] = 1.0  # exact match to "energetic" -> top_cos == 1.0 == threshold
+        (tva, conf) = w._query_to_va("gym", encode_embedding(q))
+        assert tva == (7.0, 8.0) and conf == 1.0
+
+    @pytest.mark.asyncio
+    async def test_empty_mood_index_no_indexerror(self):
+        # A loaded-but-empty index must not IndexError on the NN path.
+        config = LocalFilesConfig(db_path=_db_path())
+        db = AsyncSearcherDb(config)
+        w = _make_worker(config, db)
+        w._mood_index = ([], np.zeros((0, 2), np.float32), np.zeros((0, 512), np.float32))
+        q = np.zeros(512, dtype=np.float32); q[0] = 1.0
+        assert w._query_to_va("anything", encode_embedding(q)) == (None, 0.0)
+
+    @pytest.mark.asyncio
     async def test_nn_below_threshold_is_non_mood(self):
         config = LocalFilesConfig(db_path=_db_path())
         config.searcher.mood.nn_threshold = 0.5
