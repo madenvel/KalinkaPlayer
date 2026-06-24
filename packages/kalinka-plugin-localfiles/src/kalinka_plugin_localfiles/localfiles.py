@@ -145,27 +145,49 @@ class LocalFilesInputModule(InputModule):
         if best_match_section is not None:
             sections.append(best_match_section)
 
-        for entity_type, fetch_fn, create_fn, name, preview_content in [
+        # Presentation (header label, subtitle, icon, layout) is owned by the
+        # backend so the UI renders sections verbatim instead of re-interpreting
+        # content. The curated track set is a CARD; the derived album/artist
+        # sets are plain TILE sections shown below it.
+        for (
+            entity_type,
+            fetch_fn,
+            create_fn,
+            name,
+            subname,
+            icon,
+            content_type,
+            preview_type,
+        ) in [
             (
                 "tracks",
                 self.db_manager.get_tracks_by_ids,
                 self._create_track_browse_item,
-                "Tracks",
+                "AI SUGGESTIONS",
+                "Curated for your search",
+                "ai_suggestions",
                 PreviewContentType.TRACK,
+                PreviewType.CARD,
             ),
             (
                 "albums",
                 self.db_manager.get_albums_by_ids,
                 self._create_album_browse_item,
-                "Albums",
+                "Related Albums",
+                None,
+                "album",
                 PreviewContentType.ALBUM,
+                PreviewType.TILE,
             ),
             (
                 "artists",
                 self.db_manager.get_artists_by_ids,
                 self._create_artist_browse_item,
-                "Artists",
+                "Related Artists",
+                None,
+                "artist",
                 PreviewContentType.ARTIST,
+                PreviewType.TILE,
             ),
         ]:
             entity_ids = ids.get(entity_type, [])
@@ -179,14 +201,16 @@ class LocalFilesInputModule(InputModule):
                 BrowseItem(
                     id=cat,
                     name=name,
+                    subname=subname,
                     can_browse=False,
                     can_add=False,
                     catalog=Catalog(
                         id=cat,
                         title=name,
                         preview_config=Preview(
-                            type=PreviewType.IMAGE_TEXT,
-                            content_type=preview_content,
+                            type=preview_type,
+                            content_type=content_type,
+                            icon=icon,
                             items_count=len(entities),
                         ),
                     ),
@@ -242,16 +266,19 @@ class LocalFilesInputModule(InputModule):
         return BrowseItem(
             id=cat,
             name="BEST MATCH",
+            subname="Top results for your search",
             can_browse=False,
             can_add=False,
             catalog=Catalog(
                 id=cat,
                 title="BEST MATCH",
-                # Mixed entity types in one ranked list: a neutral CATALOG
-                # content hint, TILE so each row shows its own icon + subname.
+                # Plain TILE section (not a card). Mixed entity types in one
+                # ranked list -> neutral CATALOG content hint; the star icon
+                # marks it as the navigational best match.
                 preview_config=Preview(
                     type=PreviewType.TILE,
                     content_type=PreviewContentType.CATALOG,
+                    icon="best_match",
                     items_count=len(rows),
                 ),
             ),
