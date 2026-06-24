@@ -538,8 +538,8 @@ class AsyncEmbedderDb:
         return row[0] if row else None
 
     async def get_tracks_needing_va(self, limit: int) -> list[tuple[str, bytes]]:
-        """Tracks with a stored CLAP audio embedding but no mood (V,A) yet,
-        as [(track_id, int8_blob)] for the backfill to map -> (V,A)."""
+        """Tracks with a CLAP audio embedding but no mood (V,A) yet, as
+        [(track_id, int8_blob)]."""
         async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT id, embedding_clap_audio FROM tracks "

@@ -482,8 +482,8 @@ class ClapOnnxModel:
     ) -> Optional[tuple[float, float]]:
         """Map a 512-d CLAP audio embedding -> (valence, arousal) in 1-9.
 
-        L2-normalizes defensively (the head trains on unit-norm vectors; the
-        baked head outputs 1-9 directly). None if the head is absent or fails.
+        L2-normalizes defensively (the head trains on unit-norm vectors). None
+        if the head is absent or inference fails.
         """
         if self._va_head_session is None or embedding is None:
             return None

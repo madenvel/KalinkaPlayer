@@ -366,6 +366,8 @@ class SearchWorker:
         if idx is None:
             return None, 0.0
         words, va, emb = idx
+        if not words:  # empty/corrupt index — no mood mapping possible
+            return None, 0.0
         mcfg = self.config.searcher.mood
 
         # 1) Keyword spotting — literal mood word(s) present in the query.
@@ -399,8 +401,10 @@ class SearchWorker:
             return None, 0.0
         tv = float((va[order, 0] * w).sum() / w.sum())
         ta = float((va[order, 1] * w).sum() / w.sum())
-        # Confidence rises from 0 at the threshold to 1 at perfect similarity.
-        conf = (top_cos - mcfg.nn_threshold) / (1.0 - mcfg.nn_threshold)
+        # Confidence rises from 0 at the threshold to 1 at perfect similarity
+        # (denominator guarded for nn_threshold == 1.0).
+        denom = 1.0 - mcfg.nn_threshold
+        conf = (top_cos - mcfg.nn_threshold) / denom if denom > 0 else 1.0
         return (tv, ta), float(min(1.0, max(0.0, conf)))
 
     # ------------------------------------------------------------------
