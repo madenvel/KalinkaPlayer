@@ -628,8 +628,7 @@ class SearchWorker:
 
         Weights are dynamically normalised based on which inputs actually
         contributed, so scores always use the full 0–1 range regardless of
-        CLAP availability. Literal/text matching is handled separately by
-        the BEST MATCH path and never enters this blend.
+        CLAP availability.
 
         ``cfg.tags.enabled`` gates the entire tag pipeline — both
         prediction (handled elsewhere) and search-time scoring. When
@@ -771,16 +770,9 @@ class SearchWorker:
     async def _do_search(self, query: str, limit: int) -> dict:
         """Handle one search request end-to-end.
 
-        Two independent legs run in parallel and are returned side by side,
-        not merged:
-
-          * BEST MATCH — literal/navigational FTS over artist/album/track
-            names (``assemble_best_match``). Surfaced as its own top section.
-          * Semantic — CLAP KNN audio neighbours, tag re-ranked. Drives the
-            AI suggestion sections (tracks/albums/artists).
-
-        FTS is no longer blended into the semantic ranking; the AI sections
-        are purely semantic.
+        Two legs run in parallel: BEST MATCH (literal/navigational FTS over
+        entity names) as its own top section, and the CLAP semantic leg driving
+        the AI suggestion sections. FTS is not blended into the semantic ranking.
         """
         cfg = self.config.searcher
         self._track_meta_cache: dict[str, dict] = {}

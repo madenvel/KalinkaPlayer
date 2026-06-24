@@ -44,9 +44,8 @@ RAPIDFUZZ_CUTOFF: float = 88.0
 # config (searcher.best_match_max_results).
 MAX_RESULTS: int = 6
 
-# Scorer applied to (query, entity.name).  WRatio is robust to word-order and
-# partial matches ("piano guys" vs "The Piano Guys").  Swap for
-# fuzz.token_set_ratio / fuzz.partial_ratio if a different behaviour is wanted.
+# Scorer applied to (query, entity.name). WRatio is robust to word-order and
+# partial matches ("piano guys" vs "The Piano Guys").
 SCORER = fuzz.WRatio
 
 
@@ -57,12 +56,8 @@ SCORER = fuzz.WRatio
 
 @dataclass
 class Entity:
-    """A library entity (artist / album / track) considered for BEST MATCH.
-
-    `score` is populated by assemble_best_match; callers may leave it at the
-    default.  Redundancy checks operate on IDs (album_id / artist_id), never on
-    name strings.
-    """
+    """A library entity (artist / album / track); ``score`` is filled in by
+    assemble_best_match."""
 
     id: str
     type: str  # "artist" | "album" | "track"
@@ -92,7 +87,7 @@ def assemble_best_match(
     BEST MATCH section.  ``cutoff`` / ``max_results`` default to the module
     constants and are overridden from config by the search pipeline.
     """
-    # Step 1 — score, discard below cutoff. Fold diacritics + case so matching
+    # Score candidates, discard below cutoff. Fold diacritics + case so matching
     # is case-insensitive and ASCII queries still match accented names.
     folded_query = fold_diacritics(query).casefold()
     survivors: list[Entity] = []
@@ -101,13 +96,13 @@ def assemble_best_match(
         if entity.score >= cutoff:
             survivors.append(entity)
 
-    # Step 2 — sort by score descending, keep the top ``max_results``.  This is
-    # "the list" the redundancy rules operate on.
+    # Sort by score, keep the top ``max_results`` — the list the redundancy
+    # rules below operate on.
     survivors.sort(key=lambda e: e.score, reverse=True)
     the_list = survivors[:max_results]
 
-    # Step 3 — remove redundancy.  Index by id+type so lookups are exact and a
-    # track and its same-named album/artist never collide.
+    # Remove redundancy. Index by id+type so a track and its same-named
+    # album/artist never collide.
     albums_by_id = {e.id: e for e in the_list if e.type == "album"}
     artists_by_id = {e.id: e for e in the_list if e.type == "artist"}
 
@@ -129,5 +124,4 @@ def assemble_best_match(
                 continue  # dominated by its artist
         final.append(e)
 
-    # Step 4 — already in score-descending order; return as-is.
     return final

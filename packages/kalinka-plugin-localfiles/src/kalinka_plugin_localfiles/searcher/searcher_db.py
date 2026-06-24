@@ -464,12 +464,15 @@ class AsyncSearcherDb:
                     """
                     SELECT t.id AS track_id, t.title AS track_title,
                            t.album_id, t.artist_id,
-                           al.title AS album_title, ar.name AS artist_name
+                           al.title AS album_title,
+                           al.artist_id AS album_artist_id,
+                           ar.name AS artist_name
                     FROM fts_tracks f
                     JOIN tracks t ON t.id = f.track_id
                     LEFT JOIN albums  al ON t.album_id  = al.id
                     LEFT JOIN artists ar ON t.artist_id = ar.id
                     WHERE fts_tracks MATCH ?
+                    ORDER BY rank
                     LIMIT ?
                     """,
                     (fts_query, limit),
@@ -505,7 +508,9 @@ class AsyncSearcherDb:
                         "type": "album",
                         "name": row["album_title"],
                         "album_id": None,
-                        "artist_id": row["artist_id"],
+                        # the album's own artist, not the track's (differ on
+                        # compilations / various-artists albums).
+                        "artist_id": row["album_artist_id"],
                     }
                 )
             arid = row["artist_id"]
