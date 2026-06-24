@@ -105,9 +105,10 @@ class TestEdgeCases:
         # in to fill the gap.
         assert _ids(result) == [("ar", "artist", 99)]
 
-    def test_tie_keeps_both(self, monkeypatch):
-        # Album and its track have equal scores; strictly-greater comparison
-        # means the track is not removed.
+    def test_tie_album_dominates_track(self, monkeypatch):
+        # Album and its track score equally (the "wall" case). The album is the
+        # container, so it absorbs the tied track (>= dominance) — only the
+        # album survives.
         candidates = [
             Entity(id="al", type="album", name="Same", artist_id="ar"),
             Entity(id="t", type="track", name="Same", album_id="al",
@@ -117,7 +118,7 @@ class TestEdgeCases:
 
         result = assemble_best_match(candidates, "q")
 
-        assert {e.id for e in result} == {"al", "t"}
+        assert {e.id for e in result} == {"al"}
 
     def test_track_with_absent_relations_not_removed(self, monkeypatch):
         # A high-scoring album/artist is present but unrelated to the track,
