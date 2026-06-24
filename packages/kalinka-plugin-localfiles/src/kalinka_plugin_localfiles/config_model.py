@@ -10,6 +10,8 @@ from kalinka_plugin_sdk.module_config import ModuleConfig
 # "expert" (the default; reachable only via about:config search).
 # Mark a field "simple" only when it's mandatory or frequently changed.
 _SIMPLE = {"importance": "simple"}
+# Advanced/tuning fields hidden behind the expert ("about:config") view.
+_EXPERT = {"importance": "expert"}
 
 
 class TagsConfig(BaseModel):
@@ -157,6 +159,7 @@ class MoodConfig(BaseModel):
                 "where conf is the query's mood-match confidence (0 for a "
                 "non-mood query, so ranking stays pure CLAP)."
             ),
+            **_EXPERT,
         },
     )
     candidates: int = Field(
@@ -167,6 +170,7 @@ class MoodConfig(BaseModel):
                 "unioned with the CLAP KNN candidates so pure-mood queries are "
                 "not limited to CLAP's (near-random) neighbours."
             ),
+            **_EXPERT,
         },
     )
     nn_fallback: bool = Field(
@@ -177,6 +181,7 @@ class MoodConfig(BaseModel):
                 "target (V,A) from the nearest mood words by CLAP-text "
                 "similarity. Disable to use only literal mood keywords."
             ),
+            **_EXPERT,
         },
     )
     nn_threshold: float = Field(
@@ -186,15 +191,18 @@ class MoodConfig(BaseModel):
                 "Below this top cosine similarity the query is treated as "
                 "non-mood and mood ranking is skipped (pure CLAP)."
             ),
+            **_EXPERT,
         },
     )
     nn_top_k: int = Field(
         default=3, ge=1, le=10, title="NN fallback neighbours",
+        json_schema_extra=_EXPERT,
     )
     backfill_batch: int = Field(
         default=256, title="Mood backfill batch size",
         json_schema_extra={
             "help": "Tracks per pass when computing (V,A) for embedded tracks.",
+            **_EXPERT,
         },
     )
 
