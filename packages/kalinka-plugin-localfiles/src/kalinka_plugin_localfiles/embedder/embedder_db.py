@@ -245,9 +245,8 @@ class AsyncEmbedderDb:
     ) -> None:
         """Mark CLAP job done and write blob to tracks + vec table.
 
-        Clears mood (V,A) whenever the embedding is (re)written so the mood
-        backfill recomputes it from the current vector — mood is a projection
-        of the embedding and must not outlive it across a re-embed.
+        Clears mood (V,A) on (re)write so the backfill recomputes it — mood is a
+        projection of the embedding and must not outlive it across a re-embed.
         """
         async with self._open() as conn:
             if self._vec_available:
@@ -539,11 +538,8 @@ class AsyncEmbedderDb:
         return row[0] if row else None
 
     async def get_tracks_needing_va(self, limit: int) -> list[tuple[str, bytes]]:
-        """Tracks with a stored CLAP audio embedding but no mood (V,A) yet.
-
-        Returns [(track_id, int8_embedding_blob)]. The mood backfill computes
-        (V,A) from these blobs without re-running the audio encoder.
-        """
+        """Tracks with a stored CLAP audio embedding but no mood (V,A) yet,
+        as [(track_id, int8_blob)] for the backfill to map -> (V,A)."""
         async with self._open() as conn:
             cursor = await conn.execute(
                 "SELECT id, embedding_clap_audio FROM tracks "

@@ -292,11 +292,10 @@ class SearchWorker:
     # ------------------------------------------------------------------
 
     def _load_mood_index(self) -> Optional[tuple]:
-        """Load (words, va, text_emb) from mood_index.npz; download if needed.
+        """Load (words, va, text_emb) from mood_index.npz, downloading if needed.
 
-        Best-effort and retried (~5 min) so a transient download failure
-        doesn't disable mood ranking for the process lifetime. Returns None
-        until available, in which case mood ranking degrades to pure CLAP.
+        Best-effort, retried every ~5 min; None until available (mood ranking
+        then degrades to pure CLAP).
         """
         if self._mood_index is not None:
             return self._mood_index
@@ -306,8 +305,7 @@ class SearchWorker:
         if not _ensure_numpy():
             return None
         try:
-            # The mood index lives with the CLAP artifacts; reuse their
-            # downloader (distinct from the tag-model _ensure_model_file here).
+            # Reuse the CLAP-artifact downloader (not the tag-model one above).
             from ..embedder.clap_onnx import _ensure_model_file as _ensure_clap
             model_dir = os.path.expanduser(self.config.embedder.model_dir)
             path = _ensure_clap("mood_index", model_dir)
@@ -781,12 +779,9 @@ class SearchWorker:
             len(knn_hits),
         )
 
-        # Navigational query: a near-exact entity-name match means the user is
-        # looking up a known artist/album/track, not discovering. The semantic
-        # (CLAP text->audio) leg is unreliable for names — its distance doesn't
-        # separate a real query from noise — so suppress the AI sections and let
-        # BEST MATCH answer. (Follow-up: replace with audio-to-audio similarity
-        # from the matched entity instead of hiding.)
+        # Navigational query (near-exact name match): the semantic leg is noise
+        # for name lookups, so suppress AI and let BEST MATCH answer.
+        # TODO: replace suppression with audio-to-audio similarity from the match.
         if (
             cfg.suppress_ai_on_navigational
             and best_match
@@ -946,10 +941,9 @@ class SearchWorker:
         )
         out = [{"id": e.id, "type": e.type, "score": e.score} for e in best]
         if out:
-            # Strict case-folded full-string ratio for the top hit: ~100 only
-            # when the query IS the whole entity name (navigational). Unlike the
-            # WRatio score above it does NOT reward substrings ("piano" vs "The
-            # Piano Guys" stays low), which is what the AI-suppression gate needs.
+            # Strict case-folded ratio: ~100 only when the query IS the whole
+            # name. Unlike WRatio it ignores substrings ("piano" vs "The Piano
+            # Guys" stays low) — what the navigational gate needs.
             out[0]["nav_score"] = fuzz.ratio(
                 fold_diacritics(parsed.raw).casefold(),
                 fold_diacritics(best[0].name).casefold(),
@@ -961,15 +955,9 @@ class SearchWorker:
     ) -> list[dict]:
         """CLAP KNN search leg — returns [{track_id, distance}].
 
-        KNN-searches the audio-side index (``vec_tracks_clap``) with the
-        precomputed query embedding ``blob``. CLAP is contrastively trained
-        text↔audio, so text query → audio embedding is the canonical retrieval
-        direction and outperforms text↔text on every semantic category in our
-        benchmark.
-
-        ``blob`` is encoded once by the caller (``_encode_query_blob``) and
-        shared with the mood NN fallback; when None (non-ASCII query, no CLAP),
-        this leg is empty and FTS handles the query.
+        KNN-searches the audio index with the precomputed query ``blob`` (CLAP's
+        text→audio is the canonical retrieval direction). ``blob`` is encoded
+        once by the caller and shared with the mood fallback; None → empty leg.
         """
         if not self.db._vec_available:
             return []

@@ -54,9 +54,8 @@ _MODEL_URLS: dict[str, str] = {
     "clap_audio_encoder": f"{_RELEASE_BASE}/clap_audio_encoder.onnx",
     "clap_text_encoder": f"{_RELEASE_BASE}/clap_text_encoder.onnx",
     "clap_tokenizer": f"{_RELEASE_BASE}/clap_tokenizer.json",
-    # Mood/VA artifacts (trained in the kalinka-training repo). The filename
-    # carries VA_HEAD_VERSION so a head update downloads as a NEW file instead of
-    # being masked by the cached same-name copy.
+    # Mood/VA artifacts (from kalinka-training). VA_HEAD_VERSION in the name
+    # makes a head update download as a new file, not the cached same-name copy.
     "va_head": f"{_RELEASE_BASE}/va_head_v{VA_HEAD_VERSION}.onnx",
     "mood_index": f"{_RELEASE_BASE}/mood_index_v{VA_HEAD_VERSION}.npz",
 }
@@ -394,9 +393,8 @@ class ClapOnnxModel:
         )
         logger.info("CLAP tokenizer loaded")
 
-        # VA (mood) head — best-effort. It's tiny and optional; if the download
-        # or load fails, mood ranking simply stays off (get_valence_arousal
-        # returns None) rather than breaking CLAP embedding.
+        # VA (mood) head — best-effort/optional; on failure mood ranking stays
+        # off (get_valence_arousal returns None) without breaking CLAP embedding.
         try:
             va_path = _ensure_model_file("va_head", self._model_dir)
             if va_path:
@@ -484,10 +482,8 @@ class ClapOnnxModel:
     ) -> Optional[tuple[float, float]]:
         """Map a 512-d CLAP audio embedding -> (valence, arousal) in 1-9.
 
-        ``embedding`` is L2-normalized defensively (the stored int8 vector
-        dequantizes to ~unit norm; the head is trained on unit-norm vectors).
-        The baked head outputs the 1-9 scale directly. Returns None if the head
-        isn't loaded or inference fails.
+        L2-normalizes defensively (the head trains on unit-norm vectors; the
+        baked head outputs 1-9 directly). None if the head is absent or fails.
         """
         if self._va_head_session is None or embedding is None:
             return None

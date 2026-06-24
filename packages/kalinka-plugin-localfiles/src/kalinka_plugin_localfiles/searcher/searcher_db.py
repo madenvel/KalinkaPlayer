@@ -127,11 +127,8 @@ class AsyncSearcherDb:
     async def knn_search_mood(
         self, valence: float, arousal: float, limit: int = 200
     ) -> list[dict]:
-        """Tracks closest to a target (valence, arousal) in the 1-9 plane.
-
-        Returns [{"track_id": str, "distance": float}] (Euclidean V-A distance)
-        sorted ascending. A full scan over the two scalar columns — cheap for
-        typical libraries and needs no separate index.
+        """Tracks closest to a target (valence, arousal), as
+        [{"track_id", "distance"}] (Euclidean) ascending. Full scan, no index.
         """
         try:
             async with self._open() as conn:
