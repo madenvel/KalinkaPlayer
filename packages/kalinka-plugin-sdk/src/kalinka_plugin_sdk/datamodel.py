@@ -172,6 +172,10 @@ class PreviewType(str, Enum):
     TILE = "tile"
     # Numbered tile layout: order number, title, and subtitle on the right
     TILE_NUMBERED = "tile_numbered"
+    # Self-contained card wrapping a vertical list of items (e.g. the AI
+    # suggestions track list): the section renders its own bordered surface
+    # with a header. Plain (non-card) sections render header + rows inline.
+    CARD = "card"
     # No preview items (section displays only an image or text)
     NONE = "none"
 
@@ -379,6 +383,9 @@ class Preview(BaseModel):
         items_count (Optional[int]): Maximum number of items to show in preview
         type (PreviewType): Layout type for the preview section
         content_type (Optional[PreviewContentType]): Hint about content type for UI styling
+        icon (Optional[str]): Semantic icon id for the section header (e.g.
+            "best_match", "ai_suggestions", "album", "artist"). The UI maps
+            this to a concrete icon; presentation is owned by the backend.
         rows_count (Optional[int]): Number of rows to display
         aspect_ratio (Optional[float]): Preferred aspect ratio for items
         card_size (Optional[CardSize]): Size preference for cards/items
@@ -389,6 +396,7 @@ class Preview(BaseModel):
     items_count: Optional[int] = None
     type: PreviewType
     content_type: Optional[PreviewContentType] = None
+    icon: Optional[str] = None
     rows_count: Optional[int] = None
     aspect_ratio: Optional[float] = None
     card_size: Optional[CardSize] = None

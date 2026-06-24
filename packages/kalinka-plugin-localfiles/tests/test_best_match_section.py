@@ -8,6 +8,7 @@ sub-sorting by entity type.
 
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.localfiles import LocalFilesInputModule
+from kalinka_plugin_sdk.datamodel import PreviewType
 
 
 class _FakeDb:
@@ -68,6 +69,10 @@ def test_flat_list_preserves_score_order_across_types(tmp_path):
     assert section is not None
     assert section.name == "BEST MATCH"
     assert section.catalog.title == "BEST MATCH"
+    # Backend-owned presentation: plain TILE section, star icon, subtitle.
+    assert section.subname == "Top results for your search"
+    assert section.catalog.preview_config.type == PreviewType.TILE
+    assert section.catalog.preview_config.icon == "best_match"
 
     rows = section.sections
     assert len(rows) == 3
