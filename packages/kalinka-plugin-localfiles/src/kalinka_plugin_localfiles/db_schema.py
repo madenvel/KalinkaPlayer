@@ -16,7 +16,7 @@ import time
 
 import aiosqlite
 
-from .embedding_utils import CLAP_EMBED_FORMAT_VERSION
+from .embedding_utils import CLAP_EMBED_FORMAT_VERSION, VA_HEAD_VERSION
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -321,6 +321,29 @@ async def init_db(db_path: str) -> None:
             if col not in track_cols:
                 await cursor.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
                 logger.info("Added tracks.%s column", col)
+
+        # VA (mood) head migration (after the columns above exist). On a head
+        # version change, clear stale mood so the embedder backfill recomputes
+        # (V,A) from existing embeddings with the new head — no manual cleanup,
+        # no re-ingestion. (A CLAP re-embed already clears mood in
+        # complete_clap_job; this covers a head-only update.)
+        await cursor.execute(
+            "SELECT version FROM embedding_model_versions WHERE model_name = 'va_head'"
+        )
+        row = await cursor.fetchone()
+        if (row[0] if row else 0) != VA_HEAD_VERSION:
+            await cursor.execute(
+                "UPDATE tracks SET mood_valence = NULL, mood_arousal = NULL "
+                "WHERE mood_valence IS NOT NULL"
+            )
+            await cursor.execute(
+                "INSERT INTO embedding_model_versions (model_name, version, updated_at) "
+                "VALUES ('va_head', ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(model_name) DO UPDATE SET "
+                "version = excluded.version, updated_at = CURRENT_TIMESTAMP",
+                (VA_HEAD_VERSION,),
+            )
+            logger.info("VA head v%d: cleared mood (V,A) for recompute", VA_HEAD_VERSION)
 
         await conn.commit()
 

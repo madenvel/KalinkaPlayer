@@ -90,9 +90,8 @@ def _ensure_numpy() -> bool:
     return True
 
 
-# Function/filler words ignored when judging a query's mood "purity" (mixed-
-# query backoff in _query_to_va). Genre/instrument nouns are deliberately NOT
-# here — they're the content signal CLAP should keep ("melancholic piano").
+# Filler words ignored when scoring a query's mood "purity" (_query_to_va).
+# Genre/instrument nouns are deliberately excluded — that's content for CLAP.
 _FILLER_WORDS = frozenset({
     "a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at",
     "by", "with", "from", "into", "my", "me", "i", "you", "your", "we", "us",
@@ -330,7 +329,7 @@ class SearchWorker:
 
         Keyword spotting first (a literal mood word -> confidence 1.0), then a
         CLAP-text nearest-neighbour fallback over the mood vocabulary. Returns
-        ((None), 0.0) for non-mood queries so ranking stays pure CLAP. No LLM.
+        (None, 0.0) for non-mood queries so ranking stays pure CLAP. No LLM.
         """
         idx = self._load_mood_index()
         if idx is None:
@@ -344,10 +343,8 @@ class SearchWorker:
         if hits:
             tv = float(np.mean([va[i][0] for i in hits]))
             ta = float(np.mean([va[i][1] for i in hits]))
-            # Confidence = mood purity: the share of meaningful (non-filler)
-            # query words that are mood words. A pure-mood query
-            # ("melancholic and sad") -> 1.0; a mixed query ("melancholic
-            # piano") backs off so the CLAP leg keeps the content signal.
+            # Confidence = mood purity (share of non-filler words that are mood
+            # words): pure mood -> 1.0; "melancholic piano" -> 0.5 (CLAP keeps piano).
             matched = {words[i] for i in hits}
             content = [t for t in tokens if len(t) >= 3 and t not in _FILLER_WORDS]
             mood_share = sum(t in matched for t in content) / len(content) \
@@ -823,10 +820,9 @@ class SearchWorker:
         all_track_ids = list(dict.fromkeys(h["track_id"] for h in knn_hits))
 
         # --- Mood (valence/arousal) leg ---
-        # Map the query to a target (V,A) and pull the closest tracks, unioned
-        # with the CLAP candidates so a pure-mood query isn't limited to CLAP's
-        # (near-random) neighbours. mood_map is a 0-1 proximity score; the blend
-        # weight scales with the query's mood confidence (0 -> pure CLAP).
+        # Union tracks closest to the query's target (V,A) with the CLAP
+        # candidates, so a pure-mood query isn't limited to CLAP's (near-random)
+        # neighbours. Blend weight scales with the query's mood confidence.
         mood_map: dict[str, float] = {}
         mood_weight = 0.0
         if cfg.mood.enabled:
