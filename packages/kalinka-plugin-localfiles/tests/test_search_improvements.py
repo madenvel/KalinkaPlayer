@@ -347,3 +347,34 @@ class TestBestMatchSeparation:
         # Toggle off -> AI returned even for the name lookup.
         config.searcher.suppress_ai_on_navigational = False
         assert (await worker._do_search("michael jackson", limit=10))["tracks"] == ["tMJ"]
+
+    @pytest.mark.asyncio
+    async def test_album_candidate_carries_album_artist_not_track(self):
+        # On a various-artists album the album candidate must carry the album's
+        # own artist, not the track's (feeds the artist-dominates-album rule).
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        config = _make_config(db_path=db_path)
+        await init_db(db_path)
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "INSERT INTO artists (id, name) VALUES "
+                "('arT', 'Track Artist'), ('arV', 'Various Artists')"
+            )
+            await conn.execute(
+                "INSERT INTO albums (id, title, artist_id) VALUES "
+                "('alC', 'Compilation Hits', 'arV')"
+            )
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, "
+                "album_id, artist_id) VALUES "
+                "('tX', 'Some Song', 'f', 'mp3', 1, 'alC', 'arT')"
+            )
+            await conn.commit()
+        await _insert_fts_rows(db_path, [
+            ("tX", "Some Song", "Track Artist", "Compilation Hits"),
+        ])
+
+        db = AsyncSearcherDb(config)
+        cands = await db.search_entity_candidates("compilation hits", 100)
+        album = next(c for c in cands if c["type"] == "album")
+        assert album["artist_id"] == "arV"  # album's artist, not the track's "arT"
