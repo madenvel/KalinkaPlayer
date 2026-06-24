@@ -39,9 +39,12 @@ import urllib.request
 from collections import defaultdict
 from typing import Optional
 
+from rapidfuzz import fuzz
+
 from ..config_model import LocalFilesConfig
 from ..embedding_utils import decode_embedding
 from ..pip_utils import ensure_package
+from ..utils.name_utils import fold_diacritics
 from ..worker_utils import set_proc_title, sleep_interruptible
 from .best_match import Entity, assemble_best_match
 from .genre_labels import label_for_index
@@ -778,6 +781,23 @@ class SearchWorker:
             len(knn_hits),
         )
 
+        # Navigational query: a near-exact entity-name match means the user is
+        # looking up a known artist/album/track, not discovering. The semantic
+        # (CLAP text->audio) leg is unreliable for names — its distance doesn't
+        # separate a real query from noise — so suppress the AI sections and let
+        # BEST MATCH answer. (Follow-up: replace with audio-to-audio similarity
+        # from the matched entity instead of hiding.)
+        if (
+            cfg.suppress_ai_on_navigational
+            and best_match
+            and best_match[0].get("nav_score", 0) >= cfg.navigational_min_score
+        ):
+            logger.info(
+                "_do_search: navigational match (nav_score=%.0f) — AI suggestions suppressed",
+                best_match[0]["nav_score"],
+            )
+            return {"tracks": [], "albums": [], "artists": [], "best_match": best_match}
+
         # Semantic tag fallback — only when the KNN leg returned nothing AND
         # the tag pipeline is active. Ranks purely by genre-tag overlap. (FTS
         # no longer participates; literal matches surface via BEST MATCH.)
@@ -924,7 +944,17 @@ class SearchWorker:
             cutoff=cfg.best_match_min_fuzz_score,
             max_results=cfg.best_match_max_results,
         )
-        return [{"id": e.id, "type": e.type} for e in best]
+        out = [{"id": e.id, "type": e.type, "score": e.score} for e in best]
+        if out:
+            # Strict case-folded full-string ratio for the top hit: ~100 only
+            # when the query IS the whole entity name (navigational). Unlike the
+            # WRatio score above it does NOT reward substrings ("piano" vs "The
+            # Piano Guys" stays low), which is what the AI-suppression gate needs.
+            out[0]["nav_score"] = fuzz.ratio(
+                fold_diacritics(parsed.raw).casefold(),
+                fold_diacritics(best[0].name).casefold(),
+            )
+        return out
 
     async def _knn_leg(
         self, query: str, candidate_limit: int, blob: Optional[bytes] = None

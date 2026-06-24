@@ -37,10 +37,12 @@ from ..utils.name_utils import fold_diacritics
 
 # Inclusion threshold (rapidfuzz score, 0-100).  These surface as "BEST MATCH"
 # at the very top, so err higher rather than lower: a weak match shown as the
-# best result is worse than showing nothing.  Start ~70 and tune.  The runtime
-# pipeline overrides this from config (searcher.best_match_min_fuzz_score);
-# this is the in-code default and the value the unit tests pin to.
-RAPIDFUZZ_CUTOFF: float = 70.0
+# best result is worse than showing nothing.  88 because the scorer is now
+# case-insensitive (casefold below): real matches land >=90 (incl. a short word
+# inside a longer title, "wall" -> "The Wall" = 90), while a query that merely
+# shares one common word with a title caps at ~85 — so 88 drops those single-
+# token coincidences. Overridden at runtime by searcher.best_match_min_fuzz_score.
+RAPIDFUZZ_CUTOFF: float = 88.0
 
 # Maximum number of entities in the BEST MATCH block.  Overridden at runtime by
 # config (searcher.best_match_max_results).
@@ -95,12 +97,13 @@ def assemble_best_match(
     constants and are overridden from config by the search pipeline.
     """
     # Step 1 — score every candidate; discard below the cutoff.  Both sides are
-    # diacritic-folded so an ASCII query ("noi kabat") still matches accented
-    # names ("Női Kabát") — consistent with the FTS re-rank elsewhere.
-    folded_query = fold_diacritics(query)
+    # diacritic-folded AND case-folded, so matching is case-insensitive ("wall"
+    # == "Wall" == "The Wall") and an ASCII query ("noi kabat") still matches
+    # accented names ("Női Kabát").
+    folded_query = fold_diacritics(query).casefold()
     survivors: list[Entity] = []
     for entity in candidates:
-        entity.score = SCORER(folded_query, fold_diacritics(entity.name))
+        entity.score = SCORER(folded_query, fold_diacritics(entity.name).casefold())
         if entity.score >= cutoff:
             survivors.append(entity)
 

@@ -295,11 +295,46 @@ class TestBestMatchSeparation:
 
         worker._knn_leg = fake_knn
 
+        # Lowercase query still matches "Vangelis" (case-insensitive scorer).
         result = await worker._do_search("vangelis", limit=10)
 
-        # BEST MATCH leads with the exact artist hit; the album collapses
-        # into it (artist dominates) and the unrelated track is cut off.
-        assert result["best_match"][0] == {"id": "arV", "type": "artist"}
-        # The semantic section is CLAP-only — no FTS bleed-through.
-        assert result["tracks"] == ["tMJ"]
-        assert "tV" not in result["tracks"]
+        # BEST MATCH leads with the exact artist hit.
+        assert result["best_match"][0]["id"] == "arV"
+        assert result["best_match"][0]["type"] == "artist"
+        # "vangelis" is navigational (near-exact artist name), so the AI
+        # suggestion sections are suppressed — BEST MATCH answers it.
+        assert result["tracks"] == []
+
+    @pytest.mark.asyncio
+    async def test_navigational_suppression_toggle_and_partial(self):
+        """Navigational suppression fires on a near-exact name, is gated by the
+        config toggle, and does NOT fire on a partial name match."""
+        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
+        config = _make_config(db_path=db_path)
+        await init_db(db_path)
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute(
+                "INSERT INTO artists (id, name) VALUES ('arMJ', 'Michael Jackson')"
+            )
+            await conn.execute(
+                "INSERT INTO tracks (id, title, file_path, format, enriched, "
+                "artist_id) VALUES ('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'arMJ')"
+            )
+            await conn.commit()
+        await _insert_fts_rows(db_path, [("tMJ", "Ben", "Michael Jackson", "")])
+
+        db = AsyncSearcherDb(config)
+        worker = SearchWorker(config, db)
+
+        async def fake_knn(query, candidate_limit, blob=None):
+            return [{"track_id": "tMJ", "distance": 0.0}]
+        worker._knn_leg = fake_knn
+
+        # Exact (case-insensitive) artist name -> navigational -> AI suppressed.
+        assert (await worker._do_search("michael jackson", limit=10))["tracks"] == []
+        # Toggle off -> AI suggestions returned even for the exact name.
+        config.searcher.suppress_ai_on_navigational = False
+        assert (await worker._do_search("michael jackson", limit=10))["tracks"] == ["tMJ"]
+        # Partial name ("michael") is not navigational -> AI kept.
+        config.searcher.suppress_ai_on_navigational = True
+        assert (await worker._do_search("michael", limit=10))["tracks"] == ["tMJ"]

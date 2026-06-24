@@ -129,7 +129,9 @@ class TestEdgeCases:
             Entity(id="t-no-rel", type="track", name="No Relations",
                    album_id=None, artist_id=None),
         ]
-        monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([95, 80, 75]))
+        # Scores all clear the cutoff; the point is the redundancy logic, not
+        # the threshold.
+        monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([95, 92, 90]))
 
         result = assemble_best_match(candidates, "q")
 
