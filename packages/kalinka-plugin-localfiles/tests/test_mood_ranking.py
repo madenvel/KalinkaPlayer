@@ -49,6 +49,44 @@ def _make_worker(config, db):
     return w
 
 
+class TestHeadVersionMigration:
+    @pytest.mark.asyncio
+    async def test_version_bump_clears_stale_mood_on_startup(self):
+        from kalinka_plugin_localfiles.embedding_utils import VA_HEAD_VERSION
+
+        db_path = _db_path()
+        await init_db(db_path)  # records va_head = current version
+        async with aiosqlite.connect(db_path) as conn:
+            await _insert_track(conn, "t0", 5.0, 5.0)  # has (stale) mood
+            # Simulate a DB built by a prior head (no/old version recorded).
+            await conn.execute(
+                "DELETE FROM embedding_model_versions WHERE model_name='va_head'"
+            )
+            await conn.commit()
+
+        await init_db(db_path)  # startup migration should detect + clear
+
+        async with aiosqlite.connect(db_path) as conn:
+            cur = await conn.execute("SELECT mood_valence FROM tracks WHERE id='t0'")
+            assert (await cur.fetchone())[0] is None  # cleared for recompute
+            cur = await conn.execute(
+                "SELECT version FROM embedding_model_versions WHERE model_name='va_head'"
+            )
+            assert (await cur.fetchone())[0] == VA_HEAD_VERSION
+
+    @pytest.mark.asyncio
+    async def test_same_version_keeps_mood_idempotent(self):
+        db_path = _db_path()
+        await init_db(db_path)
+        async with aiosqlite.connect(db_path) as conn:
+            await _insert_track(conn, "t0", 5.0, 6.0)
+            await conn.commit()
+        await init_db(db_path)  # version unchanged -> must NOT clear
+        async with aiosqlite.connect(db_path) as conn:
+            cur = await conn.execute("SELECT mood_valence FROM tracks WHERE id='t0'")
+            assert (await cur.fetchone())[0] == 5.0
+
+
 class TestSchemaMigration:
     @pytest.mark.asyncio
     async def test_alter_adds_mood_columns_to_existing_db(self):

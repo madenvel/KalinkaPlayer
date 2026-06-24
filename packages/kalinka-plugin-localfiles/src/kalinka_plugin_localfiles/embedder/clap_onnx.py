@@ -36,6 +36,8 @@ from typing import Optional
 
 import numpy as np
 
+from ..embedding_utils import VA_HEAD_VERSION
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 # ---------------------------------------------------------------------------
@@ -52,19 +54,19 @@ _MODEL_URLS: dict[str, str] = {
     "clap_audio_encoder": f"{_RELEASE_BASE}/clap_audio_encoder.onnx",
     "clap_text_encoder": f"{_RELEASE_BASE}/clap_text_encoder.onnx",
     "clap_tokenizer": f"{_RELEASE_BASE}/clap_tokenizer.json",
-    # Mood/VA artifacts. Tiny (~0.3 MB / ~0.1 MB). va_head maps a CLAP audio
-    # embedding -> (valence, arousal); mood_index maps a text query -> a target
-    # (V,A) for mood ranking. Trained in the kalinka-training repo.
-    "va_head": f"{_RELEASE_BASE}/va_head.onnx",
-    "mood_index": f"{_RELEASE_BASE}/mood_index.npz",
+    # Mood/VA artifacts (trained in the kalinka-training repo). The filename
+    # carries VA_HEAD_VERSION so a head update downloads as a NEW file instead of
+    # being masked by the cached same-name copy.
+    "va_head": f"{_RELEASE_BASE}/va_head_v{VA_HEAD_VERSION}.onnx",
+    "mood_index": f"{_RELEASE_BASE}/mood_index_v{VA_HEAD_VERSION}.npz",
 }
 
 _MODEL_FILENAMES: dict[str, str] = {
     "clap_audio_encoder": "clap_audio_encoder.onnx",
     "clap_text_encoder": "clap_text_encoder.onnx",
     "clap_tokenizer": "clap_tokenizer.json",
-    "va_head": "va_head.onnx",
-    "mood_index": "mood_index.npz",
+    "va_head": f"va_head_v{VA_HEAD_VERSION}.onnx",
+    "mood_index": f"mood_index_v{VA_HEAD_VERSION}.npz",
 }
 
 # Audio constants matching laion_clap (non-fusion, HTSAT-base)

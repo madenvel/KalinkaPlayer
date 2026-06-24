@@ -20,6 +20,12 @@ CLAP_INT8_SCALE = 127.0 / CLAP_INT8_CAP
 # embedder recomputes them. 0/unset = legacy float32; 2 = int8 symmetric.
 CLAP_EMBED_FORMAT_VERSION = 2
 
+# Mood (valence/arousal) head version. Drives the versioned artifact names
+# (va_head_v{N}.onnx / mood_index_v{N}.npz) and a startup migration: on a change,
+# init_db clears tracks.mood_valence/arousal so the embedder recomputes (V,A)
+# with the new head. Bump when shipping a new head/index.
+VA_HEAD_VERSION = 1
+
 
 def encode_embedding(vector) -> bytes:
     """Quantize a (normalised) float embedding to int8 bytes for storage."""
