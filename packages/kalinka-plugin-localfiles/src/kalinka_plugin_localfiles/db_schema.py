@@ -310,10 +310,8 @@ async def init_db(db_path: str) -> None:
         )
 
         # ---------------------------------------------------------------
-        # Column migrations for existing DBs (CREATE TABLE IF NOT EXISTS
-        # never adds columns to a pre-existing table). Idempotent: add the
-        # mood (V,A) columns only when absent. Runs in the same single-writer
-        # startup transaction, so no ALTER race across subprocesses.
+        # Column migrations for existing DBs (CREATE TABLE IF NOT EXISTS won't
+        # add columns). Idempotent; runs in the single-writer startup txn.
         # ---------------------------------------------------------------
         await cursor.execute("PRAGMA table_info(tracks)")
         track_cols = {row[1] for row in await cursor.fetchall()}
@@ -323,10 +321,8 @@ async def init_db(db_path: str) -> None:
                 logger.info("Added tracks.%s column", col)
 
         # VA (mood) head migration (after the columns above exist). On a head
-        # version change, clear stale mood so the embedder backfill recomputes
-        # (V,A) from existing embeddings with the new head — no manual cleanup,
-        # no re-ingestion. (A CLAP re-embed already clears mood in
-        # complete_clap_job; this covers a head-only update.)
+        # version change, clear stale mood so the backfill recomputes it with the
+        # new head — no manual cleanup. (A re-embed clears mood separately.)
         await cursor.execute(
             "SELECT version FROM embedding_model_versions WHERE model_name = 'va_head'"
         )

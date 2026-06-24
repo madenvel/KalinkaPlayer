@@ -149,11 +149,10 @@ class EmbeddingWorker:
             return None
 
     def _compute_va(self, blob: bytes) -> Optional[tuple[float, float]]:
-        """Map a STORED int8 CLAP audio embedding -> (valence, arousal) in 1-9.
+        """Map a STORED int8 CLAP embedding -> (valence, arousal) in 1-9.
 
-        We compute mood from the stored int8 vector (decode -> head), not by
-        re-running the audio encoder, so existing tracks backfill cheaply. int8
-        dequant is effectively lossless for the head (cosine > 0.9999).
+        From the stored vector (decode -> head), not by re-running the encoder,
+        so backfill is cheap; int8 dequant is ~lossless for the head.
         """
         if not self._clap_available or not self._clap.has_va_head:
             return None
@@ -242,14 +241,12 @@ class EmbeddingWorker:
         return True
 
     async def _process_va_backfill(self) -> bool:
-        """Fill mood (valence, arousal) for embedded tracks that lack it.
+        """Fill mood (V,A) for embedded tracks that lack it, from the stored int8
+        blob (no audio re-embedding; covers new and pre-existing tracks).
 
-        Reads tracks with a stored CLAP audio embedding but no mood yet,
-        computes (V,A) from the int8 blob, and writes it back. Covers both
-        freshly-embedded and pre-existing tracks with no audio re-embedding.
-        Returns True only if it made progress (wrote at least one row), so the
-        caller's drain loop terminates even if a batch is all-failures rather
-        than re-selecting the same NULL rows forever.
+        Returns True only on progress (>=1 row written) so the caller's drain
+        loop terminates even if a whole batch fails, instead of re-selecting the
+        same NULL rows forever.
         """
         if not self._clap_available or not self._clap.has_va_head:
             return False
@@ -553,9 +550,8 @@ class EmbeddingWorker:
                         )
                         break
 
-            # Backfill mood (V,A) for embedded tracks that lack it. Cheap
-            # (one tiny matmul per track from the stored int8 vector); gated by
-            # the mood switch and the head being available.
+            # Backfill mood (V,A) for embedded tracks that lack it — cheap (one
+            # tiny matmul per track from the stored vector).
             if self.config.searcher.mood.enabled and cfg.clap.current_version > 0:
                 if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
                     self._load_clap_model()

@@ -140,12 +140,9 @@ class AiSearchConfig(BaseModel):
 class MoodConfig(BaseModel):
     """Mood (valence/arousal) ranking.
 
-    Blends a learned valence-arousal axis into AI search so mood queries
-    ("something melancholic for tonight") rank by emotional proximity rather
-    than CLAP acoustic similarity alone — the axis CLAP is weakest on. The VA
-    head and mood index auto-download alongside the CLAP models; per-track
-    (V,A) is computed from the stored embedding by the embedder. On by default;
-    if the artifacts are unavailable it degrades silently to pure CLAP ranking.
+    Blends a learned V-A axis into AI search so mood queries rank by emotional
+    proximity (the axis CLAP is weakest on). Artifacts auto-download with the
+    CLAP models; on by default, degrades silently to pure CLAP if unavailable.
     """
 
     enabled: bool = Field(

@@ -35,13 +35,9 @@ from ..utils.name_utils import fold_diacritics
 # Tunable constants
 # ---------------------------------------------------------------------------
 
-# Inclusion threshold (rapidfuzz score, 0-100).  These surface as "BEST MATCH"
-# at the very top, so err higher rather than lower: a weak match shown as the
-# best result is worse than showing nothing.  88 because the scorer is now
-# case-insensitive (casefold below): real matches land >=90 (incl. a short word
-# inside a longer title, "wall" -> "The Wall" = 90), while a query that merely
-# shares one common word with a title caps at ~85 — so 88 drops those single-
-# token coincidences. Overridden at runtime by searcher.best_match_min_fuzz_score.
+# Inclusion threshold (rapidfuzz 0-100); a weak top "BEST MATCH" is worse than
+# none. 88: the case-folded scorer lands real matches >=90 but a query sharing
+# one word with a title ~85. Overridden by searcher.best_match_min_fuzz_score.
 RAPIDFUZZ_CUTOFF: float = 88.0
 
 # Maximum number of entities in the BEST MATCH block.  Overridden at runtime by
@@ -96,10 +92,8 @@ def assemble_best_match(
     BEST MATCH section.  ``cutoff`` / ``max_results`` default to the module
     constants and are overridden from config by the search pipeline.
     """
-    # Step 1 — score every candidate; discard below the cutoff.  Both sides are
-    # diacritic-folded AND case-folded, so matching is case-insensitive ("wall"
-    # == "Wall" == "The Wall") and an ASCII query ("noi kabat") still matches
-    # accented names ("Női Kabát").
+    # Step 1 — score, discard below cutoff. Fold diacritics + case so matching
+    # is case-insensitive and ASCII queries still match accented names.
     folded_query = fold_diacritics(query).casefold()
     survivors: list[Entity] = []
     for entity in candidates:
@@ -117,9 +111,7 @@ def assemble_best_match(
     albums_by_id = {e.id: e for e in the_list if e.type == "album"}
     artists_by_id = {e.id: e for e in the_list if e.type == "artist"}
 
-    # Rule 1: album dominates its tracks (>=, so it also absorbs a track tied
-    # with it — e.g. query "wall" matches both "The Wall" and its track
-    # "Outside the Wall" at 90; the album already represents the track).
+    # Rule 1: album dominates its tracks (>= absorbs a tied track too).
     after_rule1: list[Entity] = []
     for e in the_list:
         if e.type == "track" and e.album_id is not None:
@@ -128,7 +120,7 @@ def assemble_best_match(
                 continue  # dominated by its album
         after_rule1.append(e)
 
-    # Rule 2: artist dominates its tracks/albums (>=; ties go to the container).
+    # Rule 2: artist dominates its tracks/albums (>=).
     final: list[Entity] = []
     for e in after_rule1:
         if e.type in ("track", "album") and e.artist_id is not None:
