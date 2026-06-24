@@ -39,12 +39,9 @@ import urllib.request
 from collections import defaultdict
 from typing import Optional
 
-from rapidfuzz import fuzz
-
 from ..config_model import LocalFilesConfig
 from ..embedding_utils import decode_embedding
 from ..pip_utils import ensure_package
-from ..utils.name_utils import fold_diacritics
 from ..worker_utils import set_proc_title, sleep_interruptible
 from .best_match import Entity, assemble_best_match
 from .genre_labels import label_for_index
@@ -105,6 +102,39 @@ _FILLER_WORDS = frozenset({
     "am", "are", "is", "be", "now", "tonight", "today", "day", "night", "time",
     "really", "very", "more", "bit", "little", "kinda", "sorta", "stuff",
 })
+
+# Descriptor vocabulary (instruments + genres + moods). A query token in here is
+# a description, not a name — so even when it matches an entity name ("piano" ->
+# "The Piano Guys", "jazz" -> Queen's "Jazz") it's a discovery query and the AI
+# suggestions are kept. Single tokens only; matched per-word against the query.
+_DESCRIPTOR_WORDS = frozenset({
+    # instruments
+    "piano", "guitar", "guitars", "violin", "cello", "drums", "drum", "bass",
+    "percussion", "saxophone", "sax", "synthesizer", "synth", "synths", "flute",
+    "trumpet", "organ", "harp", "harmonica", "accordion", "banjo", "ukulele",
+    "clarinet", "vocals", "vocal", "choir", "strings", "brass", "keyboard",
+    "acoustic", "instrumental", "orchestra",
+    # genres
+    "rock", "jazz", "electronic", "electronica", "ambient", "classical", "rap",
+    "hop", "pop", "metal", "folk", "blues", "techno", "house", "funk", "soul",
+    "reggae", "country", "punk", "disco", "edm", "dubstep", "trance", "indie",
+    "gospel", "latin", "orchestral", "soundtrack", "lofi", "grunge", "opera",
+    "synthwave", "ska", "swing", "bluegrass",
+    # moods (mirrors the mood vocabulary)
+    "happy", "upbeat", "energetic", "joyful", "euphoric", "triumphant", "epic",
+    "playful", "exciting", "uplifting", "calm", "peaceful", "serene", "chill",
+    "relaxed", "relaxing", "soothing", "mellow", "dreamy", "romantic", "tender",
+    "warm", "hopeful", "ethereal", "aggressive", "angry", "tense", "anxious",
+    "frantic", "menacing", "dark", "eerie", "chaotic", "intense", "sad",
+    "melancholic", "somber", "gloomy", "depressing", "mournful", "lonely",
+    "bleak", "nostalgic", "wistful", "bittersweet", "mysterious",
+})
+
+
+def _is_descriptive(query: str) -> bool:
+    """True if any query word is a mood/genre/instrument descriptor — i.e. a
+    discovery query, not a name lookup."""
+    return bool(set(re.findall(r"[a-z]+", query.lower())) & _DESCRIPTOR_WORDS)
 
 
 # ---------------------------------------------------------------------------
@@ -779,18 +809,17 @@ class SearchWorker:
             len(knn_hits),
         )
 
-        # Navigational query (near-exact name match): the semantic leg is noise
-        # for name lookups, so suppress AI and let BEST MATCH answer.
-        # TODO: replace suppression with audio-to-audio similarity from the match.
+        # Navigational query: a strong name match where the query is NOT a
+        # descriptor (mood/genre/instrument) is a lookup, not discovery. The
+        # semantic leg is noise for names, so suppress AI and let BEST MATCH
+        # answer. Descriptors ("piano", "jazz") are kept even when they match an
+        # entity name. TODO: replace suppression with audio-to-audio similarity.
         if (
             cfg.suppress_ai_on_navigational
             and best_match
-            and best_match[0].get("nav_score", 0) >= cfg.navigational_min_score
+            and not _is_descriptive(query)
         ):
-            logger.info(
-                "_do_search: navigational match (nav_score=%.0f) — AI suggestions suppressed",
-                best_match[0]["nav_score"],
-            )
+            logger.info("_do_search: navigational query — AI suggestions suppressed")
             return {"tracks": [], "albums": [], "artists": [], "best_match": best_match}
 
         # Semantic tag fallback — only when the KNN leg returned nothing AND
@@ -939,16 +968,7 @@ class SearchWorker:
             cutoff=cfg.best_match_min_fuzz_score,
             max_results=cfg.best_match_max_results,
         )
-        out = [{"id": e.id, "type": e.type, "score": e.score} for e in best]
-        if out:
-            # Strict case-folded ratio: ~100 only when the query IS the whole
-            # name. Unlike WRatio it ignores substrings ("piano" vs "The Piano
-            # Guys" stays low) — what the navigational gate needs.
-            out[0]["nav_score"] = fuzz.ratio(
-                fold_diacritics(parsed.raw).casefold(),
-                fold_diacritics(best[0].name).casefold(),
-            )
-        return out
+        return [{"id": e.id, "type": e.type} for e in best]
 
     async def _knn_leg(
         self, query: str, candidate_limit: int, blob: Optional[bytes] = None

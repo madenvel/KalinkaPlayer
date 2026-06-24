@@ -306,9 +306,9 @@ class TestBestMatchSeparation:
         assert result["tracks"] == []
 
     @pytest.mark.asyncio
-    async def test_navigational_suppression_toggle_and_partial(self):
-        """Navigational suppression fires on a near-exact name, is gated by the
-        config toggle, and does NOT fire on a partial name match."""
+    async def test_navigational_suppression_is_descriptor_aware(self):
+        """A name match suppresses AI; a descriptor query (even when it matches
+        an entity name) keeps it; the config toggle gates the whole thing."""
         db_path = os.path.join(tempfile.mkdtemp(), "test.db")
         config = _make_config(db_path=db_path)
         await init_db(db_path)
@@ -317,11 +317,20 @@ class TestBestMatchSeparation:
                 "INSERT INTO artists (id, name) VALUES ('arMJ', 'Michael Jackson')"
             )
             await conn.execute(
+                "INSERT INTO albums (id, title, artist_id) VALUES "
+                "('alP', 'Piano Collection', 'arMJ')"
+            )
+            await conn.execute(
                 "INSERT INTO tracks (id, title, file_path, format, enriched, "
-                "artist_id) VALUES ('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'arMJ')"
+                "artist_id, album_id) VALUES "
+                "('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'arMJ', NULL), "
+                "('tP', 'Etude', 'fP', 'mp3', 1, 'arMJ', 'alP')"
             )
             await conn.commit()
-        await _insert_fts_rows(db_path, [("tMJ", "Ben", "Michael Jackson", "")])
+        await _insert_fts_rows(db_path, [
+            ("tMJ", "Ben", "Michael Jackson", ""),
+            ("tP", "Etude", "Michael Jackson", "Piano Collection"),
+        ])
 
         db = AsyncSearcherDb(config)
         worker = SearchWorker(config, db)
@@ -330,11 +339,11 @@ class TestBestMatchSeparation:
             return [{"track_id": "tMJ", "distance": 0.0}]
         worker._knn_leg = fake_knn
 
-        # Exact (case-insensitive) artist name -> navigational -> AI suppressed.
+        # Name lookup (not a descriptor) -> AI suppressed.
         assert (await worker._do_search("michael jackson", limit=10))["tracks"] == []
-        # Toggle off -> AI suggestions returned even for the exact name.
+        # Descriptor query that also matches the "Piano Collection" album name ->
+        # kept (the whole point: 'piano' is discovery, not a name lookup).
+        assert (await worker._do_search("piano", limit=10))["tracks"] == ["tMJ"]
+        # Toggle off -> AI returned even for the name lookup.
         config.searcher.suppress_ai_on_navigational = False
         assert (await worker._do_search("michael jackson", limit=10))["tracks"] == ["tMJ"]
-        # Partial name ("michael") is not navigational -> AI kept.
-        config.searcher.suppress_ai_on_navigational = True
-        assert (await worker._do_search("michael", limit=10))["tracks"] == ["tMJ"]
