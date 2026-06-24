@@ -266,12 +266,14 @@ class SearcherConfig(BaseModel):
     # defaults err on the strict side. A weak match shown as the "best"
     # result is worse than showing nothing.
     best_match_min_fuzz_score: int = Field(
-        default=70, ge=0, le=100,
+        default=88, ge=0, le=100,
         title="BEST MATCH minimum rapidfuzz score (0–100)",
         json_schema_extra={
             "help": (
-                "Inclusion threshold for the top BEST MATCH block. Higher = "
-                "fewer, more confident literal matches. Mirrors RAPIDFUZZ_CUTOFF."
+                "Inclusion threshold for the top BEST MATCH block (case-"
+                "insensitive). Higher = fewer, more confident literal matches. "
+                "88 drops queries that merely share one word with a title "
+                "(~85) while keeping real matches (>=90). Mirrors RAPIDFUZZ_CUTOFF."
             ),
         },
     )
@@ -283,6 +285,33 @@ class SearcherConfig(BaseModel):
                 "Maximum entities in the BEST MATCH block (before "
                 "album/artist redundancy removal). Mirrors MAX_RESULTS."
             ),
+        },
+    )
+    suppress_ai_on_navigational: bool = Field(
+        default=True, title="Suppress AI suggestions for name matches",
+        json_schema_extra={
+            "help": (
+                "When a query near-exactly matches an artist/album/track name "
+                "(a navigational lookup), hide the semantic AI suggestions and "
+                "let BEST MATCH answer. CLAP text->audio distance is not a "
+                "reliable relevance signal for names, so the suggestions are "
+                "noise; the literal-match score is the reliable gate."
+            ),
+            **_EXPERT,
+        },
+    )
+    navigational_min_score: int = Field(
+        default=88, ge=0, le=100,
+        title="Navigational match score",
+        json_schema_extra={
+            "help": (
+                "Case-folded full-string similarity (0-100) between the query "
+                "and the top matched entity name, at or above which the query "
+                "counts as navigational and AI suggestions are suppressed. "
+                "Exact names score ~100; partial matches (e.g. 'piano' vs 'The "
+                "Piano Guys') stay well below, so ~88 separates them cleanly."
+            ),
+            **_EXPERT,
         },
     )
 
