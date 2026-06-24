@@ -52,12 +52,19 @@ _MODEL_URLS: dict[str, str] = {
     "clap_audio_encoder": f"{_RELEASE_BASE}/clap_audio_encoder.onnx",
     "clap_text_encoder": f"{_RELEASE_BASE}/clap_text_encoder.onnx",
     "clap_tokenizer": f"{_RELEASE_BASE}/clap_tokenizer.json",
+    # Mood/VA artifacts. Tiny (~0.3 MB / ~0.1 MB). va_head maps a CLAP audio
+    # embedding -> (valence, arousal); mood_index maps a text query -> a target
+    # (V,A) for mood ranking. Trained in the kalinka-training repo.
+    "va_head": f"{_RELEASE_BASE}/va_head.onnx",
+    "mood_index": f"{_RELEASE_BASE}/mood_index.npz",
 }
 
 _MODEL_FILENAMES: dict[str, str] = {
     "clap_audio_encoder": "clap_audio_encoder.onnx",
     "clap_text_encoder": "clap_text_encoder.onnx",
     "clap_tokenizer": "clap_tokenizer.json",
+    "va_head": "va_head.onnx",
+    "mood_index": "mood_index.npz",
 }
 
 # Audio constants matching laion_clap (non-fusion, HTSAT-base)
@@ -327,10 +334,15 @@ class ClapOnnxModel:
         self._audio_session = None
         self._text_session = None
         self._tokenizer = None
+        self._va_head_session = None
 
     @property
     def is_loaded(self) -> bool:
         return self._audio_session is not None
+
+    @property
+    def has_va_head(self) -> bool:
+        return self._va_head_session is not None
 
     def load(self) -> None:
         """Download (if needed) and create ONNX inference sessions."""
@@ -380,11 +392,26 @@ class ClapOnnxModel:
         )
         logger.info("CLAP tokenizer loaded")
 
+        # VA (mood) head — best-effort. It's tiny and optional; if the download
+        # or load fails, mood ranking simply stays off (get_valence_arousal
+        # returns None) rather than breaking CLAP embedding.
+        try:
+            va_path = _ensure_model_file("va_head", self._model_dir)
+            if va_path:
+                self._va_head_session = ort.InferenceSession(
+                    va_path, sess_options=sess_opts, providers=providers
+                )
+                logger.info("VA (mood) head ONNX session loaded")
+        except Exception as e:
+            logger.warning("VA head load failed (mood ranking disabled): %s", e)
+            self._va_head_session = None
+
     def unload(self) -> None:
         """Release ONNX sessions and tokenizer."""
         self._audio_session = None
         self._text_session = None
         self._tokenizer = None
+        self._va_head_session = None
 
     def get_audio_embedding(self, file_path: str) -> Optional[np.ndarray]:
         """Compute 512-dim audio embedding. Returns None on failure.
@@ -448,4 +475,29 @@ class ClapOnnxModel:
             return result[0][0].astype(np.float32)
         except Exception as e:
             logger.warning("ONNX text inference failed: %s", e)
+            return None
+
+    def get_valence_arousal(
+        self, embedding: np.ndarray
+    ) -> Optional[tuple[float, float]]:
+        """Map a 512-d CLAP audio embedding -> (valence, arousal) in 1-9.
+
+        ``embedding`` is L2-normalized defensively (the stored int8 vector
+        dequantizes to ~unit norm; the head is trained on unit-norm vectors).
+        The baked head outputs the 1-9 scale directly. Returns None if the head
+        isn't loaded or inference fails.
+        """
+        if self._va_head_session is None or embedding is None:
+            return None
+        try:
+            x = np.asarray(embedding, dtype=np.float32).reshape(-1)
+            norm = np.linalg.norm(x)
+            if norm > 0:
+                x = x / norm
+            out = self._va_head_session.run(
+                None, {"embedding": x[np.newaxis, :]}
+            )[0][0]
+            return (float(out[0]), float(out[1]))
+        except Exception as e:
+            logger.warning("VA head inference failed: %s", e)
             return None

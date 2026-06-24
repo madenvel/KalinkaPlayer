@@ -28,9 +28,11 @@ import gc
 import json
 import logging
 import logging.handlers
+import math
 import multiprocessing
 import os
 import queue
+import re
 import signal
 import time
 import urllib.request
@@ -38,6 +40,7 @@ from collections import defaultdict
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
+from ..embedding_utils import decode_embedding
 from ..pip_utils import ensure_package
 from ..worker_utils import set_proc_title, sleep_interruptible
 from .best_match import Entity, assemble_best_match
@@ -162,6 +165,9 @@ class SearchWorker:
         # IPC queues for CLAP text encoding (served by the embedder process)
         self._text_encode_request_queue = text_encode_request_queue
         self._text_encode_response_queue = text_encode_response_queue
+        # Mood index (words, va[M,2], text_emb[M,512]); lazy-loaded, retried.
+        self._mood_index: Optional[tuple] = None
+        self._mood_load_attempted_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Model loading / unloading
@@ -263,6 +269,88 @@ class SearchWorker:
         except Exception as e:
             logger.warning("CLAP text encoding IPC failed: %s", e)
             return None
+
+    # ------------------------------------------------------------------
+    # Mood (valence/arousal) query mapping
+    # ------------------------------------------------------------------
+
+    def _load_mood_index(self) -> Optional[tuple]:
+        """Load (words, va, text_emb) from mood_index.npz; download if needed.
+
+        Best-effort and retried (~5 min) so a transient download failure
+        doesn't disable mood ranking for the process lifetime. Returns None
+        until available, in which case mood ranking degrades to pure CLAP.
+        """
+        if self._mood_index is not None:
+            return self._mood_index
+        if time.monotonic() - self._mood_load_attempted_at < 300:
+            return None
+        self._mood_load_attempted_at = time.monotonic()
+        if not _ensure_numpy():
+            return None
+        try:
+            # The mood index lives with the CLAP artifacts; reuse their
+            # downloader (distinct from the tag-model _ensure_model_file here).
+            from ..embedder.clap_onnx import _ensure_model_file as _ensure_clap
+            model_dir = os.path.expanduser(self.config.embedder.model_dir)
+            path = _ensure_clap("mood_index", model_dir)
+            if not path:
+                return None
+            d = np.load(path, allow_pickle=True)
+            self._mood_index = (
+                [str(w) for w in d["words"]],
+                d["va"].astype(np.float32),
+                d["text_emb"].astype(np.float32),
+            )
+            logger.info("Mood index loaded (%d words)", len(self._mood_index[0]))
+        except Exception as e:
+            logger.warning("Mood index load failed (mood ranking off): %s", e)
+            self._mood_index = None
+        return self._mood_index
+
+    def _query_to_va(
+        self, query: str, query_blob: Optional[bytes]
+    ) -> tuple[Optional[tuple[float, float]], float]:
+        """Map a query to a target (valence, arousal) + confidence in [0,1].
+
+        Keyword spotting first (a literal mood word -> confidence 1.0), then a
+        CLAP-text nearest-neighbour fallback over the mood vocabulary. Returns
+        ((None), 0.0) for non-mood queries so ranking stays pure CLAP. No LLM.
+        """
+        idx = self._load_mood_index()
+        if idx is None:
+            return None, 0.0
+        words, va, emb = idx
+        mcfg = self.config.searcher.mood
+
+        # 1) Keyword spotting — literal mood word(s) present in the query.
+        tokens = set(re.findall(r"[a-z]+", query.lower()))
+        hits = [i for i, w in enumerate(words) if w in tokens]
+        if hits:
+            tv = float(np.mean([va[i][0] for i in hits]))
+            ta = float(np.mean([va[i][1] for i in hits]))
+            return (tv, ta), 1.0
+
+        # 2) CLAP-text nearest-neighbour fallback.
+        if not mcfg.nn_fallback or query_blob is None:
+            return None, 0.0
+        q = decode_embedding(query_blob).astype(np.float32)
+        qn = float(np.linalg.norm(q))
+        if qn == 0.0:
+            return None, 0.0
+        sims = emb @ (q / qn)
+        order = np.argsort(-sims)[: mcfg.nn_top_k]
+        top_cos = float(sims[order[0]])
+        if top_cos < mcfg.nn_threshold:
+            return None, 0.0  # query isn't mood-like -> pure CLAP
+        w = np.clip(sims[order], 0.0, None)
+        if w.sum() <= 0:
+            return None, 0.0
+        tv = float((va[order, 0] * w).sum() / w.sum())
+        ta = float((va[order, 1] * w).sum() / w.sum())
+        # Confidence rises from 0 at the threshold to 1 at perfect similarity.
+        conf = (top_cos - mcfg.nn_threshold) / (1.0 - mcfg.nn_threshold)
+        return (tv, ta), float(min(1.0, max(0.0, conf)))
 
     # ------------------------------------------------------------------
     # Inference helpers
@@ -655,9 +743,13 @@ class SearchWorker:
         if parsed.is_similar_query and parsed.similar_to_track_id:
             return await self._do_similar_search(parsed, limit)
 
+        # Encode the query once (CLAP text via IPC); the blob is reused by the
+        # KNN leg and the mood NN fallback so we don't double the IPC round-trip.
+        query_blob = await self._encode_query_blob(query)
+
         # --- Run the BEST MATCH (FTS) and semantic (KNN) legs in parallel ---
         best_match_coro = self._best_match_leg(parsed)
-        knn_coro = self._knn_leg(query, cfg.knn_candidate_limit)
+        knn_coro = self._knn_leg(query, cfg.knn_candidate_limit, query_blob)
         best_match, knn_hits = await asyncio.gather(best_match_coro, knn_coro)
 
         logger.info(
@@ -707,6 +799,35 @@ class SearchWorker:
 
         all_track_ids = list(dict.fromkeys(h["track_id"] for h in knn_hits))
 
+        # --- Mood (valence/arousal) leg ---
+        # Map the query to a target (V,A) and pull the closest tracks, unioned
+        # with the CLAP candidates so a pure-mood query isn't limited to CLAP's
+        # (near-random) neighbours. mood_map is a 0-1 proximity score; the blend
+        # weight scales with the query's mood confidence (0 -> pure CLAP).
+        mood_map: dict[str, float] = {}
+        mood_weight = 0.0
+        if cfg.mood.enabled:
+            target_va, mood_conf = self._query_to_va(query, query_blob)
+            if target_va is not None and mood_conf > 0.0:
+                mood_weight = cfg.mood.weight * mood_conf
+                mood_hits = await self.db.knn_search_mood(
+                    target_va[0], target_va[1], cfg.mood.candidates
+                )
+                all_track_ids.extend(h["track_id"] for h in mood_hits)
+                all_track_ids = list(dict.fromkeys(all_track_ids))
+                va_bulk = await self.db.get_tracks_va_bulk(all_track_ids)
+                if va_bulk:
+                    d = {tid: math.dist(target_va, va)
+                         for tid, va in va_bulk.items()}
+                    dmin, dmax = min(d.values()), max(d.values())
+                    drange = (dmax - dmin) or 1.0
+                    mood_map = {tid: 1.0 - (dist - dmin) / drange
+                                for tid, dist in d.items()}
+                logger.info(
+                    "_do_search: mood target V=%.2f A=%.2f conf=%.2f (+%d cand)",
+                    target_va[0], target_va[1], mood_conf, len(mood_hits),
+                )
+
         tags_map = await self.db.get_tracks_tags_bulk(all_track_ids)
         self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(
             all_track_ids
@@ -722,6 +843,9 @@ class SearchWorker:
                 track_tags,
                 has_knn_hits=has_knn,
             )
+            if mood_weight > 0.0:
+                # Adaptive blend: final = (1 - w)*clap + w*mood, w = weight*conf.
+                score = (1.0 - mood_weight) * score + mood_weight * mood_map.get(tid, 0.0)
             scored.append((score, tid))
 
         scored.sort(key=lambda st: -st[0])
@@ -783,31 +907,23 @@ class SearchWorker:
         )
         return [{"id": e.id, "type": e.type} for e in best]
 
-    async def _knn_leg(self, query: str, candidate_limit: int) -> list[dict]:
+    async def _knn_leg(
+        self, query: str, candidate_limit: int, blob: Optional[bytes] = None
+    ) -> list[dict]:
         """CLAP KNN search leg — returns [{track_id, distance}].
 
-        Encodes the query with CLAP's text encoder and KNN-searches the
-        audio-side index (``vec_tracks_clap``). CLAP is contrastively
-        trained text↔audio, so text query → audio embedding is the
-        canonical retrieval direction and outperforms text↔text on
-        every semantic category in our benchmark.
+        KNN-searches the audio-side index (``vec_tracks_clap``) with the
+        precomputed query embedding ``blob``. CLAP is contrastively trained
+        text↔audio, so text query → audio embedding is the canonical retrieval
+        direction and outperforms text↔text on every semantic category in our
+        benchmark.
 
-        Non-ASCII queries are skipped: CLAP's text tokenizer is
-        English-only and produces noise vectors for Cyrillic / CJK
-        input, so we leave those queries to the FTS leg.
+        ``blob`` is encoded once by the caller (``_encode_query_blob``) and
+        shared with the mood NN fallback; when None (non-ASCII query, no CLAP),
+        this leg is empty and FTS handles the query.
         """
         if not self.db._vec_available:
             return []
-        if not query.isascii():
-            logger.info("KNN skipped: non-ASCII query %r — FTS only", query)
-            return []
-        if (
-            self._text_encode_request_queue is None
-            or self._text_encode_response_queue is None
-        ):
-            return []
-        loop = asyncio.get_running_loop()
-        blob = await loop.run_in_executor(None, self._encode_query_text, query)
         if blob is None:
             return []
         t0 = time.monotonic()
@@ -816,6 +932,21 @@ class SearchWorker:
             "KNN audio search: %d results in %.3fs", len(results), time.monotonic() - t0
         )
         return results
+
+    async def _encode_query_blob(self, query: str) -> Optional[bytes]:
+        """Encode the query once (CLAP text via IPC), with the ASCII/queue
+        guards the KNN and mood legs share. Non-ASCII -> None (CLAP's English
+        tokenizer noises on Cyrillic/CJK)."""
+        if not query.isascii():
+            logger.info("CLAP encode skipped: non-ASCII query %r", query)
+            return None
+        if (
+            self._text_encode_request_queue is None
+            or self._text_encode_response_queue is None
+        ):
+            return None
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._encode_query_text, query)
 
     async def _do_similar_search(self, parsed: ParsedQuery, limit: int) -> dict:
         """Handle "songs like this" queries using CLAP audio KNN + tag matching.

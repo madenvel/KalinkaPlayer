@@ -243,7 +243,12 @@ class AsyncEmbedderDb:
     async def complete_clap_job(
         self, job_id: int, track_id: str, blob: bytes, version: int
     ) -> None:
-        """Mark CLAP job done and write blob to tracks + vec table."""
+        """Mark CLAP job done and write blob to tracks + vec table.
+
+        Clears mood (V,A) whenever the embedding is (re)written so the mood
+        backfill recomputes it from the current vector — mood is a projection
+        of the embedding and must not outlive it across a re-embed.
+        """
         async with self._open() as conn:
             if self._vec_available:
                 try:
@@ -256,7 +261,9 @@ class AsyncEmbedderDb:
                 UPDATE tracks
                 SET embedding_clap_audio = ?,
                     embedding_version = ?,
-                    embedded_at = CURRENT_TIMESTAMP
+                    embedded_at = CURRENT_TIMESTAMP,
+                    mood_valence = NULL,
+                    mood_arousal = NULL
                 WHERE id = ?
                 """,
                 (blob, version, track_id),
@@ -530,6 +537,33 @@ class AsyncEmbedderDb:
             )
             row = await cursor.fetchone()
         return row[0] if row else None
+
+    async def get_tracks_needing_va(self, limit: int) -> list[tuple[str, bytes]]:
+        """Tracks with a stored CLAP audio embedding but no mood (V,A) yet.
+
+        Returns [(track_id, int8_embedding_blob)]. The mood backfill computes
+        (V,A) from these blobs without re-running the audio encoder.
+        """
+        async with self._open() as conn:
+            cursor = await conn.execute(
+                "SELECT id, embedding_clap_audio FROM tracks "
+                "WHERE embedding_clap_audio IS NOT NULL AND mood_valence IS NULL "
+                "LIMIT ?",
+                (limit,),
+            )
+            rows = await cursor.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    async def store_mood_va(
+        self, updates: list[tuple[str, float, float]]
+    ) -> None:
+        """Write (valence, arousal) for a batch of tracks."""
+        async with self._open() as conn:
+            await conn.executemany(
+                "UPDATE tracks SET mood_valence = ?, mood_arousal = ? WHERE id = ?",
+                [(v, a, tid) for (tid, v, a) in updates],
+            )
+            await conn.commit()
 
     async def get_album_id_for_track(self, track_id: str) -> str | None:
         async with self._open() as conn:

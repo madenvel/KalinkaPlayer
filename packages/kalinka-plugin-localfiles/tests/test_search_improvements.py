@@ -290,7 +290,7 @@ class TestBestMatchSeparation:
         worker = SearchWorker(config, db)
 
         # Force the CLAP leg to return "Ben" as the nearest neighbour.
-        async def fake_knn(query, candidate_limit):
+        async def fake_knn(query, candidate_limit, blob=None):
             return [{"track_id": "tMJ", "distance": 0.0}]
 
         worker._knn_leg = fake_knn

@@ -135,12 +135,79 @@ class AiSearchConfig(BaseModel):
     )
 
 
+class MoodConfig(BaseModel):
+    """Mood (valence/arousal) ranking.
+
+    Blends a learned valence-arousal axis into AI search so mood queries
+    ("something melancholic for tonight") rank by emotional proximity rather
+    than CLAP acoustic similarity alone — the axis CLAP is weakest on. The VA
+    head and mood index auto-download alongside the CLAP models; per-track
+    (V,A) is computed from the stored embedding by the embedder. On by default;
+    if the artifacts are unavailable it degrades silently to pure CLAP ranking.
+    """
+
+    enabled: bool = Field(
+        default=True, title="Enable mood ranking", json_schema_extra=_SIMPLE,
+    )
+    weight: float = Field(
+        default=0.6, ge=0.0, le=1.0, title="Mood weight",
+        json_schema_extra={
+            "help": (
+                "Blend: final = (1 - weight*conf)*clap + (weight*conf)*mood, "
+                "where conf is the query's mood-match confidence (0 for a "
+                "non-mood query, so ranking stays pure CLAP)."
+            ),
+        },
+    )
+    candidates: int = Field(
+        default=200, title="Mood candidates before re-ranking",
+        json_schema_extra={
+            "help": (
+                "Top-K tracks retrieved by V-A proximity to the query target, "
+                "unioned with the CLAP KNN candidates so pure-mood queries are "
+                "not limited to CLAP's (near-random) neighbours."
+            ),
+        },
+    )
+    nn_fallback: bool = Field(
+        default=True, title="CLAP-text nearest-neighbour fallback",
+        json_schema_extra={
+            "help": (
+                "When no known mood word appears in the query, infer the "
+                "target (V,A) from the nearest mood words by CLAP-text "
+                "similarity. Disable to use only literal mood keywords."
+            ),
+        },
+    )
+    nn_threshold: float = Field(
+        default=0.3, ge=0.0, le=1.0, title="NN fallback confidence threshold",
+        json_schema_extra={
+            "help": (
+                "Below this top cosine similarity the query is treated as "
+                "non-mood and mood ranking is skipped (pure CLAP)."
+            ),
+        },
+    )
+    nn_top_k: int = Field(
+        default=3, ge=1, le=10, title="NN fallback neighbours",
+    )
+    backfill_batch: int = Field(
+        default=256, title="Mood backfill batch size",
+        json_schema_extra={
+            "help": "Tracks per pass when computing (V,A) for embedded tracks.",
+        },
+    )
+
+
 class SearcherConfig(BaseModel):
     enabled: bool = Field(
         default=True, title="Enable searcher", json_schema_extra=_SIMPLE,
     )
     tags: TagsConfig = Field(
         default_factory=TagsConfig, title="Tag prediction"
+    )
+    mood: MoodConfig = Field(
+        default_factory=MoodConfig, title="Mood ranking"
     )
     batch_size_tags: int = Field(
         default=8, title="Tag prediction batch size",

@@ -118,6 +118,8 @@ async def init_db(db_path: str) -> None:
                 embedding_version INTEGER DEFAULT 0,
                 embedded_at TIMESTAMP,
                 embedding_clap_text BLOB,
+                mood_valence REAL,
+                mood_arousal REAL,
                 FOREIGN KEY (album_id) REFERENCES albums (id),
                 FOREIGN KEY (artist_id) REFERENCES artists (id)
             )
@@ -306,6 +308,19 @@ async def init_db(db_path: str) -> None:
             "INSERT OR IGNORE INTO albums (id, title, artist_id, last_updated) VALUES ('unknown_album', 'Unknown Album', 'unknown_artist', ?)",
             (current_time,),
         )
+
+        # ---------------------------------------------------------------
+        # Column migrations for existing DBs (CREATE TABLE IF NOT EXISTS
+        # never adds columns to a pre-existing table). Idempotent: add the
+        # mood (V,A) columns only when absent. Runs in the same single-writer
+        # startup transaction, so no ALTER race across subprocesses.
+        # ---------------------------------------------------------------
+        await cursor.execute("PRAGMA table_info(tracks)")
+        track_cols = {row[1] for row in await cursor.fetchall()}
+        for col in ("mood_valence", "mood_arousal"):
+            if col not in track_cols:
+                await cursor.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
+                logger.info("Added tracks.%s column", col)
 
         await conn.commit()
 

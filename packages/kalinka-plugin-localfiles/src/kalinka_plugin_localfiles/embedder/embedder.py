@@ -148,6 +148,22 @@ class EmbeddingWorker:
             logger.warning("CLAP embedding failed for %s: %s", file_path, e)
             return None
 
+    def _compute_va(self, blob: bytes) -> Optional[tuple[float, float]]:
+        """Map a STORED int8 CLAP audio embedding -> (valence, arousal) in 1-9.
+
+        We compute mood from the stored int8 vector (decode -> head), not by
+        re-running the audio encoder, so existing tracks backfill cheaply. int8
+        dequant is effectively lossless for the head (cosine > 0.9999).
+        """
+        if not self._clap_available or not self._clap.has_va_head:
+            return None
+        try:
+            vec = decode_embedding(blob)
+            return self._clap.get_valence_arousal(vec)
+        except Exception as e:
+            logger.warning("VA compute failed: %s", e)
+            return None
+
     def _encode_query(self, query: str) -> Optional[bytes]:
         """Encode a text query with CLAP. Returns int8 embedding bytes or None."""
         if not self._clap_available:
@@ -223,6 +239,34 @@ class EmbeddingWorker:
                 "CLAP embeddings written for %d tracks", len(completed_track_ids)
             )
             await self._update_aggregate_embeddings(completed_track_ids)
+        return True
+
+    async def _process_va_backfill(self) -> bool:
+        """Fill mood (valence, arousal) for embedded tracks that lack it.
+
+        Reads tracks with a stored CLAP audio embedding but no mood yet,
+        computes (V,A) from the int8 blob, and writes it back. Covers both
+        freshly-embedded and pre-existing tracks with no audio re-embedding.
+        Returns True only if it made progress (wrote at least one row), so the
+        caller's drain loop terminates even if a batch is all-failures rather
+        than re-selecting the same NULL rows forever.
+        """
+        if not self._clap_available or not self._clap.has_va_head:
+            return False
+        cfg = self.config.searcher.mood
+        batch = await self.db.get_tracks_needing_va(cfg.backfill_batch)
+        if not batch:
+            return False
+        updates: list[tuple[str, float, float]] = []
+        for track_id, blob in batch:
+            va = self._compute_va(blob)
+            if va is not None:
+                updates.append((track_id, va[0], va[1]))
+        if not updates:
+            logger.warning("VA backfill: %d tracks but none computed", len(batch))
+            return False
+        await self.db.store_mood_va(updates)
+        logger.info("Mood (V,A) written for %d tracks", len(updates))
         return True
 
     async def _update_aggregate_embeddings(self, track_ids: list[str]) -> None:
@@ -508,6 +552,18 @@ class EmbeddingWorker:
                             "Unexpected error in CLAP text batch; will retry"
                         )
                         break
+
+            # Backfill mood (V,A) for embedded tracks that lack it. Cheap
+            # (one tiny matmul per track from the stored int8 vector); gated by
+            # the mood switch and the head being available.
+            if self.config.searcher.mood.enabled and cfg.clap.current_version > 0:
+                if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
+                    self._load_clap_model()
+                try:
+                    while await self._process_va_backfill():
+                        did_work = True
+                except Exception:
+                    logger.exception("Unexpected error in VA backfill; will retry")
 
             if did_work:
                 continue

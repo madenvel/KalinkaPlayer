@@ -124,6 +124,51 @@ class AsyncSearcherDb:
             logger.warning("KNN audio search failed: %s", e)
             return []
 
+    async def knn_search_mood(
+        self, valence: float, arousal: float, limit: int = 200
+    ) -> list[dict]:
+        """Tracks closest to a target (valence, arousal) in the 1-9 plane.
+
+        Returns [{"track_id": str, "distance": float}] (Euclidean V-A distance)
+        sorted ascending. A full scan over the two scalar columns — cheap for
+        typical libraries and needs no separate index.
+        """
+        try:
+            async with self._open() as conn:
+                cursor = await conn.execute(
+                    "SELECT id, "
+                    "(mood_valence - ?) * (mood_valence - ?) + "
+                    "(mood_arousal - ?) * (mood_arousal - ?) AS d2 "
+                    "FROM tracks WHERE mood_valence IS NOT NULL "
+                    "ORDER BY d2 LIMIT ?",
+                    (valence, valence, arousal, arousal, limit),
+                )
+                rows = await cursor.fetchall()
+            return [{"track_id": row[0], "distance": row[1] ** 0.5} for row in rows]
+        except Exception as e:
+            logger.warning("Mood V-A search failed: %s", e)
+            return []
+
+    async def get_tracks_va_bulk(
+        self, track_ids: list[str]
+    ) -> dict[str, tuple[float, float]]:
+        """Return {track_id: (valence, arousal)} for tracks that have mood set."""
+        if not track_ids:
+            return {}
+        try:
+            async with self._open() as conn:
+                placeholders = ",".join("?" * len(track_ids))
+                cursor = await conn.execute(
+                    f"SELECT id, mood_valence, mood_arousal FROM tracks "
+                    f"WHERE id IN ({placeholders}) AND mood_valence IS NOT NULL",
+                    track_ids,
+                )
+                rows = await cursor.fetchall()
+            return {row[0]: (row[1], row[2]) for row in rows}
+        except Exception as e:
+            logger.warning("Bulk V-A fetch failed: %s", e)
+            return {}
+
     async def get_track_clap_embedding(self, track_id: str) -> bytes | None:
         """Fetch the CLAP audio embedding for a single track."""
         if not self._vec_available:
