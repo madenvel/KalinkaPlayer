@@ -117,21 +117,23 @@ def assemble_best_match(
     albums_by_id = {e.id: e for e in the_list if e.type == "album"}
     artists_by_id = {e.id: e for e in the_list if e.type == "artist"}
 
-    # Rule 1: album dominates its tracks (strictly greater).
+    # Rule 1: album dominates its tracks (>=, so it also absorbs a track tied
+    # with it — e.g. query "wall" matches both "The Wall" and its track
+    # "Outside the Wall" at 90; the album already represents the track).
     after_rule1: list[Entity] = []
     for e in the_list:
         if e.type == "track" and e.album_id is not None:
             album = albums_by_id.get(e.album_id)
-            if album is not None and album.score > e.score:
+            if album is not None and album.score >= e.score:
                 continue  # dominated by its album
         after_rule1.append(e)
 
-    # Rule 2: artist dominates its tracks/albums (strictly greater).
+    # Rule 2: artist dominates its tracks/albums (>=; ties go to the container).
     final: list[Entity] = []
     for e in after_rule1:
         if e.type in ("track", "album") and e.artist_id is not None:
             artist = artists_by_id.get(e.artist_id)
-            if artist is not None and artist.score > e.score:
+            if artist is not None and artist.score >= e.score:
                 continue  # dominated by its artist
         final.append(e)
 
