@@ -90,6 +90,21 @@ def _ensure_numpy() -> bool:
     return True
 
 
+# Function/filler words ignored when judging a query's mood "purity" (mixed-
+# query backoff in _query_to_va). Genre/instrument nouns are deliberately NOT
+# here — they're the content signal CLAP should keep ("melancholic piano").
+_FILLER_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at",
+    "by", "with", "from", "into", "my", "me", "i", "you", "your", "we", "us",
+    "it", "its", "this", "that", "these", "those", "some", "something",
+    "anything", "like", "want", "need", "give", "play", "playing", "song",
+    "songs", "music", "track", "tracks", "tune", "tunes", "sound", "sounds",
+    "playlist", "vibe", "vibes", "mood", "feeling", "feel", "get", "got", "im",
+    "am", "are", "is", "be", "now", "tonight", "today", "day", "night", "time",
+    "really", "very", "more", "bit", "little", "kinda", "sorta", "stuff",
+})
+
+
 # ---------------------------------------------------------------------------
 # Model auto-download
 # ---------------------------------------------------------------------------
@@ -329,7 +344,15 @@ class SearchWorker:
         if hits:
             tv = float(np.mean([va[i][0] for i in hits]))
             ta = float(np.mean([va[i][1] for i in hits]))
-            return (tv, ta), 1.0
+            # Confidence = mood purity: the share of meaningful (non-filler)
+            # query words that are mood words. A pure-mood query
+            # ("melancholic and sad") -> 1.0; a mixed query ("melancholic
+            # piano") backs off so the CLAP leg keeps the content signal.
+            matched = {words[i] for i in hits}
+            content = [t for t in tokens if len(t) >= 3 and t not in _FILLER_WORDS]
+            mood_share = sum(t in matched for t in content) / len(content) \
+                if content else 1.0
+            return (tv, ta), float(mood_share)
 
         # 2) CLAP-text nearest-neighbour fallback.
         if not mcfg.nn_fallback or query_blob is None:

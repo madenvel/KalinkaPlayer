@@ -133,6 +133,27 @@ class TestQueryToVa:
         assert tva == (2.5, 3.0)
 
     @pytest.mark.asyncio
+    async def test_mixed_query_backs_off(self):
+        # "melancholic piano": 1 of 2 content words is a mood word -> conf 0.5,
+        # so the CLAP leg keeps the "piano" signal instead of mood dominating.
+        config = LocalFilesConfig(db_path=_db_path())
+        db = AsyncSearcherDb(config)
+        w = _make_worker(config, db)
+        (tva, conf) = w._query_to_va("melancholic piano", None)
+        assert tva == (2.5, 3.0)
+        assert conf == pytest.approx(0.5)
+
+    @pytest.mark.asyncio
+    async def test_filler_words_dont_dilute_pure_mood(self):
+        # Fillers ("something", "for", "tonight") don't count as content, so a
+        # pure-mood query keeps full confidence.
+        config = LocalFilesConfig(db_path=_db_path())
+        db = AsyncSearcherDb(config)
+        w = _make_worker(config, db)
+        (_, conf) = w._query_to_va("something melancholic for tonight", None)
+        assert conf == 1.0
+
+    @pytest.mark.asyncio
     async def test_nn_fallback_above_threshold(self):
         config = LocalFilesConfig(db_path=_db_path())
         db = AsyncSearcherDb(config)
