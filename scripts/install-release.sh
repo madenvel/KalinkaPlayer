@@ -129,7 +129,11 @@ mapfile -t URLS < <(printf '%s\n' "$parsed" | sed '1d')
 echo ">> Release: $TAG   architecture: $ARCH   packages: ${#URLS[@]}"
 
 # --- download into a temp dir -------------------------------------------------
+# 0755 (not mktemp's default 0700) so apt's sandbox user `_apt` can traverse in
+# to read the local .deb files; otherwise apt warns and falls back to fetching
+# unsandboxed as root.
 TMPDIR_DL="$(mktemp -d)"
+chmod 755 "$TMPDIR_DL"
 
 for url in "${URLS[@]}"; do
   name="${url##*/}"
@@ -160,7 +164,7 @@ if have dpkg-query; then
   for pkg in kalinka-server kalinka-plugin-sdk kalinka-plugin-localfiles \
              kalinka-plugin-musiccast kalinka-plugin-jamendo \
              kalinka-plugin-dummydevice; do
-    dpkg-query -W -f='   %-32n %v\n' "$pkg" 2>/dev/null || true
+    dpkg-query -W -f='   ${Package} ${Version}\n' "$pkg" 2>/dev/null || true
   done
 fi
 
