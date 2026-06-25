@@ -371,9 +371,7 @@ class JamendoInputModule(InputModule):
         mood_index: Optional[JamendoMoodIndex] = None,
     ):
         self.client = client
-        # Semantic/mood search index (JamendoMaxCaps embeddings). None when
-        # ai_search is disabled or its assets are absent — ai_search then
-        # returns empty rather than erroring.
+        # Mood/semantic index; None disables ai_search (returns empty).
         self._mood_index = mood_index
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")

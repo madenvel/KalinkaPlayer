@@ -36,11 +36,11 @@ class KalinkaPluginJamendo(InputModulePlugin):
         self._client = await get_client(config)
         mood_index = None
         if config.ai_search_enabled:
-            # Construction is cheap (no I/O); the index opens the db and loads
-            # the model lazily on the first ai_search, and disables itself if
-            # the assets are missing.
+            # Cheap to construct; assets are fetched and the model loaded
+            # lazily on the first ai_search.
             mood_index = JamendoMoodIndex(
                 config.ai_index_path,
+                config.ai_index_url or None,
                 config.ai_model_dir,
                 config.ai_model_url or None,
             )

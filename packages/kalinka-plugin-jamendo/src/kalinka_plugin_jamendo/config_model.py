@@ -5,6 +5,10 @@ from pydantic import ConfigDict, Field
 
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
+# Release hosting the int8 mood index + MiniLM encoder (see kalinka-training
+# jamendomaxcaps_embed.py). Files are fetched on first ai_search if absent.
+_RELEASE = "https://github.com/madenvel/KalinkaPlayer/releases/download/jamendo-ai-v1"
+
 
 class JamendoAudioFormat(str, Enum):
     """User-facing audio quality labels.
@@ -62,21 +66,24 @@ class JamendoConfig(ModuleConfig):
     ai_index_path: str = Field(
         default="~/kalinka/jamendo/jamendo_index.sqlite",
         title="Mood index path",
-        description="sqlite-vec database of JamendoMaxCaps track embeddings.",
+        description="Local path for the sqlite-vec mood index.",
+        json_schema_extra={"importance": "expert"},
+    )
+    ai_index_url: str = Field(
+        default=f"{_RELEASE}/jamendo_index.sqlite",
+        title="Mood index download URL",
+        description="Fetched to the index path on first use if absent. Empty = expect present.",
         json_schema_extra={"importance": "expert"},
     )
     ai_model_dir: str = Field(
         default="~/kalinka/jamendo/minilm",
         title="Embedding model directory",
-        description="Holds the MiniLM model.onnx + tokenizer.json used to embed queries.",
+        description="Local dir for the MiniLM model.onnx + tokenizer.json.",
         json_schema_extra={"importance": "expert"},
     )
     ai_model_url: str = Field(
-        default="",
+        default=_RELEASE,
         title="Embedding model download URL",
-        description=(
-            "Base URL to fetch model.onnx + tokenizer.json from if missing "
-            "(files are appended to this base). Empty = expect them present."
-        ),
+        description="Base URL; model.onnx + tokenizer.json are appended. Empty = expect present.",
         json_schema_extra={"importance": "expert"},
     )

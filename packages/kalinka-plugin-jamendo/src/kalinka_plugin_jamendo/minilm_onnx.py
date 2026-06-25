@@ -1,13 +1,7 @@
-"""MiniLM sentence-embedding encoder (ONNX, torch-free) for query encoding.
+"""MiniLM query encoder (all-MiniLM-L6-v2, ONNX, torch-free).
 
-`all-MiniLM-L6-v2` (BERT, 384-d) run via onnxruntime + the HF `tokenizers` fast
-tokenizer; mean-pools token embeddings (attention-mask weighted) and
-L2-normalizes. This is the exact encoder used offline to build the Jamendo
-text index (kalinka-training `minilm_onnx.py`/`jamendomaxcaps_embed.py`) — query
-and corpus MUST stay byte-identical, so keep the pooling here in sync with that.
-
-Lazy-loaded and idle-unloaded by the caller so the ~90 MB model only sits in RAM
-while searches are happening (the player's CLAP model already dominates memory).
+Tokenize -> attention-masked mean-pool -> L2-normalize, producing the 384-d
+vector the Jamendo mood index is built from. Lazy-loaded on first use.
 """
 from __future__ import annotations
 
@@ -23,34 +17,33 @@ MAX_TOKENS = 256
 _FILES = ("model.onnx", "tokenizer.json")
 
 
-def ensure_model(model_dir: str, base_url: Optional[str]) -> bool:
-    """Ensure model.onnx + tokenizer.json exist in model_dir.
+def download_file(url: str, dest: str) -> bool:
+    """Download url -> dest atomically (via a .part temp). True on success."""
+    tmp = dest + ".part"
+    try:
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        logger.info("downloading %s", url)
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, dest)
+        return True
+    except Exception as e:
+        logger.warning("download failed (%s): %s", url, e)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
 
-    Downloads from ``{base_url}/{file}`` if missing and a base_url is given.
-    Returns True if both files are present afterwards.
-    """
+
+def ensure_model(model_dir: str, base_url: Optional[str]) -> bool:
+    """Ensure model.onnx + tokenizer.json are in model_dir, downloading any
+    missing file from ``{base_url}/{file}``. True if both are present."""
     model_dir = os.path.expanduser(model_dir)
-    os.makedirs(model_dir, exist_ok=True)
     for name in _FILES:
         dest = os.path.join(model_dir, name)
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             continue
-        if not base_url:
+        if not base_url or not download_file(f"{base_url.rstrip('/')}/{name}", dest):
             return False
-        url = f"{base_url.rstrip('/')}/{name}"
-        tmp = dest + ".part"
-        try:
-            logger.info("Downloading MiniLM file %s from %s", name, url)
-            urllib.request.urlretrieve(url, tmp)
-            os.replace(tmp, dest)
-        except Exception as e:
-            logger.warning("MiniLM download failed for %s: %s", name, e)
-            if os.path.exists(tmp):
-                os.remove(tmp)
-            return False
-    return all(
-        os.path.exists(os.path.join(model_dir, f)) for f in _FILES
-    )
+    return True
 
 
 class MiniLmOnnx:
