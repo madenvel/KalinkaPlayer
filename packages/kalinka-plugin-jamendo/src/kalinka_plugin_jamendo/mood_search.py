@@ -34,8 +34,11 @@ class JamendoMoodIndex:
 
     async def available(self) -> bool:
         if self._available is None:
-            loop = asyncio.get_running_loop()
-            self._available = await loop.run_in_executor(None, self._provision)
+            async with self._lock:  # one provisioning; others await it
+                if self._available is None:
+                    loop = asyncio.get_running_loop()
+                    self._available = await loop.run_in_executor(
+                        None, self._provision)
         return self._available
 
     def _provision(self) -> bool:

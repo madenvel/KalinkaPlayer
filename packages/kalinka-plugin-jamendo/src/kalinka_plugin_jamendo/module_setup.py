@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -22,6 +23,7 @@ class KalinkaPluginJamendo(InputModulePlugin):
         self._client = None
         # Captured at setup so get_state() can read the current config.
         self._context: Optional[InputPluginContext] = None
+        self._provision_task: Optional[asyncio.Task] = None
 
     def module_name(self) -> str:
         return "Jamendo Input Module"
@@ -36,14 +38,16 @@ class KalinkaPluginJamendo(InputModulePlugin):
         self._client = await get_client(config)
         mood_index = None
         if config.ai_search_enabled:
-            # Cheap to construct; assets are fetched and the model loaded
-            # lazily on the first ai_search.
             mood_index = JamendoMoodIndex(
                 config.ai_index_path,
                 config.ai_index_url or None,
                 config.ai_model_dir,
                 config.ai_model_url or None,
             )
+            # Provision assets now (download index + model) rather than blocking
+            # the first search. available() is concurrency-safe, so a search that
+            # arrives mid-download just awaits the same provisioning.
+            self._provision_task = asyncio.create_task(mood_index.available())
         self.interface = JamendoInputModule(config, self._client, mood_index)
 
     async def get_state(self) -> ModuleState:
