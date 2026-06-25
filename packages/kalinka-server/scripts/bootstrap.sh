@@ -46,7 +46,18 @@ shopt -s nullglob
 wheels=( "$WHEELS_DIR"/*.whl )
 if [ ${#wheels[@]} -gt 0 ]; then
   echo "[bootstrap] Installing wheels: ${wheels[*]}"
+  # Step 1: resolve and install/upgrade any third-party dependencies the wheels
+  # pull in (numpy, fastapi, …). --upgrade is enough for those.
   "$VENV_DIR/bin/pip" install --quiet --upgrade "${wheels[@]}"
+  # Step 2: force-reinstall the first-party wheels themselves (no deps). These
+  # are versioned as one bundle by the app's kalinka-v* tag, so a rebuilt wheel
+  # can carry the SAME version string but different contents (e.g. the SDK
+  # gaining a `paths` module without a semver bump). pip's --upgrade treats an
+  # equal version as already-satisfied and would leave the stale copy in place,
+  # crash-looping the service on a missing import. Forcing it guarantees the
+  # venv matches exactly what this release shipped. --no-deps keeps it fast and
+  # offline: it only rewrites these small local wheels, not their dependencies.
+  "$VENV_DIR/bin/pip" install --quiet --force-reinstall --no-deps "${wheels[@]}"
 else
   echo "[bootstrap] No wheels found in $WHEELS_DIR"
 fi
