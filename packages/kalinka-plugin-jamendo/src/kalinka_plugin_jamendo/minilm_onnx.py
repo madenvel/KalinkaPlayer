@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import urllib.request
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__.split(".")[-1])
 

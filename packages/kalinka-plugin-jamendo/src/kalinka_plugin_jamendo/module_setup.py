@@ -75,5 +75,7 @@ class KalinkaPluginJamendo(InputModulePlugin):
 
     async def shutdown(self) -> None:
         logger.info("Shutting down Jamendo input module")
+        if self._provision_task is not None:
+            self._provision_task.cancel()
         if self._client is not None:
             await self._client.aclose()

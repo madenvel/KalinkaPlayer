@@ -6,7 +6,7 @@ from pydantic import ConfigDict, Field
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 # Release hosting the int8 mood index + MiniLM encoder (see kalinka-training
-# jamendomaxcaps_embed.py). Files are fetched on first ai_search if absent.
+# jamendomaxcaps_embed.py). Files are fetched at startup if absent.
 _RELEASE = "https://github.com/madenvel/KalinkaPlayer/releases/download/jamendo-ai-v1"
 
 

@@ -61,9 +61,14 @@ class JamendoMoodIndex:
             logger.warning("MiniLM model missing (%s); ai_search off",
                            self._model_dir)
             return False
-        meta = self._read_meta()
-        self._dtype = meta.get("dtype", "float32")
-        self._int8_scale = float(meta.get("int8_scale", 508.0))
+        try:
+            meta = self._read_meta()
+            self._dtype = meta.get("dtype", "float32")
+            self._int8_scale = float(meta.get("int8_scale", 508.0))
+        except Exception as e:  # corrupt/partial index -> stay off, don't crash
+            logger.warning("unreadable index %s (%s); ai_search off",
+                           self._index_path, e)
+            return False
         logger.info("Jamendo mood index ready (%s, %s)",
                     self._index_path, self._dtype)
         return True
