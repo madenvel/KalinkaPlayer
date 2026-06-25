@@ -48,3 +48,35 @@ class JamendoConfig(ModuleConfig):
         ),
         json_schema_extra={"importance": "simple"},
     )
+    ai_search_enabled: bool = Field(
+        default=True,
+        title="Mood / AI search",
+        description=(
+            "Enable natural-language mood/genre search over Jamendo "
+            "(e.g. \"something melancholic for tonight\"). Requires the "
+            "downloaded mood index and embedding model; silently does "
+            "nothing until both are present."
+        ),
+        json_schema_extra={"importance": "simple"},
+    )
+    ai_index_path: str = Field(
+        default="~/kalinka/jamendo/jamendo_index.sqlite",
+        title="Mood index path",
+        description="sqlite-vec database of JamendoMaxCaps track embeddings.",
+        json_schema_extra={"importance": "expert"},
+    )
+    ai_model_dir: str = Field(
+        default="~/kalinka/jamendo/minilm",
+        title="Embedding model directory",
+        description="Holds the MiniLM model.onnx + tokenizer.json used to embed queries.",
+        json_schema_extra={"importance": "expert"},
+    )
+    ai_model_url: str = Field(
+        default="",
+        title="Embedding model download URL",
+        description=(
+            "Base URL to fetch model.onnx + tokenizer.json from if missing "
+            "(files are appended to this base). Empty = expect them present."
+        ),
+        json_schema_extra={"importance": "expert"},
+    )

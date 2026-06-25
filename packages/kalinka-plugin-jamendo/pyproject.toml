@@ -25,6 +25,13 @@ classifiers = [
 dependencies = [
     "kalinka-plugin-sdk>=1,<2",
     "httpx>=0.24",
+    # ai_search (mood/semantic): MiniLM query encoder + sqlite-vec KNN.
+    # Imported lazily; ai_search disables itself if these are unavailable.
+    "numpy>=1.24",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "sqlite-vec>=0.1",
+    "aiosqlite>=0.19",
 ]
 
 [project.optional-dependencies]

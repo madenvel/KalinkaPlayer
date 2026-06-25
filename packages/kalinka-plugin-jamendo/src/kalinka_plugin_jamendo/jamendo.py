@@ -36,6 +36,7 @@ from kalinka_plugin_sdk.inputmodule import (
 )
 
 from .config_model import JamendoConfig
+from .mood_search import JamendoMoodIndex
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -363,8 +364,17 @@ def _playlist_tracks_section(pid: str) -> BrowseItem:
 
 
 class JamendoInputModule(InputModule):
-    def __init__(self, config: JamendoConfig, client: JamendoClient):
+    def __init__(
+        self,
+        config: JamendoConfig,
+        client: JamendoClient,
+        mood_index: Optional[JamendoMoodIndex] = None,
+    ):
         self.client = client
+        # Semantic/mood search index (JamendoMaxCaps embeddings). None when
+        # ai_search is disabled or its assets are absent — ai_search then
+        # returns empty rather than erroring.
+        self._mood_index = mood_index
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
@@ -413,6 +423,42 @@ class JamendoInputModule(InputModule):
         else:
             return EmptyList(offset, limit)
 
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=_estimated_total(offset, limit, len(items)),
+            items=items,
+        )
+
+    async def ai_search(
+        self, query: str, offset: int = 0, limit: int = 50
+    ) -> BrowseItemList:
+        """Natural-language mood/genre search over JamendoMaxCaps embeddings.
+
+        Returns tracks only, ranked by semantic proximity to the query. This is
+        independent of search(): no name matching, no albums/artists. Empty when
+        the mood index is unavailable.
+        """
+        limit = min(limit, MAX_LIMIT)
+        if self._mood_index is None or not query.strip():
+            return EmptyList(offset, limit)
+
+        # KNN over the mood index, enough to cover this page.
+        hits = await self._mood_index.search(query, offset + limit)
+        page = hits[offset : offset + limit]
+        if not page:
+            return EmptyList(offset, limit)
+
+        # Resolve metadata via the Jamendo API. The /tracks/ index is
+        # incomplete, so some ids may not resolve — keep the rest in mood order.
+        ids = [str(tid) for tid, _ in page]
+        raw = await self.client.request(
+            "tracks",
+            {"id": " ".join(ids), "audioformat": self.audio_format, "limit": len(ids)},
+        )
+        by_id = {str(t.get("id")): t for t in raw}
+        ordered = [by_id[i] for i in ids if i in by_id]
+        items = self._tracks_to_browse_items(ordered)
         return BrowseItemList(
             offset=offset,
             limit=limit,

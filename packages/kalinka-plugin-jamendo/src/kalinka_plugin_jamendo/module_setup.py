@@ -7,6 +7,7 @@ from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .config_model import JamendoConfig
 from .jamendo import JamendoInputModule, get_client
+from .mood_search import JamendoMoodIndex
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -33,7 +34,17 @@ class KalinkaPluginJamendo(InputModulePlugin):
         config = JamendoConfig(**context.config.model_dump())
         logger.info("Setting up Jamendo input module")
         self._client = await get_client(config)
-        self.interface = JamendoInputModule(config, self._client)
+        mood_index = None
+        if config.ai_search_enabled:
+            # Construction is cheap (no I/O); the index opens the db and loads
+            # the model lazily on the first ai_search, and disables itself if
+            # the assets are missing.
+            mood_index = JamendoMoodIndex(
+                config.ai_index_path,
+                config.ai_model_dir,
+                config.ai_model_url or None,
+            )
+        self.interface = JamendoInputModule(config, self._client, mood_index)
 
     async def get_state(self) -> ModuleState:
         """Surface the "no client_id configured" case as an ERROR.
