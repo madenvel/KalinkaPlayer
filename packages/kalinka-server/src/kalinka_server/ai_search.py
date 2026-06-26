@@ -24,9 +24,11 @@ planned addition below the suggestion cards; not implemented yet.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
@@ -42,6 +44,8 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from .best_match import (
+    MAX_RESULTS,
+    Entity,
     assemble_best_match,
     browse_item_to_entity,
     is_descriptive,
@@ -88,10 +92,10 @@ async def assemble_ai_search(
         return_exceptions=True,
     )
 
-    # Pool every literal candidate across sources/types for one merged BEST
-    # MATCH. items_by_id maps the scored entity back to its rich BrowseItem.
-    # ai_sections collects each source's ready-to-append ai_search() card(s).
-    candidates = []
+    # Collect literal candidates grouped by source (for a fair merged BEST
+    # MATCH) and each source's ready-to-append ai_search() card(s). items_by_id
+    # maps a scored entity back to its rich BrowseItem.
+    candidates_by_source: Dict[str, List[Entity]] = defaultdict(list)
     items_by_id: dict[str, BrowseItem] = {}
     ai_sections: List[BrowseItem] = []
     for src in per_source:
@@ -102,10 +106,10 @@ async def assemble_ai_search(
             continue
         for item in src.candidates:
             items_by_id[item.id.to_string] = item
-            candidates.append(browse_item_to_entity(item))
+            candidates_by_source[item.id.source].append(browse_item_to_entity(item))
         ai_sections.extend(src.ai_sections)
 
-    winners = assemble_best_match(candidates, query)
+    winners = _merge_best_match(candidates_by_source, query)
     best_match_section = _best_match_section(
         [items_by_id[w.id] for w in winners if w.id in items_by_id]
     )
@@ -161,6 +165,35 @@ async def _search_one_source(module: InputModule, query: str) -> _SourceResults:
         ai_sections = []
 
     return _SourceResults(candidates=candidates, ai_sections=ai_sections)
+
+
+def _merge_best_match(
+    candidates_by_source: Dict[str, List[Entity]], query: str
+) -> List[Entity]:
+    """Assemble BEST MATCH per source, then interleave round-robin by rank.
+
+    A single global "score, then truncate to N" merge lets a large public
+    catalog (many coincidental name matches) crowd a smaller source's genuine
+    match out of the top N — e.g. a dozen Jamendo playlists named "jarre" evict
+    the user's own "Jean-Michel Jarre". Scoring / cut-off / dedup still run per
+    source (ids are source-scoped, so dominance never crossed sources anyway);
+    interleaving each source's ranked winners guarantees every source that
+    matched is represented before the N-slot cap is reached. Source order
+    follows module order. With one source this is identical to a plain
+    assemble_best_match.
+    """
+    ranked_per_source = [
+        assemble_best_match(cands, query) for cands in candidates_by_source.values()
+    ]
+    merged: List[Entity] = []
+    for tier in itertools.zip_longest(*ranked_per_source):
+        for entity in tier:
+            if entity is None:
+                continue
+            merged.append(entity)
+            if len(merged) >= MAX_RESULTS:
+                return merged
+    return merged
 
 
 def _catalog_id(source: str, local_id: str) -> EntityId:

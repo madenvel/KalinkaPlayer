@@ -185,6 +185,33 @@ async def test_best_match_merges_across_sources():
     assert sources == {"localfiles", "jamendo"}
 
 
+async def test_large_catalog_does_not_crowd_out_smaller_source():
+    # A vast public catalog floods the candidate pool with coincidental, equally
+    # high-scoring name matches; the user's library has the one real match. The
+    # library match must still land in BEST MATCH (the "jarre" regression). The
+    # flooding source is deliberately first to prove order doesn't save it.
+    flood = FakeModule(
+        "jamendo",
+        search_results={
+            SearchType.track: [
+                _track_item("jamendo", f"j{i}", "jarre") for i in range(8)
+            ]
+        },
+    )
+    library = FakeModule(
+        "localfiles",
+        search_results={
+            SearchType.artist: [_artist_item("localfiles", "jmj", "Jean-Michel Jarre")]
+        },
+    )
+
+    result = await assemble_ai_search([flood, library], "jarre", 0, 10)
+
+    bm = _section(result, "BEST MATCH")
+    assert bm is not None
+    assert "localfiles" in {s.id.source for s in bm.sections}
+
+
 # ---------------------------------------------------------------------------
 # Navigational suppression (descriptor-aware)
 # ---------------------------------------------------------------------------
