@@ -433,9 +433,11 @@ class JamendoInputModule(InputModule):
     ) -> BrowseItemList:
         """Natural-language mood/genre search over JamendoMaxCaps embeddings.
 
-        Returns tracks only, ranked by semantic proximity to the query. This is
-        independent of search(): no name matching, no albums/artists. Empty when
-        the mood index is unavailable.
+        Returns a single AI-suggestions catalog card ("DISCOVER ON JAMENDO")
+        of tracks ranked by semantic proximity to the query — the plugin owns
+        this card's presentation. Independent of search(): no name matching, no
+        albums/artists. The server appends this card after the merged BEST
+        MATCH block. Empty when the mood index is unavailable.
         """
         limit = min(limit, MAX_LIMIT)
         if self._mood_index is None or not query.strip():
@@ -456,13 +458,30 @@ class JamendoInputModule(InputModule):
         )
         by_id = {str(t.get("id")): t for t in raw}
         ordered = [by_id[i] for i in ids if i in by_id]
-        items = self._tracks_to_browse_items(ordered)
-        return BrowseItemList(
-            offset=offset,
-            limit=limit,
-            total=_estimated_total(offset, limit, len(items)),
-            items=items,
+        tracks = self._tracks_to_browse_items(ordered)
+        if not tracks:
+            return EmptyList(offset, limit)
+
+        cat = catalog_id("ai_search:tracks")
+        card = BrowseItem(
+            id=cat,
+            name="DISCOVER ON JAMENDO",
+            subname="Open music matching this vibe",
+            can_browse=False,
+            can_add=False,
+            catalog=Catalog(
+                id=cat,
+                title="DISCOVER ON JAMENDO",
+                preview_config=Preview(
+                    type=PreviewType.CARD,
+                    content_type=PreviewContentType.TRACK,
+                    icon="ai_suggestions",
+                    items_count=len(tracks),
+                ),
+            ),
+            sections=tracks,
         )
+        return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
     # ------------------------------------------------------------------
     # Browse

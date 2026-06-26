@@ -13,8 +13,12 @@ from kalinka_plugin_sdk.datamodel import (
     Artist,
     BrowseItem,
     BrowseItemList,
+    Catalog,
     EntityId,
     EntityType,
+    Preview,
+    PreviewContentType,
+    PreviewType,
     Track,
 )
 from kalinka_plugin_sdk.inputmodule import SearchType
@@ -57,6 +61,28 @@ def _track_item(source: str, local: str, title: str) -> BrowseItem:
     )
 
 
+def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
+    """Mirror what a plugin's ai_search() returns: a source-scoped, ready-to-
+    append "AI SUGGESTIONS" card. The server appends this verbatim."""
+    cat = EntityId(id="ai_search:tracks", type=EntityType.CATALOG, source=source)
+    return BrowseItem(
+        id=cat,
+        name="AI SUGGESTIONS",
+        subname="Curated for your search",
+        catalog=Catalog(
+            id=cat,
+            title="AI SUGGESTIONS",
+            preview_config=Preview(
+                type=PreviewType.CARD,
+                content_type=PreviewContentType.TRACK,
+                icon="ai_suggestions",
+                items_count=len(tracks),
+            ),
+        ),
+        sections=list(tracks),
+    )
+
+
 class FakeModule:
     """An input module whose search()/ai_search() return canned BrowseItems."""
 
@@ -80,9 +106,11 @@ class FakeModule:
         )
 
     async def ai_search(self, query, offset=0, limit=50) -> BrowseItemList:
-        return BrowseItemList(
-            offset=offset, limit=limit, total=len(self._ai), items=list(self._ai)
-        )
+        # Plugins return a ready-made card (or nothing); the server appends it.
+        if not self._ai:
+            return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
+        card = _ai_card(self._name, self._ai)
+        return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
 
 def _section(result: BrowseItemList, name: str) -> Optional[BrowseItem]:
@@ -221,10 +249,11 @@ async def test_one_ai_card_per_source_not_merged():
 
     cards = _ai_cards(result)
     assert len(cards) == 2
-    assert {c.subname for c in cards} == {"localfiles", "jamendo"}
+    # One card per source, distinguished by its source-scoped catalog id.
+    assert {c.id.source for c in cards} == {"localfiles", "jamendo"}
     # Each card carries only its own source's track.
     for card in cards:
-        assert all(t.id.source == card.subname for t in card.sections)
+        assert all(t.id.source == card.id.source for t in card.sections)
 
 
 async def test_empty_when_no_results():
