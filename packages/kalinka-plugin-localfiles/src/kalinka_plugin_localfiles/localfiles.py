@@ -113,10 +113,11 @@ class LocalFilesInputModule(InputModule):
     ) -> BrowseItemList:
         """Semantic search via the searcher subprocess (CLAP KNN + mood + tags).
 
-        Returns a flat list of track BrowseItems ranked by semantic relevance —
-        "just a list of tracks", no albums/artists. BEST MATCH (literal name
-        lookup) and the per-source presentation are assembled by the server,
-        which merges this with every other source.
+        Returns a single AI-suggestions catalog card ("SUGGESTIONS FROM YOUR
+        LIBRARY") of semantically ranked tracks — the plugin owns this card's
+        presentation. BEST MATCH (literal name lookup) is assembled by the
+        server, which appends this card after it, alongside the other sources'
+        cards. The server may suppress the card for a navigational query.
         """
         if self._search_request_queue is None or self._search_response_queue is None:
             return EmptyList(offset, limit)
@@ -143,17 +144,34 @@ class LocalFilesInputModule(InputModule):
 
         # Preserve the searcher's rank order (get_tracks_by_ids does not).
         by_id = {t["id"]: t for t in self.db_manager.get_tracks_by_ids(track_ids)}
-        items = [
+        tracks = [
             self._create_track_browse_item(by_id[tid])
             for tid in track_ids
             if tid in by_id
         ]
-        return BrowseItemList(
-            offset=offset,
-            limit=limit,
-            total=len(items),
-            items=items[offset : offset + limit],
+        if not tracks:
+            return EmptyList(offset, limit)
+
+        cat = catalog_id("ai_search:tracks")
+        card = BrowseItem(
+            id=cat,
+            name="SUGGESTIONS FROM YOUR LIBRARY",
+            subname="Matched by mood, genre and audio features",
+            can_browse=False,
+            can_add=False,
+            catalog=Catalog(
+                id=cat,
+                title="SUGGESTIONS FROM YOUR LIBRARY",
+                preview_config=Preview(
+                    type=PreviewType.CARD,
+                    content_type=PreviewContentType.TRACK,
+                    icon="ai_suggestions",
+                    items_count=len(tracks),
+                ),
+            ),
+            sections=tracks,
         )
+        return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
     async def search(
         self, type: SearchType, query: str, offset=0, limit=50

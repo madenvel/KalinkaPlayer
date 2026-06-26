@@ -7,9 +7,11 @@ owns the catalog/preview layout so the UI renders sections verbatim):
   * **BEST MATCH** — a single merged, literal/navigational block built from the
     modules' ``search()`` results (tracks / albums / artists / playlists),
     scored and de-duplicated by :func:`best_match.assemble_best_match`.
-  * **AI SUGGESTIONS** — semantic track suggestions from each module's
-    ``ai_search()``, presented as a *separate card per source* (never merged
-    across sources — their relevance scores aren't comparable).
+  * **AI SUGGESTIONS** — each module's ``ai_search()`` returns its own
+    presentation-ready section(s) (typically a CARD catalog of semantically
+    ranked tracks). The server appends these verbatim after BEST MATCH, one
+    source's after another — never merged across sources (their relevance
+    scores aren't comparable). Only the navigational cut-off gates them.
 
 The legs run in parallel but are not blended. A strong navigational match for a
 non-descriptor query suppresses the semantic suggestions (a name lookup wants
@@ -68,11 +70,10 @@ _CANDIDATE_TYPES = (
 @dataclass
 class _SourceResults:
     """One source's contribution: literal candidates (for the merged BEST
-    MATCH) and its own semantic suggestion tracks (its own card)."""
+    MATCH) and its own ready-to-append ai_search() section(s)."""
 
-    module_name: str
     candidates: List[BrowseItem]
-    ai_tracks: List[BrowseItem]
+    ai_sections: List[BrowseItem]
 
 
 async def assemble_ai_search(
@@ -89,9 +90,10 @@ async def assemble_ai_search(
 
     # Pool every literal candidate across sources/types for one merged BEST
     # MATCH. items_by_id maps the scored entity back to its rich BrowseItem.
+    # ai_sections collects each source's ready-to-append ai_search() card(s).
     candidates = []
     items_by_id: dict[str, BrowseItem] = {}
-    ai_cards: List[BrowseItem] = []
+    ai_sections: List[BrowseItem] = []
     for src in per_source:
         if isinstance(src, BaseException):
             # A whole source blew up outside its own leg handling — skip it so
@@ -101,8 +103,7 @@ async def assemble_ai_search(
         for item in src.candidates:
             items_by_id[item.id.to_string] = item
             candidates.append(browse_item_to_entity(item))
-        if src.ai_tracks:
-            ai_cards.append(_ai_suggestions_card(src.module_name, src.ai_tracks))
+        ai_sections.extend(src.ai_sections)
 
     winners = assemble_best_match(candidates, query)
     best_match_section = _best_match_section(
@@ -118,12 +119,12 @@ async def assemble_ai_search(
         and not is_descriptive(query)
     ):
         logger.info("ai_search: navigational query %r — AI suggestions suppressed", query)
-        ai_cards = []
+        ai_sections = []
 
     sections: List[BrowseItem] = []
     if best_match_section is not None:
         sections.append(best_match_section)
-    sections.extend(ai_cards)
+    sections.extend(ai_sections)
 
     return BrowseItemList(
         offset=offset,
@@ -153,13 +154,13 @@ async def _search_one_source(module: InputModule, query: str) -> _SourceResults:
             logger.warning("search(%s) failed for %s: %s", stype.value, name, leg)
 
     if isinstance(ai_leg, BrowseItemList):
-        ai_tracks = ai_leg.items
+        ai_sections = ai_leg.items
     else:
         if isinstance(ai_leg, BaseException):
             logger.warning("ai_search failed for %s: %s", name, ai_leg)
-        ai_tracks = []
+        ai_sections = []
 
-    return _SourceResults(module_name=name, candidates=candidates, ai_tracks=ai_tracks)
+    return _SourceResults(candidates=candidates, ai_sections=ai_sections)
 
 
 def _catalog_id(source: str, local_id: str) -> EntityId:
@@ -189,28 +190,4 @@ def _best_match_section(items: List[BrowseItem]) -> Optional[BrowseItem]:
             ),
         ),
         sections=items,
-    )
-
-
-def _ai_suggestions_card(module_name: str, tracks: List[BrowseItem]) -> BrowseItem:
-    """A self-contained per-source AI SUGGESTIONS card (CARD preview of tracks).
-    The catalog id is namespaced by source so each source gets its own card."""
-    cat = _catalog_id(module_name, "ai_search:tracks")
-    return BrowseItem(
-        id=cat,
-        name="AI SUGGESTIONS",
-        subname=module_name,
-        can_browse=False,
-        can_add=False,
-        catalog=Catalog(
-            id=cat,
-            title="AI SUGGESTIONS",
-            preview_config=Preview(
-                type=PreviewType.CARD,
-                content_type=PreviewContentType.TRACK,
-                icon="ai_suggestions",
-                items_count=len(tracks),
-            ),
-        ),
-        sections=tracks,
     )

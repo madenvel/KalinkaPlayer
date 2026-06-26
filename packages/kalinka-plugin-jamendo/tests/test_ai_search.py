@@ -58,14 +58,24 @@ def make_module(client, ranked=RANKED):
     return jm.JamendoInputModule(cfg, client, FakeMoodIndex(ranked))
 
 
+def _card_tracks(res):
+    """ai_search returns a single AI-suggestions card; its tracks are in
+    ``sections``."""
+    assert len(res.items) == 1
+    card = res.items[0]
+    assert card.name == "DISCOVER ON JAMENDO"
+    return card.sections
+
+
 @pytest.mark.asyncio
 async def test_returns_tracks_in_mood_order():
     client = MetadataClient()
     mod = make_module(client)
     res = await mod.ai_search("melancholic", offset=0, limit=3)
-    assert [it.id.id for it in res.items] == ["100", "200", "300"]
+    tracks = _card_tracks(res)
+    assert [it.id.id for it in tracks] == ["100", "200", "300"]
     # tracks only — no album/artist browse items
-    for it in res.items:
+    for it in tracks:
         assert it.track is not None
         assert it.album is None and it.artist is None
         assert it.can_add is True
@@ -78,8 +88,8 @@ async def test_pagination_non_overlapping():
     mod = make_module(MetadataClient())
     p1 = await mod.ai_search("q", offset=0, limit=3)
     p2 = await mod.ai_search("q", offset=3, limit=3)
-    ids1 = [it.id.id for it in p1.items]
-    ids2 = [it.id.id for it in p2.items]
+    ids1 = [it.id.id for it in _card_tracks(p1)]
+    ids2 = [it.id.id for it in _card_tracks(p2)]
     assert ids1 == ["100", "200", "300"]
     assert ids2 == ["400", "500", "600"]
     assert not set(ids1) & set(ids2)
@@ -90,7 +100,7 @@ async def test_missing_metadata_dropped_order_preserved():
     # API can't resolve 200 -> it's dropped, the rest keep mood order.
     mod = make_module(MetadataClient(missing=["200"]))
     res = await mod.ai_search("q", offset=0, limit=3)
-    assert [it.id.id for it in res.items] == ["100", "300"]
+    assert [it.id.id for it in _card_tracks(res)] == ["100", "300"]
 
 
 @pytest.mark.asyncio
