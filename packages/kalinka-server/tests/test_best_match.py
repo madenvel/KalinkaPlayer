@@ -20,6 +20,7 @@ from kalinka_server.best_match import (
     Entity,
     assemble_best_match,
     browse_item_to_entity,
+    has_navigational_intent,
     is_descriptive,
 )
 
@@ -319,3 +320,19 @@ class TestIsDescriptive:
     def test_plain_name_is_not_descriptive(self):
         assert not is_descriptive("michael jackson")
         assert not is_descriptive("Vangelis")
+
+
+class TestHasNavigationalIntent:
+    def test_names_have_intent(self):
+        assert has_navigational_intent("jean michel jarre")
+        assert has_navigational_intent("jarre")
+        # A descriptor word plus a real name token still counts.
+        assert has_navigational_intent("dark side of the moon")
+        assert has_navigational_intent("piano guys")
+
+    def test_pure_filler_or_descriptor_has_no_intent(self):
+        # The reported case: all tokens are filler/descriptor -> no name.
+        assert not has_navigational_intent("something melancholic for tonight")
+        assert not has_navigational_intent("piano")
+        assert not has_navigational_intent("upbeat jazz")
+        assert not has_navigational_intent("play me something relaxing")

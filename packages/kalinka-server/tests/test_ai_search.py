@@ -95,11 +95,13 @@ class FakeModule:
         self._name = name
         self._search = search_results or {}
         self._ai = ai_tracks or []
+        self.search_calls = 0
 
     def module_name(self) -> str:
         return self._name
 
     async def search(self, type, query, offset=0, limit=50) -> BrowseItemList:
+        self.search_calls += 1
         items = self._search.get(type, [])
         return BrowseItemList(
             offset=offset, limit=limit, total=len(items), items=list(items)
@@ -218,33 +220,36 @@ async def test_large_catalog_does_not_crowd_out_smaller_source():
 
 
 async def test_descriptor_query_keeps_ai_even_with_best_match():
-    # "piano" matches the album name (BEST MATCH) but is a descriptor, so the
-    # semantic suggestions are kept — discovery, not a name lookup.
+    # "piano guys" is descriptive ("piano") but still names something ("guys"),
+    # so BEST MATCH fires AND the semantic suggestions are kept (not suppressed).
     module = FakeModule(
         "localfiles",
-        search_results={SearchType.album: [
-            _album_item("localfiles", "alP", "Piano Collection", "arX", "X")
+        search_results={SearchType.artist: [
+            _artist_item("localfiles", "pg", "The Piano Guys")
         ]},
         ai_tracks=[_track_item("localfiles", "tMJ", "Ben")],
     )
 
-    result = await assemble_ai_search([module], "piano", 0, 10)
+    result = await assemble_ai_search([module], "piano guys", 0, 10)
 
     assert _section(result, "BEST MATCH") is not None
     assert len(_ai_cards(result)) == 1
 
 
-async def test_no_best_match_keeps_ai():
-    # A vague mood query: nothing clears the name cutoff, so AI is shown alone.
+async def test_mood_query_skips_best_match_and_search():
+    # A pure mood/filler phrase names nothing: no BEST MATCH, and crucially the
+    # search() fan-out is skipped entirely (only ai_search runs) — both the
+    # "junk literal hits" fix and the latency fix.
     module = FakeModule(
-        "localfiles",
-        search_results={SearchType.track: [_track_item("localfiles", "t1", "Unrelated Title")]},
-        ai_tracks=[_track_item("localfiles", "tX", "Something Dreamy")],
+        "jamendo",
+        search_results={SearchType.track: [_track_item("jamendo", "s1", "Something")]},
+        ai_tracks=[_track_item("jamendo", "tX", "Autumn In The Bog")],
     )
 
-    result = await assemble_ai_search([module], "something dreamy and warm", 0, 10)
+    result = await assemble_ai_search([module], "something melancholic for tonight", 0, 10)
 
     assert _section(result, "BEST MATCH") is None
+    assert module.search_calls == 0  # no search() round-trips for a mood query
     assert len(_ai_cards(result)) == 1
 
 
