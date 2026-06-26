@@ -48,6 +48,7 @@ from .best_match import (
     Entity,
     assemble_best_match,
     browse_item_to_entity,
+    has_navigational_intent,
     is_descriptive,
 )
 
@@ -87,8 +88,13 @@ async def assemble_ai_search(
     if not query.strip() or not modules:
         return EmptyList(offset, limit)
 
+    # BEST MATCH (and its search() fan-out) only makes sense for a query that
+    # names something. A pure mood/genre phrase skips it — no junk literal hits,
+    # and the Jamendo search() round-trips are avoided for the common case.
+    navigational = has_navigational_intent(query)
+
     per_source = await asyncio.gather(
-        *(_search_one_source(module, query) for module in modules),
+        *(_search_one_source(module, query, navigational) for module in modules),
         return_exceptions=True,
     )
 
@@ -138,13 +144,20 @@ async def assemble_ai_search(
     )
 
 
-async def _search_one_source(module: InputModule, query: str) -> _SourceResults:
-    """Run a source's four ``search()`` types and its ``ai_search()`` in
-    parallel. A failing leg is logged and skipped — one bad source must not
-    sink the whole query."""
+async def _search_one_source(
+    module: InputModule, query: str, navigational: bool
+) -> _SourceResults:
+    """Run a source's ``ai_search()`` and — only for a navigational query — its
+    four ``search()`` types, in parallel. A failing leg is logged and skipped:
+    one bad source must not sink the whole query."""
     name = module.module_name()
+    search_coros = (
+        [module.search(t, query, 0, CANDIDATE_LIMIT) for t in _CANDIDATE_TYPES]
+        if navigational
+        else []
+    )
     legs = await asyncio.gather(
-        *(module.search(t, query, 0, CANDIDATE_LIMIT) for t in _CANDIDATE_TYPES),
+        *search_coros,
         module.ai_search(query, 0, AI_SUGGESTIONS_LIMIT),
         return_exceptions=True,
     )

@@ -98,6 +98,36 @@ def is_descriptive(query: str) -> bool:
     return bool(set(re.findall(r"[a-z]+", query.lower())) & _DESCRIPTOR_WORDS)
 
 
+# Filler / stop words carried by natural-language queries ("play me something
+# for tonight"). With the descriptors above, these are the words that should
+# NOT count as a name to look up.
+_FILLER_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "for", "to", "of", "in", "on", "at",
+    "by", "with", "from", "into", "my", "me", "i", "you", "your", "we", "us",
+    "it", "its", "this", "that", "these", "those", "some", "something",
+    "anything", "like", "want", "need", "give", "play", "playing", "song",
+    "songs", "music", "track", "tracks", "tune", "tunes", "sound", "sounds",
+    "playlist", "vibe", "vibes", "mood", "feeling", "feel", "get", "got", "im",
+    "am", "are", "is", "be", "now", "tonight", "today", "day", "night", "time",
+    "really", "very", "more", "bit", "little", "kinda", "sorta", "stuff",
+})
+
+
+def has_navigational_intent(query: str) -> bool:
+    """True if the query has at least one token that is neither a filler nor a
+    descriptor word — i.e. plausibly the name of a thing to look up.
+
+    A pure mood/genre/filler phrase ("something melancholic for tonight") has
+    none, so BEST MATCH is skipped: there is no name to match, and scoring a
+    long NL phrase against short titles yields coincidental hits (a track
+    literally titled "Something" partial-matches at ~90, above the cutoff).
+    Skipping it also avoids the search() fan-out for discovery queries — the
+    common ai_search case — so only the ai_search() legs run.
+    """
+    tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
+    return bool(tokens - _FILLER_WORDS - _DESCRIPTOR_WORDS)
+
+
 # ---------------------------------------------------------------------------
 # Name folding
 # ---------------------------------------------------------------------------
