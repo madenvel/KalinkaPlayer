@@ -23,7 +23,6 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.inputmodule import SearchType
 
-from kalinka_server import ai_search
 from kalinka_server.ai_search import assemble_ai_search
 
 
@@ -143,8 +142,9 @@ async def test_best_match_from_search_results():
     bm = _section(result, "BEST MATCH")
     assert bm is not None
     assert [s.name for s in bm.sections] == ["Vangelis"]
-    # "vangelis" is a name lookup (not a descriptor) -> AI suppressed.
-    assert _ai_cards(result) == []
+    # BEST MATCH leads; the AI suggestions are still shown below it (not hidden).
+    assert len(_ai_cards(result)) == 1
+    assert result.items[0] is bm  # BEST MATCH first
 
 
 async def test_artist_dominates_album_in_best_match():
@@ -215,13 +215,13 @@ async def test_large_catalog_does_not_crowd_out_smaller_source():
 
 
 # ---------------------------------------------------------------------------
-# Navigational suppression (descriptor-aware)
+# AI suggestions are always shown; the gate only skips the search() fan-out
 # ---------------------------------------------------------------------------
 
 
-async def test_descriptor_query_keeps_ai_even_with_best_match():
-    # "piano guys" is descriptive ("piano") but still names something ("guys"),
-    # so BEST MATCH fires AND the semantic suggestions are kept (not suppressed).
+async def test_navigational_query_shows_best_match_and_ai():
+    # A name lookup leads with BEST MATCH but still shows the AI suggestions
+    # below it — they are never hidden.
     module = FakeModule(
         "localfiles",
         search_results={SearchType.artist: [
@@ -236,10 +236,25 @@ async def test_descriptor_query_keeps_ai_even_with_best_match():
     assert len(_ai_cards(result)) == 1
 
 
+async def test_unknown_word_query_keeps_ai_even_with_best_match():
+    # "workout music": "workout" is not in our word lists, so the gate treats it
+    # as navigational and BEST MATCH finds a literal "Workout" track — but the AI
+    # suggestions must still be shown. This is the regression being fixed.
+    module = FakeModule(
+        "jamendo",
+        search_results={SearchType.track: [_track_item("jamendo", "w1", "Workout")]},
+        ai_tracks=[_track_item("jamendo", "tX", "Morning Run")],
+    )
+
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    assert _section(result, "BEST MATCH") is not None  # "Workout" matched literally
+    assert len(_ai_cards(result)) == 1  # ...and the AI suggestions are NOT hidden
+
+
 async def test_mood_query_skips_best_match_and_search():
     # A pure mood/filler phrase names nothing: no BEST MATCH, and crucially the
-    # search() fan-out is skipped entirely (only ai_search runs) — both the
-    # "junk literal hits" fix and the latency fix.
+    # search() fan-out is skipped entirely (only ai_search runs) — the latency fix.
     module = FakeModule(
         "jamendo",
         search_results={SearchType.track: [_track_item("jamendo", "s1", "Something")]},
@@ -250,21 +265,6 @@ async def test_mood_query_skips_best_match_and_search():
 
     assert _section(result, "BEST MATCH") is None
     assert module.search_calls == 0  # no search() round-trips for a mood query
-    assert len(_ai_cards(result)) == 1
-
-
-async def test_suppression_toggle(monkeypatch):
-    monkeypatch.setattr(ai_search, "SUPPRESS_AI_ON_NAVIGATIONAL", False)
-    module = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [_artist_item("localfiles", "arV", "Vangelis")]},
-        ai_tracks=[_track_item("localfiles", "tMJ", "Ben")],
-    )
-
-    result = await assemble_ai_search([module], "vangelis", 0, 10)
-
-    # Toggle off -> AI returned even for the navigational lookup.
-    assert _section(result, "BEST MATCH") is not None
     assert len(_ai_cards(result)) == 1
 
 

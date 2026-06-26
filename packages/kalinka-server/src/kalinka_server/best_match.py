@@ -62,9 +62,9 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 # ---------------------------------------------------------------------------
 
 # Descriptor vocabulary (instruments + genres + moods). A query token in here is
-# a description, not a name — so even when it matches an entity name ("piano" ->
-# "The Piano Guys", "jazz" -> Queen's "Jazz") it's a discovery query and the AI
-# suggestions are kept. Single tokens only; matched per-word against the query.
+# a description, not a name, so it doesn't count as navigational intent (see
+# has_navigational_intent): "piano" / "upbeat jazz" describe what to discover
+# rather than name a thing to look up. Single tokens, matched per-word.
 _DESCRIPTOR_WORDS = frozenset({
     # instruments
     "piano", "guitar", "guitars", "violin", "cello", "drums", "drum", "bass",
@@ -87,14 +87,6 @@ _DESCRIPTOR_WORDS = frozenset({
     "melancholic", "somber", "gloomy", "depressing", "mournful", "lonely",
     "bleak", "nostalgic", "wistful", "bittersweet", "mysterious",
 })
-
-
-def is_descriptive(query: str) -> bool:
-    """True if any query word is a mood/genre/instrument descriptor — i.e. a
-    discovery query, not a name lookup. Used to decide whether a strong BEST
-    MATCH should suppress the semantic AI suggestions (a name lookup) or leave
-    them (a descriptor like "piano" / "jazz" that happens to match a name)."""
-    return bool(set(re.findall(r"[a-z]+", query.lower())) & _DESCRIPTOR_WORDS)
 
 
 # Filler / stop words carried by natural-language queries ("play me something
