@@ -45,17 +45,16 @@ from kalinka_plugin_sdk.datamodel import BrowseItem, EntityType
 # Tunable constants
 # ---------------------------------------------------------------------------
 
-# Inclusion threshold (rapidfuzz 0-100); a weak top "BEST MATCH" is worse than
-# none. 88: the case-folded scorer lands real matches >=90 but a query sharing
-# one word with a title ~85.
+# Inclusion threshold (0-100) for the coverage scorer below. A weak top "BEST
+# MATCH" is worse than none. Coverage cleanly separates real matches (>=94 — the
+# whole query is explained by the name) from coincidental partial hits (<=40 —
+# only a fraction of the query's words match), so 88 sits in a wide empty gap.
 RAPIDFUZZ_CUTOFF: float = 88.0
 
 # Maximum number of entities in the BEST MATCH block.
 MAX_RESULTS: int = 6
 
-# Scorer applied to (query, entity.name). WRatio is robust to word-order and
-# partial matches ("piano guys" vs "The Piano Guys").
-SCORER = fuzz.WRatio
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +123,39 @@ def has_navigational_intent(query: str) -> bool:
     Skipping it also avoids the search() fan-out for discovery queries — the
     common ai_search case — so only the ai_search() legs run.
     """
-    tokens = set(re.findall(r"[a-z0-9]+", query.lower()))
+    tokens = set(_TOKEN_RE.findall(query.lower()))
     return bool(tokens - _FILLER_WORDS - _DESCRIPTOR_WORDS)
+
+
+# ---------------------------------------------------------------------------
+# Scorer
+# ---------------------------------------------------------------------------
+
+
+def coverage_ratio(query: str, name: str) -> float:
+    """Score how well ``name`` accounts for ``query``: the mean, over the
+    query's own (non-filler) words, of each word's best fuzzy match against any
+    word of the name. Both args are already diacritic-folded + casefolded.
+
+    Anchored on the QUERY, deliberately: a word the user typed that the name
+    can't explain drags the score down, so a coincidental 1-of-4-words hit
+    ("Something" vs "something melancholic for tonight") scores ~40, while a real
+    fragment of a longer name ("jarre" vs "Jean-Michel Jarre") scores 100 —
+    extra words in the NAME are never penalised. This is what rapidfuzz WRatio
+    gets wrong: its partial_ratio scores any short title that is a substring of
+    the query ~90, unable to tell "jarre" from "Something". Returns 0..100.
+    """
+    q_tokens = [t for t in _TOKEN_RE.findall(query) if t not in _FILLER_WORDS]
+    name_tokens = _TOKEN_RE.findall(name)
+    if not q_tokens or not name_tokens:
+        return 0.0
+    return sum(
+        max(fuzz.ratio(qt, nt) for nt in name_tokens) for qt in q_tokens
+    ) / len(q_tokens)
+
+
+# Scorer applied to (folded_query, folded_entity_name) by assemble_best_match.
+SCORER = coverage_ratio
 
 
 # ---------------------------------------------------------------------------
