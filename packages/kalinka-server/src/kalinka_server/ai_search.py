@@ -1,0 +1,216 @@
+"""Cross-source AI-search assembly.
+
+The ``/ai_search`` endpoint runs two independent legs over every input module
+and assembles the presentation here (the modules return raw data; the server
+owns the catalog/preview layout so the UI renders sections verbatim):
+
+  * **BEST MATCH** — a single merged, literal/navigational block built from the
+    modules' ``search()`` results (tracks / albums / artists / playlists),
+    scored and de-duplicated by :func:`best_match.assemble_best_match`.
+  * **AI SUGGESTIONS** — semantic track suggestions from each module's
+    ``ai_search()``, presented as a *separate card per source* (never merged
+    across sources — their relevance scores aren't comparable).
+
+The legs run in parallel but are not blended. A strong navigational match for a
+non-descriptor query suppresses the semantic suggestions (a name lookup wants
+the named thing, not "songs that sound like the words").
+
+Related Albums / Related Artists (derived from the suggestion tracks) are a
+planned addition below the suggestion cards; not implemented yet.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import List, Optional
+
+from kalinka_plugin_sdk.datamodel import (
+    BrowseItem,
+    BrowseItemList,
+    Catalog,
+    EmptyList,
+    EntityId,
+    EntityType,
+    Preview,
+    PreviewContentType,
+    PreviewType,
+)
+from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
+
+from .best_match import (
+    assemble_best_match,
+    browse_item_to_entity,
+    is_descriptive,
+)
+
+logger = logging.getLogger(__name__.split(".")[-1])
+
+# Candidates pulled per type per source to feed BEST MATCH. The rapidfuzz
+# cutoff does the real filtering; this only bounds recall/cost.
+CANDIDATE_LIMIT = 50
+# Semantic suggestion tracks requested per source for its AI SUGGESTIONS card.
+AI_SUGGESTIONS_LIMIT = 20
+# A strong non-descriptor name match hides the semantic suggestions (the query
+# is a lookup, not a discovery). Mirrors the old localfiles searcher behaviour.
+SUPPRESS_AI_ON_NAVIGATIONAL = True
+
+# Entity types pulled from search() as BEST MATCH candidates.
+_CANDIDATE_TYPES = (
+    SearchType.track,
+    SearchType.album,
+    SearchType.artist,
+    SearchType.playlist,
+)
+
+
+@dataclass
+class _SourceResults:
+    """One source's contribution: literal candidates (for the merged BEST
+    MATCH) and its own semantic suggestion tracks (its own card)."""
+
+    module_name: str
+    candidates: List[BrowseItem]
+    ai_tracks: List[BrowseItem]
+
+
+async def assemble_ai_search(
+    modules: List[InputModule], query: str, offset: int, limit: int
+) -> BrowseItemList:
+    """Build the merged BEST MATCH + per-source AI SUGGESTIONS section list."""
+    if not query.strip() or not modules:
+        return EmptyList(offset, limit)
+
+    per_source = await asyncio.gather(
+        *(_search_one_source(module, query) for module in modules),
+        return_exceptions=True,
+    )
+
+    # Pool every literal candidate across sources/types for one merged BEST
+    # MATCH. items_by_id maps the scored entity back to its rich BrowseItem.
+    candidates = []
+    items_by_id: dict[str, BrowseItem] = {}
+    ai_cards: List[BrowseItem] = []
+    for src in per_source:
+        if isinstance(src, BaseException):
+            # A whole source blew up outside its own leg handling — skip it so
+            # one bad source can't sink the query.
+            logger.warning("ai_search: source failed: %s", src)
+            continue
+        for item in src.candidates:
+            items_by_id[item.id.to_string] = item
+            candidates.append(browse_item_to_entity(item))
+        if src.ai_tracks:
+            ai_cards.append(_ai_suggestions_card(src.module_name, src.ai_tracks))
+
+    winners = assemble_best_match(candidates, query)
+    best_match_section = _best_match_section(
+        [items_by_id[w.id] for w in winners if w.id in items_by_id]
+    )
+
+    # Navigational suppression: a strong name match that is not a descriptor
+    # (mood/genre/instrument) query is a lookup — CLAP suggestions are noise,
+    # so hide them and let BEST MATCH answer.
+    if (
+        SUPPRESS_AI_ON_NAVIGATIONAL
+        and best_match_section is not None
+        and not is_descriptive(query)
+    ):
+        logger.info("ai_search: navigational query %r — AI suggestions suppressed", query)
+        ai_cards = []
+
+    sections: List[BrowseItem] = []
+    if best_match_section is not None:
+        sections.append(best_match_section)
+    sections.extend(ai_cards)
+
+    return BrowseItemList(
+        offset=offset,
+        limit=limit,
+        total=len(sections),
+        items=sections[offset : offset + limit],
+    )
+
+
+async def _search_one_source(module: InputModule, query: str) -> _SourceResults:
+    """Run a source's four ``search()`` types and its ``ai_search()`` in
+    parallel. A failing leg is logged and skipped — one bad source must not
+    sink the whole query."""
+    name = module.module_name()
+    legs = await asyncio.gather(
+        *(module.search(t, query, 0, CANDIDATE_LIMIT) for t in _CANDIDATE_TYPES),
+        module.ai_search(query, 0, AI_SUGGESTIONS_LIMIT),
+        return_exceptions=True,
+    )
+    *search_legs, ai_leg = legs
+
+    candidates: List[BrowseItem] = []
+    for stype, leg in zip(_CANDIDATE_TYPES, search_legs):
+        if isinstance(leg, BrowseItemList):
+            candidates.extend(leg.items)
+        elif isinstance(leg, BaseException):
+            logger.warning("search(%s) failed for %s: %s", stype.value, name, leg)
+
+    if isinstance(ai_leg, BrowseItemList):
+        ai_tracks = ai_leg.items
+    else:
+        if isinstance(ai_leg, BaseException):
+            logger.warning("ai_search failed for %s: %s", name, ai_leg)
+        ai_tracks = []
+
+    return _SourceResults(module_name=name, candidates=candidates, ai_tracks=ai_tracks)
+
+
+def _catalog_id(source: str, local_id: str) -> EntityId:
+    return EntityId(id=local_id, type=EntityType.CATALOG, source=source)
+
+
+def _best_match_section(items: List[BrowseItem]) -> Optional[BrowseItem]:
+    """Wrap the ordered BEST MATCH winners (mixed entity types) in a single flat
+    TILE section. None when empty so the UI renders no header."""
+    if not items:
+        return None
+    cat = _catalog_id("server", "best_match")
+    return BrowseItem(
+        id=cat,
+        name="BEST MATCH",
+        subname="Top results for your search",
+        can_browse=False,
+        can_add=False,
+        catalog=Catalog(
+            id=cat,
+            title="BEST MATCH",
+            preview_config=Preview(
+                type=PreviewType.TILE,
+                content_type=PreviewContentType.CATALOG,
+                icon="best_match",
+                items_count=len(items),
+            ),
+        ),
+        sections=items,
+    )
+
+
+def _ai_suggestions_card(module_name: str, tracks: List[BrowseItem]) -> BrowseItem:
+    """A self-contained per-source AI SUGGESTIONS card (CARD preview of tracks).
+    The catalog id is namespaced by source so each source gets its own card."""
+    cat = _catalog_id(module_name, "ai_search:tracks")
+    return BrowseItem(
+        id=cat,
+        name="AI SUGGESTIONS",
+        subname=module_name,
+        can_browse=False,
+        can_add=False,
+        catalog=Catalog(
+            id=cat,
+            title="AI SUGGESTIONS",
+            preview_config=Preview(
+                type=PreviewType.CARD,
+                content_type=PreviewContentType.TRACK,
+                icon="ai_suggestions",
+                items_count=len(tracks),
+            ),
+        ),
+        sections=tracks,
+    )

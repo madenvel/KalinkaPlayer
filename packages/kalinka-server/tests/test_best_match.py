@@ -1,11 +1,26 @@
-"""Tests for the FTS "BEST MATCH" assembly (searcher.best_match)."""
+"""Tests for the server-side "BEST MATCH" assembly (kalinka_server.best_match).
 
-import pytest
+The scoring/dedup algorithm was lifted verbatim from the localfiles searcher
+when BEST MATCH became a cross-source concern; these are its tests, plus
+coverage for the BrowseItem -> Entity adapter and the descriptor classifier
+that gate the navigational suppression.
+"""
 
-from kalinka_plugin_localfiles.searcher import best_match
-from kalinka_plugin_localfiles.searcher.best_match import (
+from kalinka_plugin_sdk.datamodel import (
+    Album,
+    Artist,
+    BrowseItem,
+    EntityId,
+    EntityType,
+    Track,
+)
+
+from kalinka_server import best_match
+from kalinka_server.best_match import (
     Entity,
     assemble_best_match,
+    browse_item_to_entity,
+    is_descriptive,
 )
 
 
@@ -71,7 +86,7 @@ class TestEdgeCases:
             Entity(id="a", type="track", name="foo"),
             Entity(id="b", type="album", name="bar"),
         ]
-        # Both below RAPIDFUZZ_CUTOFF (70).
+        # Both below RAPIDFUZZ_CUTOFF.
         monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([69, 10]))
 
         assert assemble_best_match(candidates, "q") == []
@@ -139,6 +154,19 @@ class TestEdgeCases:
         # All three survive: the artist dominates nothing it isn't related to.
         assert {e.id for e in result} == {"ar", "t", "t-no-rel"}
 
+    def test_playlist_survives_on_its_own_merit(self, monkeypatch):
+        # Playlists participate in no dominance rule, so a matching playlist is
+        # kept alongside a higher-scoring artist it has no relation to.
+        candidates = [
+            Entity(id="ar", type="artist", name="Chill Vibes"),
+            Entity(id="pl", type="playlist", name="Chill Vibes Mix"),
+        ]
+        monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([95, 90]))
+
+        result = assemble_best_match(candidates, "q")
+
+        assert {e.id for e in result} == {"ar", "pl"}
+
 
 # ---------------------------------------------------------------------------
 # End-to-end with the real scorer
@@ -176,8 +204,7 @@ class TestRealScorer:
 
     def test_drops_coincidental_single_token_hit(self):
         # An NL query that incidentally shares one common word ("tonight")
-        # with a title must not clear the cutoff. (Ported from the old FTS
-        # re-rank suite — the behaviour now lives in WRatio + the cutoff.)
+        # with a title must not clear the cutoff.
         candidates = [
             Entity(id="t", type="track", name="Make Tonight All Mine"),
         ]
@@ -205,3 +232,90 @@ class TestRealScorer:
         )
 
         assert [e.id for e in result] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# BrowseItem -> Entity adapter
+# ---------------------------------------------------------------------------
+
+
+def _eid(source, etype, local):
+    return EntityId(id=local, type=etype, source=source)
+
+
+class TestBrowseItemToEntity:
+    def test_track_carries_album_and_artist_ids(self):
+        artist = Artist(id=_eid("localfiles", EntityType.ARTIST, "ar1"), name="A")
+        album = Album(
+            id=_eid("localfiles", EntityType.ALBUM, "al1"), title="Alb", artist=artist
+        )
+        item = BrowseItem(
+            id=_eid("localfiles", EntityType.TRACK, "t1"),
+            name="Song",
+            track=Track(
+                id=_eid("localfiles", EntityType.TRACK, "t1"),
+                title="Song",
+                duration=100,
+                album=album,
+                performer=artist,
+            ),
+        )
+
+        e = browse_item_to_entity(item)
+
+        assert e.type == "track"
+        assert e.id == "kalinka:localfiles:track:t1"
+        assert e.album_id == "kalinka:localfiles:album:al1"
+        assert e.artist_id == "kalinka:localfiles:artist:ar1"
+
+    def test_album_carries_artist_id_only(self):
+        artist = Artist(id=_eid("localfiles", EntityType.ARTIST, "ar1"), name="A")
+        item = BrowseItem(
+            id=_eid("localfiles", EntityType.ALBUM, "al1"),
+            name="Alb",
+            album=Album(
+                id=_eid("localfiles", EntityType.ALBUM, "al1"),
+                title="Alb",
+                artist=artist,
+            ),
+        )
+
+        e = browse_item_to_entity(item)
+
+        assert e.type == "album"
+        assert e.album_id is None
+        assert e.artist_id == "kalinka:localfiles:artist:ar1"
+
+    def test_ids_are_source_scoped_so_cross_source_never_collide(self):
+        # Same local album id from two sources must not be treated as one.
+        a = browse_item_to_entity(
+            BrowseItem(
+                id=_eid("localfiles", EntityType.ALBUM, "1"),
+                name="X",
+                album=Album(id=_eid("localfiles", EntityType.ALBUM, "1"), title="X"),
+            )
+        )
+        b = browse_item_to_entity(
+            BrowseItem(
+                id=_eid("jamendo", EntityType.ALBUM, "1"),
+                name="X",
+                album=Album(id=_eid("jamendo", EntityType.ALBUM, "1"), title="X"),
+            )
+        )
+        assert a.id != b.id
+
+
+# ---------------------------------------------------------------------------
+# Descriptor classifier (gates navigational suppression)
+# ---------------------------------------------------------------------------
+
+
+class TestIsDescriptive:
+    def test_instrument_genre_mood_are_descriptive(self):
+        assert is_descriptive("piano")
+        assert is_descriptive("upbeat jazz for the morning")
+        assert is_descriptive("something MELANCHOLIC")  # case-insensitive
+
+    def test_plain_name_is_not_descriptive(self):
+        assert not is_descriptive("michael jackson")
+        assert not is_descriptive("Vangelis")
