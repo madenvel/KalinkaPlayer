@@ -248,105 +248,10 @@ class TestBestMatchCandidates:
 
 
 class TestBestMatchSeparation:
-    @pytest.mark.asyncio
-    async def test_exact_match_goes_to_best_match_not_ai_tracks(self):
-        """The 'vangelis' case: the exact artist match surfaces in the
-        BEST MATCH block (literal/navigational), while the AI ``tracks``
-        section is purely semantic — the CLAP neighbour "Ben". FTS is no
-        longer blended into the semantic ranking, so the two never mix."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        config = _make_config(db_path=db_path)
-        await init_db(db_path)
-
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute(
-                "INSERT INTO artists (id, name) VALUES "
-                "('arV', 'Vangelis'), ('arMJ', 'Michael Jackson')"
-            )
-            await conn.execute(
-                "INSERT INTO albums (id, title, artist_id) VALUES "
-                "('alV', 'The Best of Vangelis CD II', 'arV'), "
-                "('alMJ', 'The Best Of Michael Jackson (Disk 1)', 'arMJ')"
-            )
-            await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched, "
-                "album_id, artist_id) VALUES "
-                "('tV', 'Chariots of Fire', 'fV', 'mp3', 1, 'alV', 'arV')"
-            )
-            await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched, "
-                "album_id, artist_id) VALUES "
-                "('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'alMJ', 'arMJ')"
-            )
-            await conn.commit()
-
-        await _insert_fts_rows(db_path, [
-            ("tV", "Chariots of Fire", "Vangelis", "The Best of Vangelis CD II"),
-            ("tMJ", "Ben", "Michael Jackson",
-             "The Best Of Michael Jackson (Disk 1)"),
-        ])
-
-        db = AsyncSearcherDb(config)
-        worker = SearchWorker(config, db)
-
-        # Force the CLAP leg to return "Ben" as the nearest neighbour.
-        async def fake_knn(query, candidate_limit, blob=None):
-            return [{"track_id": "tMJ", "distance": 0.0}]
-
-        worker._knn_leg = fake_knn
-
-        # Lowercase query still matches "Vangelis" (case-insensitive scorer).
-        result = await worker._do_search("vangelis", limit=10)
-
-        # BEST MATCH leads with the exact artist hit.
-        assert result["best_match"][0]["id"] == "arV"
-        assert result["best_match"][0]["type"] == "artist"
-        # "vangelis" is navigational (near-exact artist name), so the AI
-        # suggestion sections are suppressed — BEST MATCH answers it.
-        assert result["tracks"] == []
-
-    @pytest.mark.asyncio
-    async def test_navigational_suppression_is_descriptor_aware(self):
-        """A name match suppresses AI; a descriptor query (even when it matches
-        an entity name) keeps it; the config toggle gates the whole thing."""
-        db_path = os.path.join(tempfile.mkdtemp(), "test.db")
-        config = _make_config(db_path=db_path)
-        await init_db(db_path)
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute(
-                "INSERT INTO artists (id, name) VALUES ('arMJ', 'Michael Jackson')"
-            )
-            await conn.execute(
-                "INSERT INTO albums (id, title, artist_id) VALUES "
-                "('alP', 'Piano Collection', 'arMJ')"
-            )
-            await conn.execute(
-                "INSERT INTO tracks (id, title, file_path, format, enriched, "
-                "artist_id, album_id) VALUES "
-                "('tMJ', 'Ben', 'fMJ', 'mp3', 1, 'arMJ', NULL), "
-                "('tP', 'Etude', 'fP', 'mp3', 1, 'arMJ', 'alP')"
-            )
-            await conn.commit()
-        await _insert_fts_rows(db_path, [
-            ("tMJ", "Ben", "Michael Jackson", ""),
-            ("tP", "Etude", "Michael Jackson", "Piano Collection"),
-        ])
-
-        db = AsyncSearcherDb(config)
-        worker = SearchWorker(config, db)
-
-        async def fake_knn(query, candidate_limit, blob=None):
-            return [{"track_id": "tMJ", "distance": 0.0}]
-        worker._knn_leg = fake_knn
-
-        # Name lookup (not a descriptor) -> AI suppressed.
-        assert (await worker._do_search("michael jackson", limit=10))["tracks"] == []
-        # Descriptor query that also matches the "Piano Collection" album name ->
-        # kept (the whole point: 'piano' is discovery, not a name lookup).
-        assert (await worker._do_search("piano", limit=10))["tracks"] == ["tMJ"]
-        # Toggle off -> AI returned even for the name lookup.
-        config.searcher.suppress_ai_on_navigational = False
-        assert (await worker._do_search("michael jackson", limit=10))["tracks"] == ["tMJ"]
+    # BEST MATCH assembly and navigational suppression moved to the server
+    # (kalinka_server.ai_search); their coverage lives in the server tests.
+    # search_entity_candidates is still exercised below until it is removed
+    # with the rest of the orphaned searcher FTS5 path.
 
     @pytest.mark.asyncio
     async def test_album_candidate_carries_album_artist_not_track(self):

@@ -21,7 +21,6 @@ from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     Catalog,
-    EmptyList,
     EntityId,
     EntityType,
     FavoriteIds,
@@ -45,6 +44,7 @@ from .config_schema_processor import (
     get_field_value,
     set_field_value,
 )
+from .ai_search import assemble_ai_search
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
@@ -472,13 +472,14 @@ async def create_app(
         limit: int = 10,
         sources: Optional[str] = None,
     ) -> BrowseItemList:
-        """Semantic / natural-language search across input modules."""
+        """Semantic / natural-language search across input modules.
+
+        Assembles a merged BEST MATCH block (from every source's ``search()``)
+        plus a per-source AI SUGGESTIONS card (from each ``ai_search()``); see
+        :func:`assemble_ai_search`.
+        """
         input_modules: List[InputModule] = extract_modules(sources)
-        for module in input_modules:
-            result = await module.ai_search(query, offset=offset, limit=limit)
-            if result.total > 0:
-                return result
-        return EmptyList(offset, limit)
+        return await assemble_ai_search(input_modules, query, offset, limit)
 
     @app.get("/indexer/status")
     async def indexer_status(sources: Optional[str] = None) -> dict:

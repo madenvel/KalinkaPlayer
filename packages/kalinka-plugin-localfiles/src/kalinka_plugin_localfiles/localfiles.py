@@ -111,7 +111,13 @@ class LocalFilesInputModule(InputModule):
     async def ai_search(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
-        """Semantic search via the searcher subprocess (hybrid FTS + CLAP KNN + tags)."""
+        """Semantic search via the searcher subprocess (CLAP KNN + mood + tags).
+
+        Returns a flat list of track BrowseItems ranked by semantic relevance —
+        "just a list of tracks", no albums/artists. BEST MATCH (literal name
+        lookup) and the per-source presentation are assembled by the server,
+        which merges this with every other source.
+        """
         if self._search_request_queue is None or self._search_response_queue is None:
             return EmptyList(offset, limit)
 
@@ -129,160 +135,24 @@ class LocalFilesInputModule(InputModule):
             except Exception:
                 logger.warning("ai_search: timed out waiting for searcher response")
                 return EmptyList(offset, limit)
-        logger.info(
-            "ai_search: response — %d best-match, %d tracks, %d albums, %d artists",
-            len(ids.get("best_match", [])),
-            len(ids.get("tracks", [])),
-            len(ids.get("albums", [])),
-            len(ids.get("artists", [])),
-        )
 
-        sections: List[BrowseItem] = []
-
-        # BEST MATCH (literal/navigational FTS hits) renders first, as a single
-        # flat list ordered by score — above the semantic AI suggestions.
-        best_match_section = self._build_best_match_section(ids.get("best_match", []))
-        if best_match_section is not None:
-            sections.append(best_match_section)
-
-        # Presentation (header label, subtitle, icon, layout) is owned by the
-        # backend so the UI renders sections verbatim instead of re-interpreting
-        # content. The curated track set is a CARD; the derived album/artist
-        # sets are plain TILE sections shown below it.
-        for (
-            entity_type,
-            fetch_fn,
-            create_fn,
-            name,
-            subname,
-            icon,
-            content_type,
-            preview_type,
-        ) in [
-            (
-                "tracks",
-                self.db_manager.get_tracks_by_ids,
-                self._create_track_browse_item,
-                "AI SUGGESTIONS",
-                "Curated for your search",
-                "ai_suggestions",
-                PreviewContentType.TRACK,
-                PreviewType.CARD,
-            ),
-            (
-                "albums",
-                self.db_manager.get_albums_by_ids,
-                self._create_album_browse_item,
-                "Related Albums",
-                None,
-                "album",
-                PreviewContentType.ALBUM,
-                PreviewType.TILE,
-            ),
-            (
-                "artists",
-                self.db_manager.get_artists_by_ids,
-                self._create_artist_browse_item,
-                "Related Artists",
-                None,
-                "artist",
-                PreviewContentType.ARTIST,
-                PreviewType.TILE,
-            ),
-        ]:
-            entity_ids = ids.get(entity_type, [])
-            if not entity_ids:
-                continue
-            entities = fetch_fn(entity_ids[: ai_cfg.max_results])
-            if not entities:
-                continue
-            cat = catalog_id(f"ai_search:{entity_type}")
-            sections.append(
-                BrowseItem(
-                    id=cat,
-                    name=name,
-                    subname=subname,
-                    can_browse=False,
-                    can_add=False,
-                    catalog=Catalog(
-                        id=cat,
-                        title=name,
-                        preview_config=Preview(
-                            type=preview_type,
-                            content_type=content_type,
-                            icon=icon,
-                            items_count=len(entities),
-                        ),
-                    ),
-                    sections=[create_fn(e) for e in entities],
-                )
-            )
-
-        if not sections:
+        track_ids = ids.get("tracks", [])[: ai_cfg.max_results]
+        logger.info("ai_search: response — %d tracks", len(track_ids))
+        if not track_ids:
             return EmptyList(offset, limit)
+
+        # Preserve the searcher's rank order (get_tracks_by_ids does not).
+        by_id = {t["id"]: t for t in self.db_manager.get_tracks_by_ids(track_ids)}
+        items = [
+            self._create_track_browse_item(by_id[tid])
+            for tid in track_ids
+            if tid in by_id
+        ]
         return BrowseItemList(
             offset=offset,
             limit=limit,
-            total=len(sections),
-            items=sections[offset : offset + limit],
-        )
-
-    def _build_best_match_section(
-        self, entities: List[Dict]
-    ) -> Optional[BrowseItem]:
-        """Build the BEST MATCH section: a single flat list of mixed entity
-        types (track / album / artist) in the order the searcher returned
-        them (rapidfuzz score, highest first).
-
-        ``entities`` is the searcher's ``best_match`` payload — ``{"id",
-        "type"}`` dicts. Returns None when empty so the UI renders no header.
-        """
-        if not entities:
-            return None
-
-        # Batch-fetch per type, then reassemble in the original score order.
-        builders: Dict[tuple, BrowseItem] = {}
-        for entity_type, fetch_fn, create_fn in (
-            ("track", self.db_manager.get_tracks_by_ids,
-             self._create_track_browse_item),
-            ("album", self.db_manager.get_albums_by_ids,
-             self._create_album_browse_item),
-            ("artist", self.db_manager.get_artists_by_ids,
-             self._create_artist_browse_item),
-        ):
-            ids = [e["id"] for e in entities if e["type"] == entity_type]
-            for row in fetch_fn(ids):
-                builders[(entity_type, row["id"])] = create_fn(row)
-
-        rows = [
-            builders[(e["type"], e["id"])]
-            for e in entities
-            if (e["type"], e["id"]) in builders
-        ]
-        if not rows:
-            return None
-
-        cat = catalog_id("best_match")
-        return BrowseItem(
-            id=cat,
-            name="BEST MATCH",
-            subname="Top results for your search",
-            can_browse=False,
-            can_add=False,
-            catalog=Catalog(
-                id=cat,
-                title="BEST MATCH",
-                # Plain TILE section (not a card). Mixed entity types in one
-                # ranked list -> neutral CATALOG content hint; the star icon
-                # marks it as the navigational best match.
-                preview_config=Preview(
-                    type=PreviewType.TILE,
-                    content_type=PreviewContentType.CATALOG,
-                    icon="best_match",
-                    items_count=len(rows),
-                ),
-            ),
-            sections=rows,
+            total=len(items),
+            items=items[offset : offset + limit],
         )
 
     async def search(

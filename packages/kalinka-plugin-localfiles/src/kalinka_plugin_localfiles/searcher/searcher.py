@@ -36,14 +36,12 @@ import re
 import signal
 import time
 import urllib.request
-from collections import defaultdict
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
 from ..embedding_utils import decode_embedding
 from ..pip_utils import ensure_package
 from ..worker_utils import set_proc_title, sleep_interruptible
-from .best_match import Entity, assemble_best_match
 from .genre_labels import label_for_index
 from .query_parser import ParsedQuery, parse_query
 from .searcher_db import AsyncSearcherDb
@@ -102,40 +100,6 @@ _FILLER_WORDS = frozenset({
     "am", "are", "is", "be", "now", "tonight", "today", "day", "night", "time",
     "really", "very", "more", "bit", "little", "kinda", "sorta", "stuff",
 })
-
-# Descriptor vocabulary (instruments + genres + moods). A query token in here is
-# a description, not a name — so even when it matches an entity name ("piano" ->
-# "The Piano Guys", "jazz" -> Queen's "Jazz") it's a discovery query and the AI
-# suggestions are kept. Single tokens only; matched per-word against the query.
-_DESCRIPTOR_WORDS = frozenset({
-    # instruments
-    "piano", "guitar", "guitars", "violin", "cello", "drums", "drum", "bass",
-    "percussion", "saxophone", "sax", "synthesizer", "synth", "synths", "flute",
-    "trumpet", "organ", "harp", "harmonica", "accordion", "banjo", "ukulele",
-    "clarinet", "vocals", "vocal", "choir", "strings", "brass", "keyboard",
-    "acoustic", "instrumental", "orchestra",
-    # genres
-    "rock", "jazz", "electronic", "electronica", "ambient", "classical", "rap",
-    "hop", "pop", "metal", "folk", "blues", "techno", "house", "funk", "soul",
-    "reggae", "country", "punk", "disco", "edm", "dubstep", "trance", "indie",
-    "gospel", "latin", "orchestral", "soundtrack", "lofi", "grunge", "opera",
-    "synthwave", "ska", "swing", "bluegrass",
-    # moods (mirrors the mood vocabulary)
-    "happy", "upbeat", "energetic", "joyful", "euphoric", "triumphant", "epic",
-    "playful", "exciting", "uplifting", "calm", "peaceful", "serene", "chill",
-    "relaxed", "relaxing", "soothing", "mellow", "dreamy", "romantic", "tender",
-    "warm", "hopeful", "ethereal", "aggressive", "angry", "tense", "anxious",
-    "frantic", "menacing", "dark", "eerie", "chaotic", "intense", "sad",
-    "melancholic", "somber", "gloomy", "depressing", "mournful", "lonely",
-    "bleak", "nostalgic", "wistful", "bittersweet", "mysterious",
-})
-
-
-def _is_descriptive(query: str) -> bool:
-    """True if any query word is a mood/genre/instrument descriptor — i.e. a
-    discovery query, not a name lookup."""
-    return bool(set(re.findall(r"[a-z]+", query.lower())) & _DESCRIPTOR_WORDS)
-
 
 # ---------------------------------------------------------------------------
 # Model auto-download
@@ -734,48 +698,19 @@ class SearchWorker:
             top_n,
         )
 
-    def _derive_album_artist_results(
-        self, scored_tracks: list[tuple[float, str]], limit: int
-    ) -> tuple[list[str], list[str]]:
-        """Derive album and artist top-N from scored track results."""
-        album_scores: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
-        artist_scores: dict[str, tuple[int, float]] = defaultdict(lambda: (0, 0.0))
-
-        for score, tid in scored_tracks:
-            meta = self._track_meta_cache.get(tid)
-            if not meta:
-                continue
-            aid = meta.get("album_id")
-            arid = meta.get("artist_id")
-            if aid:
-                cnt, best = album_scores[aid]
-                album_scores[aid] = (cnt + 1, max(best, score))
-            if arid:
-                cnt, best = artist_scores[arid]
-                artist_scores[arid] = (cnt + 1, max(best, score))
-
-        def _sort_key(item):
-            return (-item[1][0], -item[1][1])
-
-        album_ids = [k for k, _ in sorted(album_scores.items(), key=_sort_key)][:limit]
-        artist_ids = [k for k, _ in sorted(artist_scores.items(), key=_sort_key)][
-            :limit
-        ]
-        return album_ids, artist_ids
-
     # ------------------------------------------------------------------
     # Search dispatch
     # ------------------------------------------------------------------
 
     async def _do_search(self, query: str, limit: int) -> dict:
-        """Handle one search request end-to-end.
+        """Handle one semantic search request, returning ranked track ids.
 
-        Two legs run in parallel: BEST MATCH (literal/navigational FTS over
-        entity names) as its own top section, and the CLAP semantic leg driving
-        the AI suggestion sections. FTS is not blended into the semantic ranking.
+        This is the CLAP semantic leg only (KNN + mood + tag fallback). BEST
+        MATCH (literal/navigational name lookup) and the navigational
+        suppression that hides these suggestions for a name query now live in
+        the server, which assembles them across all sources from ``search()``.
         """
         cfg = self.config.searcher
-        self._track_meta_cache: dict[str, dict] = {}
 
         parsed = parse_query(query)
         logger.info(
@@ -794,33 +729,11 @@ class SearchWorker:
         # KNN leg and the mood NN fallback so we don't double the IPC round-trip.
         query_blob = await self._encode_query_blob(query)
 
-        # --- Run the BEST MATCH (FTS) and semantic (KNN) legs in parallel ---
-        best_match_coro = self._best_match_leg(parsed)
-        knn_coro = self._knn_leg(query, cfg.knn_candidate_limit, query_blob)
-        best_match, knn_hits = await asyncio.gather(best_match_coro, knn_coro)
-
-        logger.info(
-            "_do_search: BEST MATCH=%d, KNN=%d hits",
-            len(best_match),
-            len(knn_hits),
-        )
-
-        # Navigational query: a strong name match where the query is NOT a
-        # descriptor (mood/genre/instrument) is a lookup, not discovery. The
-        # semantic leg is noise for names, so suppress AI and let BEST MATCH
-        # answer. Descriptors ("piano", "jazz") are kept even when they match an
-        # entity name. TODO: replace suppression with audio-to-audio similarity.
-        if (
-            cfg.suppress_ai_on_navigational
-            and best_match
-            and not _is_descriptive(query)
-        ):
-            logger.info("_do_search: navigational query — AI suggestions suppressed")
-            return {"tracks": [], "albums": [], "artists": [], "best_match": best_match}
+        knn_hits = await self._knn_leg(query, cfg.knn_candidate_limit, query_blob)
+        logger.info("_do_search: KNN=%d hits", len(knn_hits))
 
         # Semantic tag fallback — only when the KNN leg returned nothing AND
-        # the tag pipeline is active. Ranks purely by genre-tag overlap. (FTS
-        # no longer participates; literal matches surface via BEST MATCH.)
+        # the tag pipeline is active. Ranks purely by genre-tag overlap.
         tag_fallback_used = False
         has_knn = bool(knn_hits)
         if (
@@ -839,12 +752,11 @@ class SearchWorker:
             tag_fallback_used = bool(tag_track_ids)
 
         if not knn_hits:
-            # No semantic results; BEST MATCH may still be non-empty.
             logger.info("_do_search: no semantic hits")
             self._log_tag_contribution_summary(
                 "_do_search", parsed, [], {}, tag_fallback_used=False
             )
-            return {"tracks": [], "albums": [], "artists": [], "best_match": best_match}
+            return {"tracks": []}
 
         # KNN score map (normalised 0-1, higher is better). Skipped on the
         # tag-fallback path, where distances are synthetic and uniform.
@@ -888,9 +800,6 @@ class SearchWorker:
                 )
 
         tags_map = await self.db.get_tracks_tags_bulk(all_track_ids)
-        self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(
-            all_track_ids
-        )
 
         scored: list[tuple[float, str]] = []
         for tid in all_track_ids:
@@ -908,10 +817,7 @@ class SearchWorker:
             scored.append((score, tid))
 
         scored.sort(key=lambda st: -st[0])
-        top_tracks = scored[:limit]
-        track_result = [tid for _, tid in top_tracks]
-
-        album_ids, artist_ids = self._derive_album_artist_results(top_tracks, limit)
+        track_result = [tid for _, tid in scored[:limit]]
 
         self._log_tag_contribution_summary(
             "_do_search",
@@ -921,50 +827,7 @@ class SearchWorker:
             tag_fallback_used=tag_fallback_used,
         )
 
-        return {
-            "tracks": track_result,
-            "albums": album_ids,
-            "artists": artist_ids,
-            "best_match": best_match,
-        }
-
-    async def _best_match_leg(self, parsed: ParsedQuery) -> list[dict]:
-        """BEST MATCH leg — literal/navigational FTS over entity names.
-
-        Builds artist/album/track candidates from FTS recall and runs the
-        pure ``assemble_best_match`` algorithm (score, cut off, truncate,
-        collapse album/artist redundancies). Returns an ordered list of
-        ``{"id", "type"}`` dicts, highest rapidfuzz score first.
-
-        Scored against the raw query, not the genre/mood-stripped text
-        query: BEST MATCH answers "take me to the thing I named", which is
-        a property of the whole typed string.
-        """
-        if not parsed.text_query:
-            return []
-        cfg = self.config.searcher
-        rows = await self.db.search_entity_candidates(
-            parsed.text_query, cfg.fts_candidate_limit
-        )
-        if not rows:
-            return []
-        candidates = [
-            Entity(
-                id=r["id"],
-                type=r["type"],
-                name=r["name"],
-                album_id=r.get("album_id"),
-                artist_id=r.get("artist_id"),
-            )
-            for r in rows
-        ]
-        best = assemble_best_match(
-            candidates,
-            parsed.raw,
-            cutoff=cfg.best_match_min_fuzz_score,
-            max_results=cfg.best_match_max_results,
-        )
-        return [{"id": e.id, "type": e.type} for e in best]
+        return {"tracks": track_result}
 
     async def _knn_leg(
         self, query: str, candidate_limit: int, blob: Optional[bytes] = None
@@ -1010,10 +873,9 @@ class SearchWorker:
         falling through to a CLAP-only similar path — keeping the
         toggle as a single switch for the whole tag pipeline.
 
-        "Songs like this" has no text query, so there is no BEST MATCH
-        block — the result always carries an empty ``best_match``.
+        Returns ranked track ids only, like :meth:`_do_search`.
         """
-        empty: dict = {"tracks": [], "albums": [], "artists": [], "best_match": []}
+        empty: dict = {"tracks": []}
 
         if not self.config.searcher.tags.enabled:
             logger.info(
@@ -1085,7 +947,6 @@ class SearchWorker:
             return empty
 
         tags_map = await self.db.get_tracks_tags_bulk(all_ids)
-        self._track_meta_cache = await self.db.get_tracks_album_artist_bulk(all_ids)
 
         scored: list[tuple[float, str]] = []
         for tid in all_ids:
@@ -1100,10 +961,7 @@ class SearchWorker:
             scored.append((score, tid))
 
         scored.sort(key=lambda x: -x[0])
-        top_tracks = scored[:limit]
-        track_result = [tid for _, tid in top_tracks]
-
-        album_ids, artist_ids = self._derive_album_artist_results(top_tracks, limit)
+        track_result = [tid for _, tid in scored[:limit]]
 
         # Similar-search has a richer pre-merge picture than _do_search:
         # call the shared summary for the in-top tag contribution, then
@@ -1124,15 +982,10 @@ class SearchWorker:
             len(tag_ids),
             len(knn_map),
             len(all_ids),
-            len(top_tracks),
+            len(track_result),
         )
 
-        return {
-            "tracks": track_result,
-            "albums": album_ids,
-            "artists": artist_ids,
-            "best_match": [],
-        }
+        return {"tracks": track_result}
 
     # ------------------------------------------------------------------
     # Search handler (IPC)
@@ -1161,18 +1014,14 @@ class SearchWorker:
                 t0 = time.monotonic()
                 result = await self._do_search(req["query"], req.get("limit", 20))
                 logger.info(
-                    "Search '%s': %d best-match, %d tracks, %d albums, "
-                    "%d artists in %.3fs",
+                    "Search '%s': %d tracks in %.3fs",
                     req["query"],
-                    len(result.get("best_match", [])),
                     len(result.get("tracks", [])),
-                    len(result.get("albums", [])),
-                    len(result.get("artists", [])),
                     time.monotonic() - t0,
                 )
             except Exception as e:
                 logger.error("Search handler error: %s", e, exc_info=True)
-                result = {"tracks": [], "albums": [], "artists": [], "best_match": []}
+                result = {"tracks": []}
 
             search_response_queue.put(result)
 
