@@ -20,6 +20,7 @@ from kalinka_server.best_match import (
     Entity,
     assemble_best_match,
     browse_item_to_entity,
+    coverage_ratio,
     has_navigational_intent,
     is_descriptive,
 )
@@ -336,3 +337,29 @@ class TestHasNavigationalIntent:
         assert not has_navigational_intent("piano")
         assert not has_navigational_intent("upbeat jazz")
         assert not has_navigational_intent("play me something relaxing")
+
+
+class TestCoverageRatio:
+    """The scorer that replaces WRatio: anchored on query-word coverage."""
+
+    def test_partial_query_overlap_scores_low(self):
+        # Only 1 of 4 query words matches the title -> well under the cutoff,
+        # where WRatio scored it ~90.
+        assert coverage_ratio(
+            "something melancholic for tonight", "something"
+        ) < best_match.RAPIDFUZZ_CUTOFF
+        assert coverage_ratio("lofi beats to study", "beats") < best_match.RAPIDFUZZ_CUTOFF
+
+    def test_short_query_fully_in_longer_name_scores_high(self):
+        # The whole query is explained by the name; extra name words don't count.
+        assert coverage_ratio("jarre", "jean-michel jarre") == 100
+        assert coverage_ratio("piano guys", "the piano guys") == 100
+        assert coverage_ratio("dark side of the moon", "the dark side of the moon") == 100
+
+    def test_typo_clears_cutoff(self):
+        assert coverage_ratio(
+            "bohemain rhapsody", "bohemian rhapsody"
+        ) >= best_match.RAPIDFUZZ_CUTOFF
+
+    def test_filler_only_query_scores_zero(self):
+        assert coverage_ratio("play me something", "something") == 0.0
