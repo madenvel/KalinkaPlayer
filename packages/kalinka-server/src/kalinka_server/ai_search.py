@@ -49,7 +49,6 @@ from .best_match import (
     assemble_best_match,
     browse_item_to_entity,
     has_navigational_intent,
-    is_descriptive,
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -59,9 +58,6 @@ logger = logging.getLogger(__name__.split(".")[-1])
 CANDIDATE_LIMIT = 50
 # Semantic suggestion tracks requested per source for its AI SUGGESTIONS card.
 AI_SUGGESTIONS_LIMIT = 20
-# A strong non-descriptor name match hides the semantic suggestions (the query
-# is a lookup, not a discovery). Mirrors the old localfiles searcher behaviour.
-SUPPRESS_AI_ON_NAVIGATIONAL = True
 
 # Entity types pulled from search() as BEST MATCH candidates.
 _CANDIDATE_TYPES = (
@@ -120,21 +116,12 @@ async def assemble_ai_search(
         [items_by_id[w.id] for w in winners if w.id in items_by_id]
     )
 
-    # Navigational suppression: a strong name match that is not a descriptor
-    # (mood/genre/instrument) query is a lookup — CLAP suggestions are noise,
-    # so hide them and let BEST MATCH answer.
-    if (
-        SUPPRESS_AI_ON_NAVIGATIONAL
-        and best_match_section is not None
-        and not is_descriptive(query)
-    ):
-        logger.info("ai_search: navigational query %r — AI suggestions suppressed", query)
-        ai_sections = []
-
-    sections: List[BrowseItem] = []
-    if best_match_section is not None:
-        sections.append(best_match_section)
-    sections.extend(ai_sections)
+    # BEST MATCH on top (when the query named something we found), then every
+    # source's AI suggestions. The suggestions are always shown — a query that
+    # reads like a name but isn't in our word lists ("workout music") must not
+    # silently lose them.
+    bm = [best_match_section] if best_match_section is not None else []
+    sections = bm + ai_sections
 
     return BrowseItemList(
         offset=offset,
@@ -209,16 +196,12 @@ def _merge_best_match(
     return merged
 
 
-def _catalog_id(source: str, local_id: str) -> EntityId:
-    return EntityId(id=local_id, type=EntityType.CATALOG, source=source)
-
-
 def _best_match_section(items: List[BrowseItem]) -> Optional[BrowseItem]:
     """Wrap the ordered BEST MATCH winners (mixed entity types) in a single flat
     TILE section. None when empty so the UI renders no header."""
     if not items:
         return None
-    cat = _catalog_id("server", "best_match")
+    cat = EntityId(id="best_match", type=EntityType.CATALOG, source="server")
     return BrowseItem(
         id=cat,
         name="BEST MATCH",

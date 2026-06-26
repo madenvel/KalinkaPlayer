@@ -22,7 +22,6 @@ from kalinka_server.best_match import (
     browse_item_to_entity,
     coverage_ratio,
     has_navigational_intent,
-    is_descriptive,
 )
 
 
@@ -308,19 +307,8 @@ class TestBrowseItemToEntity:
 
 
 # ---------------------------------------------------------------------------
-# Descriptor classifier (gates navigational suppression)
+# Navigational-intent gate (decides whether BEST MATCH / search() runs)
 # ---------------------------------------------------------------------------
-
-
-class TestIsDescriptive:
-    def test_instrument_genre_mood_are_descriptive(self):
-        assert is_descriptive("piano")
-        assert is_descriptive("upbeat jazz for the morning")
-        assert is_descriptive("something MELANCHOLIC")  # case-insensitive
-
-    def test_plain_name_is_not_descriptive(self):
-        assert not is_descriptive("michael jackson")
-        assert not is_descriptive("Vangelis")
 
 
 class TestHasNavigationalIntent:
