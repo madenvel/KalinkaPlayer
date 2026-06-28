@@ -90,6 +90,16 @@ class InputModule(Protocol):
         """
         ...
 
+    def display_name(self) -> str:
+        """
+        Return a short, human-friendly name for this source, shown in section
+        headers (e.g. "Your Library", "Jamendo"). Defaults to module_name().
+
+        Returns:
+            str: The display name for this source
+        """
+        return self.module_name()
+
     async def ai_search(self, query: str, offset: int = 0, limit: int = 50) -> BrowseItemList:
         """
         Search using natural language / AI / semantic interpretation.

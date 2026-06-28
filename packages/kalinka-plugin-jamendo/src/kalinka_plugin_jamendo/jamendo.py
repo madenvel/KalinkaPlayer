@@ -396,6 +396,10 @@ class JamendoInputModule(InputModule):
     def module_name(self) -> str:
         return "Jamendo"
 
+    def display_name(self) -> str:
+        """Human-friendly source name for section headers."""
+        return "Jamendo"
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
