@@ -20,7 +20,7 @@ trustworthy absolute measure. Both encode with the production ONNX encoder.
 
 Reproducible quality benchmark for the AI search in `kalinka-plugin-localfiles`. The skill assumes:
 
-- DB at `~/kalinka/localfiles.db` (override with `KALINKA_DB`)
+- DB at `~/kalinka/var/lib/kalinka/localfiles.db` (the dev-run active DB; a stale float-vector copy may linger at `~/kalinka/localfiles.db`) (override with `KALINKA_DB`)
 - Embeddings already computed (`embedding_clap_audio`, `embedding_clap_text`, `tags_predicted` are populated)
 - The **ONNX** CLAP wrapper (`packages/kalinka-plugin-localfiles/src/kalinka_plugin_localfiles/embedder/clap_onnx.py`) is loadable and its model files (`clap_text_encoder.onnx`, `clap_tokenizer.json`) are present in `KALINKA_MODEL_DIR` (default `~/kalinka/models`). **This is mandatory** — the stored vectors are ONNX-encoded; see the encoder note in "Reporting caveats".
 
@@ -42,7 +42,7 @@ Run all steps in order. Do not skip step 1 or 2 — the report is only meaningfu
 ### 1. Sanity-check the DB
 
 ```bash
-sqlite3 "${KALINKA_DB:-$HOME/kalinka/localfiles.db}" "
+sqlite3 "${KALINKA_DB:-$HOME/kalinka/var/lib/kalinka/localfiles.db}" "
 SELECT
   (SELECT COUNT(*) FROM tracks) AS tracks,
   (SELECT COUNT(*) FROM tracks WHERE embedding_clap_audio IS NOT NULL) AS audio_embedded,
@@ -78,7 +78,7 @@ Artist labels come from `queries.json → artist_labels` — a curated map of we
 
 ```bash
 python .claude/skills/assess-ai-search/tools/evaluate.py \
-  --db        "${KALINKA_DB:-$HOME/kalinka/localfiles.db}" \
+  --db        "${KALINKA_DB:-$HOME/kalinka/var/lib/kalinka/localfiles.db}" \
   --queries   .claude/skills/assess-ai-search/queries.json \
   --truth     tmp/ai_search_eval/ground_truth.jsonl \
   --k         10 \

@@ -258,45 +258,8 @@ class SearcherConfig(BaseModel):
     max_results: int = Field(
         default=20, title="Max results per entity type",
     )
-    # --- BEST MATCH (literal/navigational FTS block shown above AI search) ---
-    # Expert-only: these surface as the top "BEST MATCH" section, so the
-    # defaults err on the strict side. A weak match shown as the "best"
-    # result is worse than showing nothing.
-    best_match_min_fuzz_score: int = Field(
-        default=88, ge=0, le=100,
-        title="BEST MATCH minimum rapidfuzz score (0–100)",
-        json_schema_extra={
-            "help": (
-                "Inclusion threshold for the top BEST MATCH block (case-"
-                "insensitive). Higher = fewer, more confident literal matches. "
-                "88 drops queries that merely share one word with a title "
-                "(~85) while keeping real matches (>=90). Mirrors RAPIDFUZZ_CUTOFF."
-            ),
-        },
-    )
-    best_match_max_results: int = Field(
-        default=6, ge=1, le=50,
-        title="BEST MATCH max results",
-        json_schema_extra={
-            "help": (
-                "Maximum entities in the BEST MATCH block (before "
-                "album/artist redundancy removal). Mirrors MAX_RESULTS."
-            ),
-        },
-    )
-    suppress_ai_on_navigational: bool = Field(
-        default=True, title="Suppress AI suggestions for name matches",
-        json_schema_extra={
-            "help": (
-                "When a query strongly matches an artist/album/track name and is "
-                "not a descriptor (mood/genre/instrument), treat it as a name "
-                "lookup and hide the AI suggestions — CLAP text->audio distance "
-                "is noise for names. Descriptors like 'piano' or 'jazz' keep "
-                "their AI suggestions even when they match an entity name."
-            ),
-            **_EXPERT,
-        },
-    )
+    # BEST MATCH now lives server-side (kalinka_server.SearchConfig); the old
+    # best_match_* / suppress_ai_on_navigational fields were removed from here.
 
 
 class EmbedderConfig(BaseModel):
