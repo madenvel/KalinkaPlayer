@@ -299,7 +299,7 @@ INDEX_TABLES = {
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db",      default=os.environ.get("KALINKA_DB", os.path.expanduser("~/kalinka/localfiles.db")))
+    ap.add_argument("--db",      default=os.environ.get("KALINKA_DB", os.path.expanduser("~/kalinka/var/lib/kalinka/localfiles.db")))
     ap.add_argument("--queries", default=str(Path(__file__).resolve().parent.parent / "queries.json"))
     ap.add_argument("--truth",   default="tmp/ai_search_eval/ground_truth.jsonl")
     ap.add_argument("--out",     default="tmp/ai_search_eval/results.json")
