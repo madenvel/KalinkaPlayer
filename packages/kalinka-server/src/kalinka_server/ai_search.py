@@ -186,10 +186,12 @@ def _source_best_match(
 
     Returns ``(section, is_name_lookup)``: the section (None if nothing cleared
     the cut-off) and whether the query is a near-exact whole-string match
-    against one of this source's matches — a pure name lookup ("jean michel
-    jarre" -> "Jean-Michel Jarre") that should hide this source's suggestions. A
-    partial / extra-word match keeps them ("workout music" -> "Workout"). The
-    cut-off score is shared across sources.
+    against one of this source's ARTIST matches — a pure name lookup ("jean
+    michel jarre" -> "Jean-Michel Jarre") that should hide this source's
+    suggestions. Only artists count: an album / playlist / track named like a
+    mood ("Late Night Jazz") is more likely a discovery query, so it keeps the
+    suggestions. A partial / extra-word match keeps them too ("workout music" ->
+    "Workout"). The cut-off score is shared across sources.
     """
     items_by_id = {item.id.to_string: item for item in src.candidates}
     winners = assemble_best_match(
@@ -204,7 +206,8 @@ def _source_best_match(
         [items_by_id[w.id] for w in winners if w.id in items_by_id],
     )
     is_name_lookup = any(
-        full_match_score(query, w.name) >= cfg.ai_suppress_full_match_score
+        w.type == "artist"
+        and full_match_score(query, w.name) >= cfg.ai_suppress_full_match_score
         for w in winners
     )
     return section, is_name_lookup

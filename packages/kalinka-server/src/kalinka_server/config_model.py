@@ -227,10 +227,12 @@ class SearchConfig(BaseModel):
         title="Hide AI suggestions on a full-name match",
         json_schema_extra={
             "help": (
-                "When a BEST MATCH entity name matches the whole query at or "
+                "When a BEST MATCH ARTIST name matches the whole query at or "
                 "above this whole-string score (0–100), the query is treated as "
-                "a name lookup and the AI suggestion cards are hidden. Higher = "
-                "suppress less; 100 hides them only for an exact full-name match."
+                "a name lookup and that source's AI suggestion card is hidden. "
+                "Only artists count (an album/playlist named like a mood, e.g. "
+                "'Late Night Jazz', keeps the suggestions). Higher = suppress "
+                "less; 100 hides only on an exact artist-name match."
             ),
         },
     )
