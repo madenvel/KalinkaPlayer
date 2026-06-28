@@ -169,9 +169,26 @@ async def test_best_match_from_search_results():
     bms = _best_match_sections(result)
     assert [b.name for b in bms] == ["BEST MATCH · localfiles"]
     assert [s.name for s in bms[0].sections] == ["Vangelis"]
-    # "vangelis" IS the artist's whole name -> name lookup -> this source's AI hidden.
+    # "vangelis" IS an ARTIST's whole name -> name lookup -> this source's AI hidden.
     assert _ai_cards(result) == []
     assert result.items[0] is bms[0]  # BEST MATCH first
+
+
+async def test_album_full_match_keeps_ai():
+    # "late night jazz" exactly names a Jamendo album, but album/playlist names
+    # are often moods — only an ARTIST full-match suppresses, so AI stays.
+    module = FakeModule(
+        "jamendo",
+        search_results={SearchType.album: [
+            _album_item("jamendo", "a1", "Late Night Jazz", "ar", "Some Artist")
+        ]},
+        ai_tracks=[_track_item("jamendo", "t1", "Blue Mood")],
+    )
+
+    result = await assemble_ai_search([module], "late night jazz", 0, 10)
+
+    assert len(_best_match_sections(result)) == 1  # the album matched
+    assert len(_ai_cards(result)) == 1  # AI NOT hidden (album, not artist)
 
 
 async def test_artist_dominates_album_in_best_match():
