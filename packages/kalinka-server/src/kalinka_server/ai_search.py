@@ -19,8 +19,9 @@ MATCH name (a pure name lookup like "jean michel jarre" → "Jean-Michel Jarre")
 they're hidden — the user wants the named thing, not songs that sound like the
 words. A partial / extra-word query ("workout music") keeps them.
 
-Related Albums / Related Artists (derived from the suggestion tracks) are a
-planned addition below the suggestion cards; not implemented yet.
+  * **Related Albums / Related Artists** — derived from the suggestion tracks
+    (the union across sources), ranked by how many suggestions point at each
+    album / artist, and appended below the suggestion cards.
 """
 
 from __future__ import annotations
@@ -28,11 +29,13 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from kalinka_plugin_sdk.datamodel import (
+    Album,
+    Artist,
     BrowseItem,
     BrowseItemList,
     Catalog,
@@ -136,9 +139,10 @@ async def assemble_ai_search(
         ai_sections = []
 
     # BEST MATCH on top (when the query named something we found), then every
-    # source's AI suggestions.
+    # source's AI suggestions, then the Related Albums / Artists derived from
+    # those suggestions (empty when the suggestions were hidden).
     bm = [best_match_section] if best_match_section is not None else []
-    sections = bm + ai_sections
+    sections = bm + ai_sections + _related_sections(ai_sections, cfg)
 
     return BrowseItemList(
         offset=offset,
@@ -238,6 +242,99 @@ def _best_match_section(items: List[BrowseItem]) -> Optional[BrowseItem]:
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.CATALOG,
                 icon="best_match",
+                items_count=len(items),
+            ),
+        ),
+        sections=items,
+    )
+
+
+def _related_sections(
+    ai_sections: List[BrowseItem], cfg: SearchConfig
+) -> List[BrowseItem]:
+    """Derive Related Albums / Related Artists from the AI suggestion tracks.
+
+    Rolls up the tracks inside every source's card (their union, in rank order)
+    by album and by artist, ranks each by suggestion count then first
+    appearance, and wraps the top ``related_max_results`` of each into a TILE
+    section. Empty in, empty out — so when the suggestions were hidden, no
+    Related rows appear.
+    """
+    album_pairs: list = []
+    artist_pairs: list = []
+    for card in ai_sections:
+        for item in card.sections or []:
+            track = item.track
+            if track is None:
+                continue
+            if track.album is not None:
+                album_pairs.append((track.album.id.to_string, track.album))
+            # Prefer the track's own performer over the album artist, which can
+            # be "Various Artists" on a compilation.
+            artist = track.performer or (track.album.artist if track.album else None)
+            if artist is not None:
+                artist_pairs.append((artist.id.to_string, artist))
+
+    sections: List[BrowseItem] = []
+    album_cards = [_album_card(a) for a in _rollup(album_pairs, cfg.related_max_results)]
+    if album_cards:
+        sections.append(
+            _related_catalog("Related Albums", "album", PreviewContentType.ALBUM, album_cards)
+        )
+    artist_cards = [_artist_card(a) for a in _rollup(artist_pairs, cfg.related_max_results)]
+    if artist_cards:
+        sections.append(
+            _related_catalog(
+                "Related Artists", "artist", PreviewContentType.ARTIST, artist_cards
+            )
+        )
+    return sections
+
+
+def _rollup(pairs: list, limit: int) -> list:
+    """Dedup (id, entity) pairs given in rank order, rank by occurrence count
+    then first appearance, and return the top ``limit`` entities. ``first``'s
+    insertion order is the first-appearance order, and the sort is stable, so
+    the count sort keeps that as the tie-break for free."""
+    counts = Counter(key for key, _ in pairs)
+    first: dict = {}
+    for key, item in pairs:
+        first.setdefault(key, item)
+    ranked = sorted(first.items(), key=lambda kv: -counts[kv[0]])
+    return [item for _, item in ranked[:limit]]
+
+
+def _album_card(album: Album) -> BrowseItem:
+    return BrowseItem(
+        id=album.id,
+        name=album.title,
+        subname=album.artist.name if album.artist else None,
+        can_browse=True,
+        can_add=True,
+        album=album,
+    )
+
+
+def _artist_card(artist: Artist) -> BrowseItem:
+    return BrowseItem(id=artist.id, name=artist.name, can_browse=True, artist=artist)
+
+
+def _related_catalog(
+    title: str, icon: str, content_type: PreviewContentType, items: List[BrowseItem]
+) -> BrowseItem:
+    cat = EntityId(id=f"ai_search:related:{icon}", type=EntityType.CATALOG, source="server")
+    return BrowseItem(
+        id=cat,
+        name=title,
+        can_browse=False,
+        can_add=False,
+        catalog=Catalog(
+            id=cat,
+            title=title,
+            preview_config=Preview(
+                type=PreviewType.TILE,
+                content_type=content_type,
+                icon=icon,
                 items_count=len(items),
             ),
         ),

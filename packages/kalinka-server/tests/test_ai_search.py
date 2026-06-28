@@ -61,6 +61,24 @@ def _track_item(source: str, local: str, title: str) -> BrowseItem:
     )
 
 
+def _sugg_track(source, local, title, album_local, album_title, artist_local, artist_name):
+    """A suggestion track carrying full album + artist metadata, so the server
+    can derive Related Albums / Related Artists from it."""
+    tid = EntityId(id=local, type=EntityType.TRACK, source=source)
+    artist = Artist(id=EntityId(id=artist_local, type=EntityType.ARTIST, source=source), name=artist_name)
+    album = Album(
+        id=EntityId(id=album_local, type=EntityType.ALBUM, source=source),
+        title=album_title,
+        artist=artist,
+    )
+    return BrowseItem(
+        id=tid,
+        name=title,
+        can_add=True,
+        track=Track(id=tid, title=title, duration=1, album=album, performer=artist),
+    )
+
+
 def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
     """Mirror what a plugin's ai_search() returns: a source-scoped, ready-to-
     append "AI SUGGESTIONS" card. The server appends this verbatim."""
@@ -324,3 +342,50 @@ async def test_blank_query_returns_empty():
     module = FakeModule("localfiles", ai_tracks=[_track_item("localfiles", "t1", "x")])
     result = await assemble_ai_search([module], "   ", 0, 10)
     assert result.total == 0
+
+
+# ---------------------------------------------------------------------------
+# Related Albums / Related Artists (derived from the suggestion tracks)
+# ---------------------------------------------------------------------------
+
+
+async def test_related_albums_and_artists_derived():
+    # 2 suggestions on Album One/Artist One, 1 on Album Two/Artist Two.
+    module = FakeModule("localfiles", ai_tracks=[
+        _sugg_track("localfiles", "t1", "Song 1", "a1", "Album One", "ar1", "Artist One"),
+        _sugg_track("localfiles", "t2", "Song 2", "a1", "Album One", "ar1", "Artist One"),
+        _sugg_track("localfiles", "t3", "Song 3", "a2", "Album Two", "ar2", "Artist Two"),
+    ])
+
+    result = await assemble_ai_search([module], "dreamy ambient", 0, 10)
+
+    ralb = _section(result, "Related Albums")
+    rart = _section(result, "Related Artists")
+    assert ralb is not None and rart is not None
+    # Ranked by suggestion count: the album/artist with 2 tracks leads.
+    assert [s.name for s in ralb.sections] == ["Album One", "Album Two"]
+    assert [s.name for s in rart.sections] == ["Artist One", "Artist Two"]
+    # Browsable cards carrying the entity.
+    assert ralb.sections[0].album is not None and ralb.sections[0].can_browse
+    assert rart.sections[0].artist is not None
+    # Order: suggestion card, then Related Albums, then Related Artists.
+    names = [it.name for it in result.items]
+    assert names.index("AI SUGGESTIONS") < names.index("Related Albums") < names.index("Related Artists")
+
+
+async def test_related_hidden_when_ai_suppressed():
+    # A full-name lookup hides the suggestions, so the derived rows go too.
+    module = FakeModule(
+        "localfiles",
+        search_results={SearchType.artist: [_artist_item("localfiles", "arV", "Vangelis")]},
+        ai_tracks=[
+            _sugg_track("localfiles", "t1", "Song", "a1", "Album One", "ar1", "Artist One")
+        ],
+    )
+
+    result = await assemble_ai_search([module], "vangelis", 0, 10)
+
+    assert _section(result, "BEST MATCH") is not None
+    assert _ai_cards(result) == []
+    assert _section(result, "Related Albums") is None
+    assert _section(result, "Related Artists") is None
