@@ -142,8 +142,8 @@ async def test_best_match_from_search_results():
     bm = _section(result, "BEST MATCH")
     assert bm is not None
     assert [s.name for s in bm.sections] == ["Vangelis"]
-    # BEST MATCH leads; the AI suggestions are still shown below it (not hidden).
-    assert len(_ai_cards(result)) == 1
+    # "vangelis" IS the artist's whole name -> pure name lookup -> AI hidden.
+    assert _ai_cards(result) == []
     assert result.items[0] is bm  # BEST MATCH first
 
 
@@ -215,13 +215,14 @@ async def test_large_catalog_does_not_crowd_out_smaller_source():
 
 
 # ---------------------------------------------------------------------------
-# AI suggestions are always shown; the gate only skips the search() fan-out
+# AI suggestions: shown unless the query is a near-exact whole-name match
 # ---------------------------------------------------------------------------
 
 
-async def test_navigational_query_shows_best_match_and_ai():
-    # A name lookup leads with BEST MATCH but still shows the AI suggestions
-    # below it — they are never hidden.
+async def test_partial_name_match_keeps_ai():
+    # "piano guys" only partially matches "The Piano Guys" (token_sort 83 < 88,
+    # the name's "The" is leftover), so it is NOT a full-string lookup -> AI is
+    # still shown below BEST MATCH.
     module = FakeModule(
         "localfiles",
         search_results={SearchType.artist: [
@@ -238,8 +239,9 @@ async def test_navigational_query_shows_best_match_and_ai():
 
 async def test_unknown_word_query_keeps_ai_even_with_best_match():
     # "workout music": "workout" is not in our word lists, so the gate treats it
-    # as navigational and BEST MATCH finds a literal "Workout" track — but the AI
-    # suggestions must still be shown. This is the regression being fixed.
+    # as navigational and BEST MATCH finds a literal "Workout" track. But the
+    # query is not a whole-string match for "Workout" (extra "music",
+    # token_sort 70), so the AI suggestions must still be shown. The regression.
     module = FakeModule(
         "jamendo",
         search_results={SearchType.track: [_track_item("jamendo", "w1", "Workout")]},

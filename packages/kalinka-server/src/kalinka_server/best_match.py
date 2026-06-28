@@ -150,6 +150,21 @@ def coverage_ratio(query: str, name: str) -> float:
 SCORER = coverage_ratio
 
 
+def full_match_score(query: str, name: str) -> float:
+    """Symmetric whole-string similarity of query vs name (0..100), for the
+    AI-suppression decision.
+
+    High ONLY when the query *is* essentially this name ("jean michel jarre" vs
+    "Jean-Michel Jarre" = 94) — not when it merely contains the name as a
+    fragment ("workout music" vs "Workout" = 70) or names a fragment of it
+    ("jarre" vs "Jean-Michel Jarre" = 45). token_sort_ratio ignores word order
+    but penalises leftover words on EITHER side, which is exactly the
+    "full string match, not partial" rule. Folds diacritics + case first."""
+    return fuzz.token_sort_ratio(
+        fold_diacritics(query).casefold(), fold_diacritics(name).casefold()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Name folding
 # ---------------------------------------------------------------------------
