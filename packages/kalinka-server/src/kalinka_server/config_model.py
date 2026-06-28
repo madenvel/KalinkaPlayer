@@ -276,6 +276,18 @@ class SearchConfig(BaseModel):
             "help": "Semantic suggestion tracks requested per source for its card.",
         },
     )
+    related_max_results: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        title="Related albums / artists max",
+        json_schema_extra={
+            "help": (
+                "Maximum entries in the Related Albums / Related Artists rows "
+                "derived from the AI suggestion tracks."
+            ),
+        },
+    )
 
 
 class KalinkaConfig(BaseModel):
@@ -384,6 +396,7 @@ class KalinkaConfig(BaseModel):
                 leaf("search.best_match_max_results"),
                 leaf("search.candidate_limit"),
                 leaf("search.ai_suggestions_limit"),
+                leaf("search.related_max_results"),
             ],
         )
 
