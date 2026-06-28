@@ -21,6 +21,7 @@ from kalinka_server.best_match import (
     assemble_best_match,
     browse_item_to_entity,
     coverage_ratio,
+    full_match_score,
     has_navigational_intent,
 )
 
@@ -351,3 +352,19 @@ class TestCoverageRatio:
 
     def test_filler_only_query_scores_zero(self):
         assert coverage_ratio("play me something", "something") == 0.0
+
+
+class TestFullMatchScore:
+    """Whole-string similarity that gates AI suppression (cutoff 88)."""
+
+    def test_whole_name_match_is_high(self):
+        assert full_match_score("jean michel jarre", "Jean-Michel Jarre") >= 88
+        assert full_match_score("the beatles", "The Beatles") >= 88
+        assert full_match_score("dark side of the moon", "The Dark Side of the Moon") >= 88
+        assert full_match_score("bohemain rhapsody", "Bohemian Rhapsody") >= 88  # typo ok
+
+    def test_partial_or_extra_word_is_low(self):
+        assert full_match_score("workout music", "Workout") < 88        # extra "music"
+        assert full_match_score("jarre", "Jean-Michel Jarre") < 88      # fragment of name
+        assert full_match_score("happy birthday song", "Happy Birthday") < 88
+        assert full_match_score("something melancholic for tonight", "Something") < 88

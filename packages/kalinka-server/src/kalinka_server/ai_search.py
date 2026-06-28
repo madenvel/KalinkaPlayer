@@ -11,11 +11,13 @@ owns the catalog/preview layout so the UI renders sections verbatim):
     presentation-ready section(s) (typically a CARD catalog of semantically
     ranked tracks). The server appends these verbatim after BEST MATCH, one
     source's after another — never merged across sources (their relevance
-    scores aren't comparable). Only the navigational cut-off gates them.
+    scores aren't comparable).
 
-The legs run in parallel but are not blended. A strong navigational match for a
-non-descriptor query suppresses the semantic suggestions (a name lookup wants
-the named thing, not "songs that sound like the words").
+The legs run in parallel but are not blended. The suggestions are shown except
+for one case: when the query is a near-exact whole-string match against a BEST
+MATCH name (a pure name lookup like "jean michel jarre" → "Jean-Michel Jarre"),
+they're hidden — the user wants the named thing, not songs that sound like the
+words. A partial / extra-word query ("workout music") keeps them.
 
 Related Albums / Related Artists (derived from the suggestion tracks) are a
 planned addition below the suggestion cards; not implemented yet.
@@ -48,6 +50,7 @@ from .best_match import (
     Entity,
     assemble_best_match,
     browse_item_to_entity,
+    full_match_score,
     has_navigational_intent,
 )
 
@@ -58,6 +61,11 @@ logger = logging.getLogger(__name__.split(".")[-1])
 CANDIDATE_LIMIT = 50
 # Semantic suggestion tracks requested per source for its AI SUGGESTIONS card.
 AI_SUGGESTIONS_LIMIT = 20
+# Hide AI suggestions only when the query is a near-exact whole-string match
+# against a BEST MATCH name (a pure name lookup). token_sort_ratio 0..100;
+# 88 clears "jean michel jarre" vs "Jean-Michel Jarre" (94) but not a partial /
+# extra-word match like "workout music" vs "Workout" (70).
+AI_SUPPRESS_FULL_MATCH = 88
 
 # Entity types pulled from search() as BEST MATCH candidates.
 _CANDIDATE_TYPES = (
@@ -116,10 +124,20 @@ async def assemble_ai_search(
         [items_by_id[w.id] for w in winners if w.id in items_by_id]
     )
 
+    # Hide the AI suggestions only when the query *is* essentially a name we
+    # found — a near-exact whole-string match against a BEST MATCH entity
+    # ("jean michel jarre" -> "Jean-Michel Jarre"). A partial / extra-word match
+    # ("workout music" -> "Workout") keeps them: full_match_score penalises
+    # leftover words on either side, so only a true name lookup clears the bar.
+    # Result-based, not a brittle query-word list.
+    if best_match_section is not None and any(
+        full_match_score(query, w.name) >= AI_SUPPRESS_FULL_MATCH for w in winners
+    ):
+        logger.info("ai_search: full-name match for %r — AI suggestions hidden", query)
+        ai_sections = []
+
     # BEST MATCH on top (when the query named something we found), then every
-    # source's AI suggestions. The suggestions are always shown — a query that
-    # reads like a name but isn't in our word lists ("workout music") must not
-    # silently lose them.
+    # source's AI suggestions.
     bm = [best_match_section] if best_match_section is not None else []
     sections = bm + ai_sections
 
