@@ -108,6 +108,10 @@ class LocalFilesInputModule(InputModule):
         """Return the name of the module"""
         return "localfiles"
 
+    def display_name(self) -> str:
+        """Human-friendly source name for section headers."""
+        return "Your Library"
+
     async def ai_search(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:

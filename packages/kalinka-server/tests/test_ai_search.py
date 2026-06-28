@@ -1,9 +1,9 @@
 """Tests for the cross-source AI-search assembler (kalinka_server.ai_search).
 
-Covers the responsibilities that moved here from the localfiles searcher:
-merged BEST MATCH from every source's ``search()``, navigational suppression of
-the semantic suggestions (descriptor-aware), and one AI SUGGESTIONS card per
-source (never merged across sources).
+Covers the responsibilities that moved here from the localfiles searcher: a
+per-source BEST MATCH section from each source's ``search()``, per-source
+full-name suppression of that source's AI suggestions, one AI SUGGESTIONS card
+per source, and the derived Related Albums / Artists.
 """
 
 from typing import Dict, List, Optional
@@ -118,6 +118,9 @@ class FakeModule:
     def module_name(self) -> str:
         return self._name
 
+    def display_name(self) -> str:
+        return self._name
+
     async def search(self, type, query, offset=0, limit=50) -> BrowseItemList:
         self.search_calls += 1
         items = self._search.get(type, [])
@@ -144,6 +147,11 @@ def _ai_cards(result: BrowseItemList) -> List[BrowseItem]:
     return [item for item in result.items if item.name == "AI SUGGESTIONS"]
 
 
+def _best_match_sections(result: BrowseItemList) -> List[BrowseItem]:
+    """The per-source BEST MATCH sections (titled 'BEST MATCH · <source>')."""
+    return [item for item in result.items if item.name.startswith("BEST MATCH")]
+
+
 # ---------------------------------------------------------------------------
 # BEST MATCH assembly
 # ---------------------------------------------------------------------------
@@ -158,12 +166,12 @@ async def test_best_match_from_search_results():
 
     result = await assemble_ai_search([module], "vangelis", 0, 10)
 
-    bm = _section(result, "BEST MATCH")
-    assert bm is not None
-    assert [s.name for s in bm.sections] == ["Vangelis"]
-    # "vangelis" IS the artist's whole name -> pure name lookup -> AI hidden.
+    bms = _best_match_sections(result)
+    assert [b.name for b in bms] == ["BEST MATCH · localfiles"]
+    assert [s.name for s in bms[0].sections] == ["Vangelis"]
+    # "vangelis" IS the artist's whole name -> name lookup -> this source's AI hidden.
     assert _ai_cards(result) == []
-    assert result.items[0] is bm  # BEST MATCH first
+    assert result.items[0] is bms[0]  # BEST MATCH first
 
 
 async def test_artist_dominates_album_in_best_match():
@@ -179,14 +187,13 @@ async def test_artist_dominates_album_in_best_match():
 
     result = await assemble_ai_search([module], "miles davis", 0, 10)
 
-    bm = _section(result, "BEST MATCH")
-    assert bm is not None
+    bms = _best_match_sections(result)
+    assert len(bms) == 1
     # Artist out-ranks its same-named album -> only the artist survives.
-    ids = [s.id.type for s in bm.sections]
-    assert ids == [EntityType.ARTIST]
+    assert [s.id.type for s in bms[0].sections] == [EntityType.ARTIST]
 
 
-async def test_best_match_merges_across_sources():
+async def test_best_match_is_one_section_per_source():
     local = FakeModule(
         "localfiles",
         search_results={SearchType.artist: [_artist_item("localfiles", "a1", "Daft Punk")]},
@@ -200,37 +207,36 @@ async def test_best_match_merges_across_sources():
 
     result = await assemble_ai_search([local, jamendo], "daft punk", 0, 10)
 
-    bm = _section(result, "BEST MATCH")
-    assert bm is not None
-    sources = {s.id.source for s in bm.sections}
-    assert sources == {"localfiles", "jamendo"}
+    bms = _best_match_sections(result)
+    # One section per source, in module order; each holds only its own match.
+    assert [b.name for b in bms] == ["BEST MATCH · localfiles", "BEST MATCH · jamendo"]
+    assert {s.id.source for s in bms[0].sections} == {"localfiles"}
+    assert {s.id.source for s in bms[1].sections} == {"jamendo"}
 
 
-async def test_large_catalog_does_not_crowd_out_smaller_source():
-    # A vast public catalog floods the candidate pool with coincidental, equally
-    # high-scoring name matches; the user's library has the one real match. The
-    # library match must still land in BEST MATCH (the "jarre" regression). The
-    # flooding source is deliberately first to prove order doesn't save it.
+async def test_per_source_sections_are_independent_and_capped():
+    # Each source has its own BEST MATCH section, so a large catalog can't crowd
+    # out a smaller source's match (the old "jarre" regression is structural
+    # now). Each section is capped at best_match_max_results (default 3).
     flood = FakeModule(
         "jamendo",
-        search_results={
-            SearchType.track: [
-                _track_item("jamendo", f"j{i}", "jarre") for i in range(8)
-            ]
-        },
+        search_results={SearchType.track: [
+            _track_item("jamendo", f"j{i}", "jarre") for i in range(8)
+        ]},
     )
     library = FakeModule(
         "localfiles",
-        search_results={
-            SearchType.artist: [_artist_item("localfiles", "jmj", "Jean-Michel Jarre")]
-        },
+        search_results={SearchType.artist: [
+            _artist_item("localfiles", "jmj", "Jean-Michel Jarre")
+        ]},
     )
 
     result = await assemble_ai_search([flood, library], "jarre", 0, 10)
 
-    bm = _section(result, "BEST MATCH")
-    assert bm is not None
-    assert "localfiles" in {s.id.source for s in bm.sections}
+    bms = {b.name: b for b in _best_match_sections(result)}
+    assert [s.name for s in bms["BEST MATCH · localfiles"].sections] == ["Jean-Michel Jarre"]
+    # jamendo's 8 "jarre" tracks are capped to 3; they never displace localfiles.
+    assert len(bms["BEST MATCH · jamendo"].sections) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +258,7 @@ async def test_partial_name_match_keeps_ai():
 
     result = await assemble_ai_search([module], "piano guys", 0, 10)
 
-    assert _section(result, "BEST MATCH") is not None
+    assert len(_best_match_sections(result)) == 1
     assert len(_ai_cards(result)) == 1
 
 
@@ -274,7 +280,7 @@ async def test_suppression_threshold_is_config_driven():
         [module], "jean michel jarre", 0, 10,
         SearchConfig(ai_suppress_full_match_score=95),
     )
-    assert _section(loose, "BEST MATCH") is not None
+    assert len(_best_match_sections(loose)) == 1
     assert len(_ai_cards(loose)) == 1
 
 
@@ -291,7 +297,7 @@ async def test_unknown_word_query_keeps_ai_even_with_best_match():
 
     result = await assemble_ai_search([module], "workout music", 0, 10)
 
-    assert _section(result, "BEST MATCH") is not None  # "Workout" matched literally
+    assert len(_best_match_sections(result)) == 1  # "Workout" matched literally
     assert len(_ai_cards(result)) == 1  # ...and the AI suggestions are NOT hidden
 
 
@@ -306,7 +312,7 @@ async def test_mood_query_skips_best_match_and_search():
 
     result = await assemble_ai_search([module], "something melancholic for tonight", 0, 10)
 
-    assert _section(result, "BEST MATCH") is None
+    assert _best_match_sections(result) == []
     assert module.search_calls == 0  # no search() round-trips for a mood query
     assert len(_ai_cards(result)) == 1
 
@@ -385,7 +391,7 @@ async def test_related_hidden_when_ai_suppressed():
 
     result = await assemble_ai_search([module], "vangelis", 0, 10)
 
-    assert _section(result, "BEST MATCH") is not None
+    assert len(_best_match_sections(result)) == 1
     assert _ai_cards(result) == []
     assert _section(result, "Related Albums") is None
     assert _section(result, "Related Artists") is None

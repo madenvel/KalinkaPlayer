@@ -247,12 +247,12 @@ class SearchConfig(BaseModel):
         },
     )
     best_match_max_results: int = Field(
-        default=6,
+        default=3,
         ge=1,
         le=50,
-        title="BEST MATCH max results",
+        title="BEST MATCH max results per source",
         json_schema_extra={
-            "help": "Maximum entities in the merged BEST MATCH block.",
+            "help": "Maximum entities in each source's BEST MATCH section.",
         },
     )
     candidate_limit: int = Field(

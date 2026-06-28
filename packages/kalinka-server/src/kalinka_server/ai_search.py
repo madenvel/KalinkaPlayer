@@ -4,9 +4,10 @@ The ``/ai_search`` endpoint runs two independent legs over every input module
 and assembles the presentation here (the modules return raw data; the server
 owns the catalog/preview layout so the UI renders sections verbatim):
 
-  * **BEST MATCH** — a single merged, literal/navigational block built from the
-    modules' ``search()`` results (tracks / albums / artists / playlists),
-    scored and de-duplicated by :func:`best_match.assemble_best_match`.
+  * **BEST MATCH** — one literal/navigational section *per source*, built from
+    that source's ``search()`` results (tracks / albums / artists / playlists),
+    scored and de-duplicated by :func:`best_match.assemble_best_match` and
+    titled with the source's display name.
   * **AI SUGGESTIONS** — each module's ``ai_search()`` returns its own
     presentation-ready section(s) (typically a CARD catalog of semantically
     ranked tracks). The server appends these verbatim after BEST MATCH, one
@@ -27,11 +28,10 @@ words. A partial / extra-word query ("workout music") keeps them.
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from kalinka_plugin_sdk.datamodel import (
     Album,
@@ -49,7 +49,6 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from .best_match import (
-    Entity,
     assemble_best_match,
     browse_item_to_entity,
     full_match_score,
@@ -70,9 +69,12 @@ _CANDIDATE_TYPES = (
 
 @dataclass
 class _SourceResults:
-    """One source's contribution: literal candidates (for the merged BEST
-    MATCH) and its own ready-to-append ai_search() section(s)."""
+    """One source's contribution: its display name, its literal candidates (for
+    that source's own BEST MATCH section) and its ready-to-append ai_search()
+    section(s)."""
 
+    source: str
+    display_name: str
     candidates: List[BrowseItem]
     ai_sections: List[BrowseItem]
 
@@ -84,7 +86,8 @@ async def assemble_ai_search(
     limit: int,
     cfg: Optional[SearchConfig] = None,
 ) -> BrowseItemList:
-    """Build the merged BEST MATCH + per-source AI SUGGESTIONS section list.
+    """Build the section list: a per-source BEST MATCH section, then a per-source
+    AI SUGGESTIONS card, then the derived Related Albums / Artists.
 
     ``cfg`` carries the tunables (score cut-offs, limits); defaults are used when
     it is omitted (e.g. in tests).
@@ -103,46 +106,29 @@ async def assemble_ai_search(
         return_exceptions=True,
     )
 
-    # Collect literal candidates grouped by source (for a fair merged BEST
-    # MATCH) and each source's ready-to-append ai_search() card(s). items_by_id
-    # maps a scored entity back to its rich BrowseItem.
-    candidates_by_source: Dict[str, List[Entity]] = defaultdict(list)
-    items_by_id: dict[str, BrowseItem] = {}
-    ai_sections: List[BrowseItem] = []
+    # Each source gets its own BEST MATCH section (no cross-source merge), and
+    # its own AI card — hidden when *that source's* best match is a full-name
+    # lookup. Best-match sections lead, then the suggestion cards.
+    bm_sections: List[BrowseItem] = []
+    ai_cards: List[BrowseItem] = []
     for src in per_source:
         if isinstance(src, BaseException):
             # A whole source blew up outside its own leg handling — skip it so
             # one bad source can't sink the query.
             logger.warning("ai_search: source failed: %s", src)
             continue
-        for item in src.candidates:
-            items_by_id[item.id.to_string] = item
-            candidates_by_source[item.id.source].append(browse_item_to_entity(item))
-        ai_sections.extend(src.ai_sections)
+        section, is_name_lookup = _source_best_match(src, query, cfg)
+        if section is not None:
+            bm_sections.append(section)
+        if is_name_lookup:
+            logger.info(
+                "ai_search: full-name match for %r in %s — its AI hidden",
+                query, src.source,
+            )
+        else:
+            ai_cards.extend(src.ai_sections)
 
-    winners = _merge_best_match(candidates_by_source, query, cfg)
-    best_match_section = _best_match_section(
-        [items_by_id[w.id] for w in winners if w.id in items_by_id]
-    )
-
-    # Hide the AI suggestions only when the query *is* essentially a name we
-    # found — a near-exact whole-string match against a BEST MATCH entity
-    # ("jean michel jarre" -> "Jean-Michel Jarre"). A partial / extra-word match
-    # ("workout music" -> "Workout") keeps them: full_match_score penalises
-    # leftover words on either side, so only a true name lookup clears the bar.
-    # Result-based, not a brittle query-word list.
-    if best_match_section is not None and any(
-        full_match_score(query, w.name) >= cfg.ai_suppress_full_match_score
-        for w in winners
-    ):
-        logger.info("ai_search: full-name match for %r — AI suggestions hidden", query)
-        ai_sections = []
-
-    # BEST MATCH on top (when the query named something we found), then every
-    # source's AI suggestions, then the Related Albums / Artists derived from
-    # those suggestions (empty when the suggestions were hidden).
-    bm = [best_match_section] if best_match_section is not None else []
-    sections = bm + ai_sections + _related_sections(ai_sections, cfg)
+    sections = bm_sections + ai_cards + _related_sections(ai_cards, cfg)
 
     return BrowseItemList(
         offset=offset,
@@ -185,59 +171,64 @@ async def _search_one_source(
             logger.warning("ai_search failed for %s: %s", name, ai_leg)
         ai_sections = []
 
-    return _SourceResults(candidates=candidates, ai_sections=ai_sections)
+    return _SourceResults(
+        source=name,
+        display_name=module.display_name(),
+        candidates=candidates,
+        ai_sections=ai_sections,
+    )
 
 
-def _merge_best_match(
-    candidates_by_source: Dict[str, List[Entity]], query: str, cfg: SearchConfig
-) -> List[Entity]:
-    """Assemble BEST MATCH per source, then interleave round-robin by rank.
+def _source_best_match(
+    src: _SourceResults, query: str, cfg: SearchConfig
+) -> tuple[Optional[BrowseItem], bool]:
+    """Build one source's BEST MATCH section and decide whether to hide its AI.
 
-    A single global "score, then truncate to N" merge lets a large public
-    catalog (many coincidental name matches) crowd a smaller source's genuine
-    match out of the top N — e.g. a dozen Jamendo playlists named "jarre" evict
-    the user's own "Jean-Michel Jarre". Scoring / cut-off / dedup still run per
-    source (ids are source-scoped, so dominance never crossed sources anyway);
-    interleaving each source's ranked winners guarantees every source that
-    matched is represented before the N-slot cap is reached. Source order
-    follows module order. With one source this is identical to a plain
-    assemble_best_match.
+    Returns ``(section, is_name_lookup)``: the section (None if nothing cleared
+    the cut-off) and whether the query is a near-exact whole-string match
+    against one of this source's matches — a pure name lookup ("jean michel
+    jarre" -> "Jean-Michel Jarre") that should hide this source's suggestions. A
+    partial / extra-word match keeps them ("workout music" -> "Workout"). The
+    cut-off score is shared across sources.
     """
-    ranked_per_source = [
-        assemble_best_match(
-            cands,
-            query,
-            cutoff=cfg.best_match_min_score,
-            max_results=cfg.best_match_max_results,
-        )
-        for cands in candidates_by_source.values()
-    ]
-    merged: List[Entity] = []
-    for tier in itertools.zip_longest(*ranked_per_source):
-        for entity in tier:
-            if entity is None:
-                continue
-            merged.append(entity)
-            if len(merged) >= cfg.best_match_max_results:
-                return merged
-    return merged
+    items_by_id = {item.id.to_string: item for item in src.candidates}
+    winners = assemble_best_match(
+        [browse_item_to_entity(item) for item in src.candidates],
+        query,
+        cutoff=cfg.best_match_min_score,
+        max_results=cfg.best_match_max_results,
+    )
+    section = _best_match_section(
+        src.source,
+        src.display_name,
+        [items_by_id[w.id] for w in winners if w.id in items_by_id],
+    )
+    is_name_lookup = any(
+        full_match_score(query, w.name) >= cfg.ai_suppress_full_match_score
+        for w in winners
+    )
+    return section, is_name_lookup
 
 
-def _best_match_section(items: List[BrowseItem]) -> Optional[BrowseItem]:
-    """Wrap the ordered BEST MATCH winners (mixed entity types) in a single flat
-    TILE section. None when empty so the UI renders no header."""
+def _best_match_section(
+    source: str, display_name: str, items: List[BrowseItem]
+) -> Optional[BrowseItem]:
+    """Wrap one source's ordered BEST MATCH winners (mixed entity types) in a
+    flat TILE section, titled with the source's display name. None when empty
+    so the UI renders no header."""
     if not items:
         return None
-    cat = EntityId(id="best_match", type=EntityType.CATALOG, source="server")
+    cat = EntityId(id=f"best_match_{source}", type=EntityType.CATALOG, source="server")
+    title = f"BEST MATCH · {display_name}"
     return BrowseItem(
         id=cat,
-        name="BEST MATCH",
+        name=title,
         subname="Top results for your search",
         can_browse=False,
         can_add=False,
         catalog=Catalog(
             id=cat,
-            title="BEST MATCH",
+            title=title,
             preview_config=Preview(
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.CATALOG,
