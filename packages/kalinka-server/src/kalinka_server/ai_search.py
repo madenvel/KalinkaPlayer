@@ -46,26 +46,15 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from .best_match import (
-    MAX_RESULTS,
     Entity,
     assemble_best_match,
     browse_item_to_entity,
     full_match_score,
     has_navigational_intent,
 )
+from .config_model import SearchConfig
 
 logger = logging.getLogger(__name__.split(".")[-1])
-
-# Candidates pulled per type per source to feed BEST MATCH. The rapidfuzz
-# cutoff does the real filtering; this only bounds recall/cost.
-CANDIDATE_LIMIT = 50
-# Semantic suggestion tracks requested per source for its AI SUGGESTIONS card.
-AI_SUGGESTIONS_LIMIT = 20
-# Hide AI suggestions only when the query is a near-exact whole-string match
-# against a BEST MATCH name (a pure name lookup). token_sort_ratio 0..100;
-# 88 clears "jean michel jarre" vs "Jean-Michel Jarre" (94) but not a partial /
-# extra-word match like "workout music" vs "Workout" (70).
-AI_SUPPRESS_FULL_MATCH = 88
 
 # Entity types pulled from search() as BEST MATCH candidates.
 _CANDIDATE_TYPES = (
@@ -86,9 +75,18 @@ class _SourceResults:
 
 
 async def assemble_ai_search(
-    modules: List[InputModule], query: str, offset: int, limit: int
+    modules: List[InputModule],
+    query: str,
+    offset: int,
+    limit: int,
+    cfg: Optional[SearchConfig] = None,
 ) -> BrowseItemList:
-    """Build the merged BEST MATCH + per-source AI SUGGESTIONS section list."""
+    """Build the merged BEST MATCH + per-source AI SUGGESTIONS section list.
+
+    ``cfg`` carries the tunables (score cut-offs, limits); defaults are used when
+    it is omitted (e.g. in tests).
+    """
+    cfg = cfg or SearchConfig()
     if not query.strip() or not modules:
         return EmptyList(offset, limit)
 
@@ -98,7 +96,7 @@ async def assemble_ai_search(
     navigational = has_navigational_intent(query)
 
     per_source = await asyncio.gather(
-        *(_search_one_source(module, query, navigational) for module in modules),
+        *(_search_one_source(module, query, navigational, cfg) for module in modules),
         return_exceptions=True,
     )
 
@@ -119,7 +117,7 @@ async def assemble_ai_search(
             candidates_by_source[item.id.source].append(browse_item_to_entity(item))
         ai_sections.extend(src.ai_sections)
 
-    winners = _merge_best_match(candidates_by_source, query)
+    winners = _merge_best_match(candidates_by_source, query, cfg)
     best_match_section = _best_match_section(
         [items_by_id[w.id] for w in winners if w.id in items_by_id]
     )
@@ -131,7 +129,8 @@ async def assemble_ai_search(
     # leftover words on either side, so only a true name lookup clears the bar.
     # Result-based, not a brittle query-word list.
     if best_match_section is not None and any(
-        full_match_score(query, w.name) >= AI_SUPPRESS_FULL_MATCH for w in winners
+        full_match_score(query, w.name) >= cfg.ai_suppress_full_match_score
+        for w in winners
     ):
         logger.info("ai_search: full-name match for %r — AI suggestions hidden", query)
         ai_sections = []
@@ -150,20 +149,20 @@ async def assemble_ai_search(
 
 
 async def _search_one_source(
-    module: InputModule, query: str, navigational: bool
+    module: InputModule, query: str, navigational: bool, cfg: SearchConfig
 ) -> _SourceResults:
     """Run a source's ``ai_search()`` and — only for a navigational query — its
     four ``search()`` types, in parallel. A failing leg is logged and skipped:
     one bad source must not sink the whole query."""
     name = module.module_name()
     search_coros = (
-        [module.search(t, query, 0, CANDIDATE_LIMIT) for t in _CANDIDATE_TYPES]
+        [module.search(t, query, 0, cfg.candidate_limit) for t in _CANDIDATE_TYPES]
         if navigational
         else []
     )
     legs = await asyncio.gather(
         *search_coros,
-        module.ai_search(query, 0, AI_SUGGESTIONS_LIMIT),
+        module.ai_search(query, 0, cfg.ai_suggestions_limit),
         return_exceptions=True,
     )
     *search_legs, ai_leg = legs
@@ -186,7 +185,7 @@ async def _search_one_source(
 
 
 def _merge_best_match(
-    candidates_by_source: Dict[str, List[Entity]], query: str
+    candidates_by_source: Dict[str, List[Entity]], query: str, cfg: SearchConfig
 ) -> List[Entity]:
     """Assemble BEST MATCH per source, then interleave round-robin by rank.
 
@@ -201,7 +200,13 @@ def _merge_best_match(
     assemble_best_match.
     """
     ranked_per_source = [
-        assemble_best_match(cands, query) for cands in candidates_by_source.values()
+        assemble_best_match(
+            cands,
+            query,
+            cutoff=cfg.best_match_min_score,
+            max_results=cfg.best_match_max_results,
+        )
+        for cands in candidates_by_source.values()
     ]
     merged: List[Entity] = []
     for tier in itertools.zip_longest(*ranked_per_source):
@@ -209,7 +214,7 @@ def _merge_best_match(
             if entity is None:
                 continue
             merged.append(entity)
-            if len(merged) >= MAX_RESULTS:
+            if len(merged) >= cfg.best_match_max_results:
                 return merged
     return merged
 

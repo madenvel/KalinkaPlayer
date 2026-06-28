@@ -216,6 +216,68 @@ class DeviceAutomationConfig(BaseModel):
     )
 
 
+class SearchConfig(BaseModel):
+    """Cross-source search tuning: the merged BEST MATCH block and the AI
+    suggestion cards assembled by ``kalinka_server.ai_search``."""
+
+    ai_suppress_full_match_score: int = Field(
+        default=88,
+        ge=0,
+        le=100,
+        title="Hide AI suggestions on a full-name match",
+        json_schema_extra={
+            "help": (
+                "When a BEST MATCH entity name matches the whole query at or "
+                "above this whole-string score (0–100), the query is treated as "
+                "a name lookup and the AI suggestion cards are hidden. Higher = "
+                "suppress less; 100 hides them only for an exact full-name match."
+            ),
+        },
+    )
+    best_match_min_score: int = Field(
+        default=88,
+        ge=0,
+        le=100,
+        title="BEST MATCH minimum score",
+        json_schema_extra={
+            "help": (
+                "Minimum query-coverage score (0–100) for an entity to appear "
+                "in the BEST MATCH block. Higher = fewer, more confident matches."
+            ),
+        },
+    )
+    best_match_max_results: int = Field(
+        default=6,
+        ge=1,
+        le=50,
+        title="BEST MATCH max results",
+        json_schema_extra={
+            "help": "Maximum entities in the merged BEST MATCH block.",
+        },
+    )
+    candidate_limit: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        title="BEST MATCH candidates per type",
+        json_schema_extra={
+            "help": (
+                "Items fetched per entity type per source to feed BEST MATCH "
+                "ranking before the score cut-off."
+            ),
+        },
+    )
+    ai_suggestions_limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        title="AI suggestions per source",
+        json_schema_extra={
+            "help": "Semantic suggestion tracks requested per source for its card.",
+        },
+    )
+
+
 class KalinkaConfig(BaseModel):
     """Main Kalinka configuration."""
 
@@ -224,6 +286,7 @@ class KalinkaConfig(BaseModel):
     input: InputConfig = Field(default_factory=InputConfig, title="Input")
     decoder: DecoderConfig = Field(default_factory=DecoderConfig, title="Decoders")
     fixups: FixupsConfig = Field(default_factory=FixupsConfig, title="Hardware fixups")
+    search: SearchConfig = Field(default_factory=SearchConfig, title="Search")
     device_automation: DeviceAutomationConfig = Field(
         default_factory=DeviceAutomationConfig, title="Device automation"
     )
@@ -311,4 +374,17 @@ class KalinkaConfig(BaseModel):
             ],
         )
 
-        return [srv, device_auto, audio_out, fixups, buffers]
+        search_section = SectionSpec(
+            id=f"{prefix}.search",
+            title="Search",
+            importance=Importance.EXPERT,
+            fields=[
+                leaf("search.ai_suppress_full_match_score"),
+                leaf("search.best_match_min_score"),
+                leaf("search.best_match_max_results"),
+                leaf("search.candidate_limit"),
+                leaf("search.ai_suggestions_limit"),
+            ],
+        )
+
+        return [srv, device_auto, audio_out, fixups, buffers, search_section]

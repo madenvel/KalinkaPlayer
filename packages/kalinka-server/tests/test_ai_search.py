@@ -24,6 +24,7 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import SearchType
 
 from kalinka_server.ai_search import assemble_ai_search
+from kalinka_server.config_model import SearchConfig
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +236,28 @@ async def test_partial_name_match_keeps_ai():
 
     assert _section(result, "BEST MATCH") is not None
     assert len(_ai_cards(result)) == 1
+
+
+async def test_suppression_threshold_is_config_driven():
+    module = FakeModule(
+        "localfiles",
+        search_results={SearchType.artist: [
+            _artist_item("localfiles", "jmj", "Jean-Michel Jarre")
+        ]},
+        ai_tracks=[_track_item("localfiles", "t1", "Oxygene")],
+    )
+
+    # Default threshold (88): "jean michel jarre" (full-match 94) hides AI.
+    default = await assemble_ai_search([module], "jean michel jarre", 0, 10)
+    assert _ai_cards(default) == []
+
+    # Raise the threshold above 94 via config -> the same query keeps its AI.
+    loose = await assemble_ai_search(
+        [module], "jean michel jarre", 0, 10,
+        SearchConfig(ai_suppress_full_match_score=95),
+    )
+    assert _section(loose, "BEST MATCH") is not None
+    assert len(_ai_cards(loose)) == 1
 
 
 async def test_unknown_word_query_keeps_ai_even_with_best_match():
