@@ -479,7 +479,9 @@ async def create_app(
         :func:`assemble_ai_search`.
         """
         input_modules: List[InputModule] = extract_modules(sources)
-        return await assemble_ai_search(input_modules, query, offset, limit)
+        return await assemble_ai_search(
+            input_modules, query, offset, limit, app.state.config.search
+        )
 
     @app.get("/indexer/status")
     async def indexer_status(sources: Optional[str] = None) -> dict:
