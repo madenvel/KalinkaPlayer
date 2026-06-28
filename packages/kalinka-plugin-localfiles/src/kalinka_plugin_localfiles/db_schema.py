@@ -112,7 +112,6 @@ async def init_db(db_path: str) -> None:
                 replaygain_gain REAL,
                 enriched INTEGER DEFAULT 0,
                 last_updated INTEGER,
-                search_indexed_at TIMESTAMP,
                 tags_predicted TEXT,
                 embedding_clap_audio BLOB,
                 embedding_version INTEGER DEFAULT 0,
@@ -263,37 +262,11 @@ async def init_db(db_path: str) -> None:
             """
         )
 
-        # ---------------------------------------------------------------
-        # FTS5 full-text search
-        # ---------------------------------------------------------------
-
-        # Rebuild fts_tracks when its definition is stale — a legacy
-        # contentless table, or a tokenizer predating remove_diacritics 2.
-        # The index_batch poller repopulates after the index reset.
-        row = await cursor.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='fts_tracks'"
-        )
-        existing_sql = await row.fetchone()
-        existing_def = (existing_sql[0] if existing_sql else "") or ""
-        if existing_def and (
-            "content=''" in existing_def or "remove_diacritics 2" not in existing_def
-        ):
-            logger.warning("Detected stale fts_tracks definition — dropping and rebuilding")
-            await cursor.execute("DROP TABLE IF EXISTS fts_tracks")
-            await cursor.execute("UPDATE tracks SET search_indexed_at = NULL")
-
-        await cursor.execute(
-            """
-            CREATE VIRTUAL TABLE IF NOT EXISTS fts_tracks USING fts5(
-                track_id UNINDEXED,
-                title,
-                artist_name,
-                album_title,
-                genre_tags,
-                tokenize='porter unicode61 remove_diacritics 2'
-            )
-            """
-        )
+        # The fts_tracks FTS5 index is retired — BEST MATCH moved to the server
+        # (it now uses the input modules' search()). Drop the orphaned table from
+        # existing DBs (idempotent; the search_indexed_at column, if present on an
+        # old DB, is simply left unused).
+        await cursor.execute("DROP TABLE IF EXISTS fts_tracks")
 
         # ---------------------------------------------------------------
         # Default data

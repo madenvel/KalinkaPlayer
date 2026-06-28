@@ -1099,9 +1099,6 @@ class SearchWorker:
                 except queue.Full:
                     pass
 
-            # FTS indexing cycle (invalidate stale, reconcile, index new)
-            await self._index_cycle()
-
             if did_work:
                 continue
 
@@ -1121,24 +1118,6 @@ class SearchWorker:
             pass
 
         logger.info("SearchWorker shutting down")
-
-    async def _index_cycle(self) -> None:
-        """Run one full FTS indexing cycle: invalidate stale, reconcile, index new."""
-        try:
-            await self.db.invalidate_stale_indexes()
-            await self.db.reconcile_deleted_tracks()
-
-            total = 0
-            while True:
-                indexed = await self.db.index_batch()
-                if indexed == 0:
-                    break
-                total += indexed
-
-            if total:
-                logger.info("FTS indexing cycle complete: %d tracks indexed", total)
-        except Exception:
-            logger.exception("Error during FTS indexing cycle")
 
 
 # ---------------------------------------------------------------------------

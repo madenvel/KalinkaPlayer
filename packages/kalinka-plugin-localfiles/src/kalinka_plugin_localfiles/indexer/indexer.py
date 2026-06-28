@@ -330,8 +330,7 @@ class FileIndexer:
         # Nanosecond mtime for the failure-cache key. With second resolution a
         # broken file that gets fixed within the same integer second and keeps
         # the same size would collide on the key and never be retried. The
-        # tracks table deliberately stays on second-resolution modified_time
-        # (it's compared against search_indexed_at in the FTS staleness check).
+        # tracks table stays on second-resolution modified_time.
         mtime_ns = stat.st_mtime_ns
 
         existing_track = await self.db_manager.get_track_by_path(file_path)
