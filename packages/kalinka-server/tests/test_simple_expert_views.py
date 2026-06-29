@@ -117,7 +117,7 @@ def test_simple_view_includes_simple_fields_and_excludes_expert():
     assert "base_config.output.alsa.latency_ms" not in paths
     assert "base_config.output.alsa.period_ms" not in paths
     assert "input_modules.localfiles.db_path" not in paths
-    assert "input_modules.localfiles.searcher.weight_fts" not in paths
+    assert "input_modules.localfiles.searcher.weight_knn" not in paths
     assert "input_modules.localfiles.embedder.batch_size_clap" not in paths
 
 
@@ -230,7 +230,7 @@ def test_expert_list_includes_both_simple_and_expert_fields():
     assert "input_modules.localfiles.db_path" in paths
     assert "base_config.output.alsa.latency_ms" in paths
     # Nested expert leaves:
-    assert "input_modules.localfiles.searcher.weight_fts" in paths
+    assert "input_modules.localfiles.searcher.weight_knn" in paths
 
 
 def test_expert_list_is_sorted_by_path():
