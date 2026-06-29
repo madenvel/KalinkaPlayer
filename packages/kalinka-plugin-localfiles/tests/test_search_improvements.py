@@ -12,6 +12,24 @@ def _make_config(**overrides) -> LocalFilesConfig:
     return LocalFilesConfig(**overrides)
 
 
+def test_searcher_db_contract():
+    """SearchWorker calls these on ``self.db``; removing any one silently
+    breaks ai_search at runtime — the handler raises mid-``_do_search`` and the
+    plugin returns 0 tracks (no "SUGGESTIONS FROM YOUR LIBRARY" card), which
+    unit tests using ``Mock(spec=AsyncSearcherDb)`` do NOT catch.
+
+    Regression guard: ``get_tracks_tags_bulk`` / ``get_track_tags`` were dropped
+    in the FTS5 cleanup while their call sites remained.
+    """
+    required = {
+        "knn_search_audio", "knn_search_mood", "get_tracks_va_bulk",
+        "get_track_clap_embedding", "get_tracks_tags_bulk", "get_track_tags",
+        "get_similar_tracks_by_tags", "get_file_path_for_track",
+    }
+    missing = sorted(m for m in required if not callable(getattr(AsyncSearcherDb, m, None)))
+    assert not missing, f"AsyncSearcherDb is missing methods SearchWorker needs: {missing}"
+
+
 class TestDynamicWeightNormalization:
     def _make_worker(self):
         from unittest.mock import Mock

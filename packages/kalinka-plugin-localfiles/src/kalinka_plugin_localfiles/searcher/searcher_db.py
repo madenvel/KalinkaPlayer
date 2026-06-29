@@ -351,6 +351,42 @@ class AsyncSearcherDb:
             rows = await cursor.fetchall()
         return [row[0] for row in rows]
 
+    async def get_track_tags(self, track_id: str) -> dict | None:
+        """Return parsed tags_predicted JSON for a track, or None."""
+        async with self._open() as conn:
+            cursor = await conn.execute(
+                "SELECT tags_predicted FROM tracks WHERE id = ?",
+                (track_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    async def get_tracks_tags_bulk(self, track_ids: list[str]) -> dict[str, dict]:
+        """Return {track_id: tags_dict} for a list of track IDs."""
+        if not track_ids:
+            return {}
+        async with self._open() as conn:
+            placeholders = ",".join("?" * len(track_ids))
+            cursor = await conn.execute(
+                f"SELECT id, tags_predicted FROM tracks WHERE id IN ({placeholders})",
+                track_ids,
+            )
+            rows = await cursor.fetchall()
+        result: dict[str, dict] = {}
+        for row in rows:
+            tid, raw = row[0], row[1]
+            if raw:
+                try:
+                    result[tid] = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        return result
+
     async def get_tag_coverage_ratio(self) -> float:
         """Return the fraction of enriched tracks that have tags_predicted."""
         async with self._open() as conn:
