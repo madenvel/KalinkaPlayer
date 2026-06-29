@@ -23,7 +23,12 @@ def _seed(db_path: str) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executemany(
             "INSERT INTO artists (id, name) VALUES (?, ?)",
-            [("ar_starink", "Ed Starink"), ("ar_kabat", "Női Kabát")],
+            [
+                ("ar_starink", "Ed Starink"),
+                ("ar_kabat", "Női Kabát"),
+                ("ar_jarre", "Jean-Michel Jarre"),
+                ("ar_bg", "Борис Гребенщиков"),
+            ],
         )
         conn.executemany(
             "INSERT INTO albums (id, title, artist_id) VALUES (?, ?, ?)",
@@ -72,3 +77,24 @@ def test_accented_query_still_matches(db):
     is symmetric, not lossy in one direction."""
     tracks, total = db.search_tracks("Oxygène", 0, 50)
     assert total == 1
+
+
+@pytest.mark.parametrize(
+    "query", ["Jean Michel Jarre", "jean michel jarre", "Jean-Michel Jarre"]
+)
+def test_artist_search_is_punctuation_insensitive(db, query):
+    """A dashless query must find a hyphenated name: the match-fold collapses
+    punctuation to spaces, so "Jean Michel Jarre" finds "Jean-Michel Jarre"."""
+    artists, total = db.search_artists(query, 0, 50)
+    assert total == 1
+    assert artists[0]["name"] == "Jean-Michel Jarre"
+
+
+@pytest.mark.parametrize("query", ["борис гребенщиков", "гребенщиков", "ГРЕБЕНЩИКОВ"])
+def test_artist_search_is_unicode_case_insensitive(db, query):
+    """SQLite's LIKE only case-folds ASCII, so a lowercase Cyrillic query never
+    matched a capitalised Cyrillic name until the fold started casefolding.
+    Regression: 'гребенщиков' must find 'Борис Гребенщиков'."""
+    artists, total = db.search_artists(query, 0, 50)
+    assert total == 1
+    assert artists[0]["name"] == "Борис Гребенщиков"

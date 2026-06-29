@@ -327,6 +327,13 @@ class TestHasNavigationalIntent:
         assert not has_navigational_intent("upbeat jazz")
         assert not has_navigational_intent("play me something relaxing")
 
+    def test_cyrillic_query_has_intent(self):
+        # Unicode token regex: a Cyrillic query yields real tokens, so BEST
+        # MATCH is not skipped. An ASCII-only regex saw zero tokens -> treated
+        # the query as pure-descriptor and skipped the search() legs entirely.
+        assert has_navigational_intent("гребенщиков")
+        assert has_navigational_intent("борис гребенщиков")
+
 
 class TestCoverageRatio:
     """The scorer that replaces WRatio: anchored on query-word coverage."""
@@ -352,6 +359,12 @@ class TestCoverageRatio:
 
     def test_filler_only_query_scores_zero(self):
         assert coverage_ratio("play me something", "something") == 0.0
+
+    def test_cyrillic_name_scores(self):
+        # Unicode tokenisation: a Cyrillic fragment fully covered by the name
+        # scores 100. An ASCII-only token regex found no name tokens -> 0, so
+        # the artist was filtered out of BEST MATCH (inputs arrive casefolded).
+        assert coverage_ratio("гребенщиков", "борис гребенщиков") == 100
 
 
 class TestFullMatchScore:

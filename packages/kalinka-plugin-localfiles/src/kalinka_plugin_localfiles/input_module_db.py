@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import sqlite3
 import logging
@@ -12,11 +13,29 @@ from .utils.name_utils import fold_diacritics
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
+_NON_WORD_RE = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def fold_for_match(value: Optional[str]) -> str:
+    """Normalise a string for accent/case/punctuation-insensitive ``LIKE``
+    matching. Applied identically to BOTH the column (via the SQL ``fold``
+    function) and the query term so the two sides normalise the same way:
+
+      * diacritic-fold   — ``Oxygene`` finds ``Oxygène``
+      * casefold         — Unicode case-insensitivity. SQLite's ``LIKE`` only
+        folds ASCII, so without this a lowercase Cyrillic query
+        (``гребенщиков``) never matches a capitalised name (``Гребенщиков``).
+      * punctuation→space — ``Jean Michel Jarre`` matches ``Jean-Michel Jarre``.
+    """
+    folded = fold_diacritics(value or "").casefold()
+    folded = _NON_WORD_RE.sub(" ", folded)
+    return re.sub(r"\s+", " ", folded).strip()
+
+
 def _sql_fold(value: Optional[str]) -> str:
-    """SQLite-callable diacritic fold, so ``LIKE`` matching is accent-insensitive
-    (``Oxygene`` finds ``Oxygène``). Registered as a deterministic function on
-    every connection."""
-    return fold_diacritics(value or "")
+    """SQLite-callable match-fold (see :func:`fold_for_match`). Registered as a
+    deterministic ``fold`` function on every connection."""
+    return fold_for_match(value)
 
 
 class LocalFilesInputModuleDb:
@@ -314,7 +333,7 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_diacritics(query)}%"
+            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
@@ -353,7 +372,7 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_diacritics(query)}%"
+            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
@@ -390,7 +409,7 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_diacritics(query)}%"
+            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
@@ -783,7 +802,7 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_diacritics(query)}%"
+            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(

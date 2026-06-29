@@ -54,7 +54,12 @@ RAPIDFUZZ_CUTOFF: float = 88.0
 # Maximum number of entities in the BEST MATCH block.
 MAX_RESULTS: int = 6
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+# Unicode-aware: ``\w`` matches letters/digits of any script (Cyrillic, etc.),
+# not just ASCII. An ASCII-only class here made coverage_ratio score 0 for a
+# Cyrillic name and, worse, made has_navigational_intent see no tokens at all
+# for a Cyrillic query — skipping BEST MATCH entirely. Inputs are already
+# casefolded by the callers, so case is irrelevant.
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
 # ---------------------------------------------------------------------------
