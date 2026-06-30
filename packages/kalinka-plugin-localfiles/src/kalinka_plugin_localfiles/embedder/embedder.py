@@ -24,6 +24,7 @@ import logging.handlers
 import multiprocessing
 import queue
 import signal
+import threading
 import time
 from typing import Optional
 
@@ -84,49 +85,116 @@ class EmbeddingWorker:
         self.config = config
         self.db = db
         self._clap = None
-        self._clap_available = False
-        self._clap_load_attempted_at: float = 0.0
+        # The two CLAP towers load and unload independently. Text serves
+        # search queries and stays resident; audio is indexing-only and
+        # idles out (see _maybe_unload_audio).
+        self._text_available = False
+        self._audio_available = False
+        self._text_load_attempted_at: float = 0.0
+        self._audio_load_attempted_at: float = 0.0
+        self._audio_last_used_at: float = 0.0
+        # Guards session creation: the text-encode handler (executor thread)
+        # and the main work loop can both trigger a load concurrently.
+        self._model_lock = threading.Lock()
 
     # ------------------------------------------------------------------
-    # CLAP model loading
+    # CLAP model loading (text and audio towers load independently)
     # ------------------------------------------------------------------
 
-    def _load_clap_model(self):
-        if self._clap_available:
-            return
-        self._clap_load_attempted_at = time.monotonic()
+    def _new_clap(self):
+        """Instantiate the wrapper (no sessions yet). Returns it or None."""
+        if self._clap is not None:
+            return self._clap
+        from .clap_onnx import ClapOnnxModel
+
+        self._clap = ClapOnnxModel(
+            model_dir=self.config.embedder.model_dir,
+            ckpt_path=self.config.embedder.clap.ckpt_path,
+        )
+        return self._clap
+
+    def _ensure_text_model(self) -> bool:
+        """Load the text encoder (+ tokenizer + VA head). Resident for queries."""
+        if self._text_available:
+            return True
         cfg = self.config.embedder
         if cfg.clap.current_version == 0:
-            return
-
+            return False
         if not _ensure_numpy():
-            return
+            return False
+        for pkg in ("onnxruntime", "tokenizers"):
+            if not _ensure_package(pkg):
+                logger.warning("%s unavailable; CLAP text encoding disabled.", pkg)
+                return False
 
+        with self._model_lock:
+            if self._text_available:
+                return True
+            self._text_load_attempted_at = time.monotonic()
+            try:
+                self._new_clap().load_text()
+                self._text_available = self._clap.is_text_loaded
+                if self._text_available:
+                    # Log the resolved (tilde-expanded) path the loader
+                    # actually used, not the raw config string — otherwise a
+                    # misconfigured ``~/`` value silently looks like it loaded
+                    # from the home directory when it really loaded from a
+                    # literal-tilde directory under the server's CWD.
+                    logger.info(
+                        "CLAP text model loaded from: %s", self._clap._model_dir
+                    )
+            except Exception as e:
+                logger.warning(
+                    "CLAP text model loading failed: %s; query encoding disabled", e
+                )
+        return self._text_available
+
+    def _ensure_audio_model(self) -> bool:
+        """Load the audio encoder on demand (indexing only)."""
+        if self._audio_available:
+            self._audio_last_used_at = time.monotonic()
+            return True
+        cfg = self.config.embedder
+        if cfg.clap.current_version == 0:
+            return False
+        if not _ensure_numpy():
+            return False
         for pkg in ("onnxruntime", "soundfile", "soxr", "tokenizers"):
             if not _ensure_package(pkg):
+                logger.warning("%s unavailable; CLAP audio embedding disabled.", pkg)
+                return False
+
+        with self._model_lock:
+            if self._audio_available:
+                self._audio_last_used_at = time.monotonic()
+                return True
+            self._audio_load_attempted_at = time.monotonic()
+            try:
+                self._new_clap().load_audio()
+                self._audio_available = self._clap.is_audio_loaded
+                if self._audio_available:
+                    self._audio_last_used_at = time.monotonic()
+                    logger.info("CLAP audio model loaded (on-demand for indexing)")
+            except Exception as e:
                 logger.warning(
-                    "%s unavailable; CLAP audio embedding disabled.",
-                    pkg,
+                    "CLAP audio model loading failed: %s; audio embedding disabled", e
                 )
-                return
+        return self._audio_available
 
-        try:
-            from .clap_onnx import ClapOnnxModel
-
-            self._clap = ClapOnnxModel(
-                model_dir=cfg.model_dir,
-                ckpt_path=cfg.clap.ckpt_path,
-            )
-            self._clap.load()
-            self._clap_available = True
-            # Log the resolved (tilde-expanded) path the loader actually
-            # used, not the raw config string — otherwise a misconfigured
-            # ``~/`` value silently looks like it loaded from the home
-            # directory when it really loaded from a literal-tilde
-            # directory under the server's CWD.
-            logger.info("CLAP ONNX model loaded from: %s", self._clap._model_dir)
-        except Exception as e:
-            logger.warning("CLAP model loading failed: %s; audio embedding disabled", e)
+    def _maybe_unload_audio(self, idle_timeout: float) -> None:
+        """Release the audio tower after ``idle_timeout`` s with no audio work."""
+        if not self._audio_available or idle_timeout <= 0:
+            return
+        if time.monotonic() - self._audio_last_used_at < idle_timeout:
+            return
+        with self._model_lock:
+            if self._clap is not None:
+                self._clap.unload_audio()
+            self._audio_available = False
+            # Reset the retry gate so the next batch reloads immediately
+            # instead of waiting out a poll interval.
+            self._audio_load_attempted_at = 0.0
+        logger.info("CLAP audio model unloaded after %.0fs idle", idle_timeout)
 
     # ------------------------------------------------------------------
     # Inference helpers
@@ -134,11 +202,14 @@ class EmbeddingWorker:
 
     def _compute_clap_audio(self, file_path: str) -> Optional[bytes]:
         """Compute 512-dim CLAP audio embedding for file_path."""
-        if not self._clap_available:
+        if not self._audio_available:
             return None
         try:
             t0 = time.monotonic()
             vec = self._clap.get_audio_embedding(file_path)
+            # Keep the idle timer measuring from the last real embed, not
+            # just from load, so an active backlog never idles out mid-run.
+            self._audio_last_used_at = time.monotonic()
             if vec is None:
                 return None
             vec = normalise(vec)
@@ -154,7 +225,7 @@ class EmbeddingWorker:
         From the stored vector (decode -> head), not by re-running the encoder,
         so backfill is cheap; int8 dequant is ~lossless for the head.
         """
-        if not self._clap_available or not self._clap.has_va_head:
+        if not self._text_available or self._clap is None or not self._clap.has_va_head:
             return None
         try:
             vec = decode_embedding(blob)
@@ -165,7 +236,7 @@ class EmbeddingWorker:
 
     def _encode_query(self, query: str) -> Optional[bytes]:
         """Encode a text query with CLAP. Returns int8 embedding bytes or None."""
-        if not self._clap_available:
+        if not self._text_available:
             return None
         try:
             vec = self._clap.get_text_embedding(query)
@@ -181,7 +252,7 @@ class EmbeddingWorker:
         self, title: str, artist_name: str, album_title: str
     ) -> Optional[bytes]:
         """Encode track metadata text with CLAP text encoder."""
-        if not self._clap_available:
+        if not self._text_available:
             return None
         parts = []
         if artist_name:
@@ -248,7 +319,7 @@ class EmbeddingWorker:
         loop terminates even if a whole batch fails, instead of re-selecting the
         same NULL rows forever.
         """
-        if not self._clap_available or not self._clap.has_va_head:
+        if not self._text_available or self._clap is None or not self._clap.has_va_head:
             return False
         cfg = self.config.searcher.mood
         batch = await self.db.get_tracks_needing_va(cfg.backfill_batch)
@@ -365,7 +436,7 @@ class EmbeddingWorker:
 
     async def _update_aggregate_text_embeddings(self, track_ids: list[str]) -> None:
         """Embed album/artist metadata text directly (not mean-pooled)."""
-        if not self._clap_available:
+        if not self._text_available:
             return
 
         album_ids: set[str] = set()
@@ -439,7 +510,9 @@ class EmbeddingWorker:
 
             query = req.get("query", "")
             try:
-                self._load_clap_model()
+                # Text tower is normally pre-loaded at startup; this is a
+                # cheap no-op then, and a safety net if eager load failed.
+                await loop.run_in_executor(None, self._ensure_text_model)
                 blob = await loop.run_in_executor(None, self._encode_query, query)
                 response_queue.put({"blob": blob})
             except Exception as e:
@@ -460,6 +533,7 @@ class EmbeddingWorker:
         cfg = self.config.embedder
         poll = cfg.poll_interval_seconds
         embedding_enabled = cfg.enabled
+        audio_idle_timeout = cfg.audio_model_idle_timeout_seconds
 
         logger.info("EmbeddingWorker started (CLAP-only pipeline)")
 
@@ -478,6 +552,17 @@ class EmbeddingWorker:
                 )
             )
             logger.info("Text-encode handler started (serving searcher KNN queries)")
+
+        # AI search enabled == CLAP on + a searcher that will query us. Pre-load
+        # the text tower now (in a thread, so we don't block the event loop)
+        # so the first user search doesn't pay a ~480 MB model load — the old
+        # "first query after idle times out" failure. The audio tower stays
+        # unloaded until there's something to index.
+        if cfg.clap.current_version > 0 and self.config.searcher.enabled:
+            logger.info("AI search enabled; pre-loading CLAP text model")
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._ensure_text_model
+            )
 
         if not embedding_enabled:
             logger.info(
@@ -516,11 +601,11 @@ class EmbeddingWorker:
             did_work = False
             retry_gap = poll
 
-            # Process CLAP audio
+            # Process CLAP audio — loads the audio tower on demand.
             if cfg.clap.current_version > 0:
                 while await self.db.has_pending_jobs("clap_audio"):
-                    if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
-                        self._load_clap_model()
+                    if time.monotonic() - self._audio_load_attempted_at >= retry_gap:
+                        self._ensure_audio_model()
 
                     try:
                         batch_processed = await self._process_clap_batch()
@@ -532,11 +617,11 @@ class EmbeddingWorker:
                         logger.exception("Unexpected error in CLAP batch; will retry")
                         break
 
-            # Process CLAP text (metadata) embeddings
+            # Process CLAP text (metadata) embeddings — text tower only.
             if cfg.clap.current_version > 0:
                 while await self.db.has_pending_jobs("clap_text"):
-                    if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
-                        self._load_clap_model()
+                    if time.monotonic() - self._text_load_attempted_at >= retry_gap:
+                        self._ensure_text_model()
 
                     try:
                         batch_processed = await self._process_clap_text_batch()
@@ -551,10 +636,11 @@ class EmbeddingWorker:
                         break
 
             # Backfill mood (V,A) for embedded tracks that lack it — cheap (one
-            # tiny matmul per track from the stored vector).
+            # tiny matmul per track from the stored vector). Uses the VA head,
+            # which lives in the text tower, so it needs no audio session.
             if self.config.searcher.mood.enabled and cfg.clap.current_version > 0:
-                if time.monotonic() - self._clap_load_attempted_at >= retry_gap:
-                    self._load_clap_model()
+                if time.monotonic() - self._text_load_attempted_at >= retry_gap:
+                    self._ensure_text_model()
                 try:
                     while await self._process_va_backfill():
                         did_work = True
@@ -564,20 +650,17 @@ class EmbeddingWorker:
             if did_work:
                 continue
 
-            # CLAP stays resident for the lifetime of the embedder
-            # process. The model is shared with the text-encode handler
-            # that the searcher hits on every KNN query — unloading it
-            # here would force a multi-minute reload on the next user
-            # search (the model files alone are ~1.6 GB; one prior
-            # observation: "CLAP text encoding IPC failed: <empty>"
-            # because the 30-second response timeout fired while the
-            # embedder was busy re-downloading / re-instantiating the
-            # ONNX sessions).
+            # The text tower stays resident for the lifetime of the process —
+            # it serves the searcher's query-encode IPC, and unloading it made
+            # the first post-idle search time out on a ~480 MB reload. The
+            # audio tower (~272 MB), needed only for the indexing above, idles
+            # out here once there's nothing left to embed.
             #
             # DEBUG line below fires every poll cycle on an idle library
             # (default poll=300s, so ~288 lines/day per process). Real
             # work is already announced by "CLAP embeddings written" /
             # "CLAP text embedded".
+            self._maybe_unload_audio(audio_idle_timeout)
             logger.debug("No pending embedding work; sleeping %ds", poll)
             await sleep_interruptible(poll, shutdown_event, nudge_queue, "Embedder")
 

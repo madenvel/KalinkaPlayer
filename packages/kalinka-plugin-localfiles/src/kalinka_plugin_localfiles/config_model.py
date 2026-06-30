@@ -281,10 +281,25 @@ class EmbedderConfig(BaseModel):
         title="Poll interval",
         json_schema_extra={"constraints": {"unit": "s"}},
     )
-    # NB: CLAP no longer idles out. The model is shared with the searcher's
-    # text-encode IPC and unloading made the first post-idle search query
-    # time out (~30 s for a model reload). It now stays resident for the
-    # lifetime of the embedder process.
+    # The two CLAP towers have different lifecycles. The *text* encoder
+    # serves the searcher's query-encode IPC, so it stays resident for the
+    # life of the process whenever AI search is enabled — unloading it made
+    # the first post-idle search query time out on a ~480 MB reload. The
+    # *audio* encoder (~272 MB) is needed only while indexing, so it loads
+    # on demand and idles out after the timeout below.
+    audio_model_idle_timeout_seconds: int = Field(
+        default=900,
+        title="Audio model idle timeout",
+        json_schema_extra={
+            "help": (
+                "Unload the CLAP audio encoder (~272 MB) after this long with "
+                "no tracks to index (0 = never unload). The text encoder used "
+                "for search queries always stays resident."
+            ),
+            "constraints": {"unit": "s"},
+            **_EXPERT,
+        },
+    )
     max_job_attempts: int = Field(
         default=3, title="Max attempts per embedding job",
     )

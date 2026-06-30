@@ -338,29 +338,25 @@ class ClapOnnxModel:
         self._va_head_session = None
 
     @property
-    def is_loaded(self) -> bool:
+    def is_audio_loaded(self) -> bool:
         return self._audio_session is not None
+
+    @property
+    def is_text_loaded(self) -> bool:
+        return self._text_session is not None and self._tokenizer is not None
+
+    @property
+    def is_loaded(self) -> bool:
+        # "Fully loaded" == both towers. Kept for offline callers
+        # (assess-ai-search scripts) that load() then assert is_loaded.
+        return self.is_audio_loaded and self.is_text_loaded
 
     @property
     def has_va_head(self) -> bool:
         return self._va_head_session is not None
 
-    def load(self) -> None:
-        """Download (if needed) and create ONNX inference sessions."""
-        if self.is_loaded:
-            return
-
+    def _session_options(self):
         import onnxruntime as ort
-
-        audio_path = _ensure_model_file("clap_audio_encoder", self._model_dir)
-        text_path = _ensure_model_file("clap_text_encoder", self._model_dir)
-        tok_path = _ensure_model_file("clap_tokenizer", self._model_dir)
-
-        if not audio_path or not text_path or not tok_path:
-            raise FileNotFoundError(
-                f"CLAP ONNX model files missing from {self._model_dir}. "
-                "Run scripts/export_clap_onnx.py on a dev machine first."
-            )
 
         sess_opts = ort.SessionOptions()
         sess_opts.inter_op_num_threads = 1
@@ -372,12 +368,31 @@ class ClapOnnxModel:
         # but keeps the RSS flat.
         sess_opts.enable_cpu_mem_arena = False
         sess_opts.enable_mem_pattern = False
-        providers = ["CPUExecutionProvider"]
+        return sess_opts
 
-        self._audio_session = ort.InferenceSession(
-            audio_path, sess_options=sess_opts, providers=providers
-        )
-        logger.info("CLAP audio ONNX session loaded")
+    def load_text(self) -> None:
+        """Load the text encoder + tokenizer (+ optional VA head).
+
+        This is the only tower needed to encode search queries, so the
+        embedder keeps it resident whenever AI search is enabled. The VA
+        (mood) head is tiny (~0.25 MB) and loads here too, so mood backfill
+        works without the audio tower resident.
+        """
+        if self.is_text_loaded:
+            return
+
+        import onnxruntime as ort
+
+        text_path = _ensure_model_file("clap_text_encoder", self._model_dir)
+        tok_path = _ensure_model_file("clap_tokenizer", self._model_dir)
+        if not text_path or not tok_path:
+            raise FileNotFoundError(
+                f"CLAP text model files missing from {self._model_dir}. "
+                "Run scripts/export_clap_onnx.py on a dev machine first."
+            )
+
+        sess_opts = self._session_options()
+        providers = ["CPUExecutionProvider"]
 
         self._text_session = ort.InferenceSession(
             text_path, sess_options=sess_opts, providers=providers
@@ -395,19 +410,54 @@ class ClapOnnxModel:
 
         # VA (mood) head — best-effort/optional; on failure mood ranking stays
         # off (get_valence_arousal returns None) without breaking CLAP embedding.
-        try:
-            va_path = _ensure_model_file("va_head", self._model_dir)
-            if va_path:
-                self._va_head_session = ort.InferenceSession(
-                    va_path, sess_options=sess_opts, providers=providers
-                )
-                logger.info("VA (mood) head ONNX session loaded")
-        except Exception as e:
-            logger.warning("VA head load failed (mood ranking disabled): %s", e)
-            self._va_head_session = None
+        if self._va_head_session is None:
+            try:
+                va_path = _ensure_model_file("va_head", self._model_dir)
+                if va_path:
+                    self._va_head_session = ort.InferenceSession(
+                        va_path, sess_options=sess_opts, providers=providers
+                    )
+                    logger.info("VA (mood) head ONNX session loaded")
+            except Exception as e:
+                logger.warning("VA head load failed (mood ranking disabled): %s", e)
+                self._va_head_session = None
+
+    def load_audio(self) -> None:
+        """Load the audio encoder (~272 MB; needed only while indexing)."""
+        if self.is_audio_loaded:
+            return
+
+        import onnxruntime as ort
+
+        audio_path = _ensure_model_file("clap_audio_encoder", self._model_dir)
+        if not audio_path:
+            raise FileNotFoundError(
+                f"CLAP audio model file missing from {self._model_dir}. "
+                "Run scripts/export_clap_onnx.py on a dev machine first."
+            )
+
+        self._audio_session = ort.InferenceSession(
+            audio_path,
+            sess_options=self._session_options(),
+            providers=["CPUExecutionProvider"],
+        )
+        logger.info("CLAP audio ONNX session loaded")
+
+    def load(self) -> None:
+        """Download (if needed) and create both ONNX towers (full lifecycle)."""
+        self.load_text()
+        self.load_audio()
+
+    def unload_audio(self) -> None:
+        """Release the audio encoder session, keeping the text tower resident."""
+        if self._audio_session is None:
+            return
+        self._audio_session = None
+        gc.collect()
+        logger.info("CLAP audio ONNX session unloaded")
 
     def unload(self) -> None:
-        """Release ONNX sessions and tokenizer."""
+        """Release all ONNX sessions and the tokenizer."""
         self._audio_session = None
         self._text_session = None
         self._tokenizer = None
@@ -424,7 +474,7 @@ class ClapOnnxModel:
         each), never the raw fragment waveforms — the audio loader
         is a generator and `_run_one` drops its input before returning.
         """
-        if not self.is_loaded:
+        if not self.is_audio_loaded:
             return None
 
         accum: Optional[np.ndarray] = None
@@ -462,7 +512,7 @@ class ClapOnnxModel:
 
     def get_text_embedding(self, text: str) -> Optional[np.ndarray]:
         """Compute 512-dim text embedding. Returns None on failure."""
-        if not self.is_loaded:
+        if not self.is_text_loaded:
             return None
         try:
             encoded = self._tokenizer.encode(text)
