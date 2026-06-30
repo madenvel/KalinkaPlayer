@@ -20,9 +20,9 @@ MATCH name (a pure name lookup like "jean michel jarre" → "Jean-Michel Jarre")
 they're hidden — the user wants the named thing, not songs that sound like the
 words. A partial / extra-word query ("workout music") keeps them.
 
-  * **Related Albums / Related Artists** — derived from the suggestion tracks
-    (the union across sources), ranked by how many suggestions point at each
-    album / artist, and appended below the suggestion cards.
+  * **Related Artists** — derived from the suggestion tracks (the union across
+    sources), ranked by how many suggestions point at each artist, and appended
+    below the suggestion cards.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from kalinka_plugin_sdk.datamodel import (
-    Album,
     Artist,
     BrowseItem,
     BrowseItemList,
@@ -87,7 +86,7 @@ async def assemble_ai_search(
     cfg: Optional[SearchConfig] = None,
 ) -> BrowseItemList:
     """Build the section list: a per-source BEST MATCH section, then a per-source
-    AI SUGGESTIONS card, then the derived Related Albums / Artists.
+    AI SUGGESTIONS card, then the derived Related Artists.
 
     ``cfg`` carries the tunables (score cut-offs, limits); defaults are used when
     it is omitted (e.g. in tests).
@@ -249,23 +248,19 @@ def _best_match_section(
 def _related_sections(
     ai_sections: List[BrowseItem], cfg: SearchConfig
 ) -> List[BrowseItem]:
-    """Derive Related Albums / Related Artists from the AI suggestion tracks.
+    """Derive Related Artists from the AI suggestion tracks.
 
     Rolls up the tracks inside every source's card (their union, in rank order)
-    by album and by artist, ranks each by suggestion count then first
-    appearance, and wraps the top ``related_max_results`` of each into a TILE
-    section. Empty in, empty out — so when the suggestions were hidden, no
-    Related rows appear.
+    by artist, ranks them by suggestion count then first appearance, and wraps
+    the top ``related_max_results`` into a TILE section. Empty in, empty out —
+    so when the suggestions were hidden, no Related row appears.
     """
-    album_pairs: list = []
     artist_pairs: list = []
     for card in ai_sections:
         for item in card.sections or []:
             track = item.track
             if track is None:
                 continue
-            if track.album is not None:
-                album_pairs.append((track.album.id.to_string, track.album))
             # Prefer the track's own performer over the album artist, which can
             # be "Various Artists" on a compilation.
             artist = track.performer or (track.album.artist if track.album else None)
@@ -273,11 +268,6 @@ def _related_sections(
                 artist_pairs.append((artist.id.to_string, artist))
 
     sections: List[BrowseItem] = []
-    album_cards = [_album_card(a) for a in _rollup(album_pairs, cfg.related_max_results)]
-    if album_cards:
-        sections.append(
-            _related_catalog("Related Albums", "album", PreviewContentType.ALBUM, album_cards)
-        )
     artist_cards = [_artist_card(a) for a in _rollup(artist_pairs, cfg.related_max_results)]
     if artist_cards:
         sections.append(
@@ -299,17 +289,6 @@ def _rollup(pairs: list, limit: int) -> list:
         first.setdefault(key, item)
     ranked = sorted(first.items(), key=lambda kv: -counts[kv[0]])
     return [item for _, item in ranked[:limit]]
-
-
-def _album_card(album: Album) -> BrowseItem:
-    return BrowseItem(
-        id=album.id,
-        name=album.title,
-        subname=album.artist.name if album.artist else None,
-        can_browse=True,
-        can_add=True,
-        album=album,
-    )
 
 
 def _artist_card(artist: Artist) -> BrowseItem:

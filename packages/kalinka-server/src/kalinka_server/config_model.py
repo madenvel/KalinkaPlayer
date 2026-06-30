@@ -282,10 +282,10 @@ class SearchConfig(BaseModel):
         default=12,
         ge=1,
         le=50,
-        title="Related albums / artists max",
+        title="Related artists max",
         json_schema_extra={
             "help": (
-                "Maximum entries in the Related Albums / Related Artists rows "
+                "Maximum entries in the Related Artists row "
                 "derived from the AI suggestion tracks."
             ),
         },

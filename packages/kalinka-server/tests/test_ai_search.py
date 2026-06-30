@@ -3,7 +3,7 @@
 Covers the responsibilities that moved here from the localfiles searcher: a
 per-source BEST MATCH section from each source's ``search()``, per-source
 full-name suppression of that source's AI suggestions, one AI SUGGESTIONS card
-per source, and the derived Related Albums / Artists.
+per source, and the derived Related Artists.
 """
 
 from typing import Dict, List, Optional
@@ -63,7 +63,7 @@ def _track_item(source: str, local: str, title: str) -> BrowseItem:
 
 def _sugg_track(source, local, title, album_local, album_title, artist_local, artist_name):
     """A suggestion track carrying full album + artist metadata, so the server
-    can derive Related Albums / Related Artists from it."""
+    can derive Related Artists from it."""
     tid = EntityId(id=local, type=EntityType.TRACK, source=source)
     artist = Artist(id=EntityId(id=artist_local, type=EntityType.ARTIST, source=source), name=artist_name)
     album = Album(
@@ -369,12 +369,12 @@ async def test_blank_query_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# Related Albums / Related Artists (derived from the suggestion tracks)
+# Related Artists (derived from the suggestion tracks)
 # ---------------------------------------------------------------------------
 
 
-async def test_related_albums_and_artists_derived():
-    # 2 suggestions on Album One/Artist One, 1 on Album Two/Artist Two.
+async def test_related_artists_derived():
+    # 2 suggestions on Artist One, 1 on Artist Two.
     module = FakeModule("localfiles", ai_tracks=[
         _sugg_track("localfiles", "t1", "Song 1", "a1", "Album One", "ar1", "Artist One"),
         _sugg_track("localfiles", "t2", "Song 2", "a1", "Album One", "ar1", "Artist One"),
@@ -383,18 +383,15 @@ async def test_related_albums_and_artists_derived():
 
     result = await assemble_ai_search([module], "dreamy ambient", 0, 10)
 
-    ralb = _section(result, "Related Albums")
     rart = _section(result, "Related Artists")
-    assert ralb is not None and rart is not None
-    # Ranked by suggestion count: the album/artist with 2 tracks leads.
-    assert [s.name for s in ralb.sections] == ["Album One", "Album Two"]
+    assert rart is not None
+    # Ranked by suggestion count: the artist with 2 tracks leads.
     assert [s.name for s in rart.sections] == ["Artist One", "Artist Two"]
     # Browsable cards carrying the entity.
-    assert ralb.sections[0].album is not None and ralb.sections[0].can_browse
     assert rart.sections[0].artist is not None
-    # Order: suggestion card, then Related Albums, then Related Artists.
+    # Order: suggestion card, then Related Artists.
     names = [it.name for it in result.items]
-    assert names.index("AI SUGGESTIONS") < names.index("Related Albums") < names.index("Related Artists")
+    assert names.index("AI SUGGESTIONS") < names.index("Related Artists")
 
 
 async def test_related_hidden_when_ai_suppressed():
@@ -411,7 +408,6 @@ async def test_related_hidden_when_ai_suppressed():
 
     assert len(_best_match_sections(result)) == 1
     assert _ai_cards(result) == []
-    assert _section(result, "Related Albums") is None
     assert _section(result, "Related Artists") is None
 
 
@@ -438,5 +434,4 @@ async def test_catalog_sources_attribute_origin():
     # Plugin cards carry their own source too (uniform across the response).
     assert cat["AI SUGGESTIONS"].sources  # localfiles or jamendo card
     # Related is rolled up across both sources -> the union.
-    assert cat["Related Albums"].sources == ["jamendo", "localfiles"]
     assert cat["Related Artists"].sources == ["jamendo", "localfiles"]
