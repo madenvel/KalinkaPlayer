@@ -65,6 +65,14 @@ _CANDIDATE_TYPES = (
     SearchType.playlist,
 )
 
+# Section ordering by source: the user's own library first, then Jamendo, then
+# anything else (kept in configured module order via the stable sort).
+_SOURCE_PRIORITY = {"localfiles": 0, "jamendo": 1}
+
+
+def _source_rank(name: str) -> int:
+    return _SOURCE_PRIORITY.get(name, len(_SOURCE_PRIORITY))
+
 
 @dataclass
 class _SourceResults:
@@ -105,16 +113,24 @@ async def assemble_ai_search(
         return_exceptions=True,
     )
 
+    # Rank sources so the user's own library leads, then Jamendo, then any
+    # other source. Applied before splitting into rows so both the BEST MATCH
+    # and the AI suggestion sections put localfiles first. Stable sort keeps
+    # the configured module order as the tie-break for unranked sources.
+    paired = sorted(
+        zip(modules, per_source), key=lambda mp: _source_rank(mp[0].module_name())
+    )
+
     # Each source gets its own BEST MATCH section (no cross-source merge), and
     # its own AI card — hidden when *that source's* best match is a full-name
     # lookup. Best-match sections lead, then the suggestion cards.
     bm_sections: List[BrowseItem] = []
     ai_cards: List[BrowseItem] = []
-    for src in per_source:
+    for module, src in paired:
         if isinstance(src, BaseException):
             # A whole source blew up outside its own leg handling — skip it so
             # one bad source can't sink the query.
-            logger.warning("ai_search: source failed: %s", src)
+            logger.warning("ai_search: source %s failed: %s", module.module_name(), src)
             continue
         section, is_name_lookup = _source_best_match(src, query, cfg)
         if section is not None:

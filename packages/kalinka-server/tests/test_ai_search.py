@@ -435,3 +435,26 @@ async def test_catalog_sources_attribute_origin():
     assert cat["AI SUGGESTIONS"].sources  # localfiles or jamendo card
     # Related is rolled up across both sources -> the union.
     assert cat["Related Artists"].sources == ["jamendo", "localfiles"]
+
+
+async def test_localfiles_sections_lead_regardless_of_module_order():
+    """The user's own library ranks first: its BEST MATCH and AI sections come
+    before Jamendo's even when Jamendo is the first module passed in."""
+    local = FakeModule(
+        "localfiles",
+        search_results={SearchType.album: [_album_item("localfiles", "al1", "Workout", "a1", "Chet")]},
+        ai_tracks=[_sugg_track("localfiles", "l1", "Blue", "alX", "Kind of Blue", "aMiles", "Miles Davis")],
+    )
+    jamendo = FakeModule(
+        "jamendo",
+        search_results={SearchType.album: [_album_item("jamendo", "al2", "Workout", "a2", "Bill")]},
+        ai_tracks=[_sugg_track("jamendo", "j1", "So What", "alY", "Jazz Moods", "aBill", "Bill Evans")],
+    )
+    # Jamendo first in the module list — ranking must still put localfiles on top.
+    result = await assemble_ai_search([jamendo, local], "workout music", 0, 20)
+
+    bm = [it.name for it in result.items if it.name.startswith("BEST MATCH")]
+    assert bm == ["BEST MATCH · localfiles", "BEST MATCH · jamendo"]
+    # And every BEST MATCH precedes every AI suggestion card.
+    names = [it.name for it in result.items]
+    assert max(i for i, n in enumerate(names) if n.startswith("BEST MATCH")) < names.index("AI SUGGESTIONS")
