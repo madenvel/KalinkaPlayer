@@ -117,8 +117,8 @@ class LocalFilesInputModule(InputModule):
     ) -> BrowseItemList:
         """Semantic search via the searcher subprocess (CLAP KNN + mood + tags).
 
-        Returns a single AI-suggestions catalog card ("SUGGESTIONS FROM YOUR
-        LIBRARY") of semantically ranked tracks — the plugin owns this card's
+        Returns a single AI-suggestions catalog card ("FROM YOUR LIBRARY") of
+        semantically ranked tracks — the plugin owns this card's
         presentation. BEST MATCH (literal name lookup) is assembled by the
         server, which appends this card after it, alongside the other sources'
         cards. The server may suppress the card for a navigational query.
@@ -159,13 +159,13 @@ class LocalFilesInputModule(InputModule):
         cat = catalog_id("ai_search:tracks")
         card = BrowseItem(
             id=cat,
-            name="SUGGESTIONS FROM YOUR LIBRARY",
+            name="FROM YOUR LIBRARY",
             subname="Matched by mood, genre and audio features",
             can_browse=False,
             can_add=False,
             catalog=Catalog(
                 id=cat,
-                title="SUGGESTIONS FROM YOUR LIBRARY",
+                title="FROM YOUR LIBRARY",
                 preview_config=Preview(
                     type=PreviewType.CARD,
                     content_type=PreviewContentType.TRACK,
