@@ -29,7 +29,14 @@ $PY $D/fetch_audio.py        # -> clips/*.mp3, manifest.fetched.jsonl
 $PY $D/embed.py              # -> mtg_bench.db  (production ONNX)
 $PY $D/gen_queries.py        # -> queries.json
 $PY $D/run_eval.py           # -> results.json + prints the table
+$PY $D/run_eval_va.py        # -> results_va.json: baseline vs the mood (V,A) leg
 ```
+
+`run_eval.py` measures the raw CLAP retrieval model. `run_eval_va.py` additionally
+applies the production mood (valence/arousal) leg — `_query_to_va` + the
+`knn_search_mood` union + the `(1−w·conf)·clap + (w·conf)·mood` blend, using the
+deployed `va_head_v*.onnx` / `mood_index_v*.npz` — and prints a baseline→VA
+before/after table (point `VA_ARTIFACT_DIR` at the dir holding those artifacts).
 
 ## Knobs (env vars)
 
