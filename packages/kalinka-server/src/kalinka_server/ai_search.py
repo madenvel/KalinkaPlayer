@@ -65,13 +65,10 @@ _CANDIDATE_TYPES = (
     SearchType.playlist,
 )
 
-# Section ordering by source: the user's own library first, then Jamendo, then
-# anything else (kept in configured module order via the stable sort).
-_SOURCE_PRIORITY = {"localfiles": 0, "jamendo": 1}
-
-
-def _source_rank(name: str) -> int:
-    return _SOURCE_PRIORITY.get(name, len(_SOURCE_PRIORITY))
+# Section ordering by source: the user's own library first, then every other
+# source alphabetically by name.
+def _source_rank(name: str) -> tuple:
+    return (0 if name == "localfiles" else 1, name)
 
 
 @dataclass
@@ -113,10 +110,9 @@ async def assemble_ai_search(
         return_exceptions=True,
     )
 
-    # Rank sources so the user's own library leads, then Jamendo, then any
-    # other source. Applied before splitting into rows so both the BEST MATCH
-    # and the AI suggestion sections put localfiles first. Stable sort keeps
-    # the configured module order as the tie-break for unranked sources.
+    # Rank sources so the user's own library leads, then every other source
+    # alphabetically. Applied before splitting into rows so both the BEST MATCH
+    # and the AI suggestion sections put localfiles first.
     paired = sorted(
         zip(modules, per_source), key=lambda mp: _source_rank(mp[0].module_name())
     )
