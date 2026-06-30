@@ -177,21 +177,31 @@ class LocalFilesInputModule(InputModule):
         )
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
+    _SEARCH_HANDLERS = {
+        SearchType.track: "_search_tracks",
+        SearchType.album: "_search_albums",
+        SearchType.artist: "_search_artists",
+        SearchType.playlist: "_search_playlists",
+    }
+
     async def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:
-        """Search for items in the local database"""
-        if type == SearchType.track:
-            return self._search_tracks(query, offset, limit)
-        elif type == SearchType.album:
-            return self._search_albums(query, offset, limit)
-        elif type == SearchType.artist:
-            return self._search_artists(query, offset, limit)
-        elif type == SearchType.playlist:
-            return self._search_playlists(query, offset, limit)
-        else:
-            logger.warning(f"Unsupported search type: {type}")
+        """Search the local database for *type* matching *query*.
+
+        The query path is synchronous sqlite — a full-table ``LIKE`` scan with
+        a per-row ``fold()`` callback — so it runs in a thread executor instead
+        of on the event loop. Otherwise it blocks the loop and the other
+        sources' external (Qobuz/Jamendo) requests can't fire until the local
+        scan finishes (the assembler fans all sources out concurrently).
+        """
+        handler = self._SEARCH_HANDLERS.get(type)
+        if handler is None:
+            logger.warning("Unsupported search type: %s", type)
             return EmptyList(offset, limit)
+        return await asyncio.get_running_loop().run_in_executor(
+            None, getattr(self, handler), query, offset, limit
+        )
 
     def _search_tracks(self, query: str, offset: int, limit: int) -> BrowseItemList:
         """Search for tracks"""
