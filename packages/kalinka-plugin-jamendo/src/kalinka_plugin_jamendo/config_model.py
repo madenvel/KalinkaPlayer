@@ -1,8 +1,10 @@
+import os
 from typing import ClassVar
 from enum import Enum
 
 from pydantic import ConfigDict, Field
 
+from kalinka_plugin_sdk import paths
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 # Release hosting the int8 mood index + MiniLM encoder (see kalinka-training
@@ -64,7 +66,12 @@ class JamendoConfig(ModuleConfig):
         json_schema_extra={"importance": "simple"},
     )
     ai_index_path: str = Field(
-        default="~/kalinka/jamendo/jamendo_index.sqlite",
+        # Persistent state dir (<prefix>/var/lib/kalinka), same place CLAP models
+        # and localfiles.db live — NOT the user home, which is read-only on the
+        # device. paths.state_dir() honours $KALINKA_PREFIX (dev-run vs prod).
+        default_factory=lambda: os.path.join(
+            paths.state_dir(), "jamendo", "jamendo_index.sqlite"
+        ),
         title="Mood index path",
         description="Local path for the sqlite-vec mood index.",
         json_schema_extra={"importance": "expert"},
@@ -76,7 +83,7 @@ class JamendoConfig(ModuleConfig):
         json_schema_extra={"importance": "expert"},
     )
     ai_model_dir: str = Field(
-        default="~/kalinka/jamendo/minilm",
+        default_factory=lambda: os.path.join(paths.state_dir(), "jamendo", "minilm"),
         title="Embedding model directory",
         description="Local dir for the MiniLM model.onnx + tokenizer.json.",
         json_schema_extra={"importance": "expert"},
