@@ -418,6 +418,13 @@ class Catalog(BaseModel):
         preview_config (Optional[Preview]): Configuration for preview display
         role (Optional[CatalogRole]): Hint for how home/discovery surfaces
             should treat this catalog. Advisory; UI may ignore.
+        sources (List[str]): Input-module source name(s) whose entities this
+            catalog represents. A single name for a per-source section, several
+            for a server-assembled cross-source one (e.g. Related Albums rolled
+            up from multiple sources). Empty when not applicable. This is how a
+            consumer attributes a catalog to its source(s) when the catalog's
+            own ``id.source`` cannot (server-assembled sections use
+            ``source="server"`` and so can't encode the origin in the id).
     """
 
     id: EntityId
@@ -427,6 +434,7 @@ class Catalog(BaseModel):
     description: Optional[str] = ""
     preview_config: Optional[Preview] = None
     role: Optional[CatalogRole] = None
+    sources: List[str] = []
 
 
 class BrowseItem(BaseModel):
