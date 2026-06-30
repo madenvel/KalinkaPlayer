@@ -18,6 +18,11 @@ from .minilm_onnx import MiniLmOnnx, download_file, ensure_model
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+# Index asset names shipped by older releases. Once a newer (renamed) index is
+# provisioned, these stale siblings are removed from the index dir so a content
+# bump doesn't leave ~140 MB orphaned per superseded version.
+_LEGACY_INDEX_NAMES = ("jamendo_index.sqlite",)
+
 
 class JamendoMoodIndex:
     def __init__(self, index_path: str, index_url: Optional[str],
@@ -71,7 +76,27 @@ class JamendoMoodIndex:
             return False
         logger.info("Jamendo mood index ready (%s, %s)",
                     self._index_path, self._dtype)
+        self._remove_legacy_indexes()
         return True
+
+    def _remove_legacy_indexes(self) -> None:
+        """Best-effort: delete superseded index assets in the index dir.
+
+        Runs only after the current index is confirmed good, and never touches
+        the index we're actually using (in case a user pinned an old name).
+        """
+        index_dir = os.path.dirname(self._index_path)
+        current = os.path.basename(self._index_path)
+        for name in _LEGACY_INDEX_NAMES:
+            if name == current:
+                continue
+            stale = os.path.join(index_dir, name)
+            try:
+                if os.path.exists(stale):
+                    os.remove(stale)
+                    logger.info("removed stale Jamendo index %s", stale)
+            except OSError as e:
+                logger.warning("could not remove stale index %s: %s", stale, e)
 
     def _read_meta(self) -> dict:
         con = sqlite3.connect(f"file:{self._index_path}?mode=ro", uri=True)
