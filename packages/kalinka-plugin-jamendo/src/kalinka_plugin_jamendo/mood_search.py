@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sqlite3
 from typing import List, Optional, Tuple
 
@@ -18,10 +19,14 @@ from .minilm_onnx import MiniLmOnnx, download_file, ensure_model
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-# Index asset names shipped by older releases. Once a newer (renamed) index is
-# provisioned, these stale siblings are removed from the index dir so a content
-# bump doesn't leave ~140 MB orphaned per superseded version.
-_LEGACY_INDEX_NAMES = ("jamendo_index.sqlite",)
+# Our shipped mood-index naming scheme: jamendo_index.sqlite (v1) and
+# jamendo_index_v<N>.sqlite (v2+). The index is fetched only when the configured
+# path is absent, so a content change ships a renamed asset; this pattern lets
+# _remove_legacy_indexes() reclaim every superseded version (~140 MB each)
+# without maintaining a hardcoded per-version list. Anchored so it only ever
+# matches our own assets, never a user-pinned custom filename. Also clears a
+# leftover ``.part`` from an interrupted download of one of those assets.
+_INDEX_NAME_RE = re.compile(r"^jamendo_index(?:_v\d+)?\.sqlite(?:\.part)?$")
 
 
 class JamendoMoodIndex:
@@ -82,19 +87,25 @@ class JamendoMoodIndex:
     def _remove_legacy_indexes(self) -> None:
         """Best-effort: delete superseded index assets in the index dir.
 
-        Runs only after the current index is confirmed good, and never touches
-        the index we're actually using (in case a user pinned an old name).
+        Removes every older versioned index file (and stale ``.part`` temps)
+        matching our naming scheme, so a version bump self-cleans without a
+        hardcoded list. Runs only after the current index is confirmed good,
+        never touches the index we're actually using, and never a file outside
+        our scheme (e.g. a user-pinned custom name).
         """
         index_dir = os.path.dirname(self._index_path)
         current = os.path.basename(self._index_path)
-        for name in _LEGACY_INDEX_NAMES:
-            if name == current:
+        try:
+            entries = os.listdir(index_dir)
+        except OSError:
+            return
+        for name in entries:
+            if name == current or not _INDEX_NAME_RE.match(name):
                 continue
             stale = os.path.join(index_dir, name)
             try:
-                if os.path.exists(stale):
-                    os.remove(stale)
-                    logger.info("removed stale Jamendo index %s", stale)
+                os.remove(stale)
+                logger.info("removed superseded Jamendo index %s", stale)
             except OSError as e:
                 logger.warning("could not remove stale index %s: %s", stale, e)
 

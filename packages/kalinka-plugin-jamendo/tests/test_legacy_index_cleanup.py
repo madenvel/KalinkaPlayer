@@ -39,3 +39,26 @@ def test_noop_when_no_legacy_present(tmp_path):
     _make(str(current))._remove_legacy_indexes()  # must not raise
 
     assert current.exists()
+
+
+def test_removes_all_older_versions_generically(tmp_path):
+    # A future v3 must clean BOTH v1 and v2 without a hardcoded list, plus any
+    # leftover .part temp — but keep the live index and unrelated files.
+    current = tmp_path / "jamendo_index_v3.sqlite"
+    v1 = tmp_path / "jamendo_index.sqlite"
+    v2 = tmp_path / "jamendo_index_v2.sqlite"
+    part = tmp_path / "jamendo_index_v2.sqlite.part"
+    minilm = tmp_path / "minilm"           # sibling dir, must survive
+    custom = tmp_path / "my_custom_index.sqlite"  # user file, must survive
+    for p in (current, v1, v2, part, custom):
+        p.write_text("x")
+    minilm.mkdir()
+
+    _make(str(current))._remove_legacy_indexes()
+
+    assert current.exists()
+    assert custom.exists()
+    assert minilm.is_dir()
+    assert not v1.exists()
+    assert not v2.exists()
+    assert not part.exists()
