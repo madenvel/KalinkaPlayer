@@ -11,6 +11,14 @@ from kalinka_plugin_sdk.module_config import ModuleConfig
 # jamendomaxcaps_embed.py). Files are fetched at startup if absent.
 _RELEASE = "https://github.com/madenvel/KalinkaPlayer/releases/download/jamendo-ai-v1"
 
+# Mood-index asset name. The index is fetched only when the local path is
+# absent (see mood_search._provision), so a content change must rename the
+# asset to force existing installs to re-download — overrides store only
+# user-set values, so this default bump ships to everyone who hasn't pinned
+# their own path. v2 = corporate/library-music pruned (~48.6k tracks removed;
+# kalinka-training jamendomaxcaps_blocklist.py + jamendomaxcaps_prune.py).
+_INDEX_ASSET = "jamendo_index_v2.sqlite"
+
 
 class JamendoAudioFormat(str, Enum):
     """User-facing audio quality labels.
@@ -70,14 +78,14 @@ class JamendoConfig(ModuleConfig):
         # and localfiles.db live — NOT the user home, which is read-only on the
         # device. paths.state_dir() honours $KALINKA_PREFIX (dev-run vs prod).
         default_factory=lambda: os.path.join(
-            paths.state_dir(), "jamendo", "jamendo_index.sqlite"
+            paths.state_dir(), "jamendo", _INDEX_ASSET
         ),
         title="Mood index path",
         description="Local path for the sqlite-vec mood index.",
         json_schema_extra={"importance": "expert"},
     )
     ai_index_url: str = Field(
-        default=f"{_RELEASE}/jamendo_index.sqlite",
+        default=f"{_RELEASE}/{_INDEX_ASSET}",
         title="Mood index download URL",
         description="Fetched to the index path on first use if absent. Empty = expect present.",
         json_schema_extra={"importance": "expert"},
