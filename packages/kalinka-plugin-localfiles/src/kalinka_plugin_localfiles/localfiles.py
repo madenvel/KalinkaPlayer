@@ -166,6 +166,7 @@ class LocalFilesInputModule(InputModule):
             catalog=Catalog(
                 id=cat,
                 title="FROM YOUR LIBRARY",
+                sources=[cat.source],
                 preview_config=Preview(
                     type=PreviewType.CARD,
                     content_type=PreviewContentType.TRACK,

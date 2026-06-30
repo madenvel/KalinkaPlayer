@@ -232,6 +232,9 @@ def _best_match_section(
         catalog=Catalog(
             id=cat,
             title=title,
+            # Attributed to the source whose results these are; id.source is
+            # "server" (assembled here), so the origin lives in `sources`.
+            sources=sorted({it.id.source for it in items}),
             preview_config=Preview(
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.CATALOG,
@@ -325,6 +328,8 @@ def _related_catalog(
         catalog=Catalog(
             id=cat,
             title=title,
+            # Rolled up across sources, so this can be several names.
+            sources=sorted({it.id.source for it in items}),
             preview_config=Preview(
                 type=PreviewType.TILE,
                 content_type=content_type,

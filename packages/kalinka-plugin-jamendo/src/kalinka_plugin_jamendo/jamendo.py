@@ -476,6 +476,7 @@ class JamendoInputModule(InputModule):
             catalog=Catalog(
                 id=cat,
                 title="DISCOVER ON JAMENDO",
+                sources=[cat.source],
                 preview_config=Preview(
                     type=PreviewType.CARD,
                     content_type=PreviewContentType.TRACK,

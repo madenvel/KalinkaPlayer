@@ -90,6 +90,7 @@ def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
         catalog=Catalog(
             id=cat,
             title="AI SUGGESTIONS",
+            sources=[source],
             preview_config=Preview(
                 type=PreviewType.CARD,
                 content_type=PreviewContentType.TRACK,
@@ -412,3 +413,30 @@ async def test_related_hidden_when_ai_suppressed():
     assert _ai_cards(result) == []
     assert _section(result, "Related Albums") is None
     assert _section(result, "Related Artists") is None
+
+
+async def test_catalog_sources_attribute_origin():
+    """Every AI-search catalog carries its origin source(s) in ``sources``:
+    per-source sections get a single name; the cross-source Related sections
+    get the union. id.source stays "server" for the assembled ones, so this is
+    the only place the origin is recoverable (no source-id reuse/conflict)."""
+    local = FakeModule(
+        "localfiles",
+        search_results={SearchType.album: [_album_item("localfiles", "al1", "Late Night Jazz", "a1", "Chet")]},
+        ai_tracks=[_sugg_track("localfiles", "l1", "Blue", "alX", "Kind of Blue", "aMiles", "Miles Davis")],
+    )
+    jamendo = FakeModule(
+        "jamendo",
+        search_results={SearchType.album: [_album_item("jamendo", "al2", "Late Night Jazz", "a2", "Bill")]},
+        ai_tracks=[_sugg_track("jamendo", "j1", "So What", "alY", "Jazz Moods", "aBill", "Bill Evans")],
+    )
+    result = await assemble_ai_search([local, jamendo], "late night jazz", 0, 20)
+    cat = {it.name: it.catalog for it in result.items}
+
+    assert cat["BEST MATCH · localfiles"].sources == ["localfiles"]
+    assert cat["BEST MATCH · jamendo"].sources == ["jamendo"]
+    # Plugin cards carry their own source too (uniform across the response).
+    assert cat["AI SUGGESTIONS"].sources  # localfiles or jamendo card
+    # Related is rolled up across both sources -> the union.
+    assert cat["Related Albums"].sources == ["jamendo", "localfiles"]
+    assert cat["Related Artists"].sources == ["jamendo", "localfiles"]
