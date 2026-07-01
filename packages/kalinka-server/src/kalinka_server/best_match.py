@@ -21,13 +21,6 @@ Algorithm (executed in this exact order — see :func:`assemble_best_match`):
          b. artist dominates its tracks/albums (artist.score >= entity.score)
     4. Return the remaining entities, still score-descending.
 
-The tie-break in step 2 encodes the rule "only show a more granular item when
-it scores *strictly higher* than the container it belongs to". Without it, a
-query like "oxygene" that scores an album and its tracks equally (100) lets the
-same-name tracks — which sort first in the candidate list — crowd the album out
-of the ``max_results`` window before step 3 can dominate them, leaving a block
-of redundant tracks and no album.
-
 The truncate-before-dedup ordering (step 2 before step 3) is deliberate: a
 strong-but-redundant entity can crowd out a weaker survivor, leaving fewer than
 ``max_results`` items. That is intended; we do not backfill.
@@ -63,9 +56,8 @@ RAPIDFUZZ_CUTOFF: float = 88.0
 MAX_RESULTS: int = 6
 
 # Score-tie ordering: the less granular entity leads, so a container is never
-# crowded out of the max_results window by its own equally-scoring children
-# (and so the dominance rules below can then absorb them). Unknown types sort
-# last. See the module docstring's "oxygene" worked example.
+# crowded out of the max_results window by its own equally-scoring children.
+# Unknown types sort last.
 _GRANULARITY = {"artist": 0, "album": 1, "playlist": 2, "track": 3}
 
 # Unicode-aware: ``\w`` matches letters/digits of any script (Cyrillic, etc.),
