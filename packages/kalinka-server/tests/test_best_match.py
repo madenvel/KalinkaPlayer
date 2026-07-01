@@ -137,6 +137,43 @@ class TestEdgeCases:
 
         assert {e.id for e in result} == {"al"}
 
+    def test_tied_album_beats_earlier_listed_tracks(self, monkeypatch):
+        # The "oxygene" case: several same-name tracks are listed BEFORE their
+        # album and all score equally. The granularity tie-break must lift the
+        # album above the tracks so it survives truncation to max_results and
+        # Rule 1 can then absorb the tied tracks — otherwise the tracks fill
+        # every slot and the album is lost.
+        candidates = [
+            Entity(id="t1", type="track", name="Oxygene (Pt. 4)",
+                   album_id="al", artist_id="ar"),
+            Entity(id="t2", type="track", name="Oxygene (Pt. 2)",
+                   album_id="al", artist_id="ar"),
+            Entity(id="t3", type="track", name="Oxygene (Pt. 3)",
+                   album_id="al", artist_id="ar"),
+            Entity(id="al", type="album", name="Oxygene", artist_id="ar"),
+        ]
+        monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([100, 100, 100, 100]))
+
+        result = assemble_best_match(candidates, "oxygene", max_results=3)
+
+        # Only the album survives; none of its equally-scoring tracks show.
+        assert _ids(result) == [("al", "album", 100)]
+
+    def test_strictly_higher_track_still_beats_album(self, monkeypatch):
+        # The tie-break only reorders EQUAL scores: a track that scores higher
+        # than the album must still lead and survive (album never dominates a
+        # strictly-higher-scoring track).
+        candidates = [
+            Entity(id="al", type="album", name="Oxygene", artist_id="ar"),
+            Entity(id="t", type="track", name="Oxygene (Pt. 4)",
+                   album_id="al", artist_id="ar"),
+        ]
+        monkeypatch.setattr(best_match, "SCORER", _fixed_scorer([95, 100]))
+
+        result = assemble_best_match(candidates, "oxygene", max_results=3)
+
+        assert _ids(result) == [("t", "track", 100), ("al", "album", 95)]
+
     def test_track_with_absent_relations_not_removed(self, monkeypatch):
         # A high-scoring album/artist is present but unrelated to the track,
         # and the track's own album/artist are not in the list.

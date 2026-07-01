@@ -13,12 +13,20 @@ against each other — overlap is expected.
 
 Algorithm (executed in this exact order — see :func:`assemble_best_match`):
     1. Score every candidate against the query; discard score < cutoff.
-    2. Sort surviving entities (all types mixed) by score descending; keep the
-       top ``max_results``.
+    2. Sort surviving entities (all types mixed) by score descending, breaking
+       ties by granularity so the less granular entity leads (artist < album <
+       track); keep the top ``max_results``.
     3. Remove redundancy on the truncated list (strictly-by-id):
          a. album dominates its tracks (album.score >= track.score)
          b. artist dominates its tracks/albums (artist.score >= entity.score)
     4. Return the remaining entities, still score-descending.
+
+The tie-break in step 2 encodes the rule "only show a more granular item when
+it scores *strictly higher* than the container it belongs to". Without it, a
+query like "oxygene" that scores an album and its tracks equally (100) lets the
+same-name tracks — which sort first in the candidate list — crowd the album out
+of the ``max_results`` window before step 3 can dominate them, leaving a block
+of redundant tracks and no album.
 
 The truncate-before-dedup ordering (step 2 before step 3) is deliberate: a
 strong-but-redundant entity can crowd out a weaker survivor, leaving fewer than
@@ -53,6 +61,12 @@ RAPIDFUZZ_CUTOFF: float = 88.0
 
 # Maximum number of entities in the BEST MATCH block.
 MAX_RESULTS: int = 6
+
+# Score-tie ordering: the less granular entity leads, so a container is never
+# crowded out of the max_results window by its own equally-scoring children
+# (and so the dominance rules below can then absorb them). Unknown types sort
+# last. See the module docstring's "oxygene" worked example.
+_GRANULARITY = {"artist": 0, "album": 1, "playlist": 2, "track": 3}
 
 # Unicode-aware: ``\w`` matches letters/digits of any script (Cyrillic, etc.),
 # not just ASCII. An ASCII-only class here made coverage_ratio score 0 for a
@@ -266,9 +280,10 @@ def assemble_best_match(
         if entity.score >= cutoff:
             survivors.append(entity)
 
-    # Sort by score, keep the top ``max_results`` — the list the redundancy
-    # rules below operate on.
-    survivors.sort(key=lambda e: e.score, reverse=True)
+    # Sort by score descending, breaking ties so the less granular entity leads
+    # (a tied album before its tracks), then keep the top ``max_results`` — the
+    # list the redundancy rules below operate on.
+    survivors.sort(key=lambda e: (-e.score, _GRANULARITY.get(e.type, 99)))
     the_list = survivors[:max_results]
 
     # Remove redundancy. Index by id so a track and its same-named album/artist
