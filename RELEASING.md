@@ -58,6 +58,26 @@ no effect.
 
 ---
 
+## Data releases (models, indexes) — never let them become "latest"
+
+Releases that host data assets rather than software (`jamendo-ai-*`,
+`clap-onnx-*`) are cut by hand. **Always create them with `--latest=false`**:
+
+```bash
+gh release create jamendo-ai-v2 --latest=false --title "…" --notes "…" <assets…>
+```
+
+GitHub marks the most recently created release as "latest" by default, and
+`/releases/latest` is what the website's download buttons link to and what
+`scripts/install-release.sh` users expect — it must always resolve to a
+`kalinka-v*` software release. (This went wrong once: `jamendo-ai-v1` was
+published a day after `kalinka-v3.2.0` and the download buttons landed users on
+sqlite index files.) The release workflow re-pins `--latest` whenever it
+publishes a `kalinka-v*` release, but don't rely on publish ordering to fix a
+mislabeled data release.
+
+---
+
 ## Bump the SDK version
 
 The SDK version lives in **one place**:

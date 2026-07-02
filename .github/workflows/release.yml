@@ -111,12 +111,14 @@ jobs:
         with:
           path: artifacts
 
-      - name: Gather debs
+      - name: Gather debs and checksums
         run: |
           mkdir -p release
           find artifacts -name '*.deb' -exec cp -n {} release/ \;
+          (cd release && sha256sum *.deb > SHA256SUMS)
           echo "Release assets:"
           ls -l release/
+          cat release/SHA256SUMS
 
       - name: Create / update release and upload
         env:
@@ -124,13 +126,35 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag }}"
           [ -z "$TAG" ] && TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#kalinka-v}"
           echo "Publishing $TAG"
+
+          # Install instructions go above the auto-generated changelog so the
+          # release page leads with what a user should actually do.
+          cat > notes.md <<EOF
+          ## Install / upgrade
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-release.sh | sudo bash -s -- $VERSION
+          \`\`\`
+
+          Detects your architecture, downloads the right packages from this release, and installs them with \`apt\` (drop the \`-s -- $VERSION\` to always get the latest release instead).
+
+          **Manual install:** download the server package for your OS — \`debian-13.arm64\` for Raspberry Pi OS (trixie) / Debian 13, \`ubuntu-24.04.amd64\` for Ubuntu 24.04 — plus all the \`_all.deb\` plugin/SDK packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`.
+          EOF
+
           # Create the release if it doesn't exist yet (idempotent: re-runs and
           # builds for a hand-cut release just fall through to upload).
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Kalinka ${TAG#kalinka-v}" \
+              --title "Kalinka $VERSION" \
+              --notes-file notes.md \
               --generate-notes
           fi
-          gh release upload "$TAG" release/*.deb --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+          # Pin this release as "latest" so /releases/latest (linked from the
+          # website's download buttons) always resolves to a kalinka-v* software
+          # release, never a newer data release (jamendo-ai-*, clap-onnx-*).
+          # Unconditional so hand-cut pre-existing releases get pinned too.
+          gh release edit "$TAG" --latest --repo "$GITHUB_REPOSITORY"
