@@ -47,9 +47,10 @@ class JamendoConfig(ModuleConfig):
         default="",
         title="Client ID",
         description=(
-            "Jamendo API client_id. Required — without it every request "
-            "fails. Create a free application to obtain one at: "
-            "https://devportal.jamendo.com"
+            "Required for Jamendo to work. Create a free account and "
+            "application at the "
+            "[Jamendo Dev Portal](https://devportal.jamendo.com), then "
+            "paste the application's Client ID here."
         ),
         json_schema_extra={"widget": "password", "importance": "simple"},
     )
@@ -66,10 +67,9 @@ class JamendoConfig(ModuleConfig):
         default=True,
         title="Mood / AI search",
         description=(
-            "Enable natural-language mood/genre search over Jamendo "
-            "(e.g. \"something melancholic for tonight\"). Requires the "
-            "downloaded mood index and embedding model; silently does "
-            "nothing until both are present."
+            "Search Jamendo by mood or description, e.g. \"something "
+            "melancholic for tonight\". The data it needs downloads "
+            "automatically the first time."
         ),
         json_schema_extra={"importance": "simple"},
     )
@@ -81,24 +81,31 @@ class JamendoConfig(ModuleConfig):
             paths.state_dir(), "jamendo", _INDEX_ASSET
         ),
         title="Mood index path",
-        description="Local path for the sqlite-vec mood index.",
+        description="Where the mood-search index is stored.",
         json_schema_extra={"importance": "expert"},
     )
     ai_index_url: str = Field(
         default=f"{_RELEASE}/{_INDEX_ASSET}",
         title="Mood index download URL",
-        description="Fetched to the index path on first use if absent. Empty = expect present.",
+        description=(
+            "Downloaded automatically if the index is missing — leave empty "
+            "if you manage the file yourself."
+        ),
         json_schema_extra={"importance": "expert"},
     )
     ai_model_dir: str = Field(
         default_factory=lambda: os.path.join(paths.state_dir(), "jamendo", "minilm"),
         title="Embedding model directory",
-        description="Local dir for the MiniLM model.onnx + tokenizer.json.",
+        description="Where the mood-search model is stored.",
         json_schema_extra={"importance": "expert"},
     )
     ai_model_url: str = Field(
         default=_RELEASE,
         title="Embedding model download URL",
-        description="Base URL; model.onnx + tokenizer.json are appended. Empty = expect present.",
+        # Base URL — model.onnx and tokenizer.json are appended at fetch time.
+        description=(
+            "Where the model is downloaded from if missing — leave empty if "
+            "you manage the files yourself."
+        ),
         json_schema_extra={"importance": "expert"},
     )

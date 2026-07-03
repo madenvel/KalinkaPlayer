@@ -91,9 +91,11 @@ class EmbedderClapConfig(BaseModel):
     ckpt_path: str = Field(
         default="",
         title="Override model path",
+        # Expected contents: clap_audio_encoder.onnx, clap_text_encoder.onnx,
+        # clap_tokenizer.json.
         description=(
-            "Directory containing ONNX model files (clap_audio_encoder.onnx, "
-            "clap_text_encoder.onnx, clap_tokenizer.json). Uses model_dir if empty."
+            "Folder containing a custom CLAP model. Leave empty to use the "
+            "standard model from the model directory."
         ),
         json_schema_extra={"widget": "path"},
     )
@@ -131,7 +133,7 @@ class AiSearchConfig(BaseModel):
         default=10.0,
         title="Fallback coverage threshold",
         json_schema_extra={
-            "help": "Warn if CLAP coverage % is below this",
+            "help": "Warn when less than this share of the library is indexed for AI search",
             "constraints": {"unit": "%"},
         },
     )
@@ -152,9 +154,8 @@ class MoodConfig(BaseModel):
         default=0.6, ge=0.0, le=1.0, title="Mood weight",
         json_schema_extra={
             "help": (
-                "Blend: final = (1 - weight*conf)*clap + (weight*conf)*mood, "
-                "where conf is the query's mood-match confidence (0 for a "
-                "non-mood query, so ranking stays pure CLAP)."
+                "How strongly mood matching influences results for mood-style "
+                "searches — searches without a mood are unaffected"
             ),
             **_EXPERT,
         },
@@ -163,9 +164,8 @@ class MoodConfig(BaseModel):
         default=200, title="Mood candidates before re-ranking",
         json_schema_extra={
             "help": (
-                "Top-K tracks retrieved by V-A proximity to the query target, "
-                "unioned with the CLAP KNN candidates so pure-mood queries are "
-                "not limited to CLAP's (near-random) neighbours."
+                "How many tracks are considered when ranking by mood — "
+                "higher is more thorough but slower"
             ),
             **_EXPERT,
         },
@@ -174,9 +174,8 @@ class MoodConfig(BaseModel):
         default=True, title="CLAP-text nearest-neighbour fallback",
         json_schema_extra={
             "help": (
-                "When no known mood word appears in the query, infer the "
-                "target (V,A) from the nearest mood words by CLAP-text "
-                "similarity. Disable to use only literal mood keywords."
+                "Guess the intended mood when the search doesn't contain a "
+                "known mood word — turn off to match only literal mood words"
             ),
             **_EXPERT,
         },
@@ -185,8 +184,8 @@ class MoodConfig(BaseModel):
         default=0.3, ge=0.0, le=1.0, title="NN fallback confidence threshold",
         json_schema_extra={
             "help": (
-                "Below this top cosine similarity the query is treated as "
-                "non-mood and mood ranking is skipped (pure CLAP)."
+                "How confident the mood guess must be before it affects "
+                "ranking — below this, results are ranked normally"
             ),
             **_EXPERT,
         },
@@ -198,7 +197,7 @@ class MoodConfig(BaseModel):
     backfill_batch: int = Field(
         default=256, title="Mood backfill batch size",
         json_schema_extra={
-            "help": "Tracks per pass when computing (V,A) for embedded tracks.",
+            "help": "Tracks processed per pass when computing mood data for the library",
             **_EXPERT,
         },
     )
@@ -225,7 +224,7 @@ class SearcherConfig(BaseModel):
         default=300,
         title="Model idle timeout",
         json_schema_extra={
-            "help": "Unload tag models from memory after this (0 = never unload)",
+            "help": "Free memory by unloading tag models after this long idle (0 = keep loaded)",
             "constraints": {"unit": "s"},
         },
     )
@@ -292,9 +291,8 @@ class EmbedderConfig(BaseModel):
         title="Audio model idle timeout",
         json_schema_extra={
             "help": (
-                "Unload the CLAP audio encoder (~272 MB) after this long with "
-                "no tracks to index (0 = never unload). The text encoder used "
-                "for search queries always stays resident."
+                "Free memory by unloading the AI indexing model after this "
+                "long with nothing to index (0 = keep loaded)"
             ),
             "constraints": {"unit": "s"},
             **_EXPERT,
@@ -347,7 +345,14 @@ class AcoustIDConfig(BaseModel):
     api_key: str = Field(
         default="",
         title="AcoustID API key",
-        json_schema_extra={"widget": "password", **_SIMPLE},
+        json_schema_extra={
+            "help": (
+                "Lets Kalinka identify tracks by their audio fingerprint — "
+                "get a free key at [acoustid.org](https://acoustid.org/)"
+            ),
+            "widget": "password",
+            **_SIMPLE,
+        },
     )
 
 
@@ -435,8 +440,8 @@ class LocalFilesConfig(ModuleConfig):
         title="Upload quiescence window",
         json_schema_extra={
             "help": (
-                "Defer indexing of files modified within this many seconds. "
-                "Protects against indexing partial files during slow uploads."
+                "Wait until a file has stopped changing for this long before "
+                "indexing it, so half-copied uploads aren't picked up"
             ),
             "constraints": {"unit": "s"},
         },

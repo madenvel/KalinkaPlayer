@@ -20,7 +20,7 @@ class KalinkaPluginMusiccastConfig(ModuleConfig):
         default="",
         title="Device IP address",
         json_schema_extra={
-            "help": "Override MusicCast device IP",
+            "help": "IP address of your MusicCast device — leave empty to find it automatically",
             **_SIMPLE,
         },
     )
@@ -31,7 +31,10 @@ class KalinkaPluginMusiccastConfig(ModuleConfig):
     connected_input: str = Field(
         default="optical1",
         title="Connected input",
-        json_schema_extra=_SIMPLE,
+        json_schema_extra={
+            "help": "The input on your receiver that the server's audio is wired into",
+            **_SIMPLE,
+        },
     )
     zone_name: str = Field(
         default="main",
@@ -42,7 +45,7 @@ class KalinkaPluginMusiccastConfig(ModuleConfig):
         default=False,
         title="Auto volume correction",
         json_schema_extra={
-            "help": "Adjust loudness using replaygain",
+            "help": "Even out volume differences between tracks (ReplayGain)",
             **_SIMPLE,
         },
     )

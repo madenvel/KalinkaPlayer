@@ -67,7 +67,7 @@ class KalinkaPluginJamendo(InputModulePlugin):
                 state=ModuleHealthState.ERROR,
                 message=(
                     "No Jamendo client_id configured. Create a free application "
-                    "at https://devportal.jamendo.com and paste its Client ID "
+                    "at [Jamendo Dev Portal](https://devportal.jamendo.com) and paste its Client ID "
                     "into this module's settings."
                 ),
             )

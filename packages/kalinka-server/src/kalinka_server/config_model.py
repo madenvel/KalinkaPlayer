@@ -43,14 +43,14 @@ class ServerConfig(BaseModel):
         default="all",
         title="Network interface",
         json_schema_extra={
-            "help": 'Bind to a specific interface or "all"',
+            "help": 'Network connection the server listens on — "all" is right for most setups',
         },
     )
     port: int = Field(
         default=8000,
         title="Port",
         json_schema_extra={
-            "help": "HTTP API port",
+            "help": "Port the app uses to connect to this server",
             "widget": "number_input",
             "constraints": {"ge": 1, "le": 65535},
             **_SIMPLE,
@@ -60,7 +60,7 @@ class ServerConfig(BaseModel):
         default="My Kalinka Service",
         title="Service name",
         json_schema_extra={
-            "help": "Shown during Zeroconf discovery",
+            "help": "How this server appears in the app when found on your network",
             **_SIMPLE,
         },
     )
@@ -77,15 +77,17 @@ class AlsaConfig(BaseModel):
     # in the schema. The widget kind enum_dropdown tells the client to
     # render a dropdown; the presence of enum_options at request time
     # is what makes the option list dynamic. See alsa_options.py.
+    #
+    # Values are stored as `hw:CARD=…,DEV=…` so the selection survives
+    # card-index shuffling on kernel upgrade — ALSA resolves the card id
+    # to the current index at open time.
     device: str = Field(
         default="default",
         title="ALSA device",
         json_schema_extra={
             "help": (
-                "Hardware output. Stored as `hw:CARD=…,DEV=…` so the "
-                "selection survives card-index shuffling on kernel "
-                "upgrade — ALSA itself resolves the card id to the "
-                "current index at open time."
+                "Where the sound comes out — the DAC or sound card "
+                "connected to your amplifier"
             ),
             "widget": "enum_dropdown",
             **_SIMPLE,
@@ -95,6 +97,7 @@ class AlsaConfig(BaseModel):
         default=160,
         title="Output latency",
         json_schema_extra={
+            "help": "How much audio is buffered ahead — increase if you hear dropouts",
             "widget": "number_slider",
             "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
         },
@@ -103,6 +106,7 @@ class AlsaConfig(BaseModel):
         default=40,
         title="Period size",
         json_schema_extra={
+            "help": "How often audio is handed to the device — leave at default unless troubleshooting",
             "widget": "number_slider",
             "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
         },
@@ -118,7 +122,7 @@ class HttpInputConfig(BaseModel):
         default=384000,
         title="Buffer size",
         json_schema_extra={
-            "help": "HTTP input buffer (bytes)",
+            "help": "How much of a network stream is kept buffered in memory",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -126,7 +130,7 @@ class HttpInputConfig(BaseModel):
         default=768000,
         title="Chunk size",
         json_schema_extra={
-            "help": "HTTP input chunk (bytes)",
+            "help": "How much data is fetched per network request",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -141,7 +145,7 @@ class FlacDecoderConfig(BaseModel):
         default=1536000,
         title="FLAC buffer",
         json_schema_extra={
-            "help": "FLAC decoder buffer (bytes)",
+            "help": "Decoded-audio buffer for FLAC playback",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -152,7 +156,7 @@ class MpegDecoderConfig(BaseModel):
         default=176400,
         title="MPEG buffer",
         json_schema_extra={
-            "help": "MPEG decoder buffer (bytes)",
+            "help": "Decoded-audio buffer for MP3 playback",
             "constraints": {"unit": "bytes"},
         },
     )
@@ -173,8 +177,8 @@ class FixupsConfig(BaseModel):
         title="Sleep after format setup",
         json_schema_extra={
             "help": (
-                "Delay (ms) after ALSA format change. Increase if audio glitches "
-                "when format switches."
+                "Short pause after switching audio format — increase if you "
+                "hear glitches when a new track starts"
             ),
             "constraints": {"unit": "ms"},
         },
@@ -183,7 +187,7 @@ class FixupsConfig(BaseModel):
         default=False,
         title="Reopen device on format change",
         json_schema_extra={
-            "help": "Full device reopen when format changes. Required by some DACs.",
+            "help": "Fully reopen the audio device when the format changes — some DACs need this",
         },
     )
 
@@ -227,12 +231,9 @@ class SearchConfig(BaseModel):
         title="Hide AI suggestions on a full-name match",
         json_schema_extra={
             "help": (
-                "When a BEST MATCH ARTIST name matches the whole query at or "
-                "above this whole-string score (0–100), the query is treated as "
-                "a name lookup and that source's AI suggestion card is hidden. "
-                "Only artists count (an album/playlist named like a mood, e.g. "
-                "'Late Night Jazz', keeps the suggestions). Higher = suppress "
-                "less; 100 hides only on an exact artist-name match."
+                "When your search is simply an artist's name, the AI "
+                "suggestions row is hidden. This sets how close the match "
+                "must be (0–100) — 100 hides it only on an exact name"
             ),
         },
     )
@@ -243,8 +244,8 @@ class SearchConfig(BaseModel):
         title="BEST MATCH minimum score",
         json_schema_extra={
             "help": (
-                "Minimum query-coverage score (0–100) for an entity to appear "
-                "in the BEST MATCH block. Higher = fewer, more confident matches."
+                "How well a result must match your search (0–100) to appear "
+                "under BEST MATCH — higher shows fewer, more confident matches"
             ),
         },
     )
@@ -254,7 +255,7 @@ class SearchConfig(BaseModel):
         le=50,
         title="BEST MATCH max results per source",
         json_schema_extra={
-            "help": "Maximum entities in each source's BEST MATCH section.",
+            "help": "How many results each source may show in its BEST MATCH section",
         },
     )
     candidate_limit: int = Field(
@@ -264,8 +265,8 @@ class SearchConfig(BaseModel):
         title="BEST MATCH candidates per type",
         json_schema_extra={
             "help": (
-                "Items fetched per entity type per source to feed BEST MATCH "
-                "ranking before the score cut-off."
+                "How many results are considered when ranking BEST MATCH — "
+                "higher is more thorough but slower"
             ),
         },
     )
@@ -275,7 +276,7 @@ class SearchConfig(BaseModel):
         le=100,
         title="AI suggestions per source",
         json_schema_extra={
-            "help": "Semantic suggestion tracks requested per source for its card.",
+            "help": "How many tracks each source shows in its AI suggestions row",
         },
     )
     related_max_results: int = Field(
@@ -284,10 +285,7 @@ class SearchConfig(BaseModel):
         le=50,
         title="Related artists max",
         json_schema_extra={
-            "help": (
-                "Maximum entries in the Related Artists row "
-                "derived from the AI suggestion tracks."
-            ),
+            "help": "How many artists appear in the Related Artists row",
         },
     )
 
