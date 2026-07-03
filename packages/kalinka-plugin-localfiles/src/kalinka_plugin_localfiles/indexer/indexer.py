@@ -194,7 +194,7 @@ class FileIndexer:
         await trigger_enricher_update("enrich")
 
     async def handle_incremental_changes(self, changes: Set[Tuple[str, str]]):
-        """Process file changes detected by inotify (CLOSE_WRITE/MOVED_TO events)"""
+        """Process filesystem changes detected by the inotify watcher."""
         changed_items: Dict[str, Set[str]] = {
             "artists": set(),
             "albums": set(),
@@ -218,6 +218,13 @@ class FileIndexer:
                         f"Error scanning new directory {file_path}: {str(e)}"
                     )
                     continue
+
+            if change_type == "path_removed":
+                # No per-path work: the cleanup_stale_tracks() pass at the
+                # end of this batch drops database rows for files that no
+                # longer exist on disk.
+                logger.info(f"Path removed, cleanup scheduled: {file_path}")
+                continue
 
             if file_path in processed_files:
                 continue
@@ -1001,7 +1008,13 @@ async def _indexer_worker(config: LocalFilesConfig, db_manager: AsyncIndexerDb):
 
 
 async def _file_watcher_worker(config: LocalFilesConfig):
-    """Background worker task for real-time filesystem monitoring using inotify CLOSE_WRITE events"""
+    """Background worker task for real-time filesystem monitoring via inotify.
+
+    Watches for content arriving (files written or moved in, directories
+    created or moved in — a moved-in tree emits no per-file events, so it
+    is scanned as a unit) and content leaving (files/directories deleted
+    or moved out, which schedules the stale-track cleanup).
+    """
     global _indexer_queue, _file_watcher_stop_event
 
     if not HAS_INOTIFY:
@@ -1019,12 +1032,16 @@ async def _file_watcher_worker(config: LocalFilesConfig):
             inotify = INotify()
             watched_dirs = {}
 
-            # Watch mask: CLOSE_WRITE (file closed after write), MOVED_TO (atomic renames),
-            # CREATE (for new dirs), DELETE_SELF (dir removed), UNMOUNT (fs unmounted)
+            # Watch mask: CLOSE_WRITE (file closed after write), MOVED_TO
+            # (files/dirs renamed or moved in), CREATE (new files/dirs),
+            # DELETE + MOVED_FROM (files/dirs deleted or moved out),
+            # DELETE_SELF (watched dir removed), UNMOUNT (fs unmounted)
             watch_mask = (
                 flags.CLOSE_WRITE
                 | flags.MOVED_TO
                 | flags.CREATE
+                | flags.DELETE
+                | flags.MOVED_FROM
                 | flags.DELETE_SELF
                 | flags.UNMOUNT
             )
@@ -1078,8 +1095,16 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                             else dir_path
                         )
 
-                        # Handle new directory creation
-                        if event.mask & flags.CREATE and os.path.isdir(file_path):
+                        # A directory appeared — created in place (mkdir,
+                        # cp -r) or moved in whole (mv). A moved-in tree is
+                        # already populated and emits no per-file events, so
+                        # it must be watched AND queued for scanning as a
+                        # unit. Same handling for a rename within the tree:
+                        # re-adding the watches refreshes the wd -> path
+                        # mapping for the new location.
+                        if event.mask & (
+                            flags.CREATE | flags.MOVED_TO
+                        ) and os.path.isdir(file_path):
                             relevant_changes.add(("dir_added", file_path))
                             _add_watches(file_path)
                             logger.debug(f"New directory detected: {file_path}")
@@ -1090,13 +1115,33 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                                 relevant_changes.add(("file_closed", file_path))
                                 logger.debug(f"File closed after write: {file_path}")
 
-                        # Handle atomic renames (uploaded as .tmp then renamed to .mp3/.flac)
+                        # Handle file renames (uploaded as .tmp then renamed to .mp3/.flac)
                         elif event.mask & flags.MOVED_TO:
                             if is_supported_audio_file(file_path):
                                 relevant_changes.add(("file_moved", file_path))
                                 logger.debug(f"File moved (atomic rename): {file_path}")
 
-                        # Handle directory removal
+                        # A file or directory left the tree (deleted or
+                        # moved out). Queue the batch so the stale-track
+                        # cleanup drops its database rows; for a directory,
+                        # also retire the subtree's now-stale watches.
+                        elif event.mask & (flags.DELETE | flags.MOVED_FROM):
+                            if event.mask & flags.ISDIR:
+                                prefix = file_path + os.sep
+                                for wd, path in list(watched_dirs.items()):
+                                    if path == file_path or path.startswith(prefix):
+                                        del watched_dirs[wd]
+                                        try:
+                                            inotify.rm_watch(wd)
+                                        except OSError:
+                                            pass  # watch already gone
+                                relevant_changes.add(("path_removed", file_path))
+                                logger.debug(f"Directory removed/moved out: {file_path}")
+                            elif is_supported_audio_file(file_path):
+                                relevant_changes.add(("path_removed", file_path))
+                                logger.debug(f"File removed/moved out: {file_path}")
+
+                        # Handle watched directory removal
                         elif event.mask & flags.DELETE_SELF:
                             if event.wd in watched_dirs:
                                 del watched_dirs[event.wd]
@@ -1104,7 +1149,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
 
                     if relevant_changes:
                         logger.info(
-                            f"File watcher detected {len(relevant_changes)} relevant events (CLOSE_WRITE/MOVED_TO)."
+                            f"File watcher detected {len(relevant_changes)} relevant events (added/changed/removed)."
                         )
                         await _indexer_queue.put(
                             {"incremental_changes": relevant_changes}
