@@ -1,9 +1,15 @@
 """Cross-source AI-search assembly.
 
-The ``/ai_search`` endpoint runs two independent legs over every input module
+The ``/ai_search`` endpoint runs independent legs over every input module
 and assembles the presentation here (the modules return raw data; the server
 owns the catalog/preview layout so the UI renders sections verbatim):
 
+  * **CATALOG ROUTES** — when the query names a browse shelf ("recently added
+    to the library"), the matching root cards are prepended (see
+    :mod:`query_router`). Additive: the other legs still run, so a routing
+    false-positive costs one extra card, not the results. Dropped when the
+    query turns out to be a name lookup — "New Order" is a band, not the
+    "New Releases" shelf.
   * **BEST MATCH** — one literal/navigational section *per source*, built from
     that source's ``search()`` results (tracks / albums / artists / playlists),
     scored and de-duplicated by :func:`best_match.assemble_best_match` and
@@ -47,6 +53,8 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
+from typing import TYPE_CHECKING
+
 from .best_match import (
     assemble_best_match,
     browse_item_to_entity,
@@ -54,6 +62,9 @@ from .best_match import (
     has_navigational_intent,
 )
 from .config_model import SearchConfig
+
+if TYPE_CHECKING:
+    from .query_router import CatalogRouter
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -89,9 +100,11 @@ async def assemble_ai_search(
     offset: int,
     limit: int,
     cfg: Optional[SearchConfig] = None,
+    router: "Optional[CatalogRouter]" = None,
 ) -> BrowseItemList:
-    """Build the section list: a per-source BEST MATCH section, then a per-source
-    AI SUGGESTIONS card, then the derived Related Artists.
+    """Build the section list: routed catalog shortcuts, then a per-source
+    BEST MATCH section, then a per-source AI SUGGESTIONS card, then the
+    derived Related Artists.
 
     ``cfg`` carries the tunables (score cut-offs, limits); defaults are used when
     it is omitted (e.g. in tests).
@@ -104,6 +117,16 @@ async def assemble_ai_search(
     # names something. A pure mood/genre phrase skips it — no junk literal hits,
     # and the Jamendo search() round-trips are avoided for the common case.
     navigational = has_navigational_intent(query)
+
+    # Catalog routing overlaps with the per-source fan-out; route() never
+    # raises. Restricted to the sources this request targets.
+    route_task = (
+        asyncio.create_task(
+            router.route(query, {m.module_name() for m in modules}, cfg)
+        )
+        if router is not None
+        else None
+    )
 
     per_source = await asyncio.gather(
         *(_search_one_source(module, query, navigational, cfg) for module in modules),
@@ -122,6 +145,7 @@ async def assemble_ai_search(
     # lookup. Best-match sections lead, then the suggestion cards.
     bm_sections: List[BrowseItem] = []
     ai_cards: List[BrowseItem] = []
+    any_name_lookup = False
     # Maps EntityId.source -> module for the related-artist lookups. Keyed by
     # the source string each module emits on its own cards, NOT module_name()
     # — the two differ (e.g. "Jamendo" vs "jamendo").
@@ -138,6 +162,7 @@ async def assemble_ai_search(
         if section is not None:
             bm_sections.append(section)
         if is_name_lookup:
+            any_name_lookup = True
             logger.info(
                 "ai_search: full-name match for %r in %s — its AI hidden",
                 query, src.source,
@@ -145,7 +170,19 @@ async def assemble_ai_search(
         else:
             ai_cards.extend(src.ai_sections)
 
-    sections = bm_sections + ai_cards + await _related_sections(ai_cards, by_source, cfg)
+    # Routed shelves lead — unless the query turned out to be a name lookup:
+    # the user wants the named thing ("New Order"), not the shelf whose title
+    # shares its words ("New Releases").
+    routed: List[BrowseItem] = []
+    if route_task is not None:
+        routed = await route_task
+        if routed and any_name_lookup:
+            logger.info("ai_search: name lookup %r — routed shelves hidden", query)
+            routed = []
+
+    sections = (
+        routed + bm_sections + ai_cards + await _related_sections(ai_cards, by_source, cfg)
+    )
 
     return BrowseItemList(
         offset=offset,

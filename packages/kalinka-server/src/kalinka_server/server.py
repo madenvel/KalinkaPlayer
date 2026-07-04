@@ -45,6 +45,7 @@ from .config_schema_processor import (
     set_field_value,
 )
 from .ai_search import assemble_ai_search
+from .query_router import CatalogRouter
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
@@ -229,6 +230,21 @@ async def create_app(
     )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
+
+    # Catalog routing table (query -> browse shelves). Built in the background
+    # — the first embed provisions/loads the model, which must not hold up
+    # startup. Until it finishes, route() just returns nothing.
+    app.state.query_router = CatalogRouter(player_context.embedder)
+    app.state.query_router_task = asyncio.create_task(
+        app.state.query_router.rebuild(
+            [
+                (name, plugin.interface)
+                for name, plugin in modules.prepared_input_modules.items()
+                if name in modules.enabled_input_modules
+                and isinstance(plugin.interface, InputModule)
+            ]
+        )
+    )
 
     # Persist the overrides dict if plugin setup reconciled it — i.e. a
     # plugin mutated config fields that came from the overrides file, so
@@ -480,7 +496,8 @@ async def create_app(
         """
         input_modules: List[InputModule] = extract_modules(sources)
         return await assemble_ai_search(
-            input_modules, query, offset, limit, app.state.config.search
+            input_modules, query, offset, limit, app.state.config.search,
+            router=app.state.query_router,
         )
 
     @app.get("/indexer/status")
