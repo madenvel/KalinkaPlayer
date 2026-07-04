@@ -6,10 +6,13 @@ owns the catalog/preview layout so the UI renders sections verbatim):
 
   * **CATALOG ROUTES** — when the query names a browse shelf ("recently added
     to the library"), the matching root cards are prepended (see
-    :mod:`query_router`). Additive: the other legs still run, so a routing
+    :mod:`query_router`). The legs still all run, so a routing
     false-positive costs one extra card, not the results. Dropped when the
     query turns out to be a name lookup — "New Order" is a band, not the
-    "New Releases" shelf.
+    "New Releases" shelf. A surviving route also hides the AI SUGGESTIONS
+    cards (and the Related Artists derived from them): routing only fires
+    when the query is more catalog-shaped than any discovery exemplar, and
+    mood-matched tracks are noise under a catalog ask. BEST MATCH stays.
   * **BEST MATCH** — one literal/navigational section *per source*, built from
     that source's ``search()`` results (tracks / albums / artists / playlists),
     scored and de-duplicated by :func:`best_match.assemble_best_match` and
@@ -179,6 +182,19 @@ async def assemble_ai_search(
         if routed and any_name_lookup:
             logger.info("ai_search: name lookup %r — routed shelves hidden", query)
             routed = []
+
+    # A surviving route means the query is catalog-shaped, not
+    # discovery-shaped — it beat every decoy (mood/genre/similarity
+    # exemplar) by the margin. Mood-matched suggestion cards are noise
+    # under a "recently added" ask, so hide them (Related Artists is
+    # derived from them and disappears too). BEST MATCH stays: a name the
+    # query happens to contain is still worth surfacing.
+    if routed:
+        logger.info(
+            "ai_search: %r routed to a catalog — AI suggestion cards hidden",
+            query,
+        )
+        ai_cards = []
 
     sections = (
         routed + bm_sections + ai_cards + await _related_sections(ai_cards, by_source, cfg)

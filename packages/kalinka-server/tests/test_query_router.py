@@ -24,7 +24,7 @@ from kalinka_server.ai_search import assemble_ai_search
 from kalinka_server.config_model import SearchConfig
 from kalinka_server.query_router import CatalogRouter
 
-from .test_ai_search import FakeModule, _artist_item
+from .test_ai_search import FakeModule, _artist_item, _track_item
 
 _DIM = 64
 
@@ -242,6 +242,26 @@ async def test_assemble_prepends_routed_shelf():
     assert result.items and result.items[0].name == "Recently Added · Local files"
     # The feed requires inline sections; the prepended shelf must carry them.
     assert result.items[0].sections
+
+
+async def test_route_hides_ai_suggestion_cards():
+    # A surviving route marks the query catalog-shaped: mood-matched AI
+    # suggestion cards are hidden, while without a route they show as usual.
+    lib = _library()
+    lib._ai = [_track_item("localfiles", "t1", "Some Track")]
+    router = await _built_router(("localfiles", lib))
+
+    routed = await assemble_ai_search(
+        [lib], "recently added to the library", 0, 10, router=router
+    )
+    unrouted = await assemble_ai_search(
+        [lib], "dreamy shoegaze wall of sound", 0, 10, router=router
+    )
+
+    routed_names = [it.name for it in routed.items]
+    assert routed_names[0] == "Recently Added · Local files"
+    assert "AI SUGGESTIONS" not in routed_names, routed_names
+    assert "AI SUGGESTIONS" in [it.name for it in unrouted.items]
 
 
 async def test_assemble_name_lookup_vetoes_routed_shelf():
