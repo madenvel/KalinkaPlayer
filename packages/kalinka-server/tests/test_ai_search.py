@@ -14,6 +14,7 @@ from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
     Catalog,
+    CoverImage,
     EntityId,
     EntityType,
     Preview,
@@ -110,11 +111,18 @@ class FakeModule:
         name: str,
         search_results: Optional[Dict[SearchType, List[BrowseItem]]] = None,
         ai_tracks: Optional[List[BrowseItem]] = None,
+        entities: Optional[Dict[str, BrowseItem]] = None,
+        source: Optional[str] = None,
     ):
         self._name = name
+        # EntityId source emitted on this module's cards. Real modules' source
+        # strings differ from module_name() (e.g. "jamendo" vs "Jamendo").
+        self._source = source or name
         self._search = search_results or {}
         self._ai = ai_tracks or []
+        self._entities = entities or {}
         self.search_calls = 0
+        self.get_calls: List[str] = []
 
     def module_name(self) -> str:
         return self._name
@@ -133,8 +141,15 @@ class FakeModule:
         # Plugins return a ready-made card (or nothing); the server appends it.
         if not self._ai:
             return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
-        card = _ai_card(self._name, self._ai)
+        card = _ai_card(self._source, self._ai)
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
+
+    async def get(self, entity_id) -> BrowseItem:
+        self.get_calls.append(entity_id.to_string)
+        item = self._entities.get(entity_id.to_string)
+        if item is None:
+            raise ValueError(f"not found: {entity_id.to_string}")
+        return item
 
 
 def _section(result: BrowseItemList, name: str) -> Optional[BrowseItem]:
@@ -458,3 +473,123 @@ async def test_localfiles_sections_lead_regardless_of_module_order():
     # And every BEST MATCH precedes every AI suggestion card.
     names = [it.name for it in result.items]
     assert max(i for i, n in enumerate(names) if n.startswith("BEST MATCH")) < names.index("AI SUGGESTIONS")
+
+
+# ---------------------------------------------------------------------------
+# Related Artists resolution (performer stubs -> full entities with images)
+# ---------------------------------------------------------------------------
+
+
+def _full_artist(source: str, local: str, name: str) -> BrowseItem:
+    """What a source's get() returns for an artist: the full entity, image
+    included — unlike the track.performer stub the related row starts from."""
+    aid = EntityId(id=local, type=EntityType.ARTIST, source=source)
+    return BrowseItem(
+        id=aid,
+        name=name,
+        can_browse=True,
+        artist=Artist(
+            id=aid,
+            name=name,
+            image=CoverImage(small=f"/resource/artist/{local}_small.jpg"),
+        ),
+    )
+
+
+async def test_related_artists_resolved_to_full_entities():
+    module = FakeModule(
+        "localfiles",
+        ai_tracks=[
+            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd")
+        ],
+        entities={
+            "kalinka:localfiles:artist:aPF": _full_artist("localfiles", "aPF", "Pink Floyd")
+        },
+    )
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    related = _section(result, "Related Artists")
+    assert related is not None
+    (card,) = related.sections
+    assert card.artist.image is not None
+    assert card.artist.image.small == "/resource/artist/aPF_small.jpg"
+    assert module.get_calls == ["kalinka:localfiles:artist:aPF"]
+
+
+async def test_related_artist_resolution_failure_keeps_stub():
+    """A failing get() (missing entity, source error) must degrade to the
+    name-only stub, never break the search response."""
+    module = FakeModule(
+        "localfiles",
+        ai_tracks=[
+            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd")
+        ],
+        # no entities -> get() raises
+    )
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    related = _section(result, "Related Artists")
+    (card,) = related.sections
+    assert card.name == "Pink Floyd"
+    assert card.artist.image is None
+
+
+async def test_related_resolution_runs_in_bounded_parallel_batches():
+    """Lookups run concurrently, but never more than _RESOLVE_BATCH at once."""
+    import asyncio
+
+    from kalinka_server import ai_search as ai_mod
+
+    class GaugedModule(FakeModule):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.active = 0
+            self.max_active = 0
+
+        async def get(self, entity_id) -> BrowseItem:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                await asyncio.sleep(0.01)
+                return await super().get(entity_id)
+            finally:
+                self.active -= 1
+
+    n = 12  # == default related_max_results, two batches of _RESOLVE_BATCH
+    tracks = [
+        _sugg_track("localfiles", f"t{i}", f"Song {i}", f"al{i}", f"Album {i}", f"a{i}", f"Artist {i}")
+        for i in range(n)
+    ]
+    entities = {
+        f"kalinka:localfiles:artist:a{i}": _full_artist("localfiles", f"a{i}", f"Artist {i}")
+        for i in range(n)
+    }
+    module = GaugedModule("localfiles", ai_tracks=tracks, entities=entities)
+
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    related = _section(result, "Related Artists")
+    assert len(related.sections) == n
+    assert all(card.artist.image is not None for card in related.sections)
+    assert len(module.get_calls) == n
+    assert 2 <= module.max_active <= ai_mod._RESOLVE_BATCH
+
+
+async def test_resolution_keyed_by_entity_source_not_module_name():
+    """Jamendo's module_name() is "Jamendo" while its entities say "jamendo";
+    resolution must route by the source string on the module's own cards."""
+    module = FakeModule(
+        "Jamendo",
+        source="jamendo",
+        ai_tracks=[
+            _sugg_track("jamendo", "t1", "Hard", "al1", "Hard Stuff", "a337225", "Circles")
+        ],
+        entities={
+            "kalinka:jamendo:artist:a337225": _full_artist("jamendo", "a337225", "Circles")
+        },
+    )
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    related = _section(result, "Related Artists")
+    (card,) = related.sections
+    assert card.artist.image is not None

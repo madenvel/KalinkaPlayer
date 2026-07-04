@@ -122,12 +122,18 @@ async def assemble_ai_search(
     # lookup. Best-match sections lead, then the suggestion cards.
     bm_sections: List[BrowseItem] = []
     ai_cards: List[BrowseItem] = []
+    # Maps EntityId.source -> module for the related-artist lookups. Keyed by
+    # the source string each module emits on its own cards, NOT module_name()
+    # — the two differ (e.g. "Jamendo" vs "jamendo").
+    by_source: dict[str, InputModule] = {}
     for module, src in paired:
         if isinstance(src, BaseException):
             # A whole source blew up outside its own leg handling — skip it so
             # one bad source can't sink the query.
             logger.warning("ai_search: source %s failed: %s", module.module_name(), src)
             continue
+        for card in src.ai_sections:
+            by_source.setdefault(card.id.source, module)
         section, is_name_lookup = _source_best_match(src, query, cfg)
         if section is not None:
             bm_sections.append(section)
@@ -139,7 +145,7 @@ async def assemble_ai_search(
         else:
             ai_cards.extend(src.ai_sections)
 
-    sections = bm_sections + ai_cards + _related_sections(ai_cards, cfg)
+    sections = bm_sections + ai_cards + await _related_sections(ai_cards, by_source, cfg)
 
     return BrowseItemList(
         offset=offset,
@@ -257,14 +263,24 @@ def _best_match_section(
     )
 
 
-def _related_sections(
-    ai_sections: List[BrowseItem], cfg: SearchConfig
+# Related-artist get() lookups run in parallel batches of _RESOLVE_BATCH,
+# each capped at _RESOLVE_TIMEOUT_S — bounding the extra search latency to
+# n_batches × timeout even when a source hangs.
+_RESOLVE_BATCH = 6
+_RESOLVE_TIMEOUT_S = 3.0
+
+
+async def _related_sections(
+    ai_sections: List[BrowseItem],
+    by_source: dict[str, InputModule],
+    cfg: SearchConfig,
 ) -> List[BrowseItem]:
     """Derive Related Artists from the AI suggestion tracks.
 
     Rolls up the tracks inside every source's card (their union, in rank order)
-    by artist, ranks them by suggestion count then first appearance, and wraps
-    the top ``related_max_results`` into a TILE section. Empty in, empty out —
+    by artist, ranks them by suggestion count then first appearance, resolves
+    the top ``related_max_results`` to full artist entities (the track stubs
+    carry no image), and wraps them into a TILE section. Empty in, empty out —
     so when the suggestions were hidden, no Related row appears.
     """
     artist_pairs: list = []
@@ -279,8 +295,11 @@ def _related_sections(
             if artist is not None:
                 artist_pairs.append((artist.id.to_string, artist))
 
+    artists = _rollup(artist_pairs, cfg.related_max_results)
+    artists = await _resolve_artists(artists, by_source)
+
     sections: List[BrowseItem] = []
-    artist_cards = [_artist_card(a) for a in _rollup(artist_pairs, cfg.related_max_results)]
+    artist_cards = [_artist_card(a) for a in artists]
     if artist_cards:
         sections.append(
             _related_catalog(
@@ -288,6 +307,38 @@ def _related_sections(
             )
         )
     return sections
+
+
+async def _resolve_artists(
+    artists: List[Artist], by_source: dict[str, InputModule]
+) -> List[Artist]:
+    """Swap each artist stub for its source's full entity, image included.
+
+    The stubs come from ``track.performer``, which carries only id + name.
+    Any failure keeps the stub: this row is decorative and must never break
+    or stall the search response.
+    """
+
+    async def one(artist: Artist) -> Artist:
+        module = by_source.get(artist.id.source)
+        if module is None:
+            return artist
+        try:
+            item = await asyncio.wait_for(
+                module.get(artist.id), timeout=_RESOLVE_TIMEOUT_S
+            )
+        except Exception as e:
+            logger.debug("related: could not resolve %s: %s", artist.id.to_string, e)
+            return artist
+        if item is not None and item.artist is not None:
+            return item.artist
+        return artist
+
+    resolved: List[Artist] = []
+    for start in range(0, len(artists), _RESOLVE_BATCH):
+        batch = artists[start : start + _RESOLVE_BATCH]
+        resolved.extend(await asyncio.gather(*(one(a) for a in batch)))
+    return resolved
 
 
 def _rollup(pairs: list, limit: int) -> list:
