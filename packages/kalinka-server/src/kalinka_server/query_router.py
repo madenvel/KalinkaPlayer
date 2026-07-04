@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # How long one module may take to serve its root catalog during rebuild.
 _BROWSE_TIMEOUT_S = 10.0
 _ROOT_PAGE_LIMIT = 50
+# Preview items fetched per routed shelf when its own preview_config doesn't
+# say (matches the home screen's per-shelf preview fetch).
+_PREVIEW_LIMIT = 10
 # Qualifying shelves scoring more than this below the best one are dropped —
 # they cleared the floor on shared vocabulary, not on being what was asked.
 _TOP_GAP = 0.15
@@ -72,6 +75,7 @@ _DECOYS: Tuple[str, ...] = (
 @dataclass
 class _Route:
     card: BrowseItem          # the module's own root card, re-emitted on a hit
+    module: InputModule       # browsed into at query time to fill the preview
     source: str               # plugin key, e.g. "jamendo" (EntityId.source)
     # module_name() — what assemble_ai_search identifies modules by. NOT the
     # same as the plugin key for every module ("Jamendo" vs "jamendo").
@@ -147,6 +151,7 @@ class CatalogRouter:
                 texts.extend(variants)
                 routes.append(_Route(
                     card=card,
+                    module=module,
                     source=name,
                     match_key=module.module_name(),
                     display_name=display,
@@ -235,15 +240,33 @@ class CatalogRouter:
             logger.info(
                 "routed %r -> %s (decoy best %.2f)", query,
                 [(f"{s:.2f}", r.source, r.card.name) for s, r in scored], decoy_best)
-        return [self._present(r) for _, r in scored[: cfg.route_max_results]]
+        cards = await asyncio.gather(
+            *(self._present(r) for _, r in scored[: cfg.route_max_results]))
+        return [c for c in cards if c is not None]
 
-    @staticmethod
-    def _present(route: _Route) -> BrowseItem:
-        """The shelf card as an ai_search section: same entity (the UI opens
-        it in place), retitled with the source like BEST MATCH sections."""
+    async def _present(self, route: _Route) -> Optional[BrowseItem]:
+        """The shelf as a self-contained ai_search section: browse into it for
+        the preview items and attach them inline. The search feed renders each
+        section's inline ``sections`` (and drops empty ones), so a bare browse
+        pointer would never show — unlike the home screen, it does not lazy-load
+        previews. Retitled with the source like BEST MATCH; ``can_browse`` stays
+        so the header still opens the full shelf. None when the shelf is empty
+        (nothing to preview) or the browse fails."""
+        preview = route.card.catalog.preview_config if route.card.catalog else None
+        limit = preview.items_count if preview and preview.items_count else _PREVIEW_LIMIT
+        try:
+            listing = await asyncio.wait_for(
+                route.module.browse(route.card.id, 0, limit), _BROWSE_TIMEOUT_S)
+        except Exception as e:
+            logger.warning("preview browse of %s/%s failed (%s); shelf dropped",
+                           route.source, route.card.id.id, e)
+            return None
+        if not listing.items:
+            return None
         card = route.card.model_copy(deep=True)
         title = f"{card.name} · {route.display_name}"
         card.name = title
         if card.catalog is not None:
             card.catalog.title = title
+        card.sections = list(listing.items)
         return card

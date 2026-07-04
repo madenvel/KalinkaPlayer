@@ -65,7 +65,8 @@ def _shelf(source: str, local: str, title: str, description=None) -> BrowseItem:
 
 
 class RoutableModule(FakeModule):
-    """FakeModule that also serves a root catalog of shelves."""
+    """FakeModule that serves a root catalog of shelves, and one preview track
+    when browsed into by a shelf id (so routed cards get inline content)."""
 
     def __init__(self, name, shelves, display=None, **kw):
         super().__init__(name, **kw)
@@ -76,9 +77,15 @@ class RoutableModule(FakeModule):
         return self._display
 
     async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
+        if entity_id.id == "root":
+            items = list(self._shelves)
+        else:
+            # Preview content for a shelf — one canned track per shelf.
+            tid = EntityId(id=f"{entity_id.id}-t1", type=EntityType.TRACK,
+                           source=entity_id.source)
+            items = [BrowseItem(id=tid, name=f"{entity_id.id} track", can_add=True)]
         return BrowseItemList(
-            offset=offset, limit=limit, total=len(self._shelves),
-            items=list(self._shelves),
+            offset=offset, limit=limit, total=len(items), items=items,
         )
 
 
@@ -126,6 +133,9 @@ async def test_catalog_intent_query_routes_to_shelf():
     assert top.name == "Recently Added · Local files"
     assert top.catalog.title == "Recently Added · Local files"
     assert top.id.source == "localfiles" and top.id.id == "recent"
+    # Self-contained: preview items pulled from the shelf are inline, so the
+    # search feed (which drops empty-section cards) renders it.
+    assert top.sections and top.sections[0].id.id == "recent-t1"
 
 
 async def test_mood_query_falls_through_to_search():
@@ -183,6 +193,25 @@ async def test_router_off_without_embedder_or_before_rebuild():
     assert await not_built.route("recently added", None, SearchConfig()) == []
 
 
+async def test_empty_shelf_is_dropped():
+    # A shelf that browses empty (e.g. an empty library) carries no preview,
+    # so it must not be returned as a blank card the feed would drop anyway.
+    class EmptyPreviewModule(RoutableModule):
+        async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
+            if entity_id.id == "root":
+                return await super().browse(entity_id, offset, limit)
+            return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
+
+    lib = EmptyPreviewModule(
+        "localfiles",
+        [_shelf("localfiles", "recent", "Recently Added", "Recently added tracks")],
+        display="Local files",
+    )
+    router = await _built_router(("localfiles", lib))
+
+    assert await router.route("recently added to the library", None, SearchConfig()) == []
+
+
 async def test_broken_module_degrades_to_no_routes_for_it():
     class BrokenModule(RoutableModule):
         async def browse(self, *a, **kw):
@@ -211,6 +240,8 @@ async def test_assemble_prepends_routed_shelf():
     )
 
     assert result.items and result.items[0].name == "Recently Added · Local files"
+    # The feed requires inline sections; the prepended shelf must carry them.
+    assert result.items[0].sections
 
 
 async def test_assemble_name_lookup_vetoes_routed_shelf():
