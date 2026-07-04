@@ -18,10 +18,13 @@ KalinkaConfig.presentation_layout() defines the General page grouping and
 collapses the redundant `base_config` level so the UI shows peer sections.
 """
 
+import os
 from enum import Enum
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+from kalinka_plugin_sdk import paths
 
 if TYPE_CHECKING:
     from .presentation_schema import SectionSpec
@@ -29,6 +32,13 @@ if TYPE_CHECKING:
 
 # Shared extras — keeps audit-tagging consistent across the file.
 _SIMPLE = {"importance": "simple"}
+
+# Release hosting the MiniLM text encoder (model.onnx + tokenizer.json are
+# appended at fetch time). Same release the Jamendo mood index ships from —
+# the index is built in this model's embedding space.
+_MINILM_RELEASE = (
+    "https://github.com/madenvel/KalinkaPlayer/releases/download/jamendo-ai-v1"
+)
 
 
 class LogLevel(str, Enum):
@@ -290,6 +300,34 @@ class SearchConfig(BaseModel):
     )
 
 
+class EmbeddingConfig(BaseModel):
+    """Shared MiniLM text embedder (kalinka_server.text_embedder) — one model
+    instance serving the server and every plugin via the plugin context."""
+
+    model_dir: str = Field(
+        # Persistent state dir (<prefix>/var/lib/kalinka), same place the
+        # module databases live — NOT the user home, which is read-only on
+        # the device. paths.state_dir() honours $KALINKA_PREFIX.
+        default_factory=lambda: os.path.join(
+            paths.state_dir(), "models", "minilm"
+        ),
+        title="Text embedding model directory",
+        json_schema_extra={
+            "help": "Where the shared text-embedding model is stored",
+        },
+    )
+    model_url: str = Field(
+        default=_MINILM_RELEASE,
+        title="Text embedding model download URL",
+        json_schema_extra={
+            "help": (
+                "Where the model is downloaded from if missing — leave empty "
+                "if you manage the files yourself"
+            ),
+        },
+    )
+
+
 class KalinkaConfig(BaseModel):
     """Main Kalinka configuration."""
 
@@ -299,6 +337,9 @@ class KalinkaConfig(BaseModel):
     decoder: DecoderConfig = Field(default_factory=DecoderConfig, title="Decoders")
     fixups: FixupsConfig = Field(default_factory=FixupsConfig, title="Hardware fixups")
     search: SearchConfig = Field(default_factory=SearchConfig, title="Search")
+    embedding: EmbeddingConfig = Field(
+        default_factory=EmbeddingConfig, title="Text embedding"
+    )
     device_automation: DeviceAutomationConfig = Field(
         default_factory=DeviceAutomationConfig, title="Device automation"
     )
@@ -400,4 +441,22 @@ class KalinkaConfig(BaseModel):
             ],
         )
 
-        return [srv, device_auto, audio_out, fixups, buffers, search_section]
+        embedding_section = SectionSpec(
+            id=f"{prefix}.embedding",
+            title="Text embedding",
+            importance=Importance.EXPERT,
+            fields=[
+                leaf("embedding.model_dir"),
+                leaf("embedding.model_url"),
+            ],
+        )
+
+        return [
+            srv,
+            device_auto,
+            audio_out,
+            fixups,
+            buffers,
+            search_section,
+            embedding_section,
+        ]

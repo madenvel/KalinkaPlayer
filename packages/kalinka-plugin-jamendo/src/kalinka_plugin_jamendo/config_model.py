@@ -7,8 +7,11 @@ from pydantic import ConfigDict, Field
 from kalinka_plugin_sdk import paths
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
-# Release hosting the int8 mood index + MiniLM encoder (see kalinka-training
-# jamendomaxcaps_embed.py). Files are fetched at startup if absent.
+# Release hosting the int8 mood index (see kalinka-training
+# jamendomaxcaps_embed.py). Fetched at startup if absent. The MiniLM query
+# encoder is no longer a plugin asset — it is the server's shared text
+# embedder (kalinka_server.text_embedder), configured under the server's
+# "Text embedding" settings.
 _RELEASE = "https://github.com/madenvel/KalinkaPlayer/releases/download/jamendo-ai-v1"
 
 # Mood-index asset name. The index is fetched only when the local path is
@@ -90,22 +93,6 @@ class JamendoConfig(ModuleConfig):
         description=(
             "Downloaded automatically if the index is missing — leave empty "
             "if you manage the file yourself."
-        ),
-        json_schema_extra={"importance": "expert"},
-    )
-    ai_model_dir: str = Field(
-        default_factory=lambda: os.path.join(paths.state_dir(), "jamendo", "minilm"),
-        title="Embedding model directory",
-        description="Where the mood-search model is stored.",
-        json_schema_extra={"importance": "expert"},
-    )
-    ai_model_url: str = Field(
-        default=_RELEASE,
-        title="Embedding model download URL",
-        # Base URL — model.onnx and tokenizer.json are appended at fetch time.
-        description=(
-            "Where the model is downloaded from if missing — leave empty if "
-            "you manage the files yourself."
         ),
         json_schema_extra={"importance": "expert"},
     )

@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, Generic, Optional, TypeVar
 from .api import EventEmitter, EventListener, LoggerAPI, PlayQueueController
 from .dynamic_fields import DynamicFieldDecl
+from .embedding import TextEmbedder
 from .events import PlayQueueEventType, PlayQueueEvent, PlayQueueState
 from .ext_device_events import ExtDeviceEventType, ExtDeviceEvent, ExtDeviceState
 from .module_config import ModuleConfig
@@ -48,6 +49,11 @@ class PluginContextBase:
     sdk_version: str  # equals API_VERSION
     config: ModuleConfig
     listener: EventListener[PlayQueueEventType, PlayQueueEvent, PlayQueueState]
+    # Server-owned shared text embedder (SDK 1.2+). One model instance serves
+    # every plugin and the server itself — plugins must not load their own.
+    # kw_only so this defaulted field can live on the base without breaking
+    # subclasses that declare required positional fields.
+    embedder: Optional[TextEmbedder] = field(default=None, kw_only=True)
 
 
 CTX_TYPE = TypeVar("CTX_TYPE", bound=PluginContextBase)

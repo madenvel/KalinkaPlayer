@@ -39,7 +39,12 @@ dependencies = [
     "netifaces>=0.11.0",
     "packaging>=21.0",
     "rapidfuzz>=2.0.0",
-    "kalinka-plugin-sdk>=1,<2",
+    # Shared MiniLM text embedder (text_embedder.py). Imported lazily; the
+    # model itself is downloaded on first use.
+    "numpy>=1.24",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "kalinka-plugin-sdk>=1.2,<2",
 ]
 dynamic = ["version"]
 

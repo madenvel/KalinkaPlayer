@@ -7,7 +7,7 @@ from importlib.metadata import entry_points
 from typing import Any, Generator, Mapping, MutableMapping
 
 from kalinka_eventbus import EventBus
-from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState
+from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState, paths
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
 from kalinka_plugin_sdk.events import (
     PlayQueueState,
@@ -41,6 +41,7 @@ from .config_overrides import (
 from . import state_keeper
 from .alsa_volume_device import AlsaVolumeOutputPlugin
 from .playqueue import PlayQueueImpl
+from .text_embedder import SharedTextEmbedder
 from kalinka_plugin_sdk.api import PlayQueueController
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -73,6 +74,10 @@ class PlayerContext:
     playqueue: PlayQueueController
     playqueue_eventbus: EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent]  # type: ignore[type-var]
     ext_device_eventbus: EventBus[ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent]  # type: ignore[type-var]
+    # Shared MiniLM text embedder — one model instance for the server and
+    # every plugin (handed out via the plugin contexts). Lazy: loads on
+    # first embed() call.
+    embedder: SharedTextEmbedder | None = None
 
 
 @dataclass
@@ -497,6 +502,7 @@ class PreparedModuleCollection:
                     plugin_id=name,
                     sdk_version=API_VERSION,
                     config=config,
+                    embedder=self.player_context.embedder,
                 )
             case PluginType.OUTPUT_DEVICE:
                 return OutputDevicePluginContext(
@@ -506,6 +512,7 @@ class PreparedModuleCollection:
                     plugin_id=name,
                     sdk_version=API_VERSION,
                     config=config,
+                    embedder=self.player_context.embedder,
                 )
             case _:
                 raise ValueError(
@@ -651,6 +658,13 @@ async def setup(
         playqueue_eventbus=playqueue_eventbus,
         playqueue=PlayQueueImpl(config, playqueue_eventbus),
         ext_device_eventbus=device_eventbus,
+        embedder=SharedTextEmbedder(
+            config.embedding.model_dir,
+            config.embedding.model_url or None,
+            # Pre-SDK-1.2 releases stored the model in the Jamendo plugin's
+            # private directory; migrate instead of re-downloading ~90 MB.
+            legacy_dirs=[os.path.join(paths.state_dir(), "jamendo", "minilm")],
+        ),
         )
 
     # Scan and setup plugins

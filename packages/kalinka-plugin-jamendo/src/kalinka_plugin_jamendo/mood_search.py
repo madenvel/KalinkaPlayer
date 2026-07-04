@@ -1,10 +1,11 @@
 """Mood/semantic search index for the Jamendo plugin.
 
-Embeds the query with MiniLM and KNN-matches it (cosine, sqlite-vec) against
+Embeds the query with the server's shared MiniLM embedder (SDK
+``context.embedder``) and KNN-matches it (cosine, sqlite-vec) against
 precomputed MiniLM embeddings of the JamendoMaxCaps captions, one vector per
-track. The index + model are downloaded assets; this opens the index read-only
-and returns (track_id, distance). If an asset is missing and can't be fetched,
-``available()`` is False and ai_search returns nothing.
+track. The index is a downloaded asset; this opens it read-only and returns
+(track_id, distance). If the index can't be fetched or the embedder is
+unavailable, ``available()`` is False and ai_search returns nothing.
 """
 from __future__ import annotations
 
@@ -13,11 +14,36 @@ import logging
 import os
 import re
 import sqlite3
+import urllib.request
 from typing import List, Optional, Tuple
 
-from .minilm_onnx import MiniLmOnnx, download_file, ensure_model
+from kalinka_plugin_sdk.embedding import TextEmbedder
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+# The index vectors were computed with exactly this model and asset version
+# (see kalinka-training jamendomaxcaps_embed.py); a different shared model —
+# or re-exported assets of the same model — would silently return near-random
+# neighbours, so refuse to search instead. When the server ships a new
+# embedder version, this plugin must be updated together with a rebuilt index.
+_EXPECTED_MODEL_ID = "all-MiniLM-L6-v2"
+_EXPECTED_MODEL_VERSION = 1
+
+
+def download_file(url: str, dest: str) -> bool:
+    """Download url -> dest atomically (via a .part temp). True on success."""
+    tmp = dest + ".part"
+    try:
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        logger.info("downloading %s", url)
+        urllib.request.urlretrieve(url, tmp)
+        os.replace(tmp, dest)
+        return True
+    except Exception as e:
+        logger.warning("download failed (%s): %s", url, e)
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        return False
 
 # Our shipped mood-index naming scheme: jamendo_index.sqlite (v1) and
 # jamendo_index_v<N>.sqlite (v2+). The index is fetched only when the configured
@@ -31,28 +57,48 @@ _INDEX_NAME_RE = re.compile(r"^jamendo_index(?:_v\d+)?\.sqlite(?:\.part)?$")
 
 class JamendoMoodIndex:
     def __init__(self, index_path: str, index_url: Optional[str],
-                 model_dir: str, model_url: Optional[str]):
+                 embedder: Optional[TextEmbedder]):
         self._index_path = os.path.expanduser(index_path)
         self._index_url = index_url
-        self._model_dir = os.path.expanduser(model_dir)
-        self._model_url = model_url
-        self._encoder = MiniLmOnnx(self._model_dir)
-        self._lock = asyncio.Lock()  # one model, low QPS — serialize queries
+        self._embedder = embedder
+        self._lock = asyncio.Lock()  # one provisioning; concurrent callers await it
         self._available: Optional[bool] = None
         self._dtype = "float32"
         self._int8_scale = 508.0
 
     async def available(self) -> bool:
+        if self._embedder is None:
+            # Server predates the shared embedder (SDK < 1.2) — no model to
+            # encode queries with.
+            return False
         if self._available is None:
-            async with self._lock:  # one provisioning; others await it
+            async with self._lock:
                 if self._available is None:
                     loop = asyncio.get_running_loop()
-                    self._available = await loop.run_in_executor(
-                        None, self._provision)
+                    ok = await loop.run_in_executor(None, self._provision)
+                    if ok and (
+                        self._embedder.model_id != _EXPECTED_MODEL_ID
+                        or self._embedder.model_version
+                        != _EXPECTED_MODEL_VERSION
+                    ):
+                        logger.warning(
+                            "shared embedder is %s v%s but the index needs "
+                            "%s v%s; ai_search off (update the Jamendo "
+                            "plugin/index)",
+                            self._embedder.model_id,
+                            self._embedder.model_version,
+                            _EXPECTED_MODEL_ID, _EXPECTED_MODEL_VERSION)
+                        ok = False
+                    if ok:
+                        ok = await self._embedder.available()
+                        if not ok:
+                            logger.warning(
+                                "shared text embedder unavailable; ai_search off")
+                    self._available = ok
         return self._available
 
     def _provision(self) -> bool:
-        """Fetch the index + model if missing; read the index dtype/scale.
+        """Fetch the index if missing; read the index dtype/scale.
 
         Blocking (downloads, sqlite) — always called via an executor.
         """
@@ -66,10 +112,6 @@ class JamendoMoodIndex:
         ):
             logger.warning("Jamendo index missing (%s); ai_search off",
                            self._index_path)
-            return False
-        if not ensure_model(self._model_dir, self._model_url):
-            logger.warning("MiniLM model missing (%s); ai_search off",
-                           self._model_dir)
             return False
         try:
             meta = self._read_meta()
@@ -119,18 +161,17 @@ class JamendoMoodIndex:
     async def search(self, query: str, limit: int) -> List[Tuple[int, float]]:
         if not await self.available():
             return []
-        async with self._lock:
-            loop = asyncio.get_running_loop()
-            try:
-                blob = await loop.run_in_executor(None, self._encode, query)
-            except Exception as e:
-                logger.warning("query encode failed: %s", e)
-                return []
-            return await self._knn(blob, limit)
+        try:
+            # The shared embedder serializes inference internally.
+            vec = (await self._embedder.embed([query]))[0]
+        except Exception as e:
+            logger.warning("query encode failed: %s", e)
+            return []
+        return await self._knn(self._to_blob(vec), limit)
 
-    def _encode(self, query: str) -> bytes:
-        """Encode the query, quantized to int8 when the index is int8."""
-        vec = self._encoder.encode_one(query)  # float32 (384,), L2-normalized
+    def _to_blob(self, vec) -> bytes:
+        """Pack the float32 L2-normalized query vector for sqlite-vec,
+        quantized to int8 when the index is int8."""
         if self._dtype != "int8":
             return vec.tobytes()
         import numpy as np

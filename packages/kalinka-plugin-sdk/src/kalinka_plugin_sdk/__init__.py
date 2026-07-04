@@ -46,6 +46,7 @@ from .plugin import (
     InputPluginContext,
     OutputDevicePluginContext,
 )
+from .embedding import TextEmbedder
 from .module_config import ModuleConfig
 from .module_health import ModuleHealthState, ModuleState
 from .dynamic_fields import DynamicFieldDecl
@@ -59,6 +60,7 @@ __all__ = [
     "EventEmitter",
     "EventListener",
     "LoggerAPI",
+    "TextEmbedder",
     "InputPluginContext",
     "OutputDevicePluginContext",
     # Events and States

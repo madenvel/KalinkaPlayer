@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class KalinkaPluginJamendo(InputModulePlugin):
-    REQUIRES_SDK = ">=1,<2"
+    # 1.2 introduced the shared text embedder (context.embedder) that
+    # ai_search's query encoding depends on. Keep in sync with pyproject's
+    # kalinka-plugin-sdk pin.
+    REQUIRES_SDK = ">=1.2,<2"
     PLUGIN_ID = "jamendo"
     CONFIG_MODEL = JamendoConfig
 
@@ -41,12 +44,12 @@ class KalinkaPluginJamendo(InputModulePlugin):
             mood_index = JamendoMoodIndex(
                 config.ai_index_path,
                 config.ai_index_url or None,
-                config.ai_model_dir,
-                config.ai_model_url or None,
+                context.embedder,
             )
-            # Provision assets now (download index + model) rather than blocking
-            # the first search. available() is concurrency-safe, so a search that
-            # arrives mid-download just awaits the same provisioning.
+            # Provision assets now (download the index, warm the shared
+            # embedder) rather than blocking the first search. available() is
+            # concurrency-safe, so a search that arrives mid-download just
+            # awaits the same provisioning.
             self._provision_task = asyncio.create_task(mood_index.available())
         self.interface = JamendoInputModule(config, self._client, mood_index)
 

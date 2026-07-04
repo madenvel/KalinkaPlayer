@@ -1,13 +1,10 @@
 """_remove_legacy_indexes drops superseded index assets, but never the live one."""
 
-import os
-
 from kalinka_plugin_jamendo.mood_search import JamendoMoodIndex
 
 
 def _make(index_path: str) -> JamendoMoodIndex:
-    d = os.path.dirname(index_path)
-    return JamendoMoodIndex(index_path, None, os.path.join(d, "minilm"), None)
+    return JamendoMoodIndex(index_path, None, embedder=None)
 
 
 def test_removes_stale_legacy_index(tmp_path):
