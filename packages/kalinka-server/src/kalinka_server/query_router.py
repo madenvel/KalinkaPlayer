@@ -112,6 +112,24 @@ def _mentioned_sources(query: str, routes: Sequence[_Route]) -> Set[str]:
     return hits
 
 
+def _strip_mentions(query: str, aliases: Set[str]) -> str:
+    """Remove the module mention (and its preposition) from the query.
+
+    Once the mention has hard-filtered the candidates, its tokens only
+    inflate similarity against ALL of that module's shelves uniformly —
+    "popular tracks on jamendo" scores nearly as well against "Popular
+    Albums on Jamendo" as against "Popular Tracks on Jamendo", compressing
+    the gap the top-gap trim needs. Scoring the stripped query ("popular
+    tracks") restores the separation the un-suffixed query would have had.
+    """
+    q = query
+    for a in sorted(aliases, key=len, reverse=True):
+        q = re.sub(rf"\b(?:on|from|in|at)\s+{re.escape(a)}\b", " ", q,
+                   flags=re.IGNORECASE)
+        q = re.sub(rf"\b{re.escape(a)}\b", " ", q, flags=re.IGNORECASE)
+    return " ".join(q.split())
+
+
 class CatalogRouter:
     """Routing table over the enabled modules' root shelves.
 
@@ -209,13 +227,22 @@ class CatalogRouter:
         if allowed_sources is not None:
             candidates = [r for r in candidates if r.match_key in allowed_sources]
         mentioned = _mentioned_sources(query, candidates)
+        scoring_query = query
         if mentioned:
             candidates = [r for r in candidates if r.source in mentioned]
+            scoring_query = _strip_mentions(
+                query,
+                {a for r in candidates for a in r.aliases},
+            )
+            if not scoring_query:
+                # The query IS the module name — no shelf named, nothing to
+                # route to; the module's normal search legs handle it.
+                return []
         if not candidates:
             return []
 
         try:
-            q = (await self._embedder.embed([query]))[0]
+            q = (await self._embedder.embed([scoring_query]))[0]
         except Exception as e:
             logger.warning("query embedding failed (%s); no routes", e)
             return []

@@ -174,6 +174,26 @@ async def test_allowed_sources_matches_module_name_not_plugin_key():
     assert no_sources == []
 
 
+async def test_module_mention_stripped_before_scoring():
+    # The mention's tokens must not inflate every shelf of that module:
+    # "popular tracks on jamendo" is scored as "popular tracks", so the
+    # sibling "Popular Albums" falls outside the top gap and is trimmed.
+    jam = _jamendo()
+    jam._shelves.append(_shelf("jamendo", "popular-albums", "Popular Albums"))
+    router = await _built_router(("jamendo", jam))
+
+    routed = await router.route("popular tracks on jamendo", None, SearchConfig())
+
+    assert [c.id.id for c in routed] == ["popular-tracks"]
+
+
+async def test_bare_module_name_does_not_route():
+    router = await _built_router(("jamendo", _jamendo()))
+
+    assert await router.route("jamendo", None, SearchConfig()) == []
+    assert await router.route("on jamendo", None, SearchConfig()) == []
+
+
 async def test_route_cap_and_ordering():
     router = await _built_router(("jamendo", _jamendo()))
     cfg = SearchConfig(route_max_results=1)
