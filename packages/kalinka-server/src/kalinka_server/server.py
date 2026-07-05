@@ -458,7 +458,8 @@ async def create_app(
             # Re-raise HTTP exceptions as-is
             raise
         except Exception as e:
-            logger.error(f"Error browsing entity {id}: {str(e)}")
+            # repr, not str: httpx timeout exceptions stringify to "".
+            logger.error(f"Error browsing entity {id}: {e!r}")
             raise HTTPException(
                 status_code=500, detail=f"Internal server error: {str(e)}"
             )

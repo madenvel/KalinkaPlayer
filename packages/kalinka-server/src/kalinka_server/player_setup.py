@@ -40,6 +40,7 @@ from .config_overrides import (
 )
 from . import state_keeper
 from .alsa_volume_device import AlsaVolumeOutputPlugin
+from .module_timeout import TimeLimitedInputModule
 from .playqueue import PlayQueueImpl
 from .text_embedder import SharedTextEmbedder
 from kalinka_plugin_sdk.api import PlayQueueController
@@ -103,6 +104,16 @@ class PreparedPlugin:
             await plugin_instance.setup(plugin_context)
             health_state = ModuleHealthState.READY
             interface = cast_plugin_interface(plugin_instance)
+            if (
+                plugin_class.PLUGIN_TYPE == PluginType.INPUT_MODULE
+                and interface is not None
+            ):
+                # Enforce the SDK latency contract: every call into an input
+                # module must finish within the per-call budget, regardless
+                # of what the module does (see module_timeout).
+                interface = TimeLimitedInputModule(
+                    interface, plugin_context.plugin_id
+                )
         else:
             logger.info(
                 f"Plugin {plugin_class.PLUGIN_ID} is disabled in configuration - skipping setup"

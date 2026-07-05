@@ -81,6 +81,15 @@ class InputModule(Protocol):
     - Handling playlists
     - Providing track metadata and playback URLs
     - Managing genres and categorization
+
+    Latency contract: every call into this interface serves a real-time
+    request, and the server enforces a hard per-call timeout (3 seconds) on
+    its side — a call that overruns is cancelled and treated as failed, no
+    matter what the module was doing. Implementations must return within
+    that budget: configure backend HTTP timeouts to fail fast, don't retry
+    requests that already timed out, and never run provisioning or other
+    long work inline in a request path (start it in the background and
+    return what is available).
     """
 
     def module_name(self) -> str:
@@ -116,6 +125,9 @@ class InputModule(Protocol):
 
         Returns:
             BrowseItemList: Matching items, possibly mixed types via .sections
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         return EmptyList(offset, limit)
 
@@ -133,6 +145,9 @@ class InputModule(Protocol):
 
         Returns:
             BrowseItemList: A list of matching items found by the search
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         ...
 
@@ -155,6 +170,9 @@ class InputModule(Protocol):
 
         Returns:
             BrowseItemList: A list of items contained within the specified entity
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         ...
 
@@ -171,6 +189,9 @@ class InputModule(Protocol):
         Returns:
             List[TrackInfo]: List of track information objects containing
                      metadata and URL retrievers for each requested track, suitable to insert into the play queue.
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         ...
 
@@ -240,6 +261,9 @@ class InputModule(Protocol):
 
         Returns:
             BrowseItem: Detailed information about the requested entity
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         ...
 
@@ -260,6 +284,9 @@ class InputModule(Protocol):
 
         Returns:
             List[BrowseItem]: The entities that resolved, in request order
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         results = await asyncio.gather(
             *(self.get(eid) for eid in entity_ids), return_exceptions=True
