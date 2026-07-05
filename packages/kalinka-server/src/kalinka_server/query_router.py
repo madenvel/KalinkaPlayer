@@ -53,6 +53,17 @@ _PREVIEW_LIMIT = 10
 # Qualifying shelves scoring more than this below the best one are dropped —
 # they cleared the floor on shared vocabulary, not on being what was asked.
 _TOP_GAP = 0.15
+# Separates the shelf title from the source attribution on presented cards
+# ("New Releases · Jamendo"); base_title() reverses it.
+_TITLE_SEP = " · "
+
+
+def base_title(card: BrowseItem) -> str:
+    """Original shelf wording of a presented routed card, without the source
+    attribution appended by ``_present``. Used by the ai_search assembly to
+    exempt a route from the name-lookup veto when the query names the shelf
+    itself."""
+    return (card.name or "").rsplit(_TITLE_SEP, 1)[0]
 
 # Counter-intent exemplars: queries that must fall through to FTS / AI search.
 # A shelf only routes if it beats every one of these by the configured margin,
@@ -299,7 +310,8 @@ class CatalogRouter:
         if not listing.items:
             return None
         card = route.card.model_copy(deep=True)
-        title = f"{card.name} · {route.display_name}"
+        base = card.name or (card.catalog.title if card.catalog else "") or ""
+        title = f"{base}{_TITLE_SEP}{route.display_name}"
         card.name = title
         if card.catalog is not None:
             card.catalog.title = title

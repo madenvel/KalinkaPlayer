@@ -322,6 +322,27 @@ async def test_assemble_name_lookup_vetoes_routed_shelf():
     assert any("BEST MATCH" in n for n in names), names
 
 
+async def test_name_lookup_veto_spares_shelf_named_by_the_query():
+    # From the device log: 'new releases' routed to the New Releases shelves
+    # at 1.00, then a Qobuz playlist literally named "New Releases" set the
+    # name-lookup flag and the veto hid the routed shelves. When the query IS
+    # the shelf title, the route must survive; the AI cards stay hidden.
+    jam = _jamendo()
+    jam._search = {
+        SearchType.artist: [_artist_item("jamendo", "a1", "New Releases")]
+    }
+    jam._ai = [_track_item("jamendo", "t1", "Some Track")]
+    router = await _built_router(("jamendo", jam))
+
+    result = await assemble_ai_search(
+        [jam], "new releases", 0, 10, SearchConfig(), router=router
+    )
+
+    names = [it.name for it in result.items]
+    assert "New Releases · Jamendo" in names, names
+    assert "AI SUGGESTIONS" not in names, names
+
+
 async def test_assemble_without_router_unchanged():
     lib = _library()
     result = await assemble_ai_search([lib], "recently added", 0, 10)

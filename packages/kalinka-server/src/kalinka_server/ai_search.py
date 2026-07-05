@@ -65,6 +65,7 @@ from .best_match import (
     has_navigational_intent,
 )
 from .config_model import SearchConfig
+from .query_router import base_title
 
 if TYPE_CHECKING:
     from .query_router import CatalogRouter
@@ -175,13 +176,25 @@ async def assemble_ai_search(
 
     # Routed shelves lead — unless the query turned out to be a name lookup:
     # the user wants the named thing ("New Order"), not the shelf whose title
-    # shares its words ("New Releases").
+    # shares its words ("New Releases"). Exemption: when the query names the
+    # shelf ITSELF ("new releases"), a same-named catalog entity in some
+    # source (Qobuz carries playlists literally called "New Releases") must
+    # not hide the shelf — the route is the stronger claim there.
     routed: List[BrowseItem] = []
     if route_task is not None:
         routed = await route_task
         if routed and any_name_lookup:
-            logger.info("ai_search: name lookup %r — routed shelves hidden", query)
-            routed = []
+            kept = [
+                c for c in routed
+                if full_match_score(query, base_title(c))
+                >= cfg.ai_suppress_full_match_score
+            ]
+            if len(kept) != len(routed):
+                logger.info(
+                    "ai_search: name lookup %r — %d routed shelf(s) hidden",
+                    query, len(routed) - len(kept),
+                )
+            routed = kept
 
     # A surviving route means the query is catalog-shaped, not
     # discovery-shaped — it beat every decoy (mood/genre/similarity
