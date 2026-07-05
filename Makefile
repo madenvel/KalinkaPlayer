@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs dev-setup dev-run dev-rebuild-native
+.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -17,11 +17,16 @@ PIP := $(VENV)/bin/pip
 ## production image (Raspberry Pi) runs 3.13. Override to pick a specific
 ## interpreter, e.g. PYTHON=/opt/python3.13/bin/python3.
 PYTHON ?= python3
+## Prepended to PATH when running the deb build scripts, so their bare
+## `python3` / `pip` resolve to the venv instead of the system interpreter
+## (whose pip refuses installs on PEP 668 "externally managed" distros).
+VENV_BIN := $(abspath $(VENV))/bin
 
-## One-shot setup: create venv (unless one is active/exists), install sdk +
-## server + all plugins (editable), build the native extension, and seed the
-## fakeroot directory tree + config.
-dev-setup:
+## Ensure the venv exists and carries the wheel-building toolchain (pip,
+## build, setuptools-scm). Light shared prerequisite: the deb targets need
+## nothing more — wheels build in pip's isolated PEP-517 env — while
+## dev-setup layers the editable installs and fakeroot on top.
+build-env:
 	@if [ -n "$(VIRTUAL_ENV)" ]; then \
 		echo "Reusing active venv: $(VIRTUAL_ENV)"; \
 	elif [ -d $(VENV) ]; then \
@@ -30,23 +35,28 @@ dev-setup:
 		command -v $(PYTHON) >/dev/null 2>&1 || { \
 			echo "ERROR: '$(PYTHON)' not found on PATH."; \
 			echo "  Install Python >= 3.11 (e.g. 'sudo apt install python3 python3-venv')"; \
-			echo "  or point PYTHON at it: make dev-setup PYTHON=/path/to/python3.13"; \
+			echo "  or point PYTHON at it: make build-env PYTHON=/path/to/python3.13"; \
 			exit 1; }; \
 		echo "Creating venv at $(VENV) with $$($(PYTHON) --version)"; $(PYTHON) -m venv $(VENV); \
 	fi
 	@ver=$$($(PY) -c 'import sys; print("%d.%d" % sys.version_info[:2])'); \
 	if $(PY) -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then :; else \
 		echo "ERROR: venv Python is $$ver, but >= 3.11 is required."; \
-		echo "  Recreate it: rm -rf $(VENV) && make dev-setup PYTHON=python3.13"; \
+		echo "  Recreate it: rm -rf $(VENV) && make build-env PYTHON=python3.13"; \
 		exit 1; \
 	fi
 	@echo "Using $$($(PY) --version)"
+	@$(PIP) install --upgrade --quiet pip build setuptools-scm
+
+## One-shot setup: create venv (unless one is active/exists), install sdk +
+## server + all plugins (editable), build the native extension, and seed the
+## fakeroot directory tree + config.
+dev-setup: build-env
 	@command -v g++ >/dev/null 2>&1 || { \
 		echo "ERROR: g++ not found. The native player needs a C++ toolchain and"; \
 		echo "  the ALSA/FLAC/curlpp/spdlog/fmt dev headers. Install the system"; \
 		echo "  prerequisites listed in README.md (Running from source) first."; \
 		exit 1; }
-	@$(PIP) install --upgrade pip
 	@echo "Installing kalinka-plugin-sdk (editable)..."
 	@$(PIP) install -e packages/kalinka-plugin-sdk
 # The server's editable install compiles the native player in pip's isolated
@@ -128,18 +138,23 @@ copy-debs:
 		done; \
 	done
 
-## Build kalinka-server deb package
-kalinka-server-deb:
+## Build kalinka-server deb package. Runs with the venv's bin first on PATH
+## so the script's bare `python3` builds the wheel from the venv.
+kalinka-server-deb: build-env
 	@echo "Building kalinka-server deb package..."
-	@cd packages/kalinka-server && ./scripts/build_deb.sh
+	@command -v g++ >/dev/null 2>&1 || { \
+		echo "ERROR: g++ not found — the server wheel compiles the native player."; \
+		echo "  Install the C++ toolchain + dev headers listed in README.md first."; \
+		exit 1; }
+	@cd packages/kalinka-server && PATH="$(VENV_BIN):$$PATH" ./scripts/build_deb.sh
 
 ## Build all plugin deb packages (SDK, local files, musiccast, dummydevice, jamendo)
-kalinka-plugins-deb:
+kalinka-plugins-deb: build-env
 	@echo "Building plugin deb packages..."
 	@for dir in packages/kalinka-plugin-*; do \
 		if [ -f "$$dir/scripts/build_deb.sh" ]; then \
 			echo "Building $$(basename $$dir)..."; \
-			(cd "$$dir" && ./scripts/build_deb.sh) || exit 1; \
+			(cd "$$dir" && PATH="$(VENV_BIN):$$PATH" ./scripts/build_deb.sh) || exit 1; \
 		fi; \
 	done
 
@@ -157,6 +172,7 @@ help:
 	@echo "  dev-rebuild-native  Rebuild the native C++ extension, then restart to load it"
 	@echo ""
 	@echo "  build-native      Build the native player C++ extension"
+	@echo "  build-env         Create the venv (if missing) with the wheel-build toolchain"
 	@echo "  kalinka-server-deb  Build kalinka-server deb package"
 	@echo "  kalinka-plugins-deb Build all plugin deb packages (including SDK)"
 	@echo "  build-all-deb     Build all deb packages (server and plugins) and move to debs/"
