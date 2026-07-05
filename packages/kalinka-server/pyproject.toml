@@ -18,14 +18,15 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
-requires-python = ">=3.8"
+# Matches kalinka-plugin-sdk (>=3.10); anything lower fails dependency
+# resolution against it. Dev/build tooling needs 3.11+, production runs 3.13.
+requires-python = ">=3.10"
 dependencies = [
     "asyncio>=4.0.0",
     "pydantic>=2.0.0",

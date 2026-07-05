@@ -3,9 +3,6 @@ Database layer for the CLAP embedding pipeline.
 
 Uses a job queue table (embedding_jobs) for atomic claim/complete/fail
 semantics, and sqlite-vec virtual tables for 512-dim KNN search.
-
-Tag prediction jobs (tags_genre, tags_mood, tags_danceability) are
-managed by the searcher process via searcher_db.
 """
 
 import logging
@@ -124,9 +121,8 @@ class AsyncEmbedderDb:
         """
         Queue CLAP jobs for enriched tracks.
 
-        clap_audio is only scheduled for tracks whose unified tag job
-        (managed by the searcher) is 'done'.  clap_text is independent
-        — only needs enriched metadata.
+        clap_audio and clap_text are both scheduled off enriched metadata;
+        the audio embedding is metadata-independent.
 
         Returns total jobs inserted.
         """
@@ -136,7 +132,7 @@ class AsyncEmbedderDb:
         inserted = 0
 
         async with self._open() as conn:
-            # CLAP audio: wait for the unified tag stage to be done
+            # CLAP audio: schedule for every enriched track
             cursor = await conn.execute(
                 """
                 INSERT OR IGNORE INTO embedding_jobs
@@ -149,12 +145,6 @@ class AsyncEmbedderDb:
                 -- rather than silently dropped from search. Sentinels are
                 -- handled downstream (blanked in text, skipped in aggregates).
                 WHERE t.enriched IN (1, 2)
-                  AND NOT EXISTS (
-                    SELECT 1 FROM embedding_jobs j
-                    WHERE j.entity_id = t.id
-                      AND j.stage = 'tags'
-                      AND j.status != 'done'
-                  )
                   AND NOT EXISTS (
                     SELECT 1 FROM embedding_jobs j
                     WHERE j.entity_id = t.id

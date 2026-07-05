@@ -40,7 +40,6 @@ library to a bigger board.
 **AI Search (optional)**
 - Natural-language / semantic search over your library via a CLAP audio↔text embedding model (ONNX, downloaded on first boot)
 - Background **embedder** computes per-track CLAP vectors; results are KNN-retrieved and re-ranked against full-text + metadata signals
-- Optional tag prediction (genre / mood / danceability) via essentia-tensorflow for richer ranking — opt-in, since it pulls large ARM-only wheels
 - Tunable ranking weights and re-embedding versioning exposed through configuration
 - See [`scripts/clap_onnx_release.md`](scripts/clap_onnx_release.md) for the model release/upgrade process
 
@@ -99,25 +98,20 @@ Install the required system dependencies:
 sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
   libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
 ```
-Python 3.10+ is required (3.11 if you intend to use the optional tag-prediction wheels).
+Python 3.11+ is required (production runs 3.13).
 
 #### Build process
-1. Clone the repository:
+Clone the repository and build — there's no virtualenv to set up by hand, the build provisions its own:
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
-```
-2. Set up a Python virtual environment:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-3. Build everything (server + all plugins) and move the artifacts into `debs/`:
-```bash
 make build-all-deb
 ```
-You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is versioned independently by its own SemVer (currently `1.0.0`); plugins pin it `>=1,<2`, so backwards-compatible minor/patch SDK bumps don't break them — only a major bump is breaking. See [RELEASING.md](RELEASING.md) for the full release and version-bump procedure.
+On first run `make build-all-deb` creates a `.venv` with the wheel-build toolchain (or reuses an already-active `$VIRTUAL_ENV`), builds the server and every plugin, and moves the artifacts into `debs/`. To build against a specific interpreter, pass it explicitly: `make build-all-deb PYTHON=/path/to/python3.13`.
+
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`; `make build-env` just provisions the venv without building anything. Run `make help` to list all targets.
+
+The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is versioned independently by its own SemVer; plugins pin it `>=1,<2`, so backwards-compatible minor/patch SDK bumps don't break them — only a major bump is breaking. See [RELEASING.md](RELEASING.md) for the full release and version-bump procedure.
 
 #### Cleaning build artifacts
 ```bash
@@ -143,17 +137,17 @@ At startup `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates `/o
 
 `make dev-setup` + `make dev-run` get you a running server from a source checkout — no root, no systemd, and nothing written to the system's `/etc` or `/var`. Everything lives in a per-user "fakeroot" under `$KALINKA_PREFIX` (default `~/kalinka`), and the editable installs mean Python edits are picked up on the next restart.
 
-The dev venv is pinned to **Python 3.11** to match production — the optional AI packages (CLAP search, tag prediction) ship wheels for the prod interpreter, so a different version may fail to install them. `make dev-setup` creates the venv with `python3.11` and refuses to proceed against any other version.
+The dev venv needs **Python 3.11+** (production runs 3.13). `make dev-setup` creates the venv with `python3` and refuses to proceed against anything older than 3.11.
 
-1. Clone the repo and install the system prerequisites (including Python 3.11):
+1. Clone the repo and install the system prerequisites (including Python 3.11+):
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
-sudo apt install python3.11 python3.11-venv python3.11-dev g++ libasound2-dev \
+sudo apt install python3 python3-venv python3-dev g++ libasound2-dev \
   libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev build-essential
 ```
-   If your `python3.11` lives elsewhere, pass it explicitly: `make dev-setup PYTHON=/path/to/python3.11`.
-2. One-step setup. Creates a virtualenv at `.venv` with Python 3.11 (or **reuses an already-active `$VIRTUAL_ENV`** — it never makes a second venv), installs the SDK, server and all bundled plugins editable, builds the native player, and seeds the fakeroot directory tree plus a default config:
+   To use a specific interpreter, pass it explicitly: `make dev-setup PYTHON=/path/to/python3.13`.
+2. One-step setup. Creates a virtualenv at `.venv` with `python3` (or **reuses an already-active `$VIRTUAL_ENV`** — it never makes a second venv), installs the SDK, server and all bundled plugins editable, builds the native player, and seeds the fakeroot directory tree plus a default config:
 ```bash
 make dev-setup
 ```
@@ -172,13 +166,13 @@ make dev-run
 ```bash
 make dev-rebuild-native
 ```
-   Enabling an optional feature (AI search / tag prediction) in **Settings** and hitting **Restart** also just works: `dev-run` installs the requested optional packages into the venv before relaunching — the same flow `kalinka.service` runs at boot in production.
+   Enabling an optional feature (AI search) in **Settings** and hitting **Restart** also just works: `dev-run` installs the requested optional packages into the venv before relaunching — the same flow `kalinka.service` runs at boot in production.
 5. In the Kalinka Music App, go to **Settings → Connection**; the service should appear under the name you configured. Pick it and tap **Connect**.
 
 # Configuration & tuning
 
 - Most settings are editable live from the app's **Settings** screen and persisted to the `.cfg` files. The server exposes its config schema at `GET /server/config/schema` so the app can render forms.
-- **AI search** is opt-in. Enable the **embedder** (and optionally tag prediction under the searcher) in the localfiles module config. On first run the embedder downloads the CLAP ONNX models to the model directory (default `/var/lib/kalinka/models`, or `$KALINKA_PREFIX/var/lib/kalinka/models` when running from source) and embeds tracks in the background; watch progress via `GET /indexer/status`.
+- **AI search** is opt-in. Enable the **embedder** in the localfiles module config. On first run the embedder downloads the CLAP ONNX models to the model directory (default `/var/lib/kalinka/models`, or `$KALINKA_PREFIX/var/lib/kalinka/models` when running from source) and embeds tracks in the background; watch progress via `GET /indexer/status`.
 - **AcoustID** enrichment needs a free API key from the [AcoustID website](https://acoustid.org/) — set it in the localfiles enricher config.
 - Re-embedding / re-tagging is driven by `current_version` fields in the config; bump them to force a rebuild after a model change. See [`scripts/clap_onnx_release.md`](scripts/clap_onnx_release.md).
 

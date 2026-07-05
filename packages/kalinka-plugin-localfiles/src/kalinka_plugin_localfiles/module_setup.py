@@ -135,7 +135,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 title="Metadata enricher", required=False
             ),
             "searcher": _SubfeatureBookkeeping(
-                title="Search & tag prediction", required=False
+                title="Search", required=False
             ),
             "embedder": _SubfeatureBookkeeping(
                 title="CLAP embeddings", required=False
@@ -329,7 +329,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             enr.state = ModuleHealthState.READY
             enr.message = ""
 
-        # Searcher: needs numpy + (when tag prediction enabled) essentia.
+        # Searcher: the mood ranking leg needs numpy.
         srch = self._subfeatures["searcher"]
         if not config.searcher.enabled:
             srch.state = ModuleHealthState.DISABLED
@@ -338,15 +338,13 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             missing: list[str] = []
             if not _is_importable("numpy"):
                 missing.append("numpy")
-            if config.searcher.tags.enabled and not _is_importable("essentia"):
-                missing.append("essentia-tensorflow")
             if missing:
                 srch.state = ModuleHealthState.ERROR
                 srch.message = (
-                    "AI tag prediction unavailable. Missing package(s): "
+                    "Mood ranking unavailable. Missing package(s): "
                     + ", ".join(f"`{m}`" for m in missing)
                     + ". Use **Restart with install** in the modules page to "
-                    "fetch them. FTS keyword search continues to work."
+                    "fetch them."
                 )
                 srch.missing_packages = tuple(missing)
             elif self._searcher_proc is None or not self._searcher_proc.is_alive():
@@ -485,11 +483,9 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 missing.append(key)
                 seen.add(key)
 
-        # Searcher: numpy always, essentia when tag prediction is enabled.
+        # Searcher: numpy for the mood ranking leg.
         if cfg.searcher.enabled:
             need("numpy", "numpy")
-            if cfg.searcher.tags.enabled:
-                need("essentia-tensorflow", "essentia")
 
         # Embedder CLAP pipeline: numpy + the CLAP-side deps
         # (soundfile + soxr handle audio decode/resample, replacing librosa).

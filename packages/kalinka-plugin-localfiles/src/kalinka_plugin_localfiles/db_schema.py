@@ -112,7 +112,6 @@ async def init_db(db_path: str) -> None:
                 replaygain_gain REAL,
                 enriched INTEGER DEFAULT 0,
                 last_updated INTEGER,
-                tags_predicted TEXT,
                 embedding_clap_audio BLOB,
                 embedding_version INTEGER DEFAULT 0,
                 embedded_at TIMESTAMP,
@@ -239,7 +238,7 @@ async def init_db(db_path: str) -> None:
             )
             """
         )
-        for model_name in ("tags", "clap_audio", "clap_text"):
+        for model_name in ("clap_audio", "clap_text"):
             await cursor.execute(
                 "INSERT OR IGNORE INTO embedding_model_versions VALUES (?, 1, CURRENT_TIMESTAMP)",
                 (model_name,),
