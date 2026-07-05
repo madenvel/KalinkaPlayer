@@ -187,6 +187,23 @@ async def test_module_mention_stripped_before_scoring():
     assert [c.id.id for c in routed] == ["popular-tracks"]
 
 
+async def test_card_name_and_catalog_title_both_match():
+    # Qobuz's "Most Streamed" card carries catalog title "Top Releases" —
+    # queries phrased either way must find the same shelf.
+    cid = EntityId(id="most-streamed", type=EntityType.CATALOG, source="qobuz")
+    shelf = BrowseItem(
+        id=cid, name="Most Streamed", can_browse=True,
+        catalog=Catalog(id=cid, title="Top Releases"),
+    )
+    router = await _built_router(("qobuz", RoutableModule("Qobuz", [shelf], source="qobuz")))
+
+    by_name = await router.route("most streamed on qobuz", None, SearchConfig())
+    by_title = await router.route("top releases on qobuz", None, SearchConfig())
+
+    assert [c.id.id for c in by_name] == ["most-streamed"]
+    assert [c.id.id for c in by_title] == ["most-streamed"]
+
+
 async def test_bare_module_name_does_not_route():
     router = await _built_router(("jamendo", _jamendo()))
 

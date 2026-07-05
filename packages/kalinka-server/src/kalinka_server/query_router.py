@@ -89,16 +89,24 @@ def _variants(card: BrowseItem, display_name: str) -> List[str]:
     """Text variants embedded per shelf. Kept separate (scored max, not
     concatenated): mean-pooling one long string dilutes every part, while
     separate variants let "recently added" match the bare title and "new
-    additions on jamendo" match the module-qualified one."""
-    title = (card.catalog.title if card.catalog and card.catalog.title
-             else card.name) or ""
-    title = title.strip()
-    if not title:
+    additions on jamendo" match the module-qualified one.
+
+    Both the card name and the catalog title are embedded when they differ —
+    Qobuz's "Most Streamed" card carries catalog title "Top Releases", and a
+    "most streamed" query must match either wording."""
+    titles: List[str] = []
+    for t in ((card.catalog.title if card.catalog else None), card.name):
+        t = (t or "").strip()
+        if t and t.lower() not in (s.lower() for s in titles):
+            titles.append(t)
+    if not titles:
         return []
-    out = [title, f"{title} on {display_name}"]
+    out: List[str] = []
+    for t in titles:
+        out += [t, f"{t} on {display_name}"]
     desc = (card.catalog.description or "").strip() if card.catalog else ""
-    if desc and desc.lower() != title.lower():
-        out.append(f"{title}. {desc}")
+    if desc and desc.lower() != titles[0].lower():
+        out.append(f"{titles[0]}. {desc}")
     return out
 
 
