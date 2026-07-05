@@ -48,8 +48,7 @@ class TimeLimitedInputModule:
         self._inner = inner
         self._label = label
         self._timeout_s = timeout_s
-        # Bind each protocol member on the instance so 3.12+ static protocol
-        # lookup finds it and isinstance(self, InputModule) holds.
+        # Bind protocol members on the instance (see module docstring).
         for name in _PROTOCOL_METHODS:
             attr = getattr(inner, name, None)
             if attr is None:
