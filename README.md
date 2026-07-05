@@ -98,25 +98,20 @@ Install the required system dependencies:
 sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
   libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
 ```
-Python 3.11+ is required.
+Python 3.11+ is required (production runs 3.13).
 
 #### Build process
-1. Clone the repository:
+Clone the repository and build — there's no virtualenv to set up by hand, the build provisions its own:
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
-```
-2. Set up a Python virtual environment:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-3. Build everything (server + all plugins) and move the artifacts into `debs/`:
-```bash
 make build-all-deb
 ```
-You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`. Run `make help` to list all targets. The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is versioned independently by its own SemVer (currently `1.0.0`); plugins pin it `>=1,<2`, so backwards-compatible minor/patch SDK bumps don't break them — only a major bump is breaking. See [RELEASING.md](RELEASING.md) for the full release and version-bump procedure.
+On first run `make build-all-deb` creates a `.venv` with the wheel-build toolchain (or reuses an already-active `$VIRTUAL_ENV`), builds the server and every plugin, and moves the artifacts into `debs/`. To build against a specific interpreter, pass it explicitly: `make build-all-deb PYTHON=/path/to/python3.13`.
+
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`; `make build-env` just provisions the venv without building anything. Run `make help` to list all targets.
+
+The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is versioned independently by its own SemVer; plugins pin it `>=1,<2`, so backwards-compatible minor/patch SDK bumps don't break them — only a major bump is breaking. See [RELEASING.md](RELEASING.md) for the full release and version-bump procedure.
 
 #### Cleaning build artifacts
 ```bash
