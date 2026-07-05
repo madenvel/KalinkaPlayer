@@ -9,9 +9,8 @@ Stages (handled by this process):
                    a 512-dim space shared with text queries.
   - 'clap_text'  — CLAP encodes track metadata text.
 
-Tag prediction (genre, mood, danceability) is handled by the searcher
-process.  After clap_audio jobs complete, album and artist embeddings
-are updated by mean-pooling their tracks' CLAP vectors.
+After clap_audio jobs complete, album and artist embeddings are updated
+by mean-pooling their tracks' CLAP vectors.
 
 ML dependencies are NOT listed in pyproject.toml — installed on demand.
 """
@@ -595,7 +594,7 @@ class EmbeddingWorker:
         logger.info("Embedder waking — starting first work cycle")
 
         while not shutdown_event.is_set():
-            # Schedule new CLAP jobs for tracks with completed tags
+            # Schedule new CLAP jobs for enriched tracks
             await self.db.schedule_new_jobs(cfg.clap.current_version)
 
             did_work = False

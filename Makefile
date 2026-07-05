@@ -13,10 +13,10 @@ VENV ?= $(if $(VIRTUAL_ENV),$(VIRTUAL_ENV),.venv)
 KALINKA_PREFIX ?= $(HOME)/kalinka
 PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
-## Interpreter used to create a fresh venv. Pinned to 3.11 to match production
-## (the optional AI packages ship wheels for the prod Python). Override if your
-## 3.11 lives elsewhere, e.g. PYTHON=/opt/python3.11/bin/python3.
-PYTHON ?= python3.11
+## Interpreter used to create a fresh venv. Requires Python >= 3.11; the
+## production image (Raspberry Pi) runs 3.13. Override to pick a specific
+## interpreter, e.g. PYTHON=/opt/python3.13/bin/python3.
+PYTHON ?= python3
 
 ## One-shot setup: create venv (unless one is active/exists), install sdk +
 ## server + all plugins (editable), build the native extension, and seed the
@@ -29,17 +29,15 @@ dev-setup:
 	else \
 		command -v $(PYTHON) >/dev/null 2>&1 || { \
 			echo "ERROR: '$(PYTHON)' not found on PATH."; \
-			echo "  Install Python 3.11 (e.g. 'sudo apt install python3.11 python3.11-venv')"; \
-			echo "  or point PYTHON at it: make dev-setup PYTHON=/path/to/python3.11"; \
+			echo "  Install Python >= 3.11 (e.g. 'sudo apt install python3 python3-venv')"; \
+			echo "  or point PYTHON at it: make dev-setup PYTHON=/path/to/python3.13"; \
 			exit 1; }; \
 		echo "Creating venv at $(VENV) with $$($(PYTHON) --version)"; $(PYTHON) -m venv $(VENV); \
 	fi
 	@ver=$$($(PY) -c 'import sys; print("%d.%d" % sys.version_info[:2])'); \
-	if [ "$$ver" != "3.11" ]; then \
-		echo "ERROR: venv Python is $$ver, but 3.11 is required (to match production)."; \
-		echo "  Recreate it with 3.11, or point VENV at an existing 3.11 venv:"; \
-		echo "    rm -rf $(VENV) && make dev-setup            # recreate with $(PYTHON)"; \
-		echo "    make dev-setup VENV=/path/to/py311-venv"; \
+	if $(PY) -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then :; else \
+		echo "ERROR: venv Python is $$ver, but >= 3.11 is required."; \
+		echo "  Recreate it: rm -rf $(VENV) && make dev-setup PYTHON=python3.13"; \
 		exit 1; \
 	fi
 	@echo "Using $$($(PY) --version)"

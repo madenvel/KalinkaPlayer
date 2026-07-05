@@ -1,31 +1,21 @@
 """
-Search worker — Essentia tag pipeline + FTS5 indexing + search ranking.
+Search worker — CLAP semantic search + mood (valence/arousal) ranking.
 
 Runs as a separate long-lived subprocess (same pattern as embedder.py).
 
-Offline work:
-  1. Predicts genre, mood and danceability tags via Essentia-TensorFlow
-     (EffNet for genre, VGGish for mood/danceability).
-  2. Populates FTS5 index from enriched + tagged tracks.
-  3. Nudges the embedder process when tag stages complete so CLAP jobs
-     can be scheduled.
-
 Online work:
   - Receives search queries via IPC queues.
-  - Parses NL queries into structured constraints.
-  - Retrieves FTS5 candidates.
-  - Re-ranks using predicted genre/mood/danceability tags.
-  - Derives album/artist results from track hits.
+  - Encodes the query with CLAP (text→audio) via the embedder process.
+  - Retrieves candidates by CLAP KNN, augmented by a mood (V/A) leg.
+  - Ranks by CLAP similarity blended with mood proximity.
 
-ML dependencies are NOT listed in pyproject.toml — installed on demand.
-Model files are auto-downloaded to config.searcher.model_dir if missing.
+numpy is NOT listed in pyproject.toml — installed on demand for the mood
+leg's vector math.
 """
 
 from __future__ import annotations
 
 import asyncio
-import gc
-import json
 import logging
 import logging.handlers
 import math
@@ -35,15 +25,12 @@ import queue
 import re
 import signal
 import time
-import urllib.request
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
 from ..embedding_utils import decode_embedding
 from ..pip_utils import ensure_package
-from ..worker_utils import set_proc_title, sleep_interruptible
-from .genre_labels import label_for_index
-from .query_parser import ParsedQuery, parse_query
+from ..worker_utils import set_proc_title
 from .searcher_db import AsyncSearcherDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -54,18 +41,12 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # ---------------------------------------------------------------------------
 
 _PIP_SPECS: dict[str, str] = {
-    "essentia": "essentia-tensorflow",
-    "essentia_tensorflow": "essentia-tensorflow",
     "numpy": "numpy",
-}
-
-_IMPORT_NAME_ALIASES: dict[str, str] = {
-    "essentia_tensorflow": "essentia",
 }
 
 
 def _ensure_package(import_name: str) -> bool:
-    return ensure_package(import_name, _PIP_SPECS, _IMPORT_NAME_ALIASES)
+    return ensure_package(import_name, _PIP_SPECS, {})
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +61,7 @@ def _ensure_numpy() -> bool:
     if np is not None:
         return True
     if not _ensure_package("numpy"):
-        logger.error("numpy unavailable; searcher tag pipeline cannot run")
+        logger.error("numpy unavailable; searcher mood ranking cannot run")
         return False
     import numpy
 
@@ -102,56 +83,6 @@ _FILLER_WORDS = frozenset({
 })
 
 # ---------------------------------------------------------------------------
-# Model auto-download
-# ---------------------------------------------------------------------------
-
-_MODEL_URLS: dict[str, str] = {
-    "effnet": "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb",
-    "genre": "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
-    "vggish": "https://essentia.upf.edu/models/feature-extractors/vggish/audioset-vggish-3.pb",
-    "mood_mirex": "https://essentia.upf.edu/models/classification-heads/moods_mirex/moods_mirex-audioset-vggish-1.pb",
-    "danceability": "https://essentia.upf.edu/models/classification-heads/danceability/danceability-audioset-vggish-1.pb",
-}
-
-
-def _ensure_model_file(
-    name: str, configured_path: str, model_dir: str
-) -> Optional[str]:
-    """Return path to model file, downloading into model_dir if necessary."""
-    # Both inputs come from user config and may contain ``~`` — expand
-    # so os.path.isfile / os.makedirs see absolute paths. Without this,
-    # ``model_dir = "~/kalinka/models"`` causes a literal ``~`` directory
-    # to be created under the server's CWD (which then masks future
-    # "delete cached models" migrations).
-    if configured_path:
-        configured_path = os.path.expanduser(configured_path)
-    model_dir = os.path.expanduser(model_dir)
-
-    if configured_path and os.path.isfile(configured_path):
-        return configured_path
-
-    url = _MODEL_URLS.get(name)
-    if not url:
-        logger.error("No download URL for model '%s'", name)
-        return None
-
-    filename = url.rsplit("/", 1)[-1]
-    dest = os.path.join(model_dir, filename)
-    if os.path.isfile(dest):
-        return dest
-
-    os.makedirs(model_dir, exist_ok=True)
-    logger.info("Downloading model '%s' from %s …", name, url)
-    try:
-        urllib.request.urlretrieve(url, dest)
-        logger.info("Model '%s' saved to %s", name, dest)
-        return dest
-    except Exception as e:
-        logger.error("Failed to download model '%s': %s", name, e)
-        return None
-
-
-# ---------------------------------------------------------------------------
 # SearchWorker
 # ---------------------------------------------------------------------------
 
@@ -166,101 +97,12 @@ class SearchWorker:
     ):
         self.config = config
         self.db = db
-        # Essentia models (lazy-loaded per stage, unloaded after idle)
-        self._effnet = None
-        self._genre_cls = None
-        self._vggish = None
-        self._mood_cls = None
-        self._dance_cls = None
-        self._tags_load_attempted_at: float = 0.0
         # IPC queues for CLAP text encoding (served by the embedder process)
         self._text_encode_request_queue = text_encode_request_queue
         self._text_encode_response_queue = text_encode_response_queue
         # Mood index (words, va[M,2], text_emb[M,512]); lazy-loaded, retried.
         self._mood_index: Optional[tuple] = None
         self._mood_load_attempted_at: float = 0.0
-
-    # ------------------------------------------------------------------
-    # Model loading / unloading
-    # ------------------------------------------------------------------
-
-    def _load_tag_models(self):
-        """Load all tag prediction models (EffNet + VGGish + classifiers)."""
-        if self._effnet is not None:
-            return  # already loaded
-        self._tags_load_attempted_at = time.monotonic()
-        cfg = self.config.searcher
-        if not cfg.tags.enabled or cfg.tags.current_version == 0:
-            return
-        if not _ensure_numpy():
-            return
-        if not _ensure_package("essentia"):
-            logger.warning("essentia-tensorflow unavailable; tag prediction disabled")
-            return
-        try:
-            model_dir = cfg.model_dir
-            effnet_path = _ensure_model_file("effnet", cfg.tags.effnet_path, model_dir)
-            genre_path = _ensure_model_file("genre", cfg.tags.genre_path, model_dir)
-            vggish_path = _ensure_model_file("vggish", cfg.tags.vggish_path, model_dir)
-            mood_path = _ensure_model_file(
-                "mood_mirex", cfg.tags.mood_mirex_path, model_dir
-            )
-            dance_path = _ensure_model_file(
-                "danceability", cfg.tags.danceability_path, model_dir
-            )
-            import essentia.standard as es
-
-            if effnet_path and genre_path:
-                self._effnet = es.TensorflowPredictEffnetDiscogs(
-                    graphFilename=effnet_path, output="PartitionedCall:1"
-                )
-                self._genre_cls = es.TensorflowPredict2D(
-                    graphFilename=genre_path,
-                    input="serving_default_model_Placeholder",
-                    output="PartitionedCall:0",
-                )
-                logger.info("Genre model (EffNet) loaded")
-            else:
-                logger.warning("Genre model files unavailable; genre prediction disabled")
-
-            if vggish_path:
-                self._vggish = es.TensorflowPredictVGGish(
-                    graphFilename=vggish_path, output="model/vggish/embeddings"
-                )
-                if mood_path:
-                    self._mood_cls = es.TensorflowPredict2D(
-                        graphFilename=mood_path,
-                        input="serving_default_model_Placeholder",
-                        output="PartitionedCall",
-                    )
-                    logger.info("Mood model (VGGish) loaded")
-                else:
-                    logger.warning("Mood model file unavailable; mood disabled")
-                if dance_path:
-                    self._dance_cls = es.TensorflowPredict2D(
-                        graphFilename=dance_path,
-                        input="model/Placeholder",
-                        output="model/Softmax",
-                    )
-                    logger.info("Danceability model (VGGish) loaded")
-                else:
-                    logger.warning("Danceability model file unavailable")
-            else:
-                logger.warning("VGGish model unavailable; mood/danceability disabled")
-        except Exception as e:
-            logger.warning("Tag model loading failed: %s", e)
-
-    def _unload_models(self):
-        if self._effnet is None and self._vggish is None:
-            return
-        self._effnet = None
-        self._genre_cls = None
-        self._vggish = None
-        self._mood_cls = None
-        self._dance_cls = None
-        self._tags_load_attempted_at = 0.0
-        gc.collect()
-        logger.info("Tag models unloaded")
 
     # ------------------------------------------------------------------
     # CLAP text encoding via IPC (served by embedder process)
@@ -372,331 +214,16 @@ class SearchWorker:
         return (tv, ta), float(min(1.0, max(0.0, conf)))
 
     # ------------------------------------------------------------------
-    # Inference helpers
-    # ------------------------------------------------------------------
-
-    def _predict_all_tags(self, file_path: str) -> dict:
-        """Predict genre, mood, and danceability in a single pass.
-
-        Decodes audio once.  Runs EffNet for genre, then VGGish once and
-        passes its embeddings to both the mood and danceability classifiers.
-        Returns a dict with keys: genres, mood_cluster, danceability.
-        Missing keys indicate that the corresponding model was unavailable.
-        """
-        result: dict = {}
-        try:
-            import essentia.standard as es
-
-            t0 = time.monotonic()
-            loader = es.MonoLoader(filename=file_path, sampleRate=16000)
-            audio = loader()
-            # Truncate to first 60s — diminishing returns for genre/mood
-            # classification beyond that, and inference cost scales linearly.
-            max_samples = 60 * 16000
-            if len(audio) > max_samples:
-                audio = audio[:max_samples]
-            t_decode = time.monotonic() - t0
-            logger.info(
-                "  audio decode: %.3fs (%d samples, %.1fs duration)",
-                t_decode,
-                len(audio),
-                len(audio) / 16000,
-            )
-
-            # --- Genre (EffNet backbone) ---
-            if self._effnet is not None and self._genre_cls is not None:
-                try:
-                    t1 = time.monotonic()
-                    effnet_embeddings = self._effnet(audio)
-                    t_effnet = time.monotonic() - t1
-                    logger.info("  effnet backbone: %.3fs", t_effnet)
-
-                    t1 = time.monotonic()
-                    genre_activations = self._genre_cls(effnet_embeddings)
-                    t_genre_cls = time.monotonic() - t1
-                    logger.info("  genre classifier: %.3fs", t_genre_cls)
-
-                    genre_mean = genre_activations.mean(axis=0)
-                    cfg = self.config.searcher.tags
-                    top_genres = []
-                    sorted_indices = genre_mean.argsort()[::-1]
-                    for idx in sorted_indices:
-                        score = float(genre_mean[idx])
-                        if score < cfg.min_confidence:
-                            break
-                        if len(top_genres) >= cfg.top_genres:
-                            break
-                        top_genres.append(
-                            {"label": label_for_index(idx), "score": round(score, 3)}
-                        )
-                    result["genres"] = top_genres
-                except Exception as e:
-                    logger.debug("Genre extraction error: %s", e)
-
-            # --- VGGish embeddings (shared by mood + danceability) ---
-            if self._vggish is not None:
-                try:
-                    t1 = time.monotonic()
-                    vggish_embeddings = self._vggish(audio)
-                    t_vggish = time.monotonic() - t1
-                    logger.info("  vggish backbone: %.3fs", t_vggish)
-
-                    if self._mood_cls is not None:
-                        try:
-                            t1 = time.monotonic()
-                            mood_activations = self._mood_cls(
-                                vggish_embeddings
-                            ).mean(axis=0)
-                            logger.info(
-                                "  mood classifier: %.3fs", time.monotonic() - t1
-                            )
-                            result["mood_cluster"] = int(mood_activations.argmax())
-                        except Exception as e:
-                            logger.debug("Mood prediction error: %s", e)
-
-                    if self._dance_cls is not None:
-                        try:
-                            t1 = time.monotonic()
-                            dance_activations = self._dance_cls(
-                                vggish_embeddings
-                            ).mean(axis=0)
-                            logger.info(
-                                "  dance classifier: %.3fs", time.monotonic() - t1
-                            )
-                            result["danceability"] = round(
-                                float(dance_activations[0])
-                                if len(dance_activations) > 0
-                                else 0.0,
-                                3,
-                            )
-                        except Exception as e:
-                            logger.debug("Danceability prediction error: %s", e)
-                except Exception as e:
-                    logger.debug("VGGish inference error: %s", e)
-
-            logger.info(
-                "Tag inference total: %.3fs (genre=%s mood=%s dance=%s)",
-                time.monotonic() - t0,
-                "genres" in result,
-                "mood_cluster" in result,
-                "danceability" in result,
-            )
-        except Exception as e:
-            logger.warning("Tag prediction failed for %s: %s", file_path, e)
-
-        return result
-
-    # ------------------------------------------------------------------
-    # Tag batch processor
-    # ------------------------------------------------------------------
-
-    async def _process_tags_batch(self) -> bool:
-        """Process a batch of unified tag jobs (genre + mood + danceability).
-
-        Each track is decoded once; VGGish embeddings are computed once and
-        shared between mood and danceability classifiers.
-        """
-        cfg = self.config.searcher
-        batch = await self.db.claim_batch("tags", cfg.batch_size_tags)
-        if not batch:
-            return False
-
-        completed = []
-        for job in batch:
-            track_id = job["entity_id"]
-            file_path = await self.db.get_file_path_for_track(track_id)
-            if file_path is None:
-                await self.db.fail_job(
-                    job["id"], "track not found", cfg.max_job_attempts
-                )
-                continue
-
-            tags = self._predict_all_tags(file_path)
-            tags_json = json.dumps(tags) if tags else json.dumps({})
-            try:
-                await self.db.complete_tags_job(job["id"], track_id, tags_json)
-                completed.append(track_id)
-            except Exception as e:
-                await self.db.fail_job(job["id"], str(e), cfg.max_job_attempts)
-
-        if completed:
-            logger.info("Tags written for %d tracks", len(completed))
-        return True
-
-    # ------------------------------------------------------------------
-    # Ranking helpers
+    # Ranking
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _compute_tag_components(
-        parsed: ParsedQuery, track_tags: dict | None
-    ) -> tuple[float, float, float]:
-        """Compute the genre / mood / danceability score components for
-        a single track against the parsed query.
+    def _score_track(knn_norm: float, has_knn_hits: bool = True) -> float:
+        """CLAP KNN relevance for one track, normalised to 0-1.
 
-        Each value is in [0, 1]; absent tags or unconfigured query
-        constraints yield 0.0. Pulled out of ``_score_track`` so the
-        per-query summary logging can reuse the exact same logic
-        rather than duplicating the matching rules.
+        Mood (valence/arousal) blending is applied by the caller.
         """
-        if not track_tags:
-            return 0.0, 0.0, 0.0
-
-        genre_score = 0.0
-        if parsed.genres:
-            t_genres = track_tags.get("genres") or []
-            genre_labels = " ".join(
-                g.get("label", "") for g in t_genres if isinstance(g, dict)
-            ).lower()
-            matched = sum(1 for qg in parsed.genres if qg in genre_labels)
-            genre_score = matched / len(parsed.genres)
-
-        mood_score = 0.0
-        if parsed.mood_clusters:
-            t_mood = track_tags.get("mood_cluster")
-            if t_mood is not None and t_mood in parsed.mood_clusters:
-                mood_score = 1.0
-
-        dance_score = 0.0
-        t_dance = track_tags.get("danceability")
-        if t_dance is not None:
-            dance_ok = True
-            if (
-                parsed.min_danceability is not None
-                and t_dance < parsed.min_danceability
-            ):
-                dance_ok = False
-            if (
-                parsed.max_danceability is not None
-                and t_dance > parsed.max_danceability
-            ):
-                dance_ok = False
-            if dance_ok and (
-                parsed.min_danceability is not None
-                or parsed.max_danceability is not None
-            ):
-                dance_score = 1.0
-
-        return genre_score, mood_score, dance_score
-
-    def _score_track(
-        self,
-        parsed: ParsedQuery,
-        knn_norm: float,
-        track_tags: dict | None,
-        has_knn_hits: bool = True,
-    ) -> float:
-        """
-        Compute a combined relevance score for a single track from the
-        semantic (CLAP KNN) leg and the predicted-tag components.
-
-        Weights are dynamically normalised based on which inputs actually
-        contributed, so scores always use the full 0–1 range regardless of
-        CLAP availability.
-
-        ``cfg.tags.enabled`` gates the entire tag pipeline — both
-        prediction (handled elsewhere) and search-time scoring. When
-        False, ``tracks.tags_predicted`` is ignored even if previous
-        runs populated it. This makes the toggle a single switch for
-        "use tags" as a user expects, not a misleading "stop predicting
-        but keep using" semi-state.
-        """
-        cfg = self.config.searcher
-        tags_active = cfg.tags.enabled
-
-        if tags_active:
-            genre_score, mood_score, dance_score = self._compute_tag_components(
-                parsed, track_tags
-            )
-        else:
-            genre_score = mood_score = dance_score = 0.0
-
-        # Build weighted sum only from active components
-        components: list[tuple[float, float]] = []
-        if has_knn_hits:
-            components.append((cfg.weight_knn, knn_norm))
-        if tags_active:
-            if parsed.genres:
-                components.append((cfg.weight_genre, genre_score))
-            if parsed.mood_clusters:
-                components.append((cfg.weight_mood, mood_score))
-            if (
-                parsed.min_danceability is not None
-                or parsed.max_danceability is not None
-            ):
-                components.append((cfg.weight_danceability, dance_score))
-
-        total_weight = sum(w for w, _ in components) or 1.0
-        score = sum(w * v for w, v in components) / total_weight
-        return score
-
-    def _log_tag_contribution_summary(
-        self,
-        kind: str,
-        parsed: ParsedQuery,
-        top_track_ids: list[str],
-        tags_map: dict[str, dict],
-        tag_fallback_used: bool = False,
-    ) -> None:
-        """One-line per-query summary of how much the tag pipeline
-        actually changed the top-N ranking.
-
-        ``tags_active`` reflects the current value of
-        ``searcher.tags.enabled``. When False, tag components are
-        forced to 0 in scoring — the in_top counts shown here are then
-        *hypothetical* (what the matches would be if tags were on),
-        which is the useful A/B signal: same query, both states, compare.
-        """
-        tags_active = self.config.searcher.tags.enabled
-
-        if not parsed.has_tag_constraints:
-            # No tag constraints on the query — tags can't have shifted
-            # ranking by definition. Keeping the summary terse.
-            logger.info(
-                "%s summary: q=%r no_tag_constraints top=%d tags_active=%s "
-                "tag_fallback=%s",
-                kind,
-                parsed.raw[:60],
-                len(top_track_ids),
-                tags_active,
-                tag_fallback_used,
-            )
-            return
-
-        genre_hits = mood_hits = dance_hits = 0
-        for tid in top_track_ids:
-            g, m, d = self._compute_tag_components(parsed, tags_map.get(tid))
-            if g > 0:
-                genre_hits += 1
-            if m > 0:
-                mood_hits += 1
-            if d > 0:
-                dance_hits += 1
-
-        top_n = len(top_track_ids)
-        label = "in_top" if tags_active else "in_top_hypothetical"
-        logger.info(
-            "%s summary: q=%r parsed{genres=%s moods=%s dance=[%s,%s] similar=%s} "
-            "top=%d tags_active=%s tag_fallback=%s %s: "
-            "genre=%d/%d mood=%d/%d dance=%d/%d",
-            kind,
-            parsed.raw[:60],
-            parsed.genres or "-",
-            parsed.mood_clusters or "-",
-            parsed.min_danceability if parsed.min_danceability is not None else "-",
-            parsed.max_danceability if parsed.max_danceability is not None else "-",
-            parsed.similar_to_track_id or "-",
-            top_n,
-            tags_active,
-            tag_fallback_used,
-            label,
-            genre_hits,
-            top_n,
-            mood_hits,
-            top_n,
-            dance_hits,
-            top_n,
-        )
+        return knn_norm if has_knn_hits else 0.0
 
     # ------------------------------------------------------------------
     # Search dispatch
@@ -705,69 +232,34 @@ class SearchWorker:
     async def _do_search(self, query: str, limit: int) -> dict:
         """Handle one semantic search request, returning ranked track ids.
 
-        This is the CLAP semantic leg only (KNN + mood + tag fallback). BEST
-        MATCH (literal/navigational name lookup) and the navigational
-        suppression that hides these suggestions for a name query now live in
-        the server, which assembles them across all sources from ``search()``.
+        This is the CLAP semantic leg only (KNN + mood). BEST MATCH
+        (literal/navigational name lookup) and the navigational suppression
+        that hides these suggestions for a name query now live in the server,
+        which assembles them across all sources from ``search()``.
         """
         cfg = self.config.searcher
-
-        parsed = parse_query(query)
-        logger.info(
-            "_do_search: query=%r text_query=%r genres=%r mood_clusters=%r similar=%s",
-            query,
-            parsed.text_query,
-            parsed.genres,
-            parsed.mood_clusters,
-            parsed.similar_to_track_id,
-        )
-
-        if parsed.is_similar_query and parsed.similar_to_track_id:
-            return await self._do_similar_search(parsed, limit)
 
         # Encode the query once (CLAP text via IPC); the blob is reused by the
         # KNN leg and the mood NN fallback so we don't double the IPC round-trip.
         query_blob = await self._encode_query_blob(query)
 
         knn_hits = await self._knn_leg(query, cfg.knn_candidate_limit, query_blob)
-        logger.info("_do_search: KNN=%d hits", len(knn_hits))
+        logger.info("_do_search: query=%r KNN=%d hits", query, len(knn_hits))
 
-        # Semantic tag fallback — only when the KNN leg returned nothing AND
-        # the tag pipeline is active. Ranks purely by genre-tag overlap.
-        tag_fallback_used = False
         has_knn = bool(knn_hits)
-        if (
-            not has_knn
-            and cfg.tags.enabled
-            and parsed.has_tag_constraints
-            and parsed.genres
-        ):
-            tag_track_ids = await self.db.get_similar_tracks_by_tags(
-                parsed.genres, cfg.fts_candidate_limit
-            )
-            logger.info(
-                "_do_search: tag fallback returned %d tracks", len(tag_track_ids)
-            )
-            knn_hits = [{"track_id": tid, "distance": 0.0} for tid in tag_track_ids]
-            tag_fallback_used = bool(tag_track_ids)
-
         if not knn_hits:
             logger.info("_do_search: no semantic hits")
-            self._log_tag_contribution_summary(
-                "_do_search", parsed, [], {}, tag_fallback_used=False
-            )
             return {"tracks": []}
 
-        # KNN score map (normalised 0-1, higher is better). Skipped on the
-        # tag-fallback path, where distances are synthetic and uniform.
-        knn_map: dict[str, float] = {}
-        if has_knn:
-            dists = [h["distance"] for h in knn_hits]
-            min_dist = min(dists)
-            max_dist = max(dists)
-            dist_range = max_dist - min_dist if max_dist != min_dist else 1.0
-            for h in knn_hits:
-                knn_map[h["track_id"]] = 1.0 - (h["distance"] - min_dist) / dist_range
+        # KNN score map (normalised 0-1, higher is better).
+        dists = [h["distance"] for h in knn_hits]
+        min_dist = min(dists)
+        max_dist = max(dists)
+        dist_range = max_dist - min_dist if max_dist != min_dist else 1.0
+        knn_map: dict[str, float] = {
+            h["track_id"]: 1.0 - (h["distance"] - min_dist) / dist_range
+            for h in knn_hits
+        }
 
         all_track_ids = list(dict.fromkeys(h["track_id"] for h in knn_hits))
 
@@ -799,35 +291,16 @@ class SearchWorker:
                     target_va[0], target_va[1], mood_conf, len(mood_hits),
                 )
 
-        tags_map = await self.db.get_tracks_tags_bulk(all_track_ids)
-
         scored: list[tuple[float, str]] = []
         for tid in all_track_ids:
-            knn_norm = knn_map.get(tid, 0.0)
-            track_tags = tags_map.get(tid)
-            score = self._score_track(
-                parsed,
-                knn_norm,
-                track_tags,
-                has_knn_hits=has_knn,
-            )
+            score = self._score_track(knn_map.get(tid, 0.0), has_knn_hits=has_knn)
             if mood_weight > 0.0:
                 # Adaptive blend: final = (1 - w)*clap + w*mood, w = weight*conf.
                 score = (1.0 - mood_weight) * score + mood_weight * mood_map.get(tid, 0.0)
             scored.append((score, tid))
 
         scored.sort(key=lambda st: -st[0])
-        track_result = [tid for _, tid in scored[:limit]]
-
-        self._log_tag_contribution_summary(
-            "_do_search",
-            parsed,
-            track_result,
-            tags_map,
-            tag_fallback_used=tag_fallback_used,
-        )
-
-        return {"tracks": track_result}
+        return {"tracks": [tid for _, tid in scored[:limit]]}
 
     async def _knn_leg(
         self, query: str, candidate_limit: int, blob: Optional[bytes] = None
@@ -863,129 +336,6 @@ class SearchWorker:
             return None
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._encode_query_text, query)
-
-    async def _do_similar_search(self, parsed: ParsedQuery, limit: int) -> dict:
-        """Handle "songs like this" queries using CLAP audio KNN + tag matching.
-
-        The synth query is built from the reference track's predicted
-        tags, so the feature is hard-gated on ``searcher.tags.enabled``.
-        When tags are off the function returns empty rather than
-        falling through to a CLAP-only similar path — keeping the
-        toggle as a single switch for the whole tag pipeline.
-
-        Returns ranked track ids only, like :meth:`_do_search`.
-        """
-        empty: dict = {"tracks": []}
-
-        if not self.config.searcher.tags.enabled:
-            logger.info(
-                "_do_similar_search summary: tags.enabled=False — "
-                "'songs like this' requires the tag pipeline; returning empty"
-            )
-            return empty
-
-        ref_id = parsed.similar_to_track_id
-        if not ref_id:
-            return empty
-
-        ref_tags = await self.db.get_track_tags(ref_id)
-        if not ref_tags:
-            logger.info(
-                "_do_similar_search summary: ref=%s no_tags_predicted — "
-                "feature requires tag prediction (essentia-tensorflow); "
-                "returning empty",
-                ref_id,
-            )
-            return empty
-
-        ref_genres = [
-            g.get("label", "").lower()
-            for g in (ref_tags.get("genres") or [])
-            if isinstance(g, dict)
-        ]
-        ref_mood = ref_tags.get("mood_cluster")
-        ref_dance = ref_tags.get("danceability")
-
-        synth = ParsedQuery(
-            raw=parsed.raw,
-            text_query="",
-            genres=ref_genres[:5],
-            mood_clusters=[ref_mood] if ref_mood is not None else [],
-            min_danceability=(ref_dance - 0.2) if ref_dance is not None else None,
-            max_danceability=(ref_dance + 0.2) if ref_dance is not None else None,
-        )
-
-        candidate_limit = self.config.searcher.knn_candidate_limit
-
-        # -- tag-based candidates -------------------------------------------
-        tag_ids = await self.db.get_similar_tracks_by_tags(
-            synth.genres, candidate_limit
-        )
-
-        # -- CLAP audio→audio KNN candidates --------------------------------
-        knn_map: dict[str, float] = {}
-        ref_blob = await self.db.get_track_clap_embedding(ref_id)
-        if ref_blob is not None:
-            knn_rows = await self.db.knn_search_audio(ref_blob, candidate_limit)
-            if knn_rows:
-                max_dist = max(r["distance"] for r in knn_rows) or 1.0
-                for r in knn_rows:
-                    knn_map[r["track_id"]] = 1.0 - r["distance"] / max_dist
-
-        # -- merge candidate sets -------------------------------------------
-        all_ids = list(
-            dict.fromkeys(tid for tid in (*tag_ids, *knn_map.keys()) if tid != ref_id)
-        )
-        if not all_ids:
-            logger.info(
-                "_do_similar_search summary: ref=%s tag_candidates=%d "
-                "knn_candidates=%d merged=0 — returning empty",
-                ref_id,
-                len(tag_ids),
-                len(knn_map),
-            )
-            return empty
-
-        tags_map = await self.db.get_tracks_tags_bulk(all_ids)
-
-        scored: list[tuple[float, str]] = []
-        for tid in all_ids:
-            track_tags = tags_map.get(tid)
-            knn_norm = knn_map.get(tid, 0.0)
-            score = self._score_track(
-                synth,
-                knn_norm,
-                track_tags,
-                has_knn_hits=bool(knn_map),
-            )
-            scored.append((score, tid))
-
-        scored.sort(key=lambda x: -x[0])
-        track_result = [tid for _, tid in scored[:limit]]
-
-        # Similar-search has a richer pre-merge picture than _do_search:
-        # call the shared summary for the in-top tag contribution, then
-        # log the candidate-set breakdown separately so the user can see
-        # whether the tag leg or the CLAP-KNN leg sourced more of the
-        # final ranking.
-        self._log_tag_contribution_summary(
-            "_do_similar_search",
-            synth,
-            track_result,
-            tags_map,
-            tag_fallback_used=False,
-        )
-        logger.info(
-            "_do_similar_search candidates: ref=%s tag_candidates=%d "
-            "knn_candidates=%d merged=%d top=%d",
-            ref_id,
-            len(tag_ids),
-            len(knn_map),
-            len(all_ids),
-            len(track_result),
-        )
-
-        return {"tracks": track_result}
 
     # ------------------------------------------------------------------
     # Search handler (IPC)
@@ -1037,78 +387,22 @@ class SearchWorker:
         nudge_queue: Optional[multiprocessing.Queue] = None,
         embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
     ):
-        cfg = self.config.searcher
-        poll = cfg.poll_interval_seconds
-        idle_timeout = cfg.model_idle_timeout_seconds
-
-        logger.info("SearchWorker started (tags + FTS5 + ranking)")
+        # nudge_queue / embedder_nudge_queue are retained for call-site
+        # compatibility but unused: the searcher has no offline work of its
+        # own (CLAP indexing is the embedder's job), so it only serves queries.
+        logger.info("SearchWorker started (CLAP KNN + mood ranking)")
 
         await self.db._check_vec_available()
 
-        # Recover stale tag jobs from a prior crashed session
-        await self.db.recover_stale_jobs()
-
-        # Start the search handler immediately so queries are served
-        # even while tag processing / indexing is in progress.
         search_task = asyncio.create_task(
             self._run_search_handler(
                 search_request_queue, search_response_queue, shutdown_event
             )
         )
 
-        logger.info("Searcher ready (poll=%ds, idle_timeout=%ds)", poll, idle_timeout)
+        logger.info("Searcher ready")
 
-        # Wait for the first nudge or poll before doing heavy work
-        await sleep_interruptible(poll, shutdown_event, nudge_queue, "Searcher")
-
-        last_work_time = time.monotonic()
-
-        while not shutdown_event.is_set():
-            # Schedule new tag jobs for enriched tracks
-            if cfg.tags.enabled and cfg.tags.current_version > 0:
-                await self.db.schedule_new_tag_jobs(cfg.tags.current_version)
-
-            did_work = False
-            retry_gap = poll
-
-            # Process unified tag jobs (single audio decode per track)
-            if cfg.tags.enabled and cfg.tags.current_version > 0:
-                while await self.db.has_pending_jobs("tags"):
-                    if time.monotonic() - self._tags_load_attempted_at >= retry_gap:
-                        self._load_tag_models()
-
-                    try:
-                        batch_processed = await self._process_tags_batch()
-                        if batch_processed:
-                            did_work = True
-                            last_work_time = time.monotonic()
-                        else:
-                            break
-                    except Exception:
-                        logger.exception(
-                            "Unexpected error in tag batch processing; will retry"
-                        )
-                        break
-
-            # After tag processing, nudge the embedder so it can schedule
-            # CLAP jobs for tracks that now have completed tags.
-            if did_work and embedder_nudge_queue is not None:
-                try:
-                    embedder_nudge_queue.put_nowait("tags_done")
-                    logger.info("Nudged embedder after tag completion")
-                except queue.Full:
-                    pass
-
-            if did_work:
-                continue
-
-            # No work: check idle timeout, then sleep
-            if idle_timeout > 0 and (time.monotonic() - last_work_time >= idle_timeout):
-                self._unload_models()
-                last_work_time = time.monotonic()
-
-            logger.debug("No pending searcher work; sleeping %ds", poll)
-            await sleep_interruptible(poll, shutdown_event, nudge_queue, "Searcher")
+        await shutdown_event.wait()
 
         # Clean shutdown
         search_task.cancel()

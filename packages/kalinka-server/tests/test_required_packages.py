@@ -80,40 +80,25 @@ def test_returns_empty_when_subfeatures_enabled_and_deps_present(monkeypatch):
     imports already resolve."""
     cfg = LocalFilesConfig()
     cfg.searcher.enabled = True
-    cfg.searcher.tags.enabled = True
     cfg.embedder.enabled = True
     _set_importable(
         monkeypatch,
-        {"numpy", "essentia", "onnxruntime", "soundfile", "soxr", "tokenizers"},
+        {"numpy", "onnxruntime", "soundfile", "soxr", "tokenizers"},
     )
 
     plugin = _plugin_with(cfg)
     assert asyncio.run(plugin.required_packages()) == []
 
 
-def test_searcher_needs_numpy_alone_when_tags_disabled(monkeypatch):
-    """Searcher's FTS path only needs numpy; essentia is gated by
-    `searcher.tags.enabled`."""
+def test_searcher_needs_numpy_alone(monkeypatch):
+    """Searcher's mood ranking leg only needs numpy."""
     cfg = LocalFilesConfig()
     cfg.searcher.enabled = True
-    cfg.searcher.tags.enabled = False
     cfg.embedder.enabled = False
     _set_importable(monkeypatch, set())
 
     plugin = _plugin_with(cfg)
     assert asyncio.run(plugin.required_packages()) == ["numpy"]
-
-
-def test_searcher_with_tags_needs_numpy_and_essentia(monkeypatch):
-    cfg = LocalFilesConfig()
-    cfg.searcher.enabled = True
-    cfg.searcher.tags.enabled = True
-    cfg.embedder.enabled = False
-    _set_importable(monkeypatch, set())
-
-    plugin = _plugin_with(cfg)
-    result = asyncio.run(plugin.required_packages())
-    assert set(result) == {"numpy", "essentia-tensorflow"}
 
 
 def test_embedder_pulls_full_clap_stack(monkeypatch):
@@ -133,7 +118,6 @@ def test_searcher_plus_embedder_dedupes_numpy(monkeypatch):
     """numpy is required by both subfeatures but only listed once."""
     cfg = LocalFilesConfig()
     cfg.searcher.enabled = True
-    cfg.searcher.tags.enabled = True
     cfg.embedder.enabled = True
     _set_importable(monkeypatch, set())
 
@@ -142,7 +126,6 @@ def test_searcher_plus_embedder_dedupes_numpy(monkeypatch):
     assert result.count("numpy") == 1
     assert set(result) == {
         "numpy",
-        "essentia-tensorflow",
         "onnxruntime",
         "soundfile",
         "soxr",

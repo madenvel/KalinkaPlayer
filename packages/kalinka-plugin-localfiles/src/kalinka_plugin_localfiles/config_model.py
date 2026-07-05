@@ -14,79 +14,6 @@ _SIMPLE = {"importance": "simple"}
 _EXPERT = {"importance": "expert"}
 
 
-class TagsConfig(BaseModel):
-    """Shared tag prediction settings (used by both searcher and embedder).
-
-    Disabled by default. The pipeline depends on essentia-tensorflow,
-    which is only published as cp311 ARM wheels and pulls TensorFlow as
-    a transitive dep — opt-in keeps the typical install from triggering
-    a multi-hundred-megabyte fetch the user didn't ask for, and avoids
-    constraining the venv's Python version for everyone. CLAP KNN
-    search (embedder) covers most of the value of tag prediction
-    without the cost; enable this only if you specifically want the
-    Discogs/MIREX/danceability classifiers.
-    """
-
-    enabled: bool = Field(
-        default=False, title="Enable tag prediction", json_schema_extra=_SIMPLE,
-    )
-    min_confidence: float = Field(
-        default=0.3,
-        ge=0.0,
-        le=1.0,
-        title="Minimum tag confidence",
-    )
-    top_genres: int = Field(
-        default=5,
-        title="Max genres stored per track",
-    )
-    effnet_path: str = Field(
-        default="",
-        title="EffNet-Discogs backbone path",
-        json_schema_extra={
-            "help": "Auto-downloaded if empty",
-            "widget": "path",
-        },
-    )
-    genre_path: str = Field(
-        default="",
-        title="Genre Discogs400 classifier path",
-        json_schema_extra={
-            "help": "Auto-downloaded if empty",
-            "widget": "path",
-        },
-    )
-    vggish_path: str = Field(
-        default="",
-        title="VGGish backbone path",
-        json_schema_extra={
-            "help": "Auto-downloaded if empty",
-            "widget": "path",
-        },
-    )
-    mood_mirex_path: str = Field(
-        default="",
-        title="Mood MIREX classifier path",
-        json_schema_extra={
-            "help": "Auto-downloaded if empty",
-            "widget": "path",
-        },
-    )
-    danceability_path: str = Field(
-        default="",
-        title="Danceability classifier path",
-        json_schema_extra={
-            "help": "Auto-downloaded if empty",
-            "widget": "path",
-        },
-    )
-    current_version: int = Field(
-        default=1,
-        title="Model version",
-        json_schema_extra={"help": "Increment to force re-tagging"},
-    )
-
-
 class EmbedderClapConfig(BaseModel):
     ckpt_path: str = Field(
         default="",
@@ -116,9 +43,6 @@ class EmbedderClapConfig(BaseModel):
 class AiSearchConfig(BaseModel):
     weight_clap_similarity: float = Field(
         default=0.75, ge=0.0, le=1.0, title="CLAP similarity weight",
-    )
-    weight_tag_boost: float = Field(
-        default=0.15, ge=0.0, le=1.0, title="Tag overlap boost weight",
     )
     weight_popularity: float = Field(
         default=0.10, ge=0.0, le=1.0, title="Popularity weight",
@@ -207,68 +131,17 @@ class SearcherConfig(BaseModel):
     enabled: bool = Field(
         default=True, title="Enable searcher", json_schema_extra=_SIMPLE,
     )
-    tags: TagsConfig = Field(
-        default_factory=TagsConfig, title="Tag prediction"
-    )
     mood: MoodConfig = Field(
         default_factory=MoodConfig, title="Mood ranking"
     )
-    batch_size_tags: int = Field(
-        default=8, title="Tag prediction batch size",
-    )
-    poll_interval_seconds: int = Field(
-        default=300, title="Poll interval",
-        json_schema_extra={"constraints": {"unit": "s"}},
-    )
-    model_idle_timeout_seconds: int = Field(
-        default=300,
-        title="Model idle timeout",
-        json_schema_extra={
-            "help": "Free memory by unloading tag models after this long idle (0 = keep loaded)",
-            "constraints": {"unit": "s"},
-        },
-    )
-    max_job_attempts: int = Field(
-        default=3, title="Max attempts per tag job",
-    )
-    model_dir: str = Field(
-        default_factory=lambda: os.path.join(paths.state_dir(), "models"),
-        title="Model directory",
-        json_schema_extra={"widget": "path"},
-    )
-    weight_knn: float = Field(
-        default=0.45, ge=0.0, le=1.0, title="CLAP KNN similarity weight",
-    )
-    weight_genre: float = Field(
-        default=0.05, ge=0.0, le=1.0, title="Genre match weight",
-    )
-    weight_mood: float = Field(
-        default=0.10, ge=0.0, le=1.0, title="Mood match weight",
-    )
-    weight_danceability: float = Field(
-        default=0.05, ge=0.0, le=1.0, title="Danceability match weight",
-    )
-    fts_candidate_limit: int = Field(
-        default=100, title="Max FTS candidates before re-ranking",
-    )
     knn_candidate_limit: int = Field(
         default=50, title="Max KNN candidates before re-ranking",
-    )
-    max_results: int = Field(
-        default=20, title="Max results per entity type",
     )
     # BEST MATCH now lives server-side (kalinka_server.SearchConfig); the old
     # best_match_* / suppress_ai_on_navigational fields were removed from here.
 
 
 class EmbedderConfig(BaseModel):
-    # Tag prediction (genre/mood/danceability) is run by the *searcher*,
-    # not the embedder — see SearcherConfig.tags. Earlier revisions of
-    # this config declared an unused `tags: TagsConfig` and
-    # `batch_size_tags` field here, which the presentation schema then
-    # rendered as a duplicate "Tag prediction" section on the embedder
-    # card. Both fields were dead code in the embedder process; removed.
-
     enabled: bool = Field(
         default=False, title="Enable embedder", json_schema_extra=_SIMPLE,
     )

@@ -29,7 +29,7 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
     "numpy": OptionalPackageSpec(
         pip_spec="numpy==1.26.4",
         description=(
-            "Numerical core required by AI tag prediction (searcher) and "
+            "Numerical core required by the searcher's mood ranking and "
             "CLAP audio embedding (embedder)."
         ),
     ),
@@ -59,15 +59,6 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
     "tokenizers": OptionalPackageSpec(
         pip_spec="tokenizers==0.22.2",
         description="HuggingFace tokenizers used by the CLAP text encoder.",
-    ),
-    "essentia-tensorflow": OptionalPackageSpec(
-        pip_spec="essentia-tensorflow==2.1b6.dev1389",
-        description=(
-            "Essentia + TensorFlow build used by tag prediction "
-            "(genre/mood/danceability). Large download (~500 MB) "
-            "and first-time install may take several minutes on a Pi."
-        ),
-        import_name="essentia",
     ),
 }
 
