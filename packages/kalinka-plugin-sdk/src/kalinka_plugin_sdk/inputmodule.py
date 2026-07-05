@@ -1,3 +1,5 @@
+import asyncio
+
 from pydantic import BaseModel, PositiveInt, ConfigDict
 from enum import Enum
 from typing import Awaitable, Callable, List, Optional, Protocol, runtime_checkable
@@ -240,6 +242,29 @@ class InputModule(Protocol):
             BrowseItem: Detailed information about the requested entity
         """
         ...
+
+    async def get_all(self, entity_ids: List[EntityId]) -> List[BrowseItem]:
+        """Resolve many entities at once (SDK 1.3+).
+
+        Default implementation: concurrent ``get()`` per id. Override when
+        the backend supports batch lookup — e.g. one API request resolving
+        N ids — to save per-id round-trips (the server resolves Related
+        Artists through this).
+
+        Ids that fail to resolve are omitted from the result, so callers
+        must match returned items to requests by ``item.id``, never by
+        position.
+
+        Args:
+            entity_ids (List[EntityId]): The IDs of the entities to retrieve
+
+        Returns:
+            List[BrowseItem]: The entities that resolved, in request order
+        """
+        results = await asyncio.gather(
+            *(self.get(eid) for eid in entity_ids), return_exceptions=True
+        )
+        return [r for r in results if isinstance(r, BrowseItem)]
 
     async def playlist_user_list(
         self, offset: int = 0, limit: int = 25

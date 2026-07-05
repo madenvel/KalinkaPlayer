@@ -329,10 +329,9 @@ def _best_match_section(
     )
 
 
-# Related-artist get() lookups run in parallel batches of _RESOLVE_BATCH,
-# each capped at _RESOLVE_TIMEOUT_S — bounding the extra search latency to
-# n_batches × timeout even when a source hangs.
-_RESOLVE_BATCH = 6
+# Related-artist resolution is one get_all() per source (sources run in
+# parallel), each capped at _RESOLVE_TIMEOUT_S — bounding the extra search
+# latency to a single timeout even when a source hangs.
 _RESOLVE_TIMEOUT_S = 3.0
 
 
@@ -383,28 +382,37 @@ async def _resolve_artists(
     The stubs come from ``track.performer``, which carries only id + name.
     Any failure keeps the stub: this row is decorative and must never break
     or stall the search response.
-    """
 
-    async def one(artist: Artist) -> Artist:
-        module = by_source.get(artist.id.source)
+    Grouped into one ``get_all()`` call per source (SDK 1.3) so a backend
+    with batch lookup — Jamendo resolves N artists in a single request —
+    pays one round-trip instead of one per artist. Results are matched back
+    by id: ids a source omits keep their stubs.
+    """
+    by_src_stubs: dict[str, List[Artist]] = {}
+    for a in artists:
+        by_src_stubs.setdefault(a.id.source, []).append(a)
+
+    resolved: dict[str, Artist] = {}
+
+    async def one_source(source: str, stubs: List[Artist]) -> None:
+        module = by_source.get(source)
         if module is None:
-            return artist
+            return
         try:
-            item = await asyncio.wait_for(
-                module.get(artist.id), timeout=_RESOLVE_TIMEOUT_S
+            items = await asyncio.wait_for(
+                module.get_all([a.id for a in stubs]), timeout=_RESOLVE_TIMEOUT_S
             )
         except Exception as e:
-            logger.debug("related: could not resolve %s: %s", artist.id.to_string, e)
-            return artist
-        if item is not None and item.artist is not None:
-            return item.artist
-        return artist
+            logger.debug("related: could not resolve %s artists: %s", source, e)
+            return
+        for item in items:
+            if item is not None and item.artist is not None:
+                resolved[item.id.to_string] = item.artist
 
-    resolved: List[Artist] = []
-    for start in range(0, len(artists), _RESOLVE_BATCH):
-        batch = artists[start : start + _RESOLVE_BATCH]
-        resolved.extend(await asyncio.gather(*(one(a) for a in batch)))
-    return resolved
+    await asyncio.gather(
+        *(one_source(src, stubs) for src, stubs in by_src_stubs.items())
+    )
+    return [resolved.get(a.id.to_string, a) for a in artists]
 
 
 def _rollup(pairs: list, limit: int) -> list:

@@ -22,7 +22,7 @@ from kalinka_plugin_sdk.datamodel import (
     PreviewType,
     Track,
 )
-from kalinka_plugin_sdk.inputmodule import SearchType
+from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from kalinka_server.ai_search import assemble_ai_search
 from kalinka_server.config_model import SearchConfig
@@ -103,8 +103,11 @@ def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
     )
 
 
-class FakeModule:
-    """An input module whose search()/ai_search() return canned BrowseItems."""
+class FakeModule(InputModule):
+    """An input module whose search()/ai_search() return canned BrowseItems.
+
+    Subclasses the SDK protocol, so it inherits the default ``get_all``
+    (concurrent per-id ``get()``) exactly like real modules do."""
 
     def __init__(
         self,
@@ -516,6 +519,36 @@ async def test_related_artists_resolved_to_full_entities():
     assert module.get_calls == ["kalinka:localfiles:artist:aPF"]
 
 
+async def test_related_artists_resolved_in_one_batch_per_source():
+    """The server hands each source ONE get_all() with all its artist ids —
+    a batch-capable backend (Jamendo) then pays a single round-trip."""
+    module = FakeModule(
+        "localfiles",
+        ai_tracks=[
+            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd"),
+            _sugg_track("localfiles", "t2", "Echoes", "al2", "Meddle", "aTD", "Tangerine Dream"),
+        ],
+        entities={
+            "kalinka:localfiles:artist:aPF": _full_artist("localfiles", "aPF", "Pink Floyd"),
+            "kalinka:localfiles:artist:aTD": _full_artist("localfiles", "aTD", "Tangerine Dream"),
+        },
+    )
+    batches = []
+    original = module.get_all
+
+    async def spying_get_all(entity_ids):
+        batches.append([e.to_string for e in entity_ids])
+        return await original(entity_ids)
+
+    module.get_all = spying_get_all
+    result = await assemble_ai_search([module], "workout music", 0, 10)
+
+    assert _section(result, "Related Artists") is not None
+    assert batches == [
+        ["kalinka:localfiles:artist:aPF", "kalinka:localfiles:artist:aTD"]
+    ]
+
+
 async def test_related_artist_resolution_failure_keeps_stub():
     """A failing get() (missing entity, source error) must degrade to the
     name-only stub, never break the search response."""
@@ -534,11 +567,11 @@ async def test_related_artist_resolution_failure_keeps_stub():
     assert card.artist.image is None
 
 
-async def test_related_resolution_runs_in_bounded_parallel_batches():
-    """Lookups run concurrently, but never more than _RESOLVE_BATCH at once."""
+async def test_related_resolution_concurrent_via_default_get_all():
+    """A source without a batch backend resolves through the SDK's default
+    get_all: one get() per artist, run concurrently — 12 artists must not
+    take 12 sequential round-trips."""
     import asyncio
-
-    from kalinka_server import ai_search as ai_mod
 
     class GaugedModule(FakeModule):
         def __init__(self, *args, **kwargs):
@@ -555,7 +588,7 @@ async def test_related_resolution_runs_in_bounded_parallel_batches():
             finally:
                 self.active -= 1
 
-    n = 12  # == default related_max_results, two batches of _RESOLVE_BATCH
+    n = 12  # == default related_max_results
     tracks = [
         _sugg_track("localfiles", f"t{i}", f"Song {i}", f"al{i}", f"Album {i}", f"a{i}", f"Artist {i}")
         for i in range(n)
@@ -572,7 +605,7 @@ async def test_related_resolution_runs_in_bounded_parallel_batches():
     assert len(related.sections) == n
     assert all(card.artist.image is not None for card in related.sections)
     assert len(module.get_calls) == n
-    assert 2 <= module.max_active <= ai_mod._RESOLVE_BATCH
+    assert module.max_active > 1  # concurrent, not serialized
 
 
 async def test_resolution_keyed_by_entity_source_not_module_name():

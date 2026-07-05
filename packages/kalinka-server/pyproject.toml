@@ -44,7 +44,9 @@ dependencies = [
     "numpy>=1.24",
     "onnxruntime>=1.17",
     "tokenizers>=0.15",
-    "kalinka-plugin-sdk>=1.2,<2",
+    # >=1.3: the server resolves Related Artists via InputModule.get_all,
+    # whose default implementation ships with SDK 1.3.
+    "kalinka-plugin-sdk>=1.3,<2",
 ]
 dynamic = ["version"]
 

@@ -384,6 +384,11 @@ class JamendoInputModule(InputModule):
         # URLs come from /tracks/file/, which resolves every track by id.
         self._track_cache: "OrderedDict[str, Track]" = OrderedDict()
         self._cache_max = 5000
+        # Resolved artist cards keyed by artist id. Related Artists resolves
+        # the same popular artists over and over across searches; serving
+        # them from here skips the /artists round-trip entirely.
+        self._artist_cache: "OrderedDict[str, BrowseItem]" = OrderedDict()
+        self._artist_cache_max = 1000
         logger.info("Jamendo audio format: %s", self.audio_format)
 
     def _cache_track(self, metadata: Track) -> None:
@@ -391,6 +396,13 @@ class JamendoInputModule(InputModule):
         cache[metadata.id.id] = metadata
         cache.move_to_end(metadata.id.id)
         while len(cache) > self._cache_max:
+            cache.popitem(last=False)
+
+    def _cache_artist(self, item: BrowseItem) -> None:
+        cache = self._artist_cache
+        cache[item.id.id] = item
+        cache.move_to_end(item.id.id)
+        while len(cache) > self._artist_cache_max:
             cache.popitem(last=False)
 
     def module_name(self) -> str:
@@ -796,6 +808,37 @@ class JamendoInputModule(InputModule):
         if not items:
             raise ValueError(f"Entity not found: {entity_id.to_string}")
         return items[0]
+
+    async def get_all(self, entity_ids: List[EntityId]) -> List[BrowseItem]:
+        """Batch resolve (SDK 1.3). Artists resolve in ONE ``/artists`` call
+        — the ``id`` param accepts a space-separated list — with an LRU cache
+        in front, so Related Artists costs at most one round-trip per search
+        instead of one per artist. Other types fall back to per-id get()."""
+        artist_ids = [e.id for e in entity_ids if e.type == EntityType.ARTIST]
+        missing = [i for i in artist_ids if i not in self._artist_cache]
+        if missing:
+            try:
+                results = await self.client.request(
+                    "artists", {"id": " ".join(missing)}
+                )
+            except Exception as e:
+                logger.warning("artist batch resolve failed: %s", e)
+                results = []
+            for item in self._artists_to_browse_items(results):
+                self._cache_artist(item)
+        out: List[BrowseItem] = []
+        for eid in entity_ids:
+            if eid.type == EntityType.ARTIST:
+                item = self._artist_cache.get(eid.id)
+                if item is not None:
+                    self._artist_cache.move_to_end(eid.id)
+                    out.append(item)
+                continue
+            try:
+                out.append(await self.get(eid))
+            except Exception:
+                continue
+        return out
 
     # ------------------------------------------------------------------
     # Mapping helpers
