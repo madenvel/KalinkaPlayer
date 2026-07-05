@@ -39,8 +39,9 @@ _PROTOCOL_METHODS = tuple(InputModule.__protocol_attrs__)
 
 class TimeLimitedInputModule:
     """Delegating proxy that applies the per-call budget to every async
-    method of ``inner``. Async protocol methods are wrapped with the
-    timeout; sync ones pass through unchanged."""
+    method of ``inner`` — the protocol methods bound in ``__init__`` and any
+    other coroutine attribute reached through ``__getattr__``. Sync
+    attributes pass through unchanged."""
 
     def __init__(self, inner: InputModule, label: str,
                  timeout_s: float = PLUGIN_CALL_TIMEOUT_S):
@@ -74,5 +75,11 @@ class TimeLimitedInputModule:
         return timed
 
     def __getattr__(self, name):
-        # Non-protocol attributes pass through to the wrapped module.
-        return getattr(self._inner, name)
+        # Attributes beyond the InputModule protocol (e.g. get_indexer_status,
+        # which the server calls via hasattr) aren't bound in __init__, so they
+        # arrive here. Budget them too if they're coroutine functions — every
+        # async call path stays under the limit, not just the protocol ones.
+        attr = getattr(self._inner, name)
+        if inspect.iscoroutinefunction(attr):
+            return self._budgeted(attr, name)
+        return attr

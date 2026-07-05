@@ -21,6 +21,12 @@ class SlowModule(InputModule):
     async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
         return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
 
+    # Not part of the InputModule protocol — the server calls this via
+    # hasattr, so it reaches the proxy through __getattr__, not __init__.
+    async def get_indexer_status(self):
+        await asyncio.sleep(30)
+        raise AssertionError("unreachable")
+
 
 def _proxy(timeout_s: float) -> TimeLimitedInputModule:
     return TimeLimitedInputModule(SlowModule(), "slowpoke", timeout_s=timeout_s)
@@ -36,6 +42,14 @@ async def test_fast_call_passes_through():
     proxy = _proxy(0.05)
     result = await proxy.browse(None)
     assert isinstance(result, BrowseItemList)
+
+
+async def test_non_protocol_async_method_is_also_budgeted():
+    # get_indexer_status isn't a protocol method, so it comes through
+    # __getattr__ — it must still be subject to the per-call budget.
+    proxy = _proxy(0.05)
+    with pytest.raises(TimeoutError, match="slowpoke.get_indexer_status exceeded"):
+        await proxy.get_indexer_status()
 
 
 async def test_sync_attributes_and_protocol_check_pass_through():
