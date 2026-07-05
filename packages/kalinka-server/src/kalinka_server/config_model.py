@@ -20,7 +20,7 @@ collapses the redundant `base_config` level so the UI shows peer sections.
 
 import os
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 
 # Shared extras — keeps audit-tagging consistent across the file.
-_SIMPLE = {"importance": "simple"}
+_SIMPLE: dict[str, Any] = {"importance": "simple"}
 
 # Release hosting the MiniLM text encoder (model.onnx + tokenizer.json are
 # appended at fetch time). Same release the Jamendo mood index ships from —
