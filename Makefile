@@ -25,7 +25,12 @@ VENV_BIN := $(abspath $(VENV))/bin
 ## Ensure the venv exists and carries the wheel-building toolchain (pip,
 ## build, setuptools-scm). Light shared prerequisite: the deb targets need
 ## nothing more — wheels build in pip's isolated PEP-517 env — while
-## dev-setup layers the editable installs and fakeroot on top.
+## dev-setup layers the server, plugins, native build and fakeroot on top.
+##
+## The SDK is also installed here: the plugin deb builds run a manifest-export
+## step that imports kalinka_plugin_sdk (which pulls pydantic/pyyaml), so the
+## SDK and its deps must be importable in the venv. Installing it editable lets
+## pip track those deps — no hardcoded list to drift.
 build-env:
 	@if [ -n "$(VIRTUAL_ENV)" ]; then \
 		echo "Reusing active venv: $(VIRTUAL_ENV)"; \
@@ -47,6 +52,8 @@ build-env:
 	fi
 	@echo "Using $$($(PY) --version)"
 	@$(PIP) install --upgrade --quiet pip build setuptools-scm
+	@echo "Installing kalinka-plugin-sdk (editable)..."
+	@$(PIP) install --quiet -e packages/kalinka-plugin-sdk
 
 ## One-shot setup: create venv (unless one is active/exists), install sdk +
 ## server + all plugins (editable), build the native extension, and seed the
@@ -57,8 +64,6 @@ dev-setup: build-env
 		echo "  the ALSA/FLAC/curlpp/spdlog/fmt dev headers. Install the system"; \
 		echo "  prerequisites listed in README.md (Running from source) first."; \
 		exit 1; }
-	@echo "Installing kalinka-plugin-sdk (editable)..."
-	@$(PIP) install -e packages/kalinka-plugin-sdk
 # The server's editable install compiles the native player in pip's isolated
 # PEP-517 build env (pybind11 etc. come from its [build-system] requires) and
 # places the .so in-place under src/native_player — no manual build step or
