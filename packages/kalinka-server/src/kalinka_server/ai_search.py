@@ -416,16 +416,45 @@ async def _resolve_artists(
 
 
 def _rollup(pairs: list, limit: int) -> list:
-    """Dedup (id, entity) pairs given in rank order, rank by occurrence count
-    then first appearance, and return the top ``limit`` entities. ``first``'s
-    insertion order is the first-appearance order, and the sort is stable, so
-    the count sort keeps that as the tie-break for free."""
+    """Dedup (id, entity) pairs, rank within each source by occurrence count,
+    then interleave the sources round-robin into the top ``limit`` entities.
+
+    Within a source, ranking is by occurrence count then first appearance
+    (``first``'s insertion order is first-appearance order, and the stable sort
+    keeps that as the tie-break for free). Across sources we round-robin rather
+    than merge on raw count: a personal library repeats the same artists across
+    many tracks (high counts) while a discovery source returns mostly distinct
+    artists (count 1), so a merged ranking buries every discovery artist below
+    the whole library and they fall past the visible tiles. Interleaving puts
+    each source's best pick up front — localfiles, jamendo, localfiles, … — so
+    every source is visible immediately. A source that runs out just yields its
+    turns to the others, so the row is still filled to ``limit``."""
     counts = Counter(key for key, _ in pairs)
     first: dict = {}
     for key, item in pairs:
         first.setdefault(key, item)
     ranked = sorted(first.items(), key=lambda kv: -counts[kv[0]])
-    return [item for _, item in ranked[:limit]]
+
+    # Per-source queues in count-rank order. dict preserves insertion order, so
+    # the source order (which leads each round) is first-appearance order —
+    # localfiles first, matching the rest of the assembly.
+    queues: dict = {}
+    for _, item in ranked:
+        queues.setdefault(item.id.source, []).append(item)
+    if len(queues) <= 1:
+        return [item for _, item in ranked[:limit]]
+
+    order = list(queues)
+    cursor = {src: 0 for src in order}
+    result: list = []
+    while len(result) < limit and any(cursor[s] < len(queues[s]) for s in order):
+        for src in order:
+            if cursor[src] < len(queues[src]):
+                result.append(queues[src][cursor[src]])
+                cursor[src] += 1
+                if len(result) >= limit:
+                    break
+    return result
 
 
 def _artist_card(artist: Artist) -> BrowseItem:

@@ -24,7 +24,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
-from kalinka_server.ai_search import assemble_ai_search
+from kalinka_server.ai_search import _rollup, assemble_ai_search
 from kalinka_server.config_model import SearchConfig
 
 
@@ -497,6 +497,27 @@ def _full_artist(source: str, local: str, name: str) -> BrowseItem:
             image=CoverImage(small=f"/resource/artist/{local}_small.jpg"),
         ),
     )
+
+
+def test_rollup_interleaves_sources_round_robin():
+    # localfiles repeats the same artists (high counts); a discovery source
+    # returns mostly distinct ones (count 1). A raw count merge would bury
+    # every jamendo artist below the whole library — round-robin must surface
+    # jamendo's picks up front instead.
+    def _art(source, local):
+        aid = EntityId(id=local, type=EntityType.ARTIST, source=source)
+        return Artist(id=aid, name=local)
+
+    pairs = (
+        [("lf:A", _art("localfiles", "A"))] * 3
+        + [("lf:B", _art("localfiles", "B"))] * 2
+        + [("jm:X", _art("jamendo", "X"))]
+        + [("jm:Y", _art("jamendo", "Y"))]
+    )
+    out = _rollup(pairs, 6)
+
+    assert [a.id.source for a in out] == ["localfiles", "jamendo", "localfiles", "jamendo"]
+    assert [a.name for a in out] == ["A", "X", "B", "Y"]
 
 
 async def test_related_artists_resolved_to_full_entities():
