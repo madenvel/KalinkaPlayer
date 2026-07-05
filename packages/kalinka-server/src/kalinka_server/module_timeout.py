@@ -7,15 +7,22 @@ plugin does — a call that overruns is cancelled and surfaces as a
 ``TimeoutError``, which the call sites already treat like any other
 plugin failure (a failed leg, a dropped shelf, a 500 on /browse).
 
-Wraps every coroutine method transparently; sync attributes pass
-through, so ``isinstance(proxy, InputModule)`` (a runtime-checkable
-protocol) still holds.
+Every ``InputModule`` protocol method is bound concretely in ``__init__``
+so that ``isinstance(proxy, InputModule)`` still holds. This is load-bearing:
+the server gates every module behind ``isinstance(..., InputModule)`` (browse
+root, the catalog router, source resolution), and Python 3.12 changed
+``runtime_checkable`` protocol checks to resolve members by *static* lookup,
+which does NOT trigger ``__getattr__``. A pure-``__getattr__`` proxy therefore
+silently fails the check on 3.12+ (every module skipped, empty catalog), even
+though ``hasattr`` still reports every method. Binding real delegates keeps the
+proxy indistinguishable from the module on all Python versions.
 """
 
 from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 
 from kalinka_plugin_sdk.inputmodule import InputModule
@@ -26,22 +33,30 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # docstring — plugins size their backend HTTP timeouts against this.
 PLUGIN_CALL_TIMEOUT_S = 3.0
 
+# The protocol members the proxy must expose concretely (see module docstring).
+_PROTOCOL_METHODS = tuple(InputModule.__protocol_attrs__)
+
 
 class TimeLimitedInputModule:
     """Delegating proxy that applies the per-call budget to every async
-    method of ``inner``."""
+    method of ``inner``. Async protocol methods are wrapped with the
+    timeout; sync ones pass through unchanged."""
 
     def __init__(self, inner: InputModule, label: str,
                  timeout_s: float = PLUGIN_CALL_TIMEOUT_S):
         self._inner = inner
         self._label = label
         self._timeout_s = timeout_s
+        # Bind each protocol member on the instance so 3.12+ static protocol
+        # lookup finds it and isinstance(self, InputModule) holds.
+        for name in _PROTOCOL_METHODS:
+            attr = getattr(inner, name, None)
+            if attr is None:
+                continue
+            bound = self._budgeted(attr, name) if inspect.iscoroutinefunction(attr) else attr
+            setattr(self, name, bound)
 
-    def __getattr__(self, name):
-        attr = getattr(self._inner, name)
-        if not asyncio.iscoroutinefunction(attr):
-            return attr
-
+    def _budgeted(self, attr, name):
         @functools.wraps(attr)
         async def timed(*args, **kwargs):
             try:
@@ -57,3 +72,7 @@ class TimeLimitedInputModule:
                 ) from None
 
         return timed
+
+    def __getattr__(self, name):
+        # Non-protocol attributes pass through to the wrapped module.
+        return getattr(self._inner, name)
