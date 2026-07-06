@@ -27,6 +27,7 @@ from kalinka_plugin_sdk.datamodel import (
     Catalog,
     CatalogRole,
     FavoriteIds,
+    Genre,
     GenreList,
     Owner,
 )
@@ -943,6 +944,15 @@ class LocalFilesInputModule(InputModule):
             title=track["album_title"],
             artist=Artist(id=artist_id(track["artist_id"]), name=track["artist_name"]),
         )
+
+        # Enriched genre, when the query joined it in (album_genre). Carried
+        # on the card so clients — and the server's suggestion attestation —
+        # can see what the track is without another lookup.
+        if track.get("album_genre"):
+            album.genre = Genre(
+                id=genre_id(track["album_genre"].lower()),
+                name=track["album_genre"],
+            )
 
         # Add album image if available
         cover_path = self._get_album_image_urls(track["album_id"])
