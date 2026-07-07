@@ -526,16 +526,23 @@ async def create_app(
 
     @app.get("/ai_search/suggestions")
     async def ai_search_suggestions(
-        count: int = 8,
-        tz_offset_min: Optional[int] = None,
+        count: int = Query(
+            default=8, ge=1, le=32,
+            description="How many suggestions to return",
+        ),
+        tz_offset_min: Optional[int] = Query(
+            default=None, ge=-720, le=840,
+            description=(
+                "Client's UTC offset in MINUTES, east positive (UTC+3 = 180, "
+                "UTC-5 = -300; Dart: DateTime.now().timeZoneOffset.inMinutes) "
+                "— so 'morning' means the listener's morning, not the "
+                "server's. Omitted: the server's local clock decides."
+            ),
+        ),
     ) -> SuggestionList:
-        """Ready-to-run ``/ai_search`` queries matched to the current moment.
-
-        ``count`` picks (validated against the local library, plus one
-        experimental slot); ``tz_offset_min`` is the client's UTC offset in
-        minutes so "morning" means the listener's morning, not the server's —
-        omitted, the server's local clock decides.
-        """
+        """Ready-to-run ``/ai_search`` queries matched to the current moment
+        (daypart + in-window holidays), validated against the local library,
+        plus one experimental slot."""
         now = None
         if tz_offset_min is not None:
             now = datetime.now(timezone(timedelta(minutes=tz_offset_min)))
