@@ -102,6 +102,11 @@ async def lifespan(app: FastAPI):
         task = getattr(app.state, "suggestions_task", None)
         if task is not None:
             task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                # A crashed loop must not derail the rest of shutdown.
+                pass
         if sd is not None:
             await sd.unregister_service()
 

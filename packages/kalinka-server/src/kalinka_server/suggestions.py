@@ -555,16 +555,19 @@ class SuggestionEngine:
 
         picks: List[Suggestion] = []
 
+        # One slot stays reserved for the experimental pick when there is
+        # anything unvalidated to gamble on — but never at the expense of the
+        # only slot: count=1 serves a validated suggestion when one exists.
+        reserve_experimental = bool(unvalidated) and count > 1
+        reserved = count - 1 if reserve_experimental else count
+
         # An active holiday that survived validation always gets one slot —
         # it's the whole point of the date awareness, and score-weighted
         # sampling alone can bury two christmas chips under sixty dayparts.
         holiday_validated = [v for v in validated if v[1].startswith("holiday:")]
-        if holiday_validated and count > len(picks) + 1:
+        if holiday_validated and len(picks) < reserved:
             picks.append(self._pick_validated(holiday_validated, validated))
 
-        # One slot stays reserved for the experimental pick when there is
-        # anything unvalidated to gamble on.
-        reserved = count - 1 if unvalidated else count
         while validated and len(picks) < reserved:
             picks.append(self._pick_validated(validated, validated))
 

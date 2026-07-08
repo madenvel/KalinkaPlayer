@@ -329,6 +329,36 @@ def test_cache_version_mismatch_ignored(tmp_path):
     assert not engine._attested and engine._scores == {}
 
 
+@pytest.mark.asyncio
+async def test_count_one_serves_validated_not_experimental(tmp_path, monkeypatch):
+    # The experimental slot must never starve the only slot: count=1 with a
+    # validated pool returns a validated pick, and during a holiday window
+    # the guaranteed holiday slot still applies.
+    monkeypatch.setattr("kalinka_server.suggestions._ATTEST_GAP_S", 0)
+
+    class ChristmasJazzLibrary(FakeLibrary):
+        async def ai_search(self, query, offset=0, limit=50):
+            titles = ["Jingle Bells", "Silent Night", "White Christmas"]
+            return _card(
+                [
+                    _track_item(i, "Jazz", title=titles[i % len(titles)])
+                    for i in range(10)
+                ]
+            )
+
+    engine = _engine(ChristmasJazzLibrary(), tmp_path)
+    await engine._attest_all("fp")
+
+    july = engine.suggest(1, now=datetime(2026, 7, 6, 9, 0))
+    assert len(july.suggestions) == 1
+    assert not july.suggestions[0].experimental
+
+    december = engine.suggest(1, now=datetime(2026, 12, 10, 9, 0))
+    assert len(december.suggestions) == 1
+    assert not december.suggestions[0].experimental
+    assert december.suggestions[0].context == "holiday:christmas"
+
+
 def test_count_clamped(tmp_path):
     engine = _engine(None, tmp_path)
     assert len(engine.suggest(0, now=datetime(2026, 7, 6, 9, 0)).suggestions) == 1
