@@ -298,6 +298,19 @@ class MusicBrainzPlugin(EnricherPlugin):
                 "match_similarity": round(similarity * 100),
             }
 
+            # Country of origin (ISO 3166-1 alpha-2, e.g. "IT") drives
+            # nationality queries. `area`/`begin-area` (a place name) is the
+            # fallback for acts MB has no country code for — common for
+            # Soviet-era / historical artists. Both already ride along in the
+            # search response, so this costs no extra request.
+            country = best_match.get("country")
+            if country:
+                updates["country"] = country
+            area = best_match.get("area") or best_match.get("begin-area") or {}
+            area_name = area.get("name") if isinstance(area, dict) else None
+            if area_name:
+                updates["area"] = area_name
+
             # Return data for further enrichment if needed
             return {"updates": updates, "mbid": artist_mbid}
 
@@ -415,7 +428,8 @@ class MusicBrainzPlugin(EnricherPlugin):
                 try:
                     details = musicbrainzngs.get_release_by_id(
                         cand["id"],
-                        includes=["recordings", "artist-credits", "tags"],
+                        includes=["recordings", "artist-credits", "tags",
+                                  "release-groups"],
                     )
                 except Exception as e:
                     logger.debug(
@@ -488,6 +502,26 @@ class MusicBrainzPlugin(EnricherPlugin):
             if "date" in mb_release_data:
                 try:
                     updates["year"] = int(mb_release_data["date"].split("-")[0])
+                except (ValueError, IndexError):
+                    pass
+
+            # Lyrics language (ISO 639-3, e.g. "ita") — drives language queries
+            # and disambiguates nationality ones (an Italian-language track by a
+            # non-Italian artist).
+            text_rep = mb_release_data.get("text-representation") or {}
+            language = text_rep.get("language")
+            if language:
+                updates["language"] = language
+
+            # First-release year of the *release group* — the era this music is
+            # from, as opposed to `year` (this pressing/reissue). A 2010
+            # compilation of 80s songs keeps year=2010 but original_year=198x, so
+            # "80s" era queries match the music, not the CD manufacturing date.
+            rg = mb_release_data.get("release-group") or {}
+            first_release = rg.get("first-release-date")
+            if first_release:
+                try:
+                    updates["original_year"] = int(first_release.split("-")[0])
                 except (ValueError, IndexError):
                     pass
 

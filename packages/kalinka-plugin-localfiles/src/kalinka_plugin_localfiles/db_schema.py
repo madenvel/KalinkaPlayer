@@ -58,6 +58,8 @@ async def init_db(db_path: str) -> None:
                 name TEXT NOT NULL,
                 mbid TEXT,
                 image_url TEXT,
+                country TEXT,
+                area TEXT,
                 enriched INTEGER DEFAULT 0,
                 match_score INTEGER,
                 match_similarity INTEGER,
@@ -75,7 +77,9 @@ async def init_db(db_path: str) -> None:
                 title TEXT NOT NULL,
                 artist_id TEXT,
                 year INTEGER,
+                original_year INTEGER,
                 genre TEXT,
+                language TEXT,
                 image_url TEXT,
                 mbid TEXT,
                 track_count INTEGER DEFAULT 0,
@@ -291,6 +295,27 @@ async def init_db(db_path: str) -> None:
             if col not in track_cols:
                 await cursor.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
                 logger.info("Added tracks.%s column", col)
+
+        # Origin/era metadata (nationality + language + first-release year) so
+        # queries like "italian 80s" resolve on structured facts instead of CLAP,
+        # which can't perceive nationality or decade from audio. Best-effort
+        # columns — NOT added to *_REQUIRED_FIELDS, so a missing value never
+        # marks an entity as failed-enrichment.
+        await cursor.execute("PRAGMA table_info(artists)")
+        artist_cols = {row[1] for row in await cursor.fetchall()}
+        for col in ("country", "area"):
+            if col not in artist_cols:
+                await cursor.execute(f"ALTER TABLE artists ADD COLUMN {col} TEXT")
+                logger.info("Added artists.%s column", col)
+
+        await cursor.execute("PRAGMA table_info(albums)")
+        album_cols = {row[1] for row in await cursor.fetchall()}
+        if "language" not in album_cols:
+            await cursor.execute("ALTER TABLE albums ADD COLUMN language TEXT")
+            logger.info("Added albums.language column")
+        if "original_year" not in album_cols:
+            await cursor.execute("ALTER TABLE albums ADD COLUMN original_year INTEGER")
+            logger.info("Added albums.original_year column")
 
         # VA (mood) head migration (after the columns above exist). On a head
         # version change, clear stale mood so the backfill recomputes it with the
