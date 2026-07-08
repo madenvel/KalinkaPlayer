@@ -200,7 +200,7 @@ class LocalFilesInputModuleDb:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name 
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name 
                 FROM tracks t
                 LEFT JOIN albums a ON t.album_id = a.id
                 LEFT JOIN artists ar ON t.artist_id = ar.id
@@ -224,7 +224,7 @@ class LocalFilesInputModuleDb:
             placeholders = ", ".join("?" for _ in track_ids)
             cursor.execute(
                 f"""
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 LEFT JOIN albums a ON t.album_id = a.id
                 LEFT JOIN artists ar ON t.artist_id = ar.id
@@ -350,7 +350,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
@@ -502,7 +502,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
@@ -533,7 +533,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
@@ -620,7 +620,7 @@ class LocalFilesInputModuleDb:
 
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
@@ -655,7 +655,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
@@ -753,7 +753,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 """
-                SELECT t.*, a.title as album_title, ar.name as artist_name, 
+                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name, 
                        pt.position, pt.playlist_track_id
                 FROM playlist_tracks pt
                 JOIN tracks t ON pt.track_id = t.id

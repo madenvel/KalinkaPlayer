@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -46,6 +47,7 @@ from .config_schema_processor import (
 )
 from .ai_search import assemble_ai_search
 from .query_router import CatalogRouter
+from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
@@ -96,6 +98,15 @@ async def lifespan(app: FastAPI):
 
     finally:
         logger.info("Shutting down...")
+        # The suggestion engine's refresh loop runs forever by design.
+        task = getattr(app.state, "suggestions_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                # A crashed loop must not derail the rest of shutdown.
+                pass
         if sd is not None:
             await sd.unregister_service()
 
@@ -244,6 +255,23 @@ async def create_app(
                 and isinstance(plugin.interface, InputModule)
             ]
         )
+    )
+
+    # Search-suggestion engine: validated against the user's own library
+    # (localfiles) when it is enabled — a discovery catalog like Jamendo has
+    # everything, so validating against it proves nothing. Attestation runs
+    # in the background for the server's lifetime; serving never blocks.
+    library = None
+    lf = modules.prepared_input_modules.get("localfiles")
+    if (
+        lf is not None
+        and "localfiles" in modules.enabled_input_modules
+        and isinstance(lf.interface, InputModule)
+    ):
+        library = lf.interface
+    app.state.suggestions = SuggestionEngine(library, config.search)
+    app.state.suggestions_task = asyncio.create_task(
+        app.state.suggestions.refresh_loop()
     )
 
     # Persist the overrides dict if plugin setup reconciled it — i.e. a
@@ -500,6 +528,30 @@ async def create_app(
             input_modules, query, offset, limit, app.state.config.search,
             router=app.state.query_router,
         )
+
+    @app.get("/ai_search/suggestions")
+    async def ai_search_suggestions(
+        count: int = Query(
+            default=8, ge=1, le=32,
+            description="How many suggestions to return",
+        ),
+        tz_offset_min: Optional[int] = Query(
+            default=None, ge=-720, le=840,
+            description=(
+                "Client's UTC offset in MINUTES, east positive (UTC+3 = 180, "
+                "UTC-5 = -300; Dart: DateTime.now().timeZoneOffset.inMinutes) "
+                "— so 'morning' means the listener's morning, not the "
+                "server's. Omitted: the server's local clock decides."
+            ),
+        ),
+    ) -> SuggestionList:
+        """Ready-to-run ``/ai_search`` queries matched to the current moment
+        (daypart + in-window holidays), validated against the local library,
+        plus one experimental slot."""
+        now = None
+        if tz_offset_min is not None:
+            now = datetime.now(timezone(timedelta(minutes=tz_offset_min)))
+        return app.state.suggestions.suggest(count, now=now)
 
     @app.get("/indexer/status")
     async def indexer_status(sources: Optional[str] = None) -> dict:

@@ -298,6 +298,19 @@ class SearchConfig(BaseModel):
             "help": "How many artists appear in the Related Artists row",
         },
     )
+    suggest_min_score: int = Field(
+        default=25,
+        ge=0,
+        le=100,
+        title="Search suggestion validation threshold",
+        json_schema_extra={
+            "help": (
+                "How strongly a suggested search must match your library "
+                "(0–100) to be offered — higher offers fewer, safer "
+                "suggestions"
+            ),
+        },
+    )
     # Catalog routing (query_router.py): shortcuts to browse shelves shown
     # above the search results when the query names one ("recently added").
     # Floor default measured against MiniLM: bare artist names score up to
@@ -479,6 +492,7 @@ class KalinkaConfig(BaseModel):
                 leaf("search.best_match_max_results"),
                 leaf("search.candidate_limit"),
                 leaf("search.ai_suggestions_limit"),
+                leaf("search.suggest_min_score"),
                 leaf("search.related_max_results"),
                 leaf("search.route_max_results"),
                 leaf("search.route_min_similarity"),
