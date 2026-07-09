@@ -131,6 +131,34 @@ async def test_root_catalog():
 
 
 @pytest.mark.asyncio
+async def test_root_catalog_shelves_have_subname():
+    # Every shelf carries a human description on both the BrowseItem (subname)
+    # and the Catalog (description); the frontend renders
+    # ``catalog.description ?? item.subname``.
+    m = make_module([])
+    res = await m.browse(jm.catalog_id("root"))
+    for item in res.items:
+        assert item.subname, f"{item.id.id} has no subname"
+        assert item.catalog.description == item.subname
+
+
+@pytest.mark.asyncio
+async def test_new_releases_bounds_release_date_sort():
+    # New Releases must constrain the release-date sort to a recent window,
+    # otherwise Jamendo's unbounded sort is ~5s and times out.
+    m = make_module([ALBUM])
+    res = await m.browse(jm.catalog_id("new-releases"), offset=0, limit=20)
+    assert len(res.items) == 1
+    path, params = m.client.calls[-1]
+    assert path == "albums"
+    assert params["order"] == "releasedate_desc"
+    # datebetween is "<start>_<end>"; the window matches the configured span.
+    start, end = params["datebetween"].split("_")
+    span = jm.date.fromisoformat(end) - jm.date.fromisoformat(start)
+    assert span.days == jm.NEW_RELEASES_WINDOW_DAYS
+
+
+@pytest.mark.asyncio
 async def test_browse_album_paginates_tracks():
     album_with_tracks = {**ALBUM, "tracks": [TRACK, TRACK, TRACK]}
     m = make_module([album_with_tracks])

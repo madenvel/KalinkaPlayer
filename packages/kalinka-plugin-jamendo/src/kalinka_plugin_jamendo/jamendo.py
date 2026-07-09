@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict
+from datetime import date, timedelta
 from typing import List, Optional
 
 import httpx
@@ -46,6 +47,14 @@ BASE_URL = "https://api.jamendo.com/v3.0/"
 
 # Jamendo caps page size at 200.
 MAX_LIMIT = 200
+
+# Jamendo's unbounded ``order=releasedate_desc`` sort scans the whole album
+# catalog and takes ~5s server-side — past this client's per-attempt timeout,
+# so the New Releases shelf would time out and show nothing. Bounding the query
+# to a recent date window makes Jamendo sort a tiny slice instead (~0.15s). The
+# window is wide enough that offset pagination never runs dry: a 6-month window
+# holds well over MAX_LIMIT albums.
+NEW_RELEASES_WINDOW_DAYS = 180
 
 # Map the user-facing audio quality label (config.audio_format, stored as the
 # enum *value* because the config uses use_enum_values=True) to Jamendo's
@@ -608,9 +617,18 @@ class JamendoInputModule(InputModule):
             )
             items = self._albums_to_browse_items(results)
         elif endpoint == "new-releases":
+            # Bound the release-date sort to a recent window; without it the
+            # query is ~5s and times out. See NEW_RELEASES_WINDOW_DAYS.
+            today = date.today()
+            since = today - timedelta(days=NEW_RELEASES_WINDOW_DAYS)
             results = await self.client.request(
                 "albums",
-                {"order": "releasedate_desc", "offset": offset, "limit": limit},
+                {
+                    "order": "releasedate_desc",
+                    "offset": offset,
+                    "limit": limit,
+                    "datebetween": f"{since.isoformat()}_{today.isoformat()}",
+                },
             )
             items = self._albums_to_browse_items(results)
         elif endpoint == "popular-artists":
@@ -640,6 +658,7 @@ class JamendoInputModule(InputModule):
             (
                 "popular-tracks",
                 "Popular Tracks",
+                "Most played this month",
                 PreviewType.TILE,
                 PreviewContentType.TRACK,
                 CatalogRole.DISCOVERY,
@@ -647,6 +666,7 @@ class JamendoInputModule(InputModule):
             (
                 "new-releases",
                 "New Releases",
+                "Fresh albums, just added",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ALBUM,
                 CatalogRole.DISCOVERY,
@@ -654,6 +674,7 @@ class JamendoInputModule(InputModule):
             (
                 "popular-albums",
                 "Popular Albums",
+                "Trending albums this month",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ALBUM,
                 CatalogRole.DISCOVERY,
@@ -661,6 +682,7 @@ class JamendoInputModule(InputModule):
             (
                 "popular-artists",
                 "Popular Artists",
+                "The most followed artists",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ARTIST,
                 CatalogRole.DISCOVERY,
@@ -668,6 +690,7 @@ class JamendoInputModule(InputModule):
             (
                 "featured-playlists",
                 "Featured Playlists",
+                "Hand-picked collections",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.PLAYLIST,
                 CatalogRole.HIDE_ON_HOME,
@@ -677,11 +700,13 @@ class JamendoInputModule(InputModule):
             BrowseItem(
                 id=catalog_id(slug),
                 name=title,
+                subname=description,
                 can_browse=True,
                 can_add=False,
                 catalog=Catalog(
                     id=catalog_id(slug),
                     title=title,
+                    description=description,
                     can_genre_filter=False,
                     preview_config=Preview(
                         type=ptype,
@@ -693,7 +718,7 @@ class JamendoInputModule(InputModule):
                     role=role,
                 ),
             )
-            for slug, title, ptype, ctype, role in shelves
+            for slug, title, description, ptype, ctype, role in shelves
         ]
         return BrowseItemList(
             offset=offset,
