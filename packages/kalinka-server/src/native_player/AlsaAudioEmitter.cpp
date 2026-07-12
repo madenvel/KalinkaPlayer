@@ -701,6 +701,7 @@ void AlsaAudioEmitter::setSampleFormat(AudioSampleFormat requestedFormat,
     case AudioSampleFormat::PCM32_LE:
       spdlog::warn("PCM32_LE not supported, trying PCM24_3LE");
       formatToProbe = AudioSampleFormat::PCM24_3LE;
+      break;
     default:
       throw std::runtime_error("Unsupported sample format, format=" +
                                std::to_string(static_cast<int>(formatToProbe)));
