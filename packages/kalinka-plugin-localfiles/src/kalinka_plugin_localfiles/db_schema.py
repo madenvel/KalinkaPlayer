@@ -266,6 +266,23 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # ---------------------------------------------------------------
+        # Indexer state (key/value)
+        # ---------------------------------------------------------------
+        # Scan progress published by the indexer subprocess (total files
+        # discovered by the pre-count walk vs. files processed so far) so
+        # get_indexer_status() can report an "indexing" stage while a scan
+        # is running.
+
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS indexer_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+            """
+        )
+
         # The fts_tracks FTS5 index is retired — BEST MATCH moved to the server
         # (it now uses the input modules' search()). Drop the orphaned table from
         # existing DBs (idempotent; the search_indexed_at column, if present on an

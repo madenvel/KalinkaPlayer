@@ -87,6 +87,23 @@ def retry_db_locked(cls):
     return cls
 
 
+def stage_status(
+    total: int, done: int, failed: int = 0, in_progress: int = 0
+) -> dict:
+    """One stage entry of ``get_indexer_status()`` — the fixed shape the
+    client's StageStatus model parses. Shared by the indexing, enrichment
+    and embedding producers so the wire format cannot drift between them.
+    ``pending`` is derived: the four statuses always partition ``total``."""
+    return {
+        "total": total,
+        "done": done,
+        "pending": max(total - done - failed - in_progress, 0),
+        "in_progress": in_progress,
+        "failed": failed,
+        "coverage_pct": round(100.0 * done / total, 1) if total else 0.0,
+    }
+
+
 # Linux prctl op for setting the kernel-level process name (visible as
 # COMM in `ps -o comm`). Kernel truncates to 15 chars + NUL.
 _PR_SET_NAME = 15

@@ -7,7 +7,7 @@ import time
 from typing import List, Dict, Optional, Any, Tuple
 
 from ..config_model import LocalFilesConfig
-from ..worker_utils import retry_db_locked
+from ..worker_utils import retry_db_locked, stage_status
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -354,6 +354,37 @@ class AsyncEnricherDb:
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    async def get_enrichment_coverage(self) -> Dict:
+        """Aggregate enrichment progress across artists + albums + tracks,
+        in the same shape as the embedder's per-stage coverage
+        (``enriched`` values per EnrichmentStatus: 1 = done, 2 = failed,
+        0 = pending; the enricher pulls one item at a time, so there is no
+        separate in-progress state).
+
+        Each count mirrors the WHERE clause of the matching
+        ``get_non_enriched_*`` picker above — anything the picker can never
+        select (sentinel rows, albums with a dangling artist_id) must not be
+        counted, or the stage would read as pending forever."""
+        queries = (
+            ("SELECT COUNT(*), SUM(enriched = 1), SUM(enriched = 2) "
+             "FROM artists WHERE id != ?", ("unknown_artist",)),
+            ("SELECT COUNT(*), SUM(a.enriched = 1), SUM(a.enriched = 2) "
+             "FROM albums a JOIN artists ar ON a.artist_id = ar.id "
+             "WHERE a.id != ?", ("unknown_album",)),
+            ("SELECT COUNT(*), SUM(enriched = 1), SUM(enriched = 2) "
+             "FROM tracks", ()),
+        )
+        total = done = failed = 0
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            for sql, params in queries:
+                await cursor.execute(sql, params)
+                row = await cursor.fetchone()
+                total += row[0]
+                done += row[1] or 0
+                failed += row[2] or 0
+        return stage_status(total, done, failed=failed)
 
     async def search_artists(
         self, query: str, limit: int = 50

@@ -70,6 +70,10 @@ _STARTUP_DELAY_S = 20.0
 # Periodic fingerprint re-check: catches a library that finished embedding
 # after startup without requiring a server restart.
 _REFRESH_INTERVAL_S = 6 * 3600
+# Re-check cadence while the library pipeline (scan / enrichment / embedding)
+# is still working — attesting against a half-indexed library would cache
+# misleading scores until the next fingerprint change.
+_BUSY_RECHECK_S = 60.0
 # Below this share of results carrying album genre, keyword scoring can't
 # tell "irrelevant results" from "unenriched library" — the run degrades to
 # unvalidated serving instead of wrongly filtering everything out.
@@ -390,6 +394,12 @@ class SuggestionEngine:
         await asyncio.sleep(_STARTUP_DELAY_S)
         while True:
             try:
+                if await self._pipeline_busy():
+                    logger.debug(
+                        "suggestions: library pipeline busy — deferring attestation"
+                    )
+                    await asyncio.sleep(_BUSY_RECHECK_S)
+                    continue
                 fp = await self._fingerprint()
                 if fp != self._cached_fp:
                     await self._attest_all(fp)
@@ -399,18 +409,39 @@ class SuggestionEngine:
                 logger.exception("suggestions: attestation pass failed")
             await asyncio.sleep(_REFRESH_INTERVAL_S)
 
+    async def _indexer_status(self) -> dict:
+        """The library's per-stage pipeline status; {} when the module has
+        no get_indexer_status or the call fails."""
+        status_fn = getattr(self._library, "get_indexer_status", None)
+        if status_fn is None:
+            return {}
+        try:
+            return await status_fn()
+        except Exception as e:
+            logger.debug("suggestions: indexer status unavailable: %s", e)
+            return {}
+
+    async def _pipeline_busy(self) -> bool:
+        """True while the library still has indexing / enrichment / embedding
+        work outstanding. Attestation waits it out: probing a half-indexed
+        library caches misleading scores."""
+        status = await self._indexer_status()
+        return any(
+            v.get("pending", 0) > 0 or v.get("in_progress", 0) > 0
+            for v in status.values()
+        )
+
     async def _fingerprint(self) -> str:
         """Identity of the attestation inputs: piece-table version + the
-        library's embedding **done** counts (stable once indexing finishes,
-        unlike pending/in-progress which move during a run)."""
-        done: dict = {}
-        status_fn = getattr(self._library, "get_indexer_status", None)
-        if status_fn is not None:
-            try:
-                status = await status_fn()
-                done = {k: v.get("done", 0) for k, v in status.items()}
-            except Exception as e:
-                logger.debug("suggestions: indexer status unavailable: %s", e)
+        library's per-stage **done** counts (stable once the pipeline
+        settles, unlike pending/in-progress which move during a run). The
+        ``indexing`` stage is excluded — it only exists while a scan runs,
+        and hashing it would make the fingerprint flap across scans of an
+        unchanged library."""
+        status = await self._indexer_status()
+        done = {
+            k: v.get("done", 0) for k, v in status.items() if k != "indexing"
+        }
         raw = json.dumps({"v": DATA_VERSION, "done": done}, sort_keys=True)
         return hashlib.sha1(raw.encode()).hexdigest()[:16]
 

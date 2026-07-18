@@ -14,9 +14,16 @@ from typing import Optional
 import aiosqlite
 
 from ..config_model import LocalFilesConfig
-from ..worker_utils import retry_db_locked
+from ..worker_utils import retry_db_locked, stage_status
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+# The live embedding stages. Retired stages (``tags``, from the disabled
+# AutoTagger) can survive as permanently-pending rows in older databases,
+# so every job query filters on this list. Trusted constant — safe to
+# interpolate into SQL.
+CLAP_STAGES = ("clap_audio", "clap_text")
+CLAP_STAGES_SQL = "('clap_audio', 'clap_text')"
 
 # Vec table registry: entity_type → (table_name, pk_column)
 _VEC_TABLES = {
@@ -107,11 +114,11 @@ class AsyncEmbedderDb:
         """Reset in_progress CLAP jobs left over from a crashed session."""
         async with self._open() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE embedding_jobs
                 SET status = 'pending', updated_at = CURRENT_TIMESTAMP
                 WHERE status = 'in_progress'
-                  AND stage IN ('clap_audio', 'clap_text')
+                  AND stage IN {CLAP_STAGES_SQL}
                 """
             )
             await conn.commit()
@@ -628,14 +635,20 @@ class AsyncEmbedderDb:
         summing across versions would double the totals; counting just the
         current version reports one row per track and shows true progress while
         a recompute is still draining.
+
+        Only the stages in ``CLAP_STAGES`` are reported: retired stages
+        (``tags``, from the disabled AutoTagger) can survive as
+        permanently-pending rows in older databases and would read as a
+        never-finishing pipeline.
         """
         async with self._open() as conn:
             cursor = await conn.execute(
-                """
+                f"""
                 SELECT j.stage, j.status, COUNT(*) AS cnt
                 FROM embedding_jobs j
                 JOIN tracks t ON t.id = j.entity_id
-                WHERE j.model_version = (
+                WHERE j.stage IN {CLAP_STAGES_SQL}
+                  AND j.model_version = (
                     SELECT MAX(j2.model_version)
                     FROM embedding_jobs j2
                     WHERE j2.stage = j.stage
@@ -649,16 +662,12 @@ class AsyncEmbedderDb:
         for stage, status, cnt in rows:
             stats.setdefault(stage, {})[status] = cnt
 
-        result = {}
-        for stage, counts in stats.items():
-            total = sum(counts.values())
-            done = counts.get("done", 0)
-            result[stage] = {
-                "total": total,
-                "done": done,
-                "pending": counts.get("pending", 0),
-                "in_progress": counts.get("in_progress", 0),
-                "failed": counts.get("failed", 0),
-                "coverage_pct": round(100.0 * done / total, 1) if total else 0.0,
-            }
-        return result
+        return {
+            stage: stage_status(
+                total=sum(counts.values()),
+                done=counts.get("done", 0),
+                failed=counts.get("failed", 0),
+                in_progress=counts.get("in_progress", 0),
+            )
+            for stage, counts in stats.items()
+        }

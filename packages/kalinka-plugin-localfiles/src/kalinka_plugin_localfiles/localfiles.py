@@ -2,6 +2,7 @@ import asyncio
 import logging
 import multiprocessing
 import os
+import time
 from pathlib import Path
 from typing import List, Dict, Optional
 import mimetypes
@@ -1233,12 +1234,60 @@ class LocalFilesInputModule(InputModule):
         return resource_path.as_posix() if resource_path.exists() else None
 
     async def get_indexer_status(self) -> dict:
-        """Return embedding job counts and coverage percentages."""
+        """Return pipeline progress, stage by stage: ``indexing`` (only while
+        a scan is running), ``enrichment`` (only when the enricher is
+        enabled), and the embedder's ``clap_audio`` / ``clap_text`` job
+        coverage. Every stage carries the same
+        total/done/pending/in_progress/failed/coverage_pct shape."""
         from .embedder.embedder_db import AsyncEmbedderDb
+        from .enricher.enricher_db import AsyncEnricherDb
+        from .indexer.indexer_db import AsyncIndexerDb
+        from .worker_utils import stage_status
 
-        db = AsyncEmbedderDb(self.config)
+        result: dict = {}
+
         try:
-            return await db.get_embedding_coverage()
+            scan = await AsyncIndexerDb(self.config).get_scan_progress()
         except Exception as e:
-            logger.warning("get_indexer_status failed: %s", e)
-            return {}
+            logger.warning("get_indexer_status: scan progress failed: %s", e)
+            scan = None
+        # Progress writes land every ~2s while files are being processed,
+        # but a single file can stall a write for much longer (quiescence
+        # wait, slow network mount) — the window is a crash guard, not a
+        # liveness bound, hence the generous 10 minutes. A scan killed
+        # harder than `finally` (OOM, power loss) stops reading as active
+        # once the window lapses, or as soon as the next scan starts.
+        if (
+            scan
+            and scan.get("active")
+            and time.time() - scan.get("updated_at", 0) < 600
+        ):
+            total = scan.get("total", 0)
+            result["indexing"] = stage_status(
+                total, done=min(scan.get("processed", 0), total)
+            )
+
+        if self.config.enricher.enabled:
+            try:
+                result["enrichment"] = await AsyncEnricherDb(
+                    self.config
+                ).get_enrichment_coverage()
+            except Exception as e:
+                logger.warning("get_indexer_status: enrichment failed: %s", e)
+
+        # Only when embedding jobs actually drain: with embedder.enabled
+        # off the worker exits before its job loop (even in text-encode-only
+        # mode), so leftover jobs would report as pending forever — a
+        # never-finishing "Preparing AI search" stage that also blocks
+        # suggestion attestation.
+        if self.config.embedder.enabled:
+            try:
+                result.update(
+                    await AsyncEmbedderDb(self.config).get_embedding_coverage()
+                )
+            except Exception as e:
+                logger.warning(
+                    "get_indexer_status: embedding coverage failed: %s", e
+                )
+
+        return result

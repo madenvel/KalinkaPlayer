@@ -122,6 +122,15 @@ class FileIndexer:
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         self.running = False
         self.lock = asyncio.Lock()
+        # Scan progress (full scans only): total from the pre-count walk,
+        # processed incremented per file. Published to the indexer_state
+        # table in batches so /indexer/status can show an "indexing" stage.
+        # _scan_active gates publishing — scan_folder also runs for inotify
+        # dir-added batches, where there is no meaningful total.
+        self._scan_active = False
+        self._scan_total = 0
+        self._scan_processed = 0
+        self._scan_progress_written_at = 0.0
 
     async def start(self):
         """Start the indexer process"""
@@ -150,13 +159,33 @@ class FileIndexer:
             "tracks": set(),
         }
 
-        for folder in self.music_folders:
-            if not os.path.exists(folder):
-                logger.warning(f"Music folder does not exist: {folder}")
-                continue
+        # Publish a zeroed row first: it overwrites anything a scan killed
+        # harder than `finally` (OOM, power loss) left behind, and an
+        # all-zero row reads as "no outstanding work" while the pre-count
+        # below runs.
+        self._scan_total = 0
+        self._scan_processed = 0
+        self._scan_active = True
+        await self._publish_scan_progress(force=True)
 
-            logger.debug(f"Scanning folder: {folder}")
-            await self.scan_folder(folder, changed_items)
+        # Pre-count pass: a directory-listing-only walk (no stat, no reads)
+        # so the per-file loop below can report real percentage progress.
+        self._scan_total = await self._count_supported_files()
+        await self._publish_scan_progress(force=True)
+
+        try:
+            for folder in self.music_folders:
+                if not os.path.exists(folder):
+                    logger.warning(f"Music folder does not exist: {folder}")
+                    continue
+
+                logger.debug(f"Scanning folder: {folder}")
+                await self.scan_folder(folder, changed_items)
+        finally:
+            # Mark the scan inactive even on failure so the status reader
+            # never shows a stuck "indexing" stage.
+            self._scan_active = False
+            await self._publish_scan_progress(force=True)
 
         # Delete stale entries after scanning but before enrichment
         cleanup_results = await self.cleanup_stale_tracks()
@@ -281,6 +310,39 @@ class FileIndexer:
                                     changed_items[key].add(value)
                     except Exception as e:
                         logger.exception(f"Error processing file {file_path}: {str(e)}")
+                    if self._scan_active:
+                        self._scan_processed += 1
+                        await self._publish_scan_progress()
+
+    async def _count_supported_files(self) -> int:
+        """Count supported audio files across the music folders. Directory
+        listing only — no per-file stat — so it stays cheap even for large
+        libraries."""
+
+        def _count() -> int:
+            count = 0
+            for folder in self.music_folders:
+                for _, _, files in os.walk(folder):
+                    count += sum(
+                        1 for f in files if self._is_supported_audio_file(f)
+                    )
+            return count
+
+        return await asyncio.get_running_loop().run_in_executor(None, _count)
+
+    async def _publish_scan_progress(self, force: bool = False):
+        """Write scan progress to the database, throttled to one write per
+        couple of seconds unless forced (scan start/end)."""
+        now = time.monotonic()
+        if not force and now - self._scan_progress_written_at < 2.0:
+            return
+        self._scan_progress_written_at = now
+        try:
+            await self.db_manager.set_scan_progress(
+                self._scan_total, self._scan_processed, self._scan_active
+            )
+        except Exception as e:
+            logger.debug(f"Failed to publish scan progress: {e}")
 
     def _is_supported_audio_file(self, filename: str) -> bool:
         """Check if the file is a supported audio format."""

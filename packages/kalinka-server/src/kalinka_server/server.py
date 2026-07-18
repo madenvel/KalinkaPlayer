@@ -556,7 +556,8 @@ async def create_app(
 
     @app.get("/indexer/status")
     async def indexer_status(sources: Optional[str] = None) -> dict:
-        """Return embedding job coverage for each configured input module."""
+        """Return pipeline progress (indexing / enrichment / embedding
+        stages) for each configured input module."""
         input_modules: List[InputModule] = extract_modules(sources)
         result = {}
         for module in input_modules:

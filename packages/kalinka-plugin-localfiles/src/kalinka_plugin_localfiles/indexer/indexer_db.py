@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import aiosqlite
@@ -291,6 +292,47 @@ class AsyncIndexerDb:
             await cursor.execute("SELECT file_path FROM indexer_failures")
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
+
+    async def set_scan_progress(
+        self, total: int, processed: int, active: bool
+    ) -> None:
+        """Publish scan progress for get_indexer_status().
+
+        ``total`` comes from the pre-count walk, ``processed`` is the number
+        of files handled so far. ``updated_at`` lets the reader treat a row
+        left behind by a crashed scan as inactive.
+        """
+        value = json.dumps(
+            {
+                "total": total,
+                "processed": processed,
+                "active": active,
+                "updated_at": int(time.time()),
+            }
+        )
+        async with self._open() as conn:
+            await conn.execute(
+                "INSERT OR REPLACE INTO indexer_state (key, value) "
+                "VALUES ('scan_progress', ?)",
+                (value,),
+            )
+            await conn.commit()
+
+    async def get_scan_progress(self) -> Optional[Dict]:
+        """Read the scan progress published by :meth:`set_scan_progress`.
+        Returns None when absent or unreadable."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT value FROM indexer_state WHERE key = 'scan_progress'"
+            )
+            row = await cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return json.loads(row[0])
+        except (ValueError, TypeError):
+            return None
 
     async def delete_orphaned_albums_and_artists(self) -> Tuple[int, int]:
         """Delete albums and artists that have no tracks referencing them.
