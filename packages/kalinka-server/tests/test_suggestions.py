@@ -306,6 +306,24 @@ async def test_unattested_engine_serves_experimental(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_no_library_ignores_stale_cache(tmp_path, monkeypatch):
+    # Scores persisted while a library module was enabled must not filter
+    # the pool after the module is disabled: a Jamendo-only user would get
+    # chips suppressed by a library that is no longer searched.
+    monkeypatch.setattr("kalinka_server.suggestions._ATTEST_GAP_S", 0)
+    enabled = _engine(FakeLibrary(), tmp_path)
+    await enabled._attest_all("fp-1")
+    assert (tmp_path / "cache.json").exists()
+
+    disabled = _engine(None, tmp_path)
+    await disabled.refresh_loop()
+    assert not disabled._attested and disabled._scores == {}
+    result = disabled.suggest(4, now=datetime(2026, 7, 6, 20, 0))
+    assert not result.attested
+    assert all(s.experimental for s in result.suggestions)
+
+
+@pytest.mark.asyncio
 async def test_cache_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr("kalinka_server.suggestions._ATTEST_GAP_S", 0)
     engine = _engine(FakeLibrary(), tmp_path)

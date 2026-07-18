@@ -387,10 +387,13 @@ class SuggestionEngine:
         """Load the persisted scores, then (re-)attest whenever the library
         fingerprint moves. Runs for the server's lifetime; cancelled on
         shutdown."""
-        self._load_cache()
         if self._library is None:
+            # Deliberately skip the cache too: scores persisted while a
+            # library module was enabled must not filter the pool after it
+            # is disabled — everything serves unvalidated, context-only.
             logger.info("suggestions: no library module — serving unvalidated")
             return
+        self._load_cache()
         await asyncio.sleep(_STARTUP_DELAY_S)
         while True:
             try:
