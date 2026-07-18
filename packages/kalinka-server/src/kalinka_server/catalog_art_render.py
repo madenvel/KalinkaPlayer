@@ -165,6 +165,37 @@ def _vignette(width: int, height: int, strength: float = 0.28) -> Image.Image:
     return Image.fromarray(layer, "RGBA")
 
 
+# The client draws the title, icon and description over the top-left of the
+# card. These fractions define the "text panel" the scrim below guarantees is
+# dark; the frontend bounds its text column to the same left fraction so the
+# two agree on where text lives and where the art is free to show.
+TEXT_ZONE_W = 0.62
+TEXT_ZONE_TOP = 0.5
+
+
+def _text_scrim(
+    width: int, height: int, *, strength: float = 0.82
+) -> Image.Image:
+    """A soft dark wedge anchored to the top-left, confined to the text zone.
+
+    Strong in the top-left corner (under the title), easing down the left edge
+    (under the description) and fading to nothing past ``TEXT_ZONE_W`` — so the
+    art on the right keeps full brightness. Drawn *above* the cover tiles, it
+    lets text stay legible even where a tile reaches under it, without turning
+    into a hard band across the artwork."""
+    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+    nx = xs / width
+    ny = ys / height
+    # Left column falloff (feathered past the text zone so there's no seam).
+    left = np.clip((TEXT_ZONE_W - nx) / TEXT_ZONE_W, 0.0, 1.0) ** 0.9
+    # Extra weight toward the top, where the title sits.
+    top = np.clip((TEXT_ZONE_TOP - ny) / TEXT_ZONE_TOP, 0.0, 1.0)
+    alpha = strength * left * (0.5 + 0.5 * top)
+    layer = np.zeros((height, width, 4), dtype=np.uint8)
+    layer[..., 3] = (np.clip(alpha, 0.0, 1.0) * 255).astype(np.uint8)
+    return Image.fromarray(layer, "RGBA")
+
+
 def _apply_grain(image: Image.Image, rng: np.random.Generator, amplitude: float) -> Image.Image:
     array = np.asarray(image.convert("RGB"), dtype=np.float32)
     noise = rng.standard_normal((image.height, image.width, 1)).astype(np.float32)
@@ -376,23 +407,28 @@ def render_catalog_art(
         # brightness, which is where the contrast comes from.
         _scrims(base)
 
-        # Cover tiles cascade toward the right; largest in front, drawn last.
-        # Layout tuned for three; with fewer the leftover slots just vanish.
+        # Cover tiles cascade toward the lower-right, largest in front (drawn
+        # last). Pushed right of the text zone and dropped below the title band
+        # so the top-left stays clear; the leftmost tile's edge still tucks
+        # under the text scrim, reading as shadow rather than a collision.
         slots = [
-            (0.58, 0.56, 0.545),  # (tile side factor of H, cx/W, cy/H) front
-            (0.46, 0.745, 0.47),
-            (0.38, 0.875, 0.62),
+            (0.56, 0.66, 0.585),  # (tile side factor of H, cx/W, cy/H) front
+            (0.45, 0.83, 0.49),
+            (0.375, 0.935, 0.65),
         ]
         order = list(range(min(len(covers), 3)))[::-1]  # back to front
         for idx in order:
             side_f, cx_f, cy_f = slots[idx]
             side = round(height * side_f)
             tile = _rounded_tile(covers[idx], side, radius=round(side * 0.055))
-            angle = float(rng.uniform(-8.0, 8.0))
+            angle = float(rng.uniform(-7.0, 7.0))
             _paste_with_shadow(
                 base, tile, (round(width * cx_f), round(height * cy_f)), angle
             )
 
+        # Text panel: applied above the tiles so the title/description zone is
+        # reliably dark, but confined to the left so the covers stay vivid.
+        base.alpha_composite(_text_scrim(width, height))
         base.alpha_composite(_vignette(width, height, 0.20))
         out = base.convert("RGB")
         out = ImageEnhance.Contrast(out).enhance(1.06)
@@ -401,6 +437,7 @@ def render_catalog_art(
     base = _procedural_base(width, height, rng)
     _rings_and_dots(base, rng)
     _scrims(base, floor_alpha=36)
+    base.alpha_composite(_text_scrim(width, height, strength=0.5))
     base.alpha_composite(_vignette(width, height, 0.22))
     if names:
         _bake_names(base, names)
