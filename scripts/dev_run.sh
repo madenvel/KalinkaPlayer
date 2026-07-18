@@ -13,6 +13,12 @@
 # picking up any edited Python (editable install). For C++ changes run
 # `make dev-rebuild-native` then restart.
 #
+# Web UI: served from <prefix>/usr/share/kalinka-web when present. Symlink an
+# app-repo build there to test it — rebuilds are picked up per request, no
+# server restart, just refresh the browser:
+#   mkdir -p "$KALINKA_PREFIX/usr/share"
+#   ln -sfn <app-repo>/build/web "$KALINKA_PREFIX/usr/share/kalinka-web"
+#
 # Stop with Ctrl-C. Extra args (e.g. --debug) are forwarded to the server.
 
 set -uo pipefail

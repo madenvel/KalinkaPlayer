@@ -27,6 +27,7 @@ _LOG = "var/log/kalinka"
 _RUN = "run/kalinka"
 _CACHE = "var/cache/kalinka"
 _MEDIA = "srv/kalinka/music"
+_WEB_UI = "usr/share/kalinka-web"
 
 
 def prefix() -> str:
@@ -68,3 +69,9 @@ def media_dir() -> str:
     """Default music drop-off — ``<prefix>/srv/kalinka/music`` (under /srv, FHS
     "served data", so the deb can provision it world-writable)."""
     return _under(_MEDIA)
+
+
+def web_ui_dir() -> str:
+    """Browser player bundle — ``<prefix>/usr/share/kalinka-web`` (installed by
+    the optional kalinka-web package; served at ``/`` when present)."""
+    return _under(_WEB_UI)
