@@ -143,11 +143,24 @@ class AsyncEnricherDb:
     @staticmethod
     async def _reset_failed_rows(cursor) -> Dict[str, int]:
         """Flip every ``enriched=2`` (FAILED) row back to ``enriched=0``
-        on the given cursor (no commit). Returns per-entity row counts."""
+        on the given cursor (no commit). Returns per-entity row counts.
+
+        Albums carrying *generated* artwork are also re-opened, with the
+        generated cover cleared: this sweep only runs when the enrichment
+        setup changed, and a changed setup may now find a real cover that
+        the generated one would otherwise mask (the art-fetching plugins
+        skip albums whose ``image_url`` is set). If nothing better turns
+        up, the deterministic generator re-derives the identical cover.
+        """
         counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
+        await cursor.execute(
+            "UPDATE albums SET enriched = 0, image_url = NULL, "
+            "image_generated = 0 WHERE image_generated = 1"
+        )
+        counts["albums"] = cursor.rowcount or 0
         for table in ("artists", "albums", "tracks"):
             await cursor.execute(f"UPDATE {table} SET enriched = 0 WHERE enriched = 2")
-            counts[table] = cursor.rowcount or 0
+            counts[table] += cursor.rowcount or 0
         return counts
 
     async def reset_failed_to_retry(self) -> Dict[str, int]:
@@ -268,6 +281,25 @@ class AsyncEnricherDb:
             )
             row = await cursor.fetchone()
             return int(row[0]) if row and row[0] is not None else 0
+
+    async def get_album_track_titles(self, album_id: str) -> List[str]:
+        """Titles of an album's tracks in disc/track order.
+
+        Feeds the procedural artwork generator's fallback album-family
+        signature, so the ordering must be deterministic.
+        """
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT title FROM tracks
+                WHERE album_id = ?
+                ORDER BY disc_number, track_number, title
+                """,
+                (album_id,),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows if row[0]]
 
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""

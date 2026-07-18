@@ -29,8 +29,9 @@ OPTIONAL_PACKAGES: dict[str, OptionalPackageSpec] = {
     "numpy": OptionalPackageSpec(
         pip_spec="numpy==1.26.4",
         description=(
-            "Numerical core required by the searcher's mood ranking and "
-            "CLAP audio embedding (embedder)."
+            "Numerical core required by the searcher's mood ranking, "
+            "CLAP audio embedding (embedder), and the enricher's generated "
+            "album art."
         ),
     ),
     "onnxruntime": OptionalPackageSpec(

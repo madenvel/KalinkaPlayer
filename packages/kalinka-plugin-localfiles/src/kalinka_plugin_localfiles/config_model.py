@@ -241,6 +241,21 @@ class DeezerConfig(BaseModel):
     )
 
 
+class ProceduralArtworkConfig(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        title="Generate missing album art",
+        json_schema_extra={
+            "help": (
+                "Draw deterministic abstract cover art for albums that still "
+                "have no artwork after all other sources have been tried — "
+                "needs the `numpy` package (installed on demand)"
+            ),
+            **_SIMPLE,
+        },
+    )
+
+
 class PluginsConfig(BaseModel):
     musicbrainz: MusicBrainzConfig = Field(
         default_factory=MusicBrainzConfig, title="MusicBrainz"
@@ -248,6 +263,9 @@ class PluginsConfig(BaseModel):
     acoustid: AcoustIDConfig = Field(default_factory=AcoustIDConfig, title="AcoustID")
     wikidata: WikidataConfig = Field(default_factory=WikidataConfig, title="Wikidata")
     deezer: DeezerConfig = Field(default_factory=DeezerConfig, title="Deezer")
+    procedural_artwork: ProceduralArtworkConfig = Field(
+        default_factory=ProceduralArtworkConfig, title="Generated album art"
+    )
     filesystem_fallback_enabled: bool = Field(
         default=True,
         title="Use file name/path for enrichment",

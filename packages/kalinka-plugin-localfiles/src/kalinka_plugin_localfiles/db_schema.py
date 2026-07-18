@@ -81,6 +81,7 @@ async def init_db(db_path: str) -> None:
                 genre TEXT,
                 language TEXT,
                 image_url TEXT,
+                image_generated INTEGER DEFAULT 0,
                 mbid TEXT,
                 track_count INTEGER DEFAULT 0,
                 duration INTEGER DEFAULT 0,
@@ -316,6 +317,14 @@ async def init_db(db_path: str) -> None:
         if "original_year" not in album_cols:
             await cursor.execute("ALTER TABLE albums ADD COLUMN original_year INTEGER")
             logger.info("Added albums.original_year column")
+        # Marks covers produced by the procedural artwork generator, so the
+        # FAILED-row retry sweep can clear them and give real sources
+        # another chance when the enrichment setup changes.
+        if "image_generated" not in album_cols:
+            await cursor.execute(
+                "ALTER TABLE albums ADD COLUMN image_generated INTEGER DEFAULT 0"
+            )
+            logger.info("Added albums.image_generated column")
 
         # VA (mood) head migration (after the columns above exist). On a head
         # version change, clear stale mood so the backfill recomputes it with the

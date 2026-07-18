@@ -2,6 +2,7 @@
 import multiprocessing
 import asyncio
 import enum
+import importlib.util
 import json
 import logging
 import queue
@@ -89,6 +90,22 @@ class MetadataEnricher:
         if config.enricher.plugins.deezer.enabled:
             logger.info("Loading DeezerPlugin")
             self.plugins.append(DeezerPlugin(config, self.db_manager))
+
+        # Generated album art is strictly last: it only fills covers no
+        # real source could provide, so every fetching plugin above must
+        # get its chance first.
+        if config.enricher.plugins.procedural_artwork.enabled:
+            if importlib.util.find_spec("numpy") is not None:
+                logger.info("Loading ProceduralArtworkPlugin")
+                from .procedural_artwork_plugin import ProceduralArtworkPlugin
+
+                self.plugins.append(ProceduralArtworkPlugin(config, self.db_manager))
+            else:
+                logger.warning(
+                    "Generated album art is enabled but numpy is not "
+                    "installed; skipping. Use 'Restart with install' on the "
+                    "modules page to fetch it."
+                )
 
         logger.info(
             f"Loaded {len(self.plugins)} enrichment plugins: {[p.__class__.__name__ for p in self.plugins]}"

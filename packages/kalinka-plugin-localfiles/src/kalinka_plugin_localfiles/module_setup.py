@@ -317,7 +317,10 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 )
 
         # Enricher: DISABLED if config.enricher.enabled is False; else READY
-        # (hard dependencies are guaranteed by the plugin's deb).
+        # (hard dependencies are guaranteed by the plugin's deb). The one
+        # optional leg is generated album art, which needs numpy — a
+        # missing numpy there is a WARNING (art generation off), not an
+        # ERROR: metadata enrichment itself is unaffected.
         enr = self._subfeatures["enricher"]
         if not config.enricher.enabled:
             enr.state = ModuleHealthState.DISABLED
@@ -325,6 +328,15 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         elif self._enricher_proc is None or not self._enricher_proc.is_alive():
             enr.state = ModuleHealthState.ERROR
             enr.message = "Enricher subprocess failed to start."
+        elif config.enricher.plugins.procedural_artwork.enabled and not _is_importable(
+            "numpy"
+        ):
+            enr.state = ModuleHealthState.WARNING
+            enr.message = (
+                "Generated album art unavailable. Missing package: `numpy`. "
+                "Use **Restart with install** in the modules page to fetch it."
+            )
+            enr.missing_packages = ("numpy",)
         else:
             enr.state = ModuleHealthState.READY
             enr.message = ""
@@ -482,6 +494,10 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             if not _is_importable(import_name):
                 missing.append(key)
                 seen.add(key)
+
+        # Enricher: numpy for the generated-album-art leg.
+        if cfg.enricher.enabled and cfg.enricher.plugins.procedural_artwork.enabled:
+            need("numpy", "numpy")
 
         # Searcher: numpy for the mood ranking leg.
         if cfg.searcher.enabled:
