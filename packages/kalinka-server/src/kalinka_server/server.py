@@ -46,6 +46,7 @@ from .config_schema_processor import (
     set_field_value,
 )
 from .ai_search import assemble_ai_search
+from .catalog_art_service import CatalogArtService
 from .query_router import CatalogRouter
 from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
@@ -99,15 +100,20 @@ async def lifespan(app: FastAPI):
 
     finally:
         logger.info("Shutting down...")
-        # The suggestion engine's refresh loop runs forever by design.
-        task = getattr(app.state, "suggestions_task", None)
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                # A crashed loop must not derail the rest of shutdown.
-                pass
+        # The suggestion engine's refresh loop and the catalog-art worker
+        # both run forever by design; cancel them and swallow the result.
+        for attr in ("suggestions_task", "catalog_art_task"):
+            task = getattr(app.state, attr, None)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    # A crashed loop must not derail the rest of shutdown.
+                    pass
+        art = getattr(app.state, "catalog_art", None)
+        if art is not None:
+            await art.close()
         if sd is not None:
             await sd.unregister_service()
 
@@ -274,6 +280,24 @@ async def create_app(
     app.state.suggestions_task = asyncio.create_task(
         app.state.suggestions.refresh_loop()
     )
+
+    # Composed catalog-card backgrounds. Generated lazily off the browse
+    # path by a single worker; served from the on-disk cache. The resolver
+    # returns None for disabled/absent sources instead of raising, so the
+    # worker just skips them.
+    def _art_module_resolver(entity_id: EntityId) -> Optional[InputModule]:
+        source = entity_id.source
+        if source not in modules.enabled_input_modules:
+            return None
+        plugin = modules.prepared_input_modules.get(source)
+        interface = plugin.interface if plugin is not None else None
+        return interface if isinstance(interface, InputModule) else None
+
+    app.state.catalog_art = CatalogArtService(
+        os.path.join(paths.cache_dir(), "catalog_art"),
+        _art_module_resolver,
+    )
+    app.state.catalog_art_task = asyncio.create_task(app.state.catalog_art.run())
 
     # Persist the overrides dict if plugin setup reconciled it — i.e. a
     # plugin mutated config fields that came from the overrides file, so
@@ -482,6 +506,7 @@ async def create_app(
             result = await input_module.browse(
                 entity_id, offset=offset, limit=limit, genre_ids=genre_ids_obj
             )
+            app.state.catalog_art.decorate(result)
             return result.model_dump(exclude_unset=True)
         except HTTPException:
             # Re-raise HTTP exceptions as-is
@@ -492,6 +517,23 @@ async def create_app(
             raise HTTPException(
                 status_code=500, detail=f"Internal server error: {str(e)}"
             )
+
+    @app.get("/catalog/art/{file_name}")
+    async def get_catalog_art(file_name: str):
+        """Serve a generated catalog-card background.
+
+        File names embed a content fingerprint, so the bytes at a given URL
+        never change — hence the immutable, long-lived cache header. When a
+        catalog's content changes the browse response points at a new URL.
+        """
+        path = app.state.catalog_art.art_file(file_name)
+        if path is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(
+            path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/search/{search_type}/{query}")
     async def search(
