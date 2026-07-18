@@ -97,8 +97,12 @@ def test_consume_resets_persist_first_and_keeps_armed_value(tmp_path):
 
     cfg = _Cfg(rebuild=True, plain=True)
     live = dict(overrides)
-    _collection(ofile)._consume_one_shot_overrides("fake", _Plugin, cfg, live)
+    consumed = _collection(ofile)._consume_one_shot_overrides(
+        "fake", _Plugin, cfg, live
+    )
 
+    # The consumed key is reported so the caller can reset the loaded value.
+    assert consumed == [PREFIX + "rebuild"]
     # Trigger dropped from the live dict and from disk...
     assert PREFIX + "rebuild" not in live
     assert PREFIX + "rebuild" not in load_overrides(ofile)
@@ -133,7 +137,7 @@ def test_consume_disarms_in_memory_when_persist_fails(monkeypatch):
 
     cfg = _Cfg(rebuild=True)
     live = {PREFIX + "rebuild": True}
-    _collection("/does/not/matter")._consume_one_shot_overrides(
+    consumed = _collection("/does/not/matter")._consume_one_shot_overrides(
         "fake", _Plugin, cfg, live
     )
 
@@ -141,6 +145,8 @@ def test_consume_disarms_in_memory_when_persist_fails(monkeypatch):
     # plugin skips the action this boot — never act without a durable reset.
     assert PREFIX + "rebuild" in live
     assert cfg.rebuild is False
+    # Nothing durably consumed, so the caller has nothing to reset.
+    assert consumed == []
 
 
 def test_consume_without_file_clears_in_memory(tmp_path):
@@ -148,6 +154,41 @@ def test_consume_without_file_clears_in_memory(tmp_path):
     live = {PREFIX + "rebuild": True}
     _collection(None)._consume_one_shot_overrides("fake", _Plugin, cfg, live)
     assert PREFIX + "rebuild" not in live
+    assert cfg.rebuild is True
+
+
+# ---------------------------------------------------------------------------
+# Reset the loaded value after consumption
+# ---------------------------------------------------------------------------
+
+
+def test_reset_consumed_one_shot_restores_default_on_loaded_config():
+    """After the plugin has acted, the loaded value must go back to default so
+    GET /server/config reports the disarmed state — not the armed value that
+    lingered on the in-memory config until the next restart (the reported bug).
+    """
+    cfg = _Cfg(rebuild=True)  # armed value still on config post-setup
+    PreparedModuleCollection()._reset_consumed_one_shot_values(
+        "fake", _Plugin, cfg, [PREFIX + "rebuild"]
+    )
+    assert cfg.rebuild is False
+
+
+def test_reset_consumed_one_shot_handles_nested_field():
+    cfg = _Cfg()
+    cfg.sub.flag = True
+    PreparedModuleCollection()._reset_consumed_one_shot_values(
+        "fake", _Plugin, cfg, [PREFIX + "sub.flag"]
+    )
+    assert cfg.sub.flag is False
+
+
+def test_reset_consumed_one_shot_noop_without_consumed_keys():
+    cfg = _Cfg(rebuild=True)
+    PreparedModuleCollection()._reset_consumed_one_shot_values(
+        "fake", _Plugin, cfg, []
+    )
+    # No keys consumed (e.g. disabled module / persist failure) → left as-is.
     assert cfg.rebuild is True
 
 

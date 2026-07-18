@@ -224,9 +224,12 @@ class PreparedModuleCollection:
         plugin_class: type[PluginBase],
         plugin_config: ModuleConfig,
         overrides: MutableMapping[str, Any],
-    ) -> None:
+    ) -> list[str]:
         """Reset any *armed* one-shot triggers for this plugin, persist-first,
-        before its ``setup()`` runs.
+        before its ``setup()`` runs. Returns the override keys durably consumed
+        this boot (empty if none were armed or a persist failure forced a
+        disarm), so the caller can reset their *loaded* value once the plugin
+        has acted (see ``_reset_consumed_one_shot_values``).
 
         A one-shot field (``json_schema_extra={"one_shot": True}``) is a "do X
         once on next restart" toggle. We clear it from the overrides — on disk
@@ -246,7 +249,7 @@ class PreparedModuleCollection:
             plugin_class.CONFIG_MODEL, prefix, plugin_config, overrides
         )
         if not armed:
-            return
+            return []
 
         armed_set = set(armed)
         cleared = {k: v for k, v in overrides.items() if k not in armed_set}
@@ -285,7 +288,10 @@ class PreparedModuleCollection:
                             key,
                             disarm_exc,
                         )
-                return
+                # Disarmed, not consumed: the override stays on disk for a retry
+                # and the loaded value is already back to default, so there's
+                # nothing for the caller to reset.
+                return []
 
         # When there's no overrides file the reset only lives in memory
         # (tests); say so rather than implying durability.
@@ -297,6 +303,51 @@ class PreparedModuleCollection:
                 key,
                 reset_kind,
             )
+        return armed
+
+    def _reset_consumed_one_shot_values(
+        self,
+        plugin_name: str,
+        plugin_class: type[PluginBase],
+        plugin_config: ModuleConfig,
+        consumed_keys: list[str],
+    ) -> None:
+        """Reset the *loaded* value of already-consumed one-shot triggers back
+        to their field default, after the plugin has acted on them this boot.
+
+        ``_consume_one_shot_overrides`` clears the override from disk but leaves
+        the armed value on ``plugin_config`` so the plugin can act. That live
+        object is what ``GET /server/config`` reports, so without this reset the
+        trigger reads as still-armed for the rest of the process — the UI shows
+        it "on" until the next restart rebuilds config from the (now-clean)
+        overrides. Clearing it here keeps the loaded value in step with disk.
+        """
+        if not consumed_keys:
+            return
+        prefix = (
+            "input_modules."
+            if plugin_class.PLUGIN_TYPE == PluginType.INPUT_MODULE
+            else "devices."
+        ) + plugin_name + "."
+        default_config = plugin_class.CONFIG_MODEL()
+        for key in consumed_keys:
+            if not key.startswith(prefix):
+                continue
+            attrs = key[len(prefix):].split(".")
+            try:
+                parent = plugin_config
+                default_parent = default_config
+                for part in attrs[:-1]:
+                    parent = getattr(parent, part)
+                    default_parent = getattr(default_parent, part)
+                setattr(parent, attrs[-1], getattr(default_parent, attrs[-1]))
+            except (AttributeError, IndexError) as exc:
+                logger.error(
+                    "Could not reset consumed one-shot '%s' on the loaded "
+                    "config; it may read as still-armed until restart: %s",
+                    key,
+                    exc,
+                )
 
     def _reconcile_consumed_overrides(
         self,
@@ -407,6 +458,7 @@ class PreparedModuleCollection:
                 "config": None,
                 "context": None,
                 "error": None,
+                "consumed_one_shot": [],
             }
             try:
                 config = self._build_module_config(
@@ -419,7 +471,7 @@ class PreparedModuleCollection:
                 # for disabled modules) — otherwise the trigger waits, armed,
                 # until the module is enabled rather than being silently lost.
                 if getattr(config, "enabled", True):
-                    self._consume_one_shot_overrides(
+                    entry["consumed_one_shot"] = self._consume_one_shot_overrides(
                         plugin_name, plugin_class, config, overrides
                     )
                 entry["context"] = self._make_plugin_context(
@@ -488,6 +540,16 @@ class PreparedModuleCollection:
                 )
                 if changed:
                     self.overrides_dirty = True
+                # The plugin has now acted on any armed one-shot trigger; reset
+                # its loaded value to default so GET /server/config reflects the
+                # disarmed state immediately, matching the already-cleared disk
+                # override instead of echoing the armed value until next restart.
+                self._reset_consumed_one_shot_values(
+                    plugin_name,
+                    entry["class"],
+                    entry["config"],
+                    entry.get("consumed_one_shot") or [],
+                )
 
             if prepared_module is not None:
                 out.append((plugin_name, prepared_module))
