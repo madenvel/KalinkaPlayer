@@ -281,10 +281,8 @@ async def create_app(
         app.state.suggestions.refresh_loop()
     )
 
-    # Composed catalog-card backgrounds. Generated lazily off the browse
-    # path by a single worker; served from the on-disk cache. The resolver
-    # returns None for disabled/absent sources instead of raising, so the
-    # worker just skips them.
+    # Composed catalog-card backgrounds, generated lazily off the browse path.
+    # The resolver returns None for disabled/absent sources (no raise).
     def _art_module_resolver(entity_id: EntityId) -> Optional[InputModule]:
         source = entity_id.source
         if source not in modules.enabled_input_modules:
@@ -520,12 +518,8 @@ async def create_app(
 
     @app.get("/catalog/art/{file_name}")
     async def get_catalog_art(file_name: str):
-        """Serve a generated catalog-card background.
-
-        File names embed a content fingerprint, so the bytes at a given URL
-        never change — hence the immutable, long-lived cache header. When a
-        catalog's content changes the browse response points at a new URL.
-        """
+        """Serve a generated catalog-card background. The name is fingerprinted,
+        so the bytes at a URL never change — hence the immutable cache header."""
         path = app.state.catalog_art.art_file(file_name)
         if path is None:
             raise HTTPException(status_code=404, detail="Not found")

@@ -1,9 +1,4 @@
-"""Tests for server-generated catalog-card background art.
-
-Covers the pure renderer (both variants, determinism, fingerprinting) and the
-service layer: inline decoration never blocks, files carry a content-derived
-name, unchanged inputs reuse the file, and the served path is validated.
-"""
+"""Tests for the catalog-card art renderer and generation service."""
 
 from __future__ import annotations
 

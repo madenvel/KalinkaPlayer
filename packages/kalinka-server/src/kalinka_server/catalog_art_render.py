@@ -1,26 +1,9 @@
-"""Composed background art for catalog cards.
+"""Composed background art for catalog cards. Pure, synchronous Pillow/NumPy.
 
-Pure, synchronous Pillow/NumPy rendering — no I/O, no event loop. The
-service layer (``catalog_art_service``) fetches inputs and offloads these
-calls to a worker thread.
-
-Two variants share one visual language (dark, high-contrast, film grain,
-berry/brass accents echoing the localfiles procedural album art):
-
-- **covers**: up to three album covers — the first becomes a heavily
-  blurred, darkened backdrop with colour glows pulled from each cover's
-  dominant colour; the covers themselves sit as rotated, rounded,
-  drop-shadowed tiles on the right, leaving the top-left clear for the
-  client-drawn title.
-- **textual**: seeded procedural blobs (no covers to show) with up to
-  three category names baked into the lower-left, each keyed to a stable
-  per-name colour.
-
-Determinism: identical inputs (covers bytes, names, seed) render identical
-pixels, so re-generation with unchanged inputs produces an identical file.
-
-Bump ``STYLE_VERSION`` when the look changes — it is part of the content
-fingerprint, so every card regenerates on upgrade.
+Two variants: a cover collage (up to three covers, blurred hero + tiles) and
+a coverless textual card (procedural blobs + baked category names). Rendering
+is deterministic in its inputs. STYLE_VERSION is part of the content
+fingerprint, so bumping it regenerates every card.
 """
 
 from __future__ import annotations
@@ -42,9 +25,8 @@ CANVAS_H = 540
 _ACCENT_BERRY = (176, 66, 106)
 _ACCENT_BRASS = (201, 168, 106)
 
-# Candidate fonts for baked category names, in preference order. DejaVu and
-# Liberation ship on Debian/RPi and Fedora and cover Cyrillic; the Pillow
-# bundled fallback is Latin-only but better than nothing.
+# Bold fonts for baked names, in preference order; DejaVu/Liberation cover
+# Cyrillic, the bundled Pillow fallback is Latin-only.
 _FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
@@ -86,15 +68,14 @@ def _fit_cover(image: Image.Image, width: int, height: int) -> Image.Image:
 
 
 def _dominant_color(image: Image.Image) -> tuple[int, int, int]:
-    """The most vivid colour of a small thumbnail — saturation-weighted so
-    glows stay colourful instead of averaging to mud."""
+    """Most vivid colour of the image, saturation-weighted so glows don't
+    average to mud."""
     thumb = image.convert("RGB").resize((12, 12), Image.Resampling.LANCZOS)
     pixels = np.asarray(thumb, dtype=np.float32) / 255.0
     flat = pixels.reshape(-1, 3)
     maxc = flat.max(axis=1)
     minc = flat.min(axis=1)
     sat = np.where(maxc > 0, (maxc - minc) / np.maximum(maxc, 1e-6), 0.0)
-    # Vividness: saturated and reasonably bright, but not blown-out white.
     score = sat * np.clip(maxc, 0.15, 0.9)
     r, g, b = flat[int(score.argmax())]
     return (int(r * 255), int(g * 255), int(b * 255))
@@ -165,10 +146,8 @@ def _vignette(width: int, height: int, strength: float = 0.28) -> Image.Image:
     return Image.fromarray(layer, "RGBA")
 
 
-# The client draws the title, icon and description over the top-left of the
-# card. These fractions define the "text panel" the scrim below guarantees is
-# dark; the frontend bounds its text column to the same left fraction so the
-# two agree on where text lives and where the art is free to show.
+# Left fraction of the card the client draws title/description over; the
+# frontend bounds its text column to the same TEXT_ZONE_W.
 TEXT_ZONE_W = 0.62
 TEXT_ZONE_TOP = 0.5
 
@@ -176,19 +155,13 @@ TEXT_ZONE_TOP = 0.5
 def _text_scrim(
     width: int, height: int, *, strength: float = 0.82
 ) -> Image.Image:
-    """A soft dark wedge anchored to the top-left, confined to the text zone.
-
-    Strong in the top-left corner (under the title), easing down the left edge
-    (under the description) and fading to nothing past ``TEXT_ZONE_W`` — so the
-    art on the right keeps full brightness. Drawn *above* the cover tiles, it
-    lets text stay legible even where a tile reaches under it, without turning
-    into a hard band across the artwork."""
+    """Dark wedge under the top-left text, fading to nothing past TEXT_ZONE_W
+    so the art on the right stays bright. Drawn above the tiles, so text over a
+    tile edge stays legible."""
     ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
     nx = xs / width
     ny = ys / height
-    # Left column falloff (feathered past the text zone so there's no seam).
     left = np.clip((TEXT_ZONE_W - nx) / TEXT_ZONE_W, 0.0, 1.0) ** 0.9
-    # Extra weight toward the top, where the title sits.
     top = np.clip((TEXT_ZONE_TOP - ny) / TEXT_ZONE_TOP, 0.0, 1.0)
     alpha = strength * left * (0.5 + 0.5 * top)
     layer = np.zeros((height, width, 4), dtype=np.uint8)
@@ -205,8 +178,8 @@ def _apply_grain(image: Image.Image, rng: np.random.Generator, amplitude: float)
 
 
 def _rings_and_dots(base: Image.Image, rng: np.random.Generator) -> None:
-    """Faint concentric rings on the right half and two accent dots, drawn in
-    place. Kept away from the top-left title area."""
+    """Faint concentric rings and two accent dots on the right, away from the
+    title area."""
     draw = ImageDraw.Draw(base, "RGBA")
     cx = base.width * (0.62 + rng.random() * 0.3)
     cy = base.height * (0.2 + rng.random() * 0.6)
@@ -227,9 +200,8 @@ def _rings_and_dots(base: Image.Image, rng: np.random.Generator) -> None:
 
 
 def _rounded_tile(cover: Image.Image, side: int, radius: int) -> Image.Image:
-    """Square cover tile with anti-aliased rounded corners and a subtle
-    light border, as RGBA."""
-    scale = 4  # supersampled mask for smooth corners
+    """RGBA square cover tile: rounded corners + faint light border."""
+    scale = 4  # supersample the corner mask
     tile = _fit_cover(cover.convert("RGB"), side, side)
     mask = Image.new("L", (side * scale, side * scale), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
@@ -272,13 +244,11 @@ def _paste_with_shadow(
 def _procedural_base(
     width: int, height: int, rng: np.random.Generator
 ) -> Image.Image:
-    """Dark seeded base for coverless cards: near-black ground with a few
-    distinct saturated colour fields grading in from the edges. The top-left
-    (client title) and lower-left (baked names) quadrants stay dark."""
+    """Seeded near-black ground with saturated colour fields grading in from
+    the right, keeping the left (text) dark."""
     base = Image.new("RGBA", (width, height), (11, 12, 16, 255))
 
-    # Primary field: berry or brass family, anchored past the right edge so
-    # it grades across the canvas.
+    # Primary berry/brass field anchored past the right edge.
     berry = rng.random() < 0.6
     primary_hue = (330.0 + rng.random() * 30.0) if berry else (28.0 + rng.random() * 22.0)
     base.alpha_composite(_radial_glow(
@@ -288,7 +258,7 @@ def _procedural_base(
         _hue_color(primary_hue, 0.68, 0.34),
         1.0,
     ))
-    # Secondary: the sibling family, smaller, upper-right region.
+    # Sibling family, upper-right.
     secondary_hue = (28.0 + rng.random() * 22.0) if berry else (330.0 + rng.random() * 30.0)
     base.alpha_composite(_radial_glow(
         width, height,
@@ -297,7 +267,7 @@ def _procedural_base(
         _hue_color(secondary_hue, 0.62, 0.30),
         0.9,
     ))
-    # Cool violet counterweight low-centre for depth.
+    # Cool violet counterweight, low-centre.
     base.alpha_composite(_radial_glow(
         width, height,
         (width * (0.35 + rng.random() * 0.3), height * (0.95 + rng.random() * 0.2)),
@@ -317,8 +287,7 @@ def _ellipsize(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> st
 
 
 def _bake_names(base: Image.Image, names: Sequence[str]) -> None:
-    """Up to three category rows in the lower-left: colour dot + tinted bold
-    name with a soft shadow. The top-left stays clear for the client title."""
+    """Up to three category rows in the lower-left: colour dot + tinted name."""
     width, height = base.size
     font = _load_font(max(18, round(height * 0.062)))
     row_h = round(height * 0.105)
@@ -356,9 +325,8 @@ def _bake_names(base: Image.Image, names: Sequence[str]) -> None:
 
 
 def _scrims(base: Image.Image, *, floor_alpha: int = 70) -> None:
-    """Legibility stack for the backdrop: flat floor, title gradient from the
-    top-left, bottom scrim — mirrors what the client used to draw. Applied
-    *before* cover tiles so they stay bright against the darkened ground."""
+    """Flat floor + directional gradients. Applied before the tiles so they
+    stay bright against the darkened ground."""
     width, height = base.size
     if floor_alpha:
         base.alpha_composite(Image.new("RGBA", base.size, (0, 0, 0, floor_alpha)))
@@ -380,12 +348,8 @@ def render_catalog_art(
     width: int = CANVAS_W,
     height: int = CANVAS_H,
 ) -> Image.Image:
-    """Render one card background.
-
-    ``covers`` non-empty -> cover collage variant (names ignored);
-    otherwise the textual/procedural variant with up to three ``names``
-    baked in (or none, for a plain procedural backdrop).
-    """
+    """Render one card background. Covers present -> collage (names ignored);
+    else the textual variant with up to three ``names`` baked in."""
     rng = _rng(seed)
 
     if covers:
@@ -403,16 +367,12 @@ def render_catalog_art(
                 _radial_glow(width, height, center, radius, color, 0.45)
             )
         _rings_and_dots(base, rng)
-        # Darken the ground first; the tiles pasted on top keep full
-        # brightness, which is where the contrast comes from.
         _scrims(base)
 
-        # Cover tiles cascade toward the lower-right, largest in front (drawn
-        # last). Pushed right of the text zone and dropped below the title band
-        # so the top-left stays clear; the leftmost tile's edge still tucks
-        # under the text scrim, reading as shadow rather than a collision.
+        # Tiles cascade to the lower-right, largest in front (drawn last), clear
+        # of the top-left text zone.
         slots = [
-            (0.56, 0.66, 0.585),  # (tile side factor of H, cx/W, cy/H) front
+            (0.56, 0.66, 0.585),  # (tile side / H, cx / W, cy / H), front
             (0.45, 0.83, 0.49),
             (0.375, 0.935, 0.65),
         ]
@@ -426,8 +386,7 @@ def render_catalog_art(
                 base, tile, (round(width * cx_f), round(height * cy_f)), angle
             )
 
-        # Text panel: applied above the tiles so the title/description zone is
-        # reliably dark, but confined to the left so the covers stay vivid.
+        # Above the tiles, so the text zone is dark even over a tile edge.
         base.alpha_composite(_text_scrim(width, height))
         base.alpha_composite(_vignette(width, height, 0.20))
         out = base.convert("RGB")
@@ -455,8 +414,7 @@ def encode_jpeg(image: Image.Image, quality: int = 85) -> bytes:
 def content_fingerprint(
     cover_bytes: Sequence[bytes], names: Sequence[str], seed: str
 ) -> str:
-    """Stable identity of a card's rendered content: style version + variant
-    inputs. Unchanged fingerprint -> the cached file is still current."""
+    """Content identity (style version + inputs); unchanged -> cache is current."""
     hasher = hashlib.sha1()
     hasher.update(f"style:{STYLE_VERSION}".encode())
     hasher.update(f"seed:{seed}".encode())

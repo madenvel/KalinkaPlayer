@@ -1,26 +1,12 @@
 """Server-generated background art for catalog cards.
 
-Input modules rarely provide a representative image for their catalog
-sections ("My Albums", "Popular tracks", "Playlists by category"), so the
-client used to fan out per-card preview requests and compose a background
-itself. This service moves that composition server-side:
-
-- ``decorate()`` runs inline on every ``/browse`` response. It is pure
-  lookup — for each catalog item without a module-provided image it either
-  fills in the URL of already-generated art or leaves the image empty and
-  enqueues background generation. The browse response is never delayed.
-- A single worker task drains the queue: it browses the catalog's first
-  page, pulls up to three covers (or category names when the children are
-  catalogs/text-only), renders via :mod:`catalog_art_render`, and writes
-  the JPEG to ``<prefix>/var/cache/kalinka/catalog_art/``.
-- File names embed a content fingerprint, so the URL changes exactly when
-  the rendered content changes; clients cache by URL and re-fetch only
-  then. Serving happens via ``GET /catalog/art/{file}`` with immutable
-  cache headers.
-
-Re-generation is cheap-by-default: every ``REFRESH_SECONDS`` the worker
-re-fetches the inputs and re-renders only when the fingerprint moved
-(covers changed, category list changed, ``STYLE_VERSION`` bumped).
+``decorate()`` runs inline on every ``/browse`` response: for each imageless
+catalog item it fills in the URL of ready art or enqueues generation, never
+blocking. A single worker drains the queue — browsing the catalog's first
+page, rendering via :mod:`catalog_art_render`, and writing the JPEG under
+``<prefix>/var/cache/kalinka/catalog_art/``. File names embed a content
+fingerprint, so a card's URL changes only when its content does; the worker
+re-checks every ``REFRESH_SECONDS`` but re-renders only on a fingerprint move.
 """
 
 from __future__ import annotations
@@ -65,11 +51,8 @@ ART_URL_PREFIX = "/catalog/art"
 REFRESH_SECONDS = 24 * 3600
 #: After a failed attempt (module down, remote cache warming) retry sooner.
 FAIL_RETRY_SECONDS = 10 * 60
-#: One upstream page per card; matches the old client preview fetch so the
-#: modules' own caches don't fragment by limit.
-FETCH_LIMIT = 8
+FETCH_LIMIT = 8  # one upstream page per card
 MAX_COVERS = 3
-#: Refuse absurd cover downloads (remote catalogs serve ~100 KB images).
 MAX_COVER_BYTES = 8 * 1024 * 1024
 
 _FILE_RE = re.compile(r"^[0-9a-f]{16}-[0-9a-f]{8}\.jpg$")
@@ -140,8 +123,7 @@ class CatalogArtService:
             raw = json.loads(self._index_path.read_text())
             self._entries = dict(raw.get("entries", {}))
             if raw.get("style_version") != STYLE_VERSION:
-                # New look: keep serving the old files, but re-render every
-                # card at the first opportunity.
+                # New look: re-render every card at the next browse.
                 for entry in self._entries.values():
                     entry["next_check_at"] = 0.0
         except FileNotFoundError:
@@ -149,8 +131,7 @@ class CatalogArtService:
         except (OSError, ValueError) as exc:
             logger.warning("Catalog art index unreadable, starting clean: %s", exc)
             self._entries = {}
-        # Drop index entries whose file vanished, and stray files no entry
-        # references (crashed writes, superseded styles).
+        # Drop entries whose file vanished and files no entry references.
         referenced = set()
         for cat_id, entry in list(self._entries.items()):
             name = entry.get("file")
