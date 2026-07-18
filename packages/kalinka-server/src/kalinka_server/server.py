@@ -52,6 +52,7 @@ from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
 from .multisearch import calculate_fuzzy_score
+from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
     write_pending_installs,
@@ -1224,5 +1225,14 @@ async def create_app(
         await handle_device_websocket_connection(
             websocket, player_context.ext_device_eventbus, device
         )
+
+    # Browser player (optional kalinka-web package). Mounted last so every API
+    # route above wins; check_dir=False resolves per request, so installing the
+    # bundle after startup works without a server restart.
+    app.mount(
+        "/",
+        WebUiStaticFiles(directory=paths.web_ui_dir(), html=True, check_dir=False),
+        name="web-ui",
+    )
 
     return app

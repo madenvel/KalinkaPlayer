@@ -56,6 +56,17 @@ no effect.
 > a clean tree**. Between tags you'll get dev versions like `0.2.1.dev3+g<sha>.dYYYYMMDD`,
 > which is expected for development builds but not for a release.
 
+### The browser UI package (kalinka-web)
+
+The browser player is released independently from the
+[KalinkaAI repo](https://github.com/madenvel/KalinkaAI/releases) (versioned by
+the app, not by `kalinka-v*`); the server serves its bundle from
+`/usr/share/kalinka-web`. It is **not** attached to server releases —
+`install-release.sh` fetches the latest `kalinka-web_*_all.deb` straight from
+the app repo at install time, so the two release cadences are decoupled and a
+web-UI update ships to users on their next `install-release.sh` run without a
+server release. Nothing to do here when cutting a server release.
+
 ---
 
 ## Data releases (models, indexes) — never let them become "latest"

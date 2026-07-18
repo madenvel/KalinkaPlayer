@@ -8,15 +8,23 @@
 # architecture (arm64 on a Raspberry Pi, amd64 on a PC) and installs all the
 # arch-independent plugin + SDK packages alongside it.
 #
+# The browser player (kalinka-web) is released separately from the app repo;
+# its latest arch-independent package is fetched and installed too, so the
+# server can serve the player UI at its root URL. This is best-effort — the
+# server runs fine without it (and shows an install page), so a lookup failure
+# only warns.
+#
 # Usage:
 #   ./install-release.sh                 # install the latest kalinka-v* release
 #   ./install-release.sh 3.2.0           # install a specific version
 #   ./install-release.sh kalinka-v3.2.0  # same, full tag form
 #
 # Env:
-#   KALINKA_REPO   owner/repo to pull releases from (default: madenvel/KalinkaPlayer)
-#   GITHUB_TOKEN   optional, only to avoid the 60-req/hr anonymous API limit
-#   NO_APT_UPDATE  set to 1 to skip `apt-get update` before installing
+#   KALINKA_REPO     owner/repo to pull the server release from (default: madenvel/KalinkaPlayer)
+#   KALINKA_WEB_REPO owner/repo for the kalinka-web package (default: madenvel/KalinkaAI)
+#   KALINKA_WEB      set to 0 to skip installing the browser player
+#   GITHUB_TOKEN     optional, only to avoid the 60-req/hr anonymous API limit
+#   NO_APT_UPDATE    set to 1 to skip `apt-get update` before installing
 #
 # The download runs as your user; only the install step uses sudo. Running the
 # whole script under sudo is fine too.
@@ -89,8 +97,23 @@ fi
 # fed on stdin without colliding with the program source.
 TMPDIR_DL=""
 PARSER="$(mktemp --suffix=.py)"
-cleanup() { rm -rf "$PARSER" ${TMPDIR_DL:+"$TMPDIR_DL"}; }
+WEB_PARSER="$(mktemp --suffix=.py)"
+cleanup() { rm -rf "$PARSER" "$WEB_PARSER" ${TMPDIR_DL:+"$TMPDIR_DL"}; }
 trap cleanup EXIT
+
+# Picks the newest non-draft/prerelease's kalinka-web_*_all.deb asset URL, if any.
+cat > "$WEB_PARSER" <<'PY'
+import sys, json
+data = json.load(sys.stdin)
+for r in (data if isinstance(data, list) else [data]):
+    if r.get("draft") or r.get("prerelease"):
+        continue
+    for a in r.get("assets", []):
+        name = a.get("name", "")
+        if name.startswith("kalinka-web_") and name.endswith("_all.deb"):
+            print(a["browser_download_url"])
+            sys.exit(0)
+PY
 cat > "$PARSER" <<'PY'
 import sys, json
 arch = sys.argv[1]
@@ -125,6 +148,21 @@ parsed="$(printf '%s' "$json" | python3 "$PARSER" "$ARCH")" \
 TAG="$(printf '%s\n' "$parsed" | sed -n '1p')"
 mapfile -t URLS < <(printf '%s\n' "$parsed" | sed '1d')
 [ "${#URLS[@]}" -gt 0 ] || die "no installable .deb assets found for $TAG ($ARCH)"
+
+# --- resolve the browser player (kalinka-web) from the app repo ----------------
+if [ "${KALINKA_WEB:-1}" != "0" ]; then
+  WEB_REPO="${KALINKA_WEB_REPO:-madenvel/KalinkaAI}"
+  echo ">> Looking up the latest kalinka-web package in $WEB_REPO ..."
+  if web_json="$(fetch "https://api.github.com/repos/${WEB_REPO}/releases?per_page=30")" \
+     && web_url="$(printf '%s' "$web_json" | python3 "$WEB_PARSER")" \
+     && [ -n "$web_url" ]; then
+    URLS+=("$web_url")
+    echo "   found ${web_url##*/}"
+  else
+    echo ">> note: no kalinka-web package found in $WEB_REPO — installing without the" >&2
+    echo "   browser player (set KALINKA_WEB=0 to silence, or install it later)." >&2
+  fi
+fi
 
 echo ">> Release: $TAG   architecture: $ARCH   packages: ${#URLS[@]}"
 
@@ -163,7 +201,7 @@ echo ">> Installed:"
 if have dpkg-query; then
   for pkg in kalinka-server kalinka-plugin-sdk kalinka-plugin-localfiles \
              kalinka-plugin-musiccast kalinka-plugin-jamendo \
-             kalinka-plugin-dummydevice; do
+             kalinka-plugin-dummydevice kalinka-web; do
     dpkg-query -W -f='   ${Package} ${Version}\n' "$pkg" 2>/dev/null || true
   done
 fi
