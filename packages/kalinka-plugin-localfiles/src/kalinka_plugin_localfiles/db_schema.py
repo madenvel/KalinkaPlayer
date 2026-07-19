@@ -184,6 +184,56 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # Per local-album-cluster grouping metadata, keyed 1:1 to an albums
+        # row. The folders a cluster occupies are derived from member tracks;
+        # primary_folder is the dominant one (display/blocking only).
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS album_cluster (
+                album_id       TEXT PRIMARY KEY,
+                primary_folder TEXT NOT NULL,
+                grouping_conf  REAL NOT NULL DEFAULT 1.0,
+                grouping_basis TEXT,
+                kind           TEXT,
+                generation     INTEGER NOT NULL DEFAULT 0,
+                needs_review   INTEGER NOT NULL DEFAULT 0,
+                review_reason  TEXT
+            )
+            """
+        )
+
+        # Durable user grouping decisions the reconciler treats as hard
+        # constraints (a relationship, not a metadata field).
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS membership_constraint (
+                id               TEXT PRIMARY KEY,
+                kind             TEXT NOT NULL,
+                track_id         TEXT NOT NULL,
+                album_id         TEXT,
+                related_track_id TEXT,
+                created_at       INTEGER NOT NULL
+            )
+            """
+        )
+
+        # Redirects a replaced id (after a cluster split/merge or a track-move)
+        # to its current one, so artwork caches, playlists and bookmarks keep
+        # resolving. Chains are flattened on write, so resolution is one hop.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entity_id_alias (
+                old_id      TEXT PRIMARY KEY,
+                current_id  TEXT NOT NULL,
+                entity_type TEXT NOT NULL
+            )
+            """
+        )
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entity_id_alias_current "
+            "ON entity_id_alias(current_id)"
+        )
+
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS playlists (
