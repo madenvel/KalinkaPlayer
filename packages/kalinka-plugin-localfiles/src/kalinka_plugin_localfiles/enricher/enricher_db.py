@@ -47,14 +47,10 @@ class AsyncEnricherDb:
             yield conn
 
     async def save_fingerprint(self, track_id: str, fingerprint: str) -> None:
-        """Persist a computed chromaprint into track_evidence.
-
-        fpcalc is expensive (up to a 30 s timeout) and today the fingerprint
-        is recomputed on every AcoustID attempt. Storing it lets a re-attempt
-        reuse it and gives duplicate/move detection a signal. Upsert so it
-        works whether or not the indexer's evidence row exists yet, and only
-        touches the fingerprint columns.
-        """
+        """Persist a computed chromaprint (upsert; only the fingerprint
+        columns, and works whether or not the evidence row exists yet).
+        fpcalc is expensive and was recomputed every attempt; storing it lets
+        a retry reuse it and feeds duplicate/move detection."""
         async with self._open() as conn:
             await conn.execute(
                 """

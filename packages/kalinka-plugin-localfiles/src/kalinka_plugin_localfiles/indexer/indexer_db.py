@@ -193,13 +193,9 @@ class AsyncIndexerDb:
         device_id: Optional[str],
         inode: Optional[str],
     ) -> None:
-        """Maintain the stable file-identity row for a processed file.
-
-        ``first_indexed`` is set once, on the file's first appearance, and
-        **never** rewritten — it is the durable add-time (unlike
-        ``last_updated``, which enrichment legitimately bumps). Path, size,
-        mtime and device/inode are refreshed on every pass.
-        """
+        """Maintain the file-identity row. first_indexed is written once and
+        never rewritten (the durable add-time; last_updated is bumped by
+        enrichment). Path/size/mtime/device/inode refresh on every pass."""
         async with self._open() as conn:
             await conn.execute(
                 """
@@ -229,13 +225,10 @@ class AsyncIndexerDb:
     async def upsert_track_evidence(
         self, track_id: str, evidence: Dict[str, Any]
     ) -> None:
-        """Upsert the current-snapshot evidence row for a track.
-
-        JSON-encodes ``raw_tags`` / ``stream_info``. Only the named columns are
-        written, so cue-sheet / fingerprint set by later passes are preserved.
-        ``import_batch`` and ``art_phash`` are kept when a refresh doesn't
-        supply them (a retag without embedded art shouldn't drop the hash).
-        """
+        """Upsert the current-snapshot evidence row (only named columns, so
+        fingerprint/cue set later survive). art_phash/import_batch are kept
+        when a refresh omits them — a retag without art shouldn't drop the
+        hash."""
         raw_tags = evidence.get("raw_tags")
         stream_info = evidence.get("stream_info")
         async with self._open() as conn:

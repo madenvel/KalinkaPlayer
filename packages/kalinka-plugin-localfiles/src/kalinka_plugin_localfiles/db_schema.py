@@ -129,13 +129,9 @@ async def init_db(db_path: str) -> None:
             """
         )
 
-        # Stable per-file identity, independent of path. A rename/move updates
-        # current_path and nothing else, so a track's id survives folder
-        # reorganisation (today's path-derived track id does not). file_id is
-        # the same value as tracks.id; move detection on rescan corroborates
-        # with (device_id, inode) and, later, content_hash/fingerprint before
-        # trusting size+mtime alone. Populated for existing rows by the
-        # backfill below; device/inode fill in on the file's next scan.
+        # Stable per-file identity. current_path is a mutable attribute, so a
+        # rename keeps the id. file_id == tracks.id; first_indexed is never
+        # rewritten. device/inode corroborate move detection later.
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS library_file (
@@ -151,12 +147,9 @@ async def init_db(db_path: str) -> None:
             """
         )
 
-        # Verbatim per-file evidence, kept as a current snapshot (upserted in
-        # place, never versioned). Holds everything the resolver/clusterer may
-        # need but the display tables don't carry: all raw tags (incl.
-        # albumartist and the compilation flag), stream characteristics, an
-        # embedded-art perceptual hash, cue-sheet membership, and a chromaprint
-        # once one is computed. track_id == library_file.file_id == tracks.id.
+        # Verbatim per-file evidence the display tables don't carry (raw tags
+        # incl. albumartist/compilation, stream info, art hash, cue,
+        # chromaprint). Current snapshot: upserted, not versioned.
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS track_evidence (
@@ -387,15 +380,10 @@ async def init_db(db_path: str) -> None:
             )
             logger.info("Added albums.image_generated column")
 
-        # Backfill library_file from existing tracks so every already-indexed
-        # file has a stable identity row immediately (later phases key off it).
-        # tracks.id is currently path-derived, so it doubles as the initial
-        # file_id; current_path/size/mtime come straight across, and
-        # last_updated is the best available first_indexed for legacy rows.
-        # Columns are selected conditionally so a very old tracks table missing
-        # size/mtime/last_updated still backfills (those become NULL / now).
-        # Idempotent: OR IGNORE skips files already present (and any duplicate
-        # current_path, which the UNIQUE constraint would otherwise reject).
+        # Backfill file identity from existing tracks (path-hash id becomes
+        # file_id; last_updated is the best first_indexed for legacy rows).
+        # Columns selected conditionally so a pre-size/mtime tracks table still
+        # migrates. Idempotent via OR IGNORE.
         size_expr = "file_size" if "file_size" in track_cols else "NULL"
         mtime_expr = "modified_time" if "modified_time" in track_cols else "NULL"
         first_expr = (

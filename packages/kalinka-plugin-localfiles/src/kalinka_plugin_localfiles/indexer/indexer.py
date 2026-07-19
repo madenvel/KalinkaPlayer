@@ -518,24 +518,16 @@ class FileIndexer:
         if existing_track is None:
             await self.db_manager.insert_track(track_data)
         else:
-            # Surgical update: overwrite only the indexer-owned columns (present
-            # in track_data). Columns owned by later passes — mbid, match_score,
-            # embeddings, mood — are absent from track_data and so survive,
-            # instead of being dropped by the old INSERT OR REPLACE. enriched is
-            # reset to 0 (track_data), so a changed file is re-enriched, but its
-            # existing embeddings are reused rather than recomputed.
+            # Surgical update, not INSERT OR REPLACE: track_data carries only
+            # indexer-owned columns, so mbid/embeddings/mood survive. enriched
+            # resets to 0, so a changed file re-enriches but reuses embeddings.
             await self.db_manager.update_track(track_id, track_data)
         changes["tracks"] = track_id
 
-        # Maintain stable file identity (first_indexed preserved across
-        # re-reads; path/size/mtime/device/inode refreshed).
         await self.db_manager.upsert_library_file(
             track_id, file_path, file_size, modified_time, device_id, inode
         )
 
-        # Persist verbatim evidence alongside the display row. Kept as a
-        # current snapshot (upserted), so a re-read of a changed file refreshes
-        # it; the art-phash/fingerprint columns are left to later passes.
         art_phash = (
             await asyncio.to_thread(self._art_phash, metadata["album_art"])
             if "album_art" in metadata
@@ -641,10 +633,8 @@ class FileIndexer:
                 apic = id3[tag]
                 metadata["album_art"] = apic.data
                 break
-        # Evidence for the clusterer/resolver (Phase 1+): verbatim text frames
-        # (incl. TPE2 album-artist and TCMP compilation, which the display
-        # tables don't carry) plus stream characteristics. Binary frames like
-        # APIC are skipped.
+        # Verbatim text frames (incl. TPE2 album-artist, TCMP compilation) +
+        # stream info for the clusterer. Binary frames (APIC) skipped.
         metadata["raw_tags"] = {
             key: str(frame)
             for key, frame in id3.items()
@@ -717,9 +707,8 @@ class FileIndexer:
                     break
             else:
                 metadata["album_art"] = pictures[0].data
-        # Evidence for the clusterer/resolver (Phase 1+): every Vorbis comment
-        # verbatim (incl. albumartist and compilation) plus stream info. Vorbis
-        # keys can repeat, so each maps to a list of values.
+        # Every Vorbis comment verbatim (incl. albumartist/compilation) +
+        # stream info. Keys can repeat, so values are lists.
         metadata["raw_tags"] = {key: list(flac[key]) for key in flac.keys()}
         metadata["stream_info"] = {
             "sample_rate": getattr(flac.info, "sample_rate", None),
@@ -732,12 +721,10 @@ class FileIndexer:
 
     @staticmethod
     def _art_phash(image_data: bytes) -> Optional[str]:
-        """64-bit dHash of embedded art as 16 hex chars, or None on failure.
+        """64-bit row-difference hash (dHash) of embedded art, 16 hex or None.
 
-        Row-wise difference hash: adjacent-pixel brightness comparisons on a
-        9x8 grayscale downscale. Cheap (the image is already decoded here) and
-        robust to re-encoding/resizing, so two files carrying the same cover
-        hash close in Hamming distance — the Phase-1 art-group signal.
+        Adjacent-pixel brightness on a 9x8 grayscale downscale. Same cover ->
+        small Hamming distance; robust to re-encoding/resize.
         """
         try:
             img = Image.open(io.BytesIO(image_data)).convert("L").resize(

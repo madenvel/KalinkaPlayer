@@ -631,9 +631,8 @@ class AcoustIdPlugin(EnricherPlugin):
                 )
                 return None
 
-            # Persist the (expensive) chromaprint so a later attempt reuses it
-            # and duplicate/move detection has a signal. Best-effort: a write
-            # failure must not abort the lookup that follows.
+            # Persist the (expensive) chromaprint for reuse. Best-effort: a
+            # write failure must not abort the lookup.
             try:
                 await self.db_manager.save_fingerprint(track["id"], fingerprint)
             except Exception as e:
