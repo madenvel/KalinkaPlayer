@@ -114,6 +114,11 @@ def test_plan_generic_dump_is_singles_pool():
     assert c.anchor_artist_id == "unknown_artist"
 
 
+def test_plan_empty_folder():
+    plan = plan_folder("/music/empty", [])
+    assert plan.clusters == [] and not plan.split
+
+
 def test_plan_two_albums_split():
     a = [(_track(f"a{i}", artist_id="one", track_number=i),
           _ev(album="Alpha", albumartist="one", art="0000000000000000"))

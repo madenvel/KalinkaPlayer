@@ -94,10 +94,13 @@ def build_features(track: Dict, evidence: Optional[Dict]) -> TrackFeatures:
 @dataclass
 class ClusterPlan:
     track_ids: List[str]
-    kind: str                       # album | compilation | singles_pool
+    kind: str                       # album | compilation | singles_pool | multi_disc
     title: str                      # "" for singles_pool (stays unknown_album)
     anchor_artist_id: str
     grouping_basis: Dict[str, object] = field(default_factory=dict)
+    folder: str = ""
+    disc_numbers: frozenset = field(default_factory=frozenset)
+    albumartist_key: Optional[str] = None
 
 
 @dataclass
@@ -114,6 +117,8 @@ def _dominant(values) -> Optional[str]:
 
 def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderPlan:
     """Plan the clusters for one folder from (track_row, evidence_row) pairs."""
+    if not rows:
+        return FolderPlan(folder=folder, clusters=[], split=False)
     features = [build_features(t, e) for t, e in rows]
     display_by_id = {
         t["id"]: (t, _album_display(_loads((e or {}).get("raw_tags"))))
@@ -130,6 +135,8 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
             for t in member_tracks
             if t.get("artist_id") and t.get("artist_id") != "unknown_artist"
         }
+        discs = frozenset(f.disc_number for f in group if f.disc_number)
+        aa_key = _dominant(f.albumartist_key for f in group)
 
         if is_va_folder(len(real_artists), len(ids)):
             comp = compilation_title(folder)
@@ -137,12 +144,12 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
                 # A generic dump — leave tracks loose (unknown_album), no album.
                 clusters.append(
                     ClusterPlan(ids, "singles_pool", "", "unknown_artist",
-                                {"reason": "generic_dump"})
+                                {"reason": "generic_dump"}, folder, discs, aa_key)
                 )
                 continue
             clusters.append(
                 ClusterPlan(ids, "compilation", comp, VARIOUS_ARTISTS_ID,
-                            {"reason": "va_compilation"})
+                            {"reason": "va_compilation"}, folder, discs, aa_key)
             )
             continue
 
@@ -152,7 +159,8 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         title = _dominant(titles) or os.path.basename(folder.rstrip("/")) or ""
         anchor = _dominant(t.get("artist_id") for t in member_tracks) or "unknown_artist"
         clusters.append(
-            ClusterPlan(ids, "album", title, anchor, dict(result.basis))
+            ClusterPlan(ids, "album", title, anchor, dict(result.basis),
+                        folder, discs, aa_key)
         )
 
     return FolderPlan(folder=folder, clusters=clusters, split=result.split)
