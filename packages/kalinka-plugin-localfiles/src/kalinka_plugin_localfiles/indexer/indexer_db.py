@@ -184,6 +184,48 @@ class AsyncIndexerDb:
             await cursor.execute(query, values)
             await conn.commit()
 
+    async def upsert_library_file(
+        self,
+        file_id: str,
+        current_path: str,
+        size_bytes: int,
+        modified_at: int,
+        device_id: Optional[str],
+        inode: Optional[str],
+    ) -> None:
+        """Maintain the stable file-identity row for a processed file.
+
+        ``first_indexed`` is set once, on the file's first appearance, and
+        **never** rewritten — it is the durable add-time (unlike
+        ``last_updated``, which enrichment legitimately bumps). Path, size,
+        mtime and device/inode are refreshed on every pass.
+        """
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO library_file
+                    (file_id, current_path, size_bytes, modified_at,
+                     device_id, inode, first_indexed)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    current_path = excluded.current_path,
+                    size_bytes   = excluded.size_bytes,
+                    modified_at  = excluded.modified_at,
+                    device_id    = excluded.device_id,
+                    inode        = excluded.inode
+                """,
+                (
+                    file_id,
+                    current_path,
+                    size_bytes,
+                    modified_at,
+                    device_id,
+                    inode,
+                    int(time.time()),
+                ),
+            )
+            await conn.commit()
+
     async def upsert_track_evidence(
         self, track_id: str, evidence: Dict[str, Any]
     ) -> None:

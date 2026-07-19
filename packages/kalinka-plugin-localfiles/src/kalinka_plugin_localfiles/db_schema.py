@@ -392,14 +392,20 @@ async def init_db(db_path: str) -> None:
         # tracks.id is currently path-derived, so it doubles as the initial
         # file_id; current_path/size/mtime come straight across, and
         # last_updated is the best available first_indexed for legacy rows.
+        # Columns are selected conditionally so a very old tracks table missing
+        # size/mtime/last_updated still backfills (those become NULL / now).
         # Idempotent: OR IGNORE skips files already present (and any duplicate
         # current_path, which the UNIQUE constraint would otherwise reject).
+        size_expr = "file_size" if "file_size" in track_cols else "NULL"
+        mtime_expr = "modified_time" if "modified_time" in track_cols else "NULL"
+        first_expr = (
+            "COALESCE(last_updated, ?)" if "last_updated" in track_cols else "?"
+        )
         await cursor.execute(
-            """
+            f"""
             INSERT OR IGNORE INTO library_file
                 (file_id, current_path, size_bytes, modified_at, first_indexed)
-            SELECT id, file_path, file_size, modified_time,
-                   COALESCE(last_updated, ?)
+            SELECT id, file_path, {size_expr}, {mtime_expr}, {first_expr}
             FROM tracks
             """,
             (current_time,),

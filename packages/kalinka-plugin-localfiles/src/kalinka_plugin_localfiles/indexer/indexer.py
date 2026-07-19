@@ -396,6 +396,8 @@ class FileIndexer:
 
         file_size = stat.st_size
         modified_time = int(stat.st_mtime)
+        device_id = str(stat.st_dev)
+        inode = str(stat.st_ino)
         # Nanosecond mtime for the failure-cache key. With second resolution a
         # broken file that gets fixed within the same integer second and keeps
         # the same size would collide on the key and never be retried. The
@@ -513,8 +515,23 @@ class FileIndexer:
             "enriched": 0,
             "last_updated": int(time.time()),
         }
-        await self.db_manager.insert_track(track_data)
+        if existing_track is None:
+            await self.db_manager.insert_track(track_data)
+        else:
+            # Surgical update: overwrite only the indexer-owned columns (present
+            # in track_data). Columns owned by later passes — mbid, match_score,
+            # embeddings, mood — are absent from track_data and so survive,
+            # instead of being dropped by the old INSERT OR REPLACE. enriched is
+            # reset to 0 (track_data), so a changed file is re-enriched, but its
+            # existing embeddings are reused rather than recomputed.
+            await self.db_manager.update_track(track_id, track_data)
         changes["tracks"] = track_id
+
+        # Maintain stable file identity (first_indexed preserved across
+        # re-reads; path/size/mtime/device/inode refreshed).
+        await self.db_manager.upsert_library_file(
+            track_id, file_path, file_size, modified_time, device_id, inode
+        )
 
         # Persist verbatim evidence alongside the display row. Kept as a
         # current snapshot (upserted), so a re-read of a changed file refreshes
