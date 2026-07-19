@@ -137,6 +137,10 @@ def pair_signal_score(
     b_seq = sequence_analysis([t.track_number for t in b])
     joint_seq = sequence_analysis([t.track_number for t in a + b])
 
+    # "Tags differ" means both are present and distinct — a tagged-vs-untagged
+    # pair is not a tag conflict.
+    tags_differ = bool(a_album) and bool(b_album) and a_album != b_album
+
     if a_cue and a_cue == b_cue:
         fire("same_cue_sheet")
 
@@ -155,11 +159,10 @@ def pair_signal_score(
 
     if a_album and a_album == b_album:
         fire("same_album_tag")
-    elif a_album and b_album and a_album != b_album:
+    elif tags_differ and a_seq.is_plausible and b_seq.is_plausible:
         # Two distinct album tags that each stand on their own complete
         # sequence — the "two albums in one folder" signature.
-        if a_seq.is_plausible and b_seq.is_plausible:
-            fire("different_album_tags_both_sequences")
+        fire("different_album_tags_both_sequences")
 
     if a_aa and a_aa == b_aa:
         fire("same_albumartist")
@@ -176,13 +179,13 @@ def pair_signal_score(
         and a_discs.isdisjoint(b_discs)
         and a_seq.is_plausible
         and b_seq.is_plausible
-        and a_album != b_album
+        and tags_differ
     ):
         fire("disjoint_disc_sequences")
 
     if a_stream and a_stream == b_stream:
         fire("same_stream")
-    elif a_stream and b_stream and a_stream != b_stream and a_album != b_album:
+    elif a_stream and b_stream and a_stream != b_stream and tags_differ:
         fire("stream_mismatch_with_tag_split")
 
     if a_batch and a_batch == b_batch:
