@@ -536,11 +536,17 @@ class FileIndexer:
         # Persist verbatim evidence alongside the display row. Kept as a
         # current snapshot (upserted), so a re-read of a changed file refreshes
         # it; the art-phash/fingerprint columns are left to later passes.
+        art_phash = (
+            await asyncio.to_thread(self._art_phash, metadata["album_art"])
+            if "album_art" in metadata
+            else None
+        )
         await self.db_manager.upsert_track_evidence(
             track_id,
             {
                 "raw_tags": metadata.get("raw_tags"),
                 "stream_info": metadata.get("stream_info"),
+                "art_phash": art_phash,
             },
         )
 
@@ -723,6 +729,31 @@ class FileIndexer:
             "encoder": flac["encoder"][0] if "encoder" in flac else None,
         }
         return metadata
+
+    @staticmethod
+    def _art_phash(image_data: bytes) -> Optional[str]:
+        """64-bit dHash of embedded art as 16 hex chars, or None on failure.
+
+        Row-wise difference hash: adjacent-pixel brightness comparisons on a
+        9x8 grayscale downscale. Cheap (the image is already decoded here) and
+        robust to re-encoding/resizing, so two files carrying the same cover
+        hash close in Hamming distance — the Phase-1 art-group signal.
+        """
+        try:
+            img = Image.open(io.BytesIO(image_data)).convert("L").resize(
+                (9, 8), Image.Resampling.LANCZOS
+            )
+            px = img.tobytes()  # 72 bytes, one grayscale value per pixel
+            bits = 0
+            for row in range(8):
+                for col in range(8):
+                    left = px[row * 9 + col]
+                    right = px[row * 9 + col + 1]
+                    bits = (bits << 1) | (1 if left > right else 0)
+            return f"{bits:016x}"
+        except Exception as e:
+            logger.debug("art phash failed: %s", e)
+            return None
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
         """Save artwork images in different sizes"""

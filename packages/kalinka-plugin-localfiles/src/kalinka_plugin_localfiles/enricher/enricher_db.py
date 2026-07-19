@@ -46,6 +46,28 @@ class AsyncEnricherDb:
             await conn.execute("PRAGMA busy_timeout=5000")
             yield conn
 
+    async def save_fingerprint(self, track_id: str, fingerprint: str) -> None:
+        """Persist a computed chromaprint into track_evidence.
+
+        fpcalc is expensive (up to a 30 s timeout) and today the fingerprint
+        is recomputed on every AcoustID attempt. Storing it lets a re-attempt
+        reuse it and gives duplicate/move detection a signal. Upsert so it
+        works whether or not the indexer's evidence row exists yet, and only
+        touches the fingerprint columns.
+        """
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO track_evidence (track_id, fingerprint, fp_computed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(track_id) DO UPDATE SET
+                    fingerprint    = excluded.fingerprint,
+                    fp_computed_at = excluded.fp_computed_at
+                """,
+                (track_id, fingerprint, int(time.time())),
+            )
+            await conn.commit()
+
     async def get_track_by_id(self, track_id: str) -> Optional[Dict]:
         """Get track information by ID"""
         async with self._open() as conn:

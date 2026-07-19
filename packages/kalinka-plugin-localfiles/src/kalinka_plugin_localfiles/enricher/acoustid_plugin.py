@@ -631,6 +631,14 @@ class AcoustIdPlugin(EnricherPlugin):
                 )
                 return None
 
+            # Persist the (expensive) chromaprint so a later attempt reuses it
+            # and duplicate/move detection has a signal. Best-effort: a write
+            # failure must not abort the lookup that follows.
+            try:
+                await self.db_manager.save_fingerprint(track["id"], fingerprint)
+            except Exception as e:
+                logger.debug("Could not persist fingerprint: %s", e)
+
             # Look up fingerprint
             results = await asyncio.to_thread(
                 self._lookup_fingerprint, fingerprint, duration

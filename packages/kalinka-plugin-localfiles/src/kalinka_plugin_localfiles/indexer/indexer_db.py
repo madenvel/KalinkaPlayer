@@ -232,8 +232,9 @@ class AsyncIndexerDb:
         """Upsert the current-snapshot evidence row for a track.
 
         JSON-encodes ``raw_tags`` / ``stream_info``. Only the named columns are
-        written, so art-phash / cue-sheet / fingerprint set by later passes are
-        preserved. ``import_batch`` is kept if a refresh doesn't supply one.
+        written, so cue-sheet / fingerprint set by later passes are preserved.
+        ``import_batch`` and ``art_phash`` are kept when a refresh doesn't
+        supply them (a retag without embedded art shouldn't drop the hash).
         """
         raw_tags = evidence.get("raw_tags")
         stream_info = evidence.get("stream_info")
@@ -241,11 +242,14 @@ class AsyncIndexerDb:
             await conn.execute(
                 """
                 INSERT INTO track_evidence
-                    (track_id, raw_tags, stream_info, import_batch, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (track_id, raw_tags, stream_info, art_phash,
+                     import_batch, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(track_id) DO UPDATE SET
                     raw_tags     = excluded.raw_tags,
                     stream_info  = excluded.stream_info,
+                    art_phash    = COALESCE(excluded.art_phash,
+                                            track_evidence.art_phash),
                     import_batch = COALESCE(excluded.import_batch,
                                             track_evidence.import_batch),
                     updated_at   = excluded.updated_at
@@ -254,6 +258,7 @@ class AsyncIndexerDb:
                     track_id,
                     json.dumps(raw_tags) if raw_tags is not None else None,
                     json.dumps(stream_info) if stream_info is not None else None,
+                    evidence.get("art_phash"),
                     evidence.get("import_batch"),
                     int(time.time()),
                 ),
