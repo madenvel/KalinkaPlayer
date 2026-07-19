@@ -184,6 +184,40 @@ class AsyncIndexerDb:
             await cursor.execute(query, values)
             await conn.commit()
 
+    async def upsert_track_evidence(
+        self, track_id: str, evidence: Dict[str, Any]
+    ) -> None:
+        """Upsert the current-snapshot evidence row for a track.
+
+        JSON-encodes ``raw_tags`` / ``stream_info``. Only the named columns are
+        written, so art-phash / cue-sheet / fingerprint set by later passes are
+        preserved. ``import_batch`` is kept if a refresh doesn't supply one.
+        """
+        raw_tags = evidence.get("raw_tags")
+        stream_info = evidence.get("stream_info")
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO track_evidence
+                    (track_id, raw_tags, stream_info, import_batch, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(track_id) DO UPDATE SET
+                    raw_tags     = excluded.raw_tags,
+                    stream_info  = excluded.stream_info,
+                    import_batch = COALESCE(excluded.import_batch,
+                                            track_evidence.import_batch),
+                    updated_at   = excluded.updated_at
+                """,
+                (
+                    track_id,
+                    json.dumps(raw_tags) if raw_tags is not None else None,
+                    json.dumps(stream_info) if stream_info is not None else None,
+                    evidence.get("import_batch"),
+                    int(time.time()),
+                ),
+            )
+            await conn.commit()
+
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration)"""
         async with self._open() as conn:

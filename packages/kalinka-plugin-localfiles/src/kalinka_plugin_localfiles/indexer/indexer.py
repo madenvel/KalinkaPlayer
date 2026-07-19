@@ -516,6 +516,17 @@ class FileIndexer:
         await self.db_manager.insert_track(track_data)
         changes["tracks"] = track_id
 
+        # Persist verbatim evidence alongside the display row. Kept as a
+        # current snapshot (upserted), so a re-read of a changed file refreshes
+        # it; the art-phash/fingerprint columns are left to later passes.
+        await self.db_manager.upsert_track_evidence(
+            track_id,
+            {
+                "raw_tags": metadata.get("raw_tags"),
+                "stream_info": metadata.get("stream_info"),
+            },
+        )
+
         await self.db_manager.update_album_stats(album_id)
         # Successfully indexed — drop any stale failure record (e.g. an
         # earlier partial upload that has since completed).
@@ -607,6 +618,24 @@ class FileIndexer:
                 apic = id3[tag]
                 metadata["album_art"] = apic.data
                 break
+        # Evidence for the clusterer/resolver (Phase 1+): verbatim text frames
+        # (incl. TPE2 album-artist and TCMP compilation, which the display
+        # tables don't carry) plus stream characteristics. Binary frames like
+        # APIC are skipped.
+        metadata["raw_tags"] = {
+            key: str(frame)
+            for key, frame in id3.items()
+            if not key.startswith("APIC")
+        }
+        metadata["stream_info"] = {
+            "sample_rate": getattr(mp3.info, "sample_rate", None),
+            "channels": getattr(mp3.info, "channels", None),
+            "bitrate": getattr(mp3.info, "bitrate", None),
+            "codec": "mp3",
+            "encoder": str(id3["TSSE"])
+            if "TSSE" in id3
+            else (str(id3["TENC"]) if "TENC" in id3 else None),
+        }
         return metadata
 
     def _extract_flac_metadata(self, file_path: str, metadata: Dict) -> Dict:
@@ -665,6 +694,17 @@ class FileIndexer:
                     break
             else:
                 metadata["album_art"] = pictures[0].data
+        # Evidence for the clusterer/resolver (Phase 1+): every Vorbis comment
+        # verbatim (incl. albumartist and compilation) plus stream info. Vorbis
+        # keys can repeat, so each maps to a list of values.
+        metadata["raw_tags"] = {key: list(flac[key]) for key in flac.keys()}
+        metadata["stream_info"] = {
+            "sample_rate": getattr(flac.info, "sample_rate", None),
+            "bits_per_sample": getattr(flac.info, "bits_per_sample", None),
+            "channels": getattr(flac.info, "channels", None),
+            "codec": "flac",
+            "encoder": flac["encoder"][0] if "encoder" in flac else None,
+        }
         return metadata
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
