@@ -129,6 +129,50 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # Stable per-file identity, independent of path. A rename/move updates
+        # current_path and nothing else, so a track's id survives folder
+        # reorganisation (today's path-derived track id does not). file_id is
+        # the same value as tracks.id; move detection on rescan corroborates
+        # with (device_id, inode) and, later, content_hash/fingerprint before
+        # trusting size+mtime alone. Populated for existing rows by the
+        # backfill below; device/inode fill in on the file's next scan.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_file (
+                file_id       TEXT PRIMARY KEY,
+                current_path  TEXT NOT NULL UNIQUE,
+                size_bytes    INTEGER,
+                modified_at   INTEGER,
+                device_id     TEXT,
+                inode         TEXT,
+                content_hash  TEXT,
+                first_indexed INTEGER NOT NULL
+            )
+            """
+        )
+
+        # Verbatim per-file evidence, kept as a current snapshot (upserted in
+        # place, never versioned). Holds everything the resolver/clusterer may
+        # need but the display tables don't carry: all raw tags (incl.
+        # albumartist and the compilation flag), stream characteristics, an
+        # embedded-art perceptual hash, cue-sheet membership, and a chromaprint
+        # once one is computed. track_id == library_file.file_id == tracks.id.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS track_evidence (
+                track_id       TEXT PRIMARY KEY,
+                raw_tags       TEXT,
+                stream_info    TEXT,
+                art_phash      TEXT,
+                cue_sheet      TEXT,
+                fingerprint    TEXT,
+                fp_computed_at INTEGER,
+                import_batch   TEXT,
+                updated_at     INTEGER
+            )
+            """
+        )
+
         # Negative cache for files whose metadata could not be extracted.
         # Keyed by path + (size, mtime) so a still-uploading / partially
         # written file — which changes size or mtime between scans — keeps
@@ -342,6 +386,24 @@ async def init_db(db_path: str) -> None:
                 "ALTER TABLE albums ADD COLUMN image_generated INTEGER DEFAULT 0"
             )
             logger.info("Added albums.image_generated column")
+
+        # Backfill library_file from existing tracks so every already-indexed
+        # file has a stable identity row immediately (later phases key off it).
+        # tracks.id is currently path-derived, so it doubles as the initial
+        # file_id; current_path/size/mtime come straight across, and
+        # last_updated is the best available first_indexed for legacy rows.
+        # Idempotent: OR IGNORE skips files already present (and any duplicate
+        # current_path, which the UNIQUE constraint would otherwise reject).
+        await cursor.execute(
+            """
+            INSERT OR IGNORE INTO library_file
+                (file_id, current_path, size_bytes, modified_at, first_indexed)
+            SELECT id, file_path, file_size, modified_time,
+                   COALESCE(last_updated, ?)
+            FROM tracks
+            """,
+            (current_time,),
+        )
 
         # VA (mood) head migration (after the columns above exist). On a head
         # version change, clear stale mood so the backfill recomputes it with the
