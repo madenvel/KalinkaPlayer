@@ -280,6 +280,29 @@ class AsyncIndexerDb:
             )
             await conn.commit()
 
+    async def get_tracks_with_evidence(self) -> List[Tuple[Dict, Dict]]:
+        """All tracks paired with their track_evidence (empty dict if none),
+        for the clustering pass."""
+        _ev_cols = ("raw_tags", "stream_info", "art_phash", "cue_sheet",
+                    "import_batch")
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                """
+                SELECT t.*, e.raw_tags, e.stream_info, e.art_phash,
+                       e.cue_sheet, e.import_batch
+                FROM tracks t
+                LEFT JOIN track_evidence e ON e.track_id = t.id
+                """
+            )
+            rows = await cur.fetchall()
+        out: List[Tuple[Dict, Dict]] = []
+        for r in rows:
+            d = dict(r)
+            ev = {c: d.pop(c) for c in _ev_cols}
+            out.append((d, ev))
+        return out
+
     async def get_all_tracks(self) -> List[Dict]:
         """Get all tracks in the database"""
         async with self._open() as conn:

@@ -326,6 +326,19 @@ class LocalFilesConfig(ModuleConfig):
         title="Enable file watching",
         json_schema_extra={"help": "Rescan on filesystem changes", **_SIMPLE},
     )
+    folder_first_clustering: bool = Field(
+        default=False,
+        title="Folder-first album grouping",
+        json_schema_extra={
+            "help": (
+                "Group albums from the folder and multiple signals rather than "
+                "one album tag per track, so tag variance and untagged rips no "
+                "longer fragment an album. Re-clusters the library on the next "
+                "scan."
+            ),
+            **_SIMPLE,
+        },
+    )
     quiescence_seconds: int = Field(
         default=5,
         title="Upload quiescence window",

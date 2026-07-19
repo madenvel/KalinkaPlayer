@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import io
+import json
 import time
 import logging
 import asyncio
@@ -183,18 +184,27 @@ class FileIndexer:
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
             )
 
-        # Coalesce V/A folders into compilation albums (or leave generic
-        # dumps loose under unknown_album). Each track keeps its real artist
-        # and still surfaces under it via the orphan-tracks fallback. Runs
-        # after the stale-track cleanup so it doesn't operate on rows about to
-        # be removed, and before notifying the enricher so it sees the result.
-        va_results = await self.orphan_va_folder_tracks()
-        if va_results["folders"]:
-            logger.info(
-                f"V/A coalesce: {va_results['folders']} folder(s), "
-                f"{va_results['tracks']} track(s) re-pointed, "
-                f"{va_results['orphans']} orphan album(s) deleted"
-            )
+        # Group tracks into albums. Folder-first clustering (when enabled)
+        # supersedes the V/A-only coalesce pass — it does V/A folding plus
+        # tag-variance merging, untagged-rip titling and multi-album splits.
+        # Both run after stale-track cleanup and before the enricher nudge.
+        if getattr(self.config, "folder_first_clustering", False):
+            res = await self.recluster()
+            if res.get("reassigned"):
+                logger.info(
+                    "Clustering: %d album(s), %d track(s) re-pointed, "
+                    "%d alias(es), %d orphan album(s) deleted",
+                    res["clusters"], res["reassigned"],
+                    res["aliases"], res["orphans"],
+                )
+        else:
+            va_results = await self.orphan_va_folder_tracks()
+            if va_results["folders"]:
+                logger.info(
+                    f"V/A coalesce: {va_results['folders']} folder(s), "
+                    f"{va_results['tracks']} track(s) re-pointed, "
+                    f"{va_results['orphans']} orphan album(s) deleted"
+                )
 
         # If anything changed and we have an enricher callback, notify it
         if any(changed_items.values()):
@@ -761,6 +771,96 @@ class FileIndexer:
                 f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
             )
             return False
+
+    async def recluster(self) -> Dict[str, int]:
+        """Folder-first album grouping over the whole library.
+
+        Plans each folder (folder-first partition + V/A classification), merges
+        disc-sibling folders, assigns stable album ids (overlap reattach so an
+        unchanged library is a no-op), then applies: album rows, guarded
+        album_id reassignment, album_cluster rows, and id aliases. Replaces the
+        V/A-only pass when folder_first_clustering is on.
+        """
+        from ..clustering.cluster_db import AsyncClusterDb
+        from ..clustering.identity import assign_stable_ids
+        from ..clustering.merge import merge_disc_siblings
+        from ..clustering.planner import plan_folder
+
+        rows = await self.db_manager.get_tracks_with_evidence()
+        if not rows:
+            return {"clusters": 0, "reassigned": 0, "aliases": 0, "orphans": 0}
+
+        by_folder: Dict[str, List] = {}
+        current_album_of: Dict[str, str] = {}
+        for track, ev in rows:
+            folder = album_folder_for_path(track.get("file_path") or "")
+            if not folder:
+                continue
+            by_folder.setdefault(folder, []).append((track, ev))
+            current_album_of[track["id"]] = track.get("album_id") or "unknown_album"
+
+        clusters = []
+        for folder, folder_rows in by_folder.items():
+            clusters.extend(plan_folder(folder, folder_rows).clusters)
+        clusters = merge_disc_siblings(clusters)
+
+        ids, aliases = assign_stable_ids(clusters, current_album_of)
+
+        cluster_db = AsyncClusterDb(self.config)
+        va_seeded = False
+        reassigned = 0
+        affected_albums: Set[str] = set()
+
+        for cluster, album_id in zip(clusters, ids):
+            if cluster.kind != "singles_pool":
+                anchor = cluster.anchor_artist_id
+                if cluster.kind == "compilation" and not va_seeded:
+                    await self._ensure_various_artists()
+                    va_seeded = True
+                existing = await self.db_manager.get_album_by_id(album_id)
+                if existing is None:
+                    await self.db_manager.insert_album(
+                        {
+                            "id": album_id,
+                            "title": cluster.title or "Unknown Album",
+                            "artist_id": anchor,
+                            "enriched": 0,
+                            "last_updated": int(time.time()),
+                        }
+                    )
+                elif existing.get("artist_id") != anchor:
+                    # Fix the anchor (e.g. re-point to Various Artists) without
+                    # clobbering an enriched title / cover.
+                    await self.db_manager.update_album(album_id, {"artist_id": anchor})
+                await cluster_db.upsert_cluster(
+                    album_id,
+                    primary_folder=cluster.folder,
+                    grouping_conf=1.0,
+                    grouping_basis=json.dumps(cluster.grouping_basis),
+                    kind=cluster.kind,
+                    bump_generation=True,
+                )
+            affected_albums.add(album_id)
+            for tid in cluster.track_ids:
+                if current_album_of.get(tid) != album_id:
+                    await self.db_manager.reassign_album(tid, album_id)
+                    affected_albums.add(current_album_of.get(tid) or "unknown_album")
+                    reassigned += 1
+
+        for old_id, new_id in aliases:
+            await cluster_db.add_alias(old_id, new_id, "album")
+
+        for album_id in affected_albums:
+            if album_id and album_id != "unknown_album":
+                await self.db_manager.update_album_stats(album_id)
+
+        deleted_albums, _ = await self.db_manager.delete_orphaned_albums_and_artists()
+        return {
+            "clusters": len(clusters),
+            "reassigned": reassigned,
+            "aliases": len(aliases),
+            "orphans": deleted_albums,
+        }
 
     async def orphan_va_folder_tracks(self) -> Dict[str, int]:
         """Coalesce a V/A folder's per-track albums into one compilation album.
