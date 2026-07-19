@@ -106,6 +106,15 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      # Full history + tags: the notes step lists commits since the previous
+      # kalinka-v* tag (GitHub's --generate-notes only lists merged PRs, and
+      # most commits here land on main directly — it came out empty).
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -143,14 +152,26 @@ jobs:
           **Manual install:** download the server package for your OS — \`debian-13.arm64\` for Raspberry Pi OS (trixie) / Debian 13, \`ubuntu-24.04.amd64\` for Ubuntu 24.04 — plus all the \`_all.deb\` plugin/SDK packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. For the browser player, add \`kalinka-web_*_all.deb\` from the [app releases](https://github.com/madenvel/KalinkaAI/releases).
           EOF
 
+          # Commit list since the previous kalinka-v* tag (skipped for the
+          # first release ever).
+          PREV=$(git tag -l 'kalinka-v*' --sort=-v:refname | sed -n "/^${TAG}\$/{n;p}")
+          if [ -n "$PREV" ]; then
+            {
+              echo
+              echo "## What's Changed"
+              git log --no-merges --pretty='* %s — %h' "$PREV..$TAG"
+              echo
+              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$PREV...$TAG"
+            } >> notes.md
+          fi
+
           # Create the release if it doesn't exist yet (idempotent: re-runs and
           # builds for a hand-cut release just fall through to upload).
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Kalinka $VERSION" \
-              --notes-file notes.md \
-              --generate-notes
+              --notes-file notes.md
           fi
           gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
           # Pin this release as "latest" so /releases/latest (linked from the
