@@ -41,29 +41,16 @@ from .id_generator import (
 from .indexer_db import AsyncIndexerDb
 
 
-# A folder's tracks coalesce into a single V/A compilation album when:
-#   1. they span at least this many distinct artists, AND
-#   2. at least this fraction of tracks have unique artists.
-# Both have to be true so we don't misfire on mistagged albums (e.g.
-# Abbey Road with 2-3 wrong-artist tags out of 17 tracks).
-VA_MIN_DISTINCT_ARTISTS = 4
-VA_MIN_ARTIST_UNIQUENESS = 0.5
-
-# Folder names that are dumping grounds / structural dirs, not compilations or
-# artists. Used both to keep such folders' tracks loose under unknown_album and
-# to reject them as a parent-artist (e.g. ".../unused/8bit Remixes").
-_GENERIC_FOLDER_RE = re.compile(
-    r"^(music|musik|audio|downloads?|mp3s?|tracks?|songs?|various|"
-    r"streamed_music|unused|unsorted|sorted|misc|miscellaneous|temp|tmp|"
-    r"incoming|untitled|new folder|to ?sort|todo|.*\bmix(?:es)?\b.*)$",
-    re.IGNORECASE,
+# V/A-compilation classification (thresholds, folder heuristics, title
+# helpers) lives in clustering.classify so the planner and this pass share it.
+from ..clustering.classify import (  # noqa: E402
+    GENERIC_FOLDER_RE as _GENERIC_FOLDER_RE,
+    VA_MIN_ARTIST_UNIQUENESS,
+    VA_MIN_DISTINCT_ARTISTS,
+    VARIOUS_ARTISTS_ID,
+    compilation_title as _compilation_title,
+    strip_artist_prefix as _strip_artist_prefix,
 )
-# Bare disc/volume folder names that need the parent dir for a meaningful title.
-_BARE_DISC_RE = re.compile(
-    r"^(cd[-_ ]?\d+|disc\s*\d+|disk\s*\d+|volume\s*\d+|vol\.?\s*\d+)$", re.IGNORECASE
-)
-_VA_PREFIX_RE = re.compile(r"^(va|various artists?)\s*[-–—]\s*", re.IGNORECASE)
-VARIOUS_ARTISTS_ID = "various_artists"
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
@@ -852,7 +839,7 @@ class FileIndexer:
             #     tracks are remixer-credited -> that artist's album (so it
             #     doesn't masquerade as a Various-Artists compilation)
             #   * otherwise           -> a Various-Artists compilation album
-            comp_title = self._compilation_title(folder)
+            comp_title = _compilation_title(folder)
             album_reanchored = False
             if comp_title is None:
                 target_id = "unknown_album"
@@ -863,7 +850,7 @@ class FileIndexer:
                 )
                 if parent_artist is not None:
                     owner_id = parent_artist["id"]
-                    display_title = self._strip_artist_prefix(
+                    display_title = _strip_artist_prefix(
                         comp_title, parent_artist["name"]
                     )
                     dest = f"album '{display_title}' under {parent_artist['name']}"
@@ -930,31 +917,6 @@ class FileIndexer:
             "orphans": deleted_albums,
         }
 
-    def _compilation_title(self, folder: str) -> Optional[str]:
-        """Album title for a V/A folder, or None if it's a generic dump that
-        shouldn't become an album (a top-level ``music`` dir, a personal
-        ``90s Mixes`` pile, etc.).
-
-        A folder explicitly marked ``VA -`` / ``Various Artists -`` is a
-        declared compilation, so it bypasses the generic-dump heuristic (e.g.
-        ``VA - Trance Mixes`` must not be rejected by the ``mix`` rule)."""
-        name = os.path.basename(folder).strip()
-        # Strip the V/A marker first so the heuristic and the title both see
-        # the real name.
-        title = _VA_PREFIX_RE.sub("", name).strip()
-        explicit_va = title != name
-        if not title:
-            return None
-        if not explicit_va and _GENERIC_FOLDER_RE.match(title):
-            return None
-        # A bare "Disc 1" / "Volume 2" folder is meaningless on its own — most
-        # disc subdirs are already collapsed by album_folder_for_path, but for
-        # the rest borrow the parent dir for a real title.
-        if _BARE_DISC_RE.match(title):
-            parent = os.path.basename(os.path.dirname(folder)).strip()
-            title = f"{parent} {title}".strip() if parent else title
-        return title or None
-
     async def _ensure_various_artists(self) -> None:
         """Seed the Various-Artists sentinel artist (compilation albums hang
         off it; real per-track artists are preserved on the tracks)."""
@@ -985,18 +947,6 @@ class FileIndexer:
         if not (artist_folders.get(artist_id, set()) - {folder}):
             return None
         return await self.db_manager.get_artist_by_id(artist_id)
-
-    @staticmethod
-    def _strip_artist_prefix(title: str, artist_name: str) -> str:
-        """Drop a leading artist name from a title so it reads cleanly once the
-        album is attributed to that artist (``Ratatat Remixes Vol. 2`` ->
-        ``Remixes Vol. 2``). Only strips at a separator/word boundary, so
-        artist ``AB`` does not corrupt ``ABBA Gold``."""
-        if title.lower().startswith(artist_name.lower()):
-            rest = title[len(artist_name) :]
-            if not rest or rest[0] in " -–—":  # boundary required
-                return rest.lstrip(" -–—") or title
-        return title
 
     async def _ensure_compilation_album(
         self, album_id: str, title: str, artist_id: str

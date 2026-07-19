@@ -12,6 +12,10 @@ orphan/appears-on query.
 import pytest
 import pytest_asyncio
 
+from kalinka_plugin_localfiles.clustering.classify import (
+    compilation_title,
+    strip_artist_prefix,
+)
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.db_schema import init_db
 from kalinka_plugin_localfiles.indexer.id_generator import generate_artist_id
@@ -126,7 +130,7 @@ async def test_generic_dump_folder_stays_unknown_album(indexer):
 
 
 def test_strip_artist_prefix_requires_a_boundary():
-    f = FileIndexer._strip_artist_prefix
+    f = strip_artist_prefix
     assert f("Ratatat Remixes Vol. 2", "Ratatat") == "Remixes Vol. 2"
     assert f("Massive Attack - Sessions", "Massive Attack") == "Sessions"
     assert f("Remixes", "Netsky") == "Remixes"  # no prefix -> unchanged
@@ -138,5 +142,5 @@ async def test_va_marked_folder_bypasses_generic_filter(indexer):
     """An explicit "VA -" marker declares a compilation, so a name that would
     otherwise be treated as a generic dump (e.g. "Mixes") is still honoured."""
     fi, music_dir, _ = indexer
-    assert fi._compilation_title(str(music_dir / "VA - Trance Mixes")) == "Trance Mixes"
-    assert fi._compilation_title(str(music_dir / "90s Mixes")) is None  # no marker
+    assert compilation_title(str(music_dir / "VA - Trance Mixes")) == "Trance Mixes"
+    assert compilation_title(str(music_dir / "90s Mixes")) is None  # no marker
