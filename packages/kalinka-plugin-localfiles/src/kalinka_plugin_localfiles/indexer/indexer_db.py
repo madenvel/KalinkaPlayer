@@ -138,6 +138,13 @@ class AsyncIndexerDb:
         """Update track information"""
         await self._update("tracks", track_id, data)
 
+    async def reassign_album(self, track_id: str, album_id: str) -> None:
+        """The single owner of tracks.album_id writes — clustering / reconciler
+        only. Album membership must flow through here, never through an
+        enrichment plugin (§3 invariant: membership changes only in the
+        clustering pass)."""
+        await self._update("tracks", track_id, {"album_id": album_id})
+
     async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
         """Update album information (only columns that exist in the table)."""
         await self._update("albums", album_id, data)
