@@ -11,7 +11,7 @@ Depends: python3 (>= @PYTHON_VERSION@), python3 (<< @PYTHON_VERSION_UPPER@),
     python3-venv,
     python3-pip,
     python3-setuptools,
-    kalinka-plugin-sdk (>= 1.0), kalinka-plugin-sdk (<< 2),
+    kalinka-plugin-sdk (>= 1.3.1), kalinka-plugin-sdk (<< 2),
     @SHLIBDEPS@
 Recommends: kalinka-web
 Description: Kalinka Music Player (server)
