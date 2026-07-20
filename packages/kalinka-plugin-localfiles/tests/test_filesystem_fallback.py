@@ -121,3 +121,38 @@ class TestFilesystemFallbackPlugin:
         metadata = plugin._extract_metadata_from_path(path)
         assert metadata.get("album") is None
         assert metadata.get("artist") is None
+
+
+class TestNoSpaceDotPrefix:
+    """"N.Title" filenames (no space after the dot) parse number + clean title,
+    and a stem-echo title (basename minus extension) still counts as a
+    filename placeholder so a retry can improve it."""
+
+    def test_extract_number_and_title_no_space(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "1.Кончится лето"
+        )
+        assert num == 1
+        assert title == "Кончится лето"
+        assert artist is None
+
+    def test_year_prefix_not_a_track_number(self, plugin):
+        num, title, _ = plugin._extract_track_number_and_title("1985.Some Song")
+        assert num is None
+        assert title == "1985.Some Song"
+
+    @pytest.mark.asyncio
+    async def test_stem_echo_title_gets_replaced(self, plugin):
+        track = {
+            "id": "t1",
+            "title": "1.Кончится лето",  # stem of the file below
+            "file_path": "/home/user/Music/В.Цой - Черный альбом/1.Кончится лето.flac",
+            "artist_id": "artist_x",
+            "album_id": "album_x",
+            "track_number": None,
+        }
+        result = await plugin.enrich_track(track)
+        assert result is not None
+        updates = result["updates"]
+        assert updates["title"] == "Кончится лето"   # prefix stripped
+        assert updates["track_number"] == 1

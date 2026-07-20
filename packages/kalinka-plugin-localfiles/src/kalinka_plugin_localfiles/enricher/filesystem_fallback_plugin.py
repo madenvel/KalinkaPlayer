@@ -44,7 +44,8 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     This plugin does NOT set the "enriched" flag to allow other plugins to re-check the data.
     """
 
-    ENRICHER_VERSION = 1
+    # v2: no-space "N.Title" prefix pattern + stem-echo title guard.
+    ENRICHER_VERSION = 2
 
     # Match the indexer's V/A detection criteria
     # (``orphan_va_folder_tracks``). Filesystem fallback skips album
@@ -443,10 +444,15 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         updates = {}
         changed_items = {"artists": set(), "albums": set()}
 
-        # Handle track title
+        # Handle track title. A title equal to the basename OR its stem is
+        # still just a filename echo (a prior pass may have stripped only the
+        # extension), so a re-run can keep improving it — e.g. dropping a
+        # "1."-prefix once the number patterns learn to match it.
         current_title = track.get("title", "")
-        if not current_title or current_title == os.path.basename(track["file_path"]):
-            if fs_metadata.get("title"):
+        basename = os.path.basename(track["file_path"])
+        stem = os.path.splitext(basename)[0]
+        if not current_title or current_title in (basename, stem):
+            if fs_metadata.get("title") and fs_metadata["title"] != current_title:
                 updates["title"] = fs_metadata["title"]
 
         # Handle track number

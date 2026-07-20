@@ -41,10 +41,13 @@ _DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk)[\s\-_]*\d+$", re.IGNORECASE)
 # Leading "NN." / "NN " / "NN- " / "NN_ " track-number prefixes on a filename
 # stem. Shared by the indexer (so ordering is right at scan time) and the
 # enricher's filesystem fallback, so the two can't disagree on parsing.
+# The no-space form ("1.Кончится лето") is capped at two digits so a year
+# prefix ("1985.Some Song") is never eaten as a track number.
 TRACK_NUMBER_PREFIX_PATTERNS = (
-    re.compile(r"^(\d+)\.?\s+"),  # "1. " / "1 " / "1."
-    re.compile(r"^(\d+)-\s+"),    # "1- "
-    re.compile(r"^(\d+)_\s+"),    # "1_ "
+    re.compile(r"^(\d+)\.?\s+"),       # "1. " / "1 " / "1."
+    re.compile(r"^(\d+)-\s+"),         # "1- "
+    re.compile(r"^(\d+)_\s+"),         # "1_ "
+    re.compile(r"^(\d{1,2})\.(?=\S)"), # "1.Title" (no space after the dot)
 )
 
 

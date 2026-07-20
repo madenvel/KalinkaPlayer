@@ -28,6 +28,15 @@ def test_parse_leading_track_number():
     assert parse_leading_track_number("No Number Here") is None
 
 
+def test_parse_no_space_dot_prefix():
+    # "N.Title" with no space after the dot (common in ripped folders).
+    assert parse_leading_track_number("1.Кончится лето") == 1
+    assert parse_leading_track_number("12.Track") == 12
+    # A year prefix must never be eaten as a track number (>2 digits).
+    assert parse_leading_track_number("1985.Some Song") is None
+    assert parse_leading_track_number("2001.A Space Odyssey") is None
+
+
 @pytest_asyncio.fixture
 async def indexer(tmp_path):
     music = tmp_path / "music"
