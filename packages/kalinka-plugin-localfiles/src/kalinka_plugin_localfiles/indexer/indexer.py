@@ -31,6 +31,7 @@ from ..utils.name_utils import (
     album_folder_for_path,
     clean_display_name,
     expand_music_folders,
+    parse_leading_track_number,
     path_within_roots,
 )
 from ..worker_utils import set_proc_title
@@ -491,6 +492,16 @@ class FileIndexer:
             await self.db_manager.insert_album(album_data)
             changes["albums"] = album_id
 
+        # Track number: prefer the tag; otherwise parse a leading "NN." from
+        # the filename so albums sort correctly at scan time, not only after
+        # the enricher's filesystem fallback runs (same patterns, so the two
+        # agree). The fallback still fills it later when a file has neither.
+        track_number = metadata.get("track_number")
+        if track_number is None:
+            track_number = parse_leading_track_number(
+                os.path.splitext(os.path.basename(file_path))[0]
+            )
+
         track_id = generate_track_id(file_path)
         track_data: Dict[str, Any] = {
             "id": track_id,
@@ -501,7 +512,7 @@ class FileIndexer:
             "album_id": album_id,
             "artist_id": artist_id,
             "duration": metadata.get("duration", 0),
-            "track_number": metadata.get("track_number"),
+            "track_number": track_number,
             "disc_number": metadata.get("disc_number"),
             "file_path": file_path,
             "format": metadata.get("format", "unknown"),

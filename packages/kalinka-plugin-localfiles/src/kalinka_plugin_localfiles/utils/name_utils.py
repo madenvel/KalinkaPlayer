@@ -30,12 +30,34 @@ import re
 import unicodedata
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Optional
 
 _LEADING_TRAILING_PUNCT_RE = re.compile(r"^[\-_.,/ \t]+|[\-_.,/ \t]+$")
 _WHITESPACE_RUN_RE = re.compile(r"\s+")
 _PUNCT_FOR_ID_RE = re.compile(r"[\-_./]")
 _NON_WORD_RE = re.compile(r"[^\w\s]")
 _DISC_SUBDIR_RE = re.compile(r"^(cd|disc|disk)[\s\-_]*\d+$", re.IGNORECASE)
+
+# Leading "NN." / "NN " / "NN- " / "NN_ " track-number prefixes on a filename
+# stem. Shared by the indexer (so ordering is right at scan time) and the
+# enricher's filesystem fallback, so the two can't disagree on parsing.
+TRACK_NUMBER_PREFIX_PATTERNS = (
+    re.compile(r"^(\d+)\.?\s+"),  # "1. " / "1 " / "1."
+    re.compile(r"^(\d+)-\s+"),    # "1- "
+    re.compile(r"^(\d+)_\s+"),    # "1_ "
+)
+
+
+def parse_leading_track_number(name: str) -> Optional[int]:
+    """Leading track number from a filename stem ("1. Title" -> 1), else None."""
+    for pat in TRACK_NUMBER_PREFIX_PATTERNS:
+        m = pat.match(name)
+        if m:
+            try:
+                return int(m.group(1))
+            except (ValueError, IndexError):
+                continue
+    return None
 
 
 def clean_display_name(name: str) -> str:

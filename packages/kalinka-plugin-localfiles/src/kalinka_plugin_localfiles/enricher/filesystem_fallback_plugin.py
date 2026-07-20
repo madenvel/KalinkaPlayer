@@ -1,12 +1,15 @@
 import logging
 import os
-import re
 import time
 from pathlib import Path
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import album_folder_for_path, clean_display_name
+from ..utils.name_utils import (
+    TRACK_NUMBER_PREFIX_PATTERNS,
+    album_folder_for_path,
+    clean_display_name,
+)
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
 
@@ -61,12 +64,9 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             str(Path(folder).expanduser().resolve()) for folder in config.music_folders
         ]
 
-        # Track number regex patterns
-        self.track_number_patterns = [
-            r"^(\d+)\.?\s+",  # "1. " or "1 " or "1."
-            r"^(\d+)-\s+",  # "1- "
-            r"^(\d+)_\s+",  # "1_ "
-        ]
+        # Track-number prefix patterns are shared with the indexer (which now
+        # parses them at scan time too) so the two never disagree.
+        self.track_number_patterns = TRACK_NUMBER_PREFIX_PATTERNS
 
         # Per-folder V/A determination, cached for the lifetime of the
         # plugin instance so we don't re-query the DB for every track.
@@ -104,7 +104,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
 
         # First, try to extract track number if present
         for pattern in self.track_number_patterns:
-            match = re.match(pattern, filename)
+            match = pattern.match(filename)
             if match:
                 try:
                     track_number = int(match.group(1))
