@@ -84,3 +84,63 @@ def strip_disc_suffix(title: str) -> str:
     if not title:
         return title
     return _DISC_SUFFIX_RE.sub("", title).strip() or title
+
+
+# --- title normalization (deterministic cleanup of a local title) -----------
+# Album titles are always locally derived (MusicBrainz never sets a title), so
+# this is a safe cleanup of folder/tag junk, not a competing title source.
+
+_BRACKET_TAG_RE = re.compile(r"^\s*\{[^}]*\}\s*")          # "{uaoa}Foo"
+_YEAR_PREFIX_RE = re.compile(r"^\s*(?:19|20)\d{2}\s*[.\-–—]\s*")  # "1993. Foo"
+_SOURCE_TAIL_RE = re.compile(
+    r"\s*[-–—]{1,3}\s*(?:jamendo|beatport|bandcamp|soundcloud)\b.*$", re.I)
+_DIGITS_TAIL_RE = re.compile(r"\s*[-–—]\s*\d{5,}\s*$")     # "… - 500604904"
+_FORMAT_TAIL_RE = re.compile(
+    r"\s*[-–—\[(]*\s*(?:mp3|flac|wav|web|webm|ogg|aac|hi-?res)\s*[)\]]*\s*$", re.I)
+_TRAILING_PAREN_RE = re.compile(r"\s*[([]([^()\[\]]*)[)\]]\s*$")
+
+_CATALOG_DIGITS_RE = re.compile(r"\d{5,}")
+_FORMAT_TOKEN_RE = re.compile(
+    r"\b(?:mp3|flac|wav|web|webm|ogg|aac|hi-?res|\d{2,3}-\d{2,3}|"
+    r"\d{2,3}\s?khz|\d{2,3}\s?bit)\b", re.I)
+# Parentheticals that are meaningful and must be kept.
+_DESCRIPTIVE_RE = re.compile(
+    r"\b(soundtrack|ost|live|remaster(?:ed)?|deluxe|anniversary|edition|"
+    r"remix(?:es)?|acoustic|mono|stereo|demo|bonus|expanded|special|single|"
+    r"ep|explicit|instrumental|reissue|collector'?s|complete|sessions?|"
+    r"unplugged|original|volume|vol\.?|part|disc|disk|cd)\b", re.I)
+
+
+def _is_catalog_paren(contents: str) -> bool:
+    """True for a pressing/catalog parenthetical (strip), False for a
+    descriptive one like (Soundtrack) / (Remastered) / a bare year (keep)."""
+    c = contents.strip()
+    if not c or _DESCRIPTIVE_RE.search(c):
+        return False
+    if re.fullmatch(r"(?:19|20)\d{2}", c):   # a bare year -> keep
+        return False
+    if _CATALOG_DIGITS_RE.search(c) or _FORMAT_TOKEN_RE.search(c):
+        return True
+    # "Label CAT123, Country" shape: has a comma and an uppercase label token.
+    return "," in c and bool(re.search(r"[A-Z]{2,}", c))
+
+
+def normalize_album_title(title: str) -> str:
+    """Strip folder/tag junk from a title: leading bracket tag + year prefix,
+    trailing source/format/catalog tokens and catalog parentheticals. Keeps
+    descriptive parentheticals and disc/volume markers. Returns the original
+    if cleanup would empty it."""
+    if not title:
+        return title
+    t = _BRACKET_TAG_RE.sub("", title.strip())
+    t = _YEAR_PREFIX_RE.sub("", t)
+    t = _SOURCE_TAIL_RE.sub("", t)
+    for _ in range(3):  # peel a few trailing catalog parentheticals
+        m = _TRAILING_PAREN_RE.search(t)
+        if not m or not _is_catalog_paren(m.group(1)):
+            break
+        t = t[: m.start()].rstrip()
+    t = _FORMAT_TAIL_RE.sub("", t)
+    t = _DIGITS_TAIL_RE.sub("", t)
+    t = t.strip(" -–—_.,/\t")
+    return t or title

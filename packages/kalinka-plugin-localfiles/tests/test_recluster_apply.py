@@ -107,6 +107,25 @@ async def test_untagged_folder_gets_named_album(indexer):
 
 
 @pytest.mark.asyncio
+async def test_recluster_cleans_path_artifact_title(indexer):
+    fi, music, config = indexer
+    folder = music / "1993. Jean Michel Jarre - Chronology (Sony 88875129492, Russia)"
+    for i in range(1, 5):
+        _flac(folder / f"{i}. Track {i}.flac", title=f"T{i}",
+              artist="Jean Michel Jarre", albumartist="Jean Michel Jarre",
+              album="Chronology (Sony 88875129492, Russia)", tracknumber=str(i))
+        await fi.process_file(str(folder / f"{i}. Track {i}.flac"))
+
+    await fi.recluster()
+
+    title = await _scalar(
+        config, "SELECT title FROM albums WHERE id IN "
+        "(SELECT DISTINCT album_id FROM tracks WHERE file_path LIKE ?)",
+        (f"{folder}%",))
+    assert title == "Chronology"   # catalog parenthetical stripped
+
+
+@pytest.mark.asyncio
 async def test_recluster_idempotent(indexer):
     fi, music, config = indexer
     folder = music / "Album X"

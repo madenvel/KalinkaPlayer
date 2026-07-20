@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from ..utils.name_utils import clean_display_name, normalize_for_id
-from .classify import VARIOUS_ARTISTS_ID, compilation_title, is_va_folder, strip_disc_suffix
+from .classify import (
+    VARIOUS_ARTISTS_ID,
+    compilation_title,
+    is_va_folder,
+    normalize_album_title,
+    strip_disc_suffix,
+)
 from .engine import partition_folder
 from .signals import TrackFeatures
 
@@ -148,8 +154,9 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
                 )
                 continue
             clusters.append(
-                ClusterPlan(ids, "compilation", comp, VARIOUS_ARTISTS_ID,
-                            {"reason": "va_compilation"}, folder, discs, aa_key)
+                ClusterPlan(ids, "compilation", normalize_album_title(comp),
+                            VARIOUS_ARTISTS_ID, {"reason": "va_compilation"},
+                            folder, discs, aa_key)
             )
             continue
 
@@ -168,6 +175,7 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         if len(raw_titles) >= 2 and len({strip_disc_suffix(t) for t in raw_titles}) == 1:
             title = strip_disc_suffix(title)
             kind = "multi_disc"
+        title = normalize_album_title(title)
 
         clusters.append(
             ClusterPlan(ids, kind, title, anchor, dict(result.basis),

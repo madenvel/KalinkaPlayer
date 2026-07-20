@@ -839,10 +839,18 @@ class FileIndexer:
                             "last_updated": int(time.time()),
                         }
                     )
-                elif existing.get("artist_id") != anchor:
-                    # Fix the anchor (e.g. re-point to Various Artists) without
-                    # clobbering an enriched title / cover.
-                    await self.db_manager.update_album(album_id, {"artist_id": anchor})
+                else:
+                    # Refresh the anchor (e.g. re-point to Various Artists) and
+                    # the title. Titles are always locally derived (MusicBrainz
+                    # never sets one), so cleaning a folder/tag-junk title here
+                    # can't clobber an external title; covers are untouched.
+                    fixes = {}
+                    if existing.get("artist_id") != anchor:
+                        fixes["artist_id"] = anchor
+                    if cluster.title and existing.get("title") != cluster.title:
+                        fixes["title"] = cluster.title
+                    if fixes:
+                        await self.db_manager.update_album(album_id, fixes)
                 await cluster_db.upsert_cluster(
                     album_id,
                     primary_folder=cluster.folder,
