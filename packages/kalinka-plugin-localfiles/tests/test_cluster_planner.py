@@ -114,6 +114,37 @@ def test_plan_generic_dump_is_singles_pool():
     assert c.anchor_artist_id == "unknown_artist"
 
 
+def test_multidisc_in_one_folder_strips_disc_suffix_from_title():
+    # Both discs tagged "… (Disc N)" in one folder collapse to one album whose
+    # title drops the disc marker.
+    rows = []
+    for i in range(1, 6):
+        rows.append((_track(f"a{i}", track_number=i, disc_number=1),
+                     _ev(album="Best Of MJ (Disk 1)", albumartist="MJ")))
+    for i in range(1, 6):
+        rows.append((_track(f"b{i}", track_number=i, disc_number=2),
+                     _ev(album="Best Of MJ (Disk 2)", albumartist="MJ")))
+    plan = plan_folder("/music/Best Of MJ (2CD)", rows)
+    assert len(plan.clusters) == 1
+    c = plan.clusters[0]
+    assert c.title == "Best Of MJ"      # (Disk N) stripped
+    assert c.kind == "multi_disc"
+    assert len(c.track_ids) == 10
+
+
+def test_standalone_volume_keeps_its_name():
+    # A single "Vol. 2" release (one title variant) must NOT be stripped.
+    rows = [
+        (_track(f"t{i}", track_number=i), _ev(album="Greatest Hits Vol. 2",
+                                              albumartist="Band"))
+        for i in range(1, 7)
+    ]
+    plan = plan_folder("/music/Greatest Hits Vol 2", rows)
+    assert len(plan.clusters) == 1
+    assert plan.clusters[0].title == "Greatest Hits Vol. 2"
+    assert plan.clusters[0].kind == "album"
+
+
 def test_plan_empty_folder():
     plan = plan_folder("/music/empty", [])
     assert plan.clusters == [] and not plan.split

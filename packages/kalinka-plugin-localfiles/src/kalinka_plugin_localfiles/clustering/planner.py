@@ -158,8 +158,19 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         titles = [display_by_id[i][1] for i in ids]
         title = _dominant(titles) or os.path.basename(folder.rstrip("/")) or ""
         anchor = _dominant(t.get("artist_id") for t in member_tracks) or "unknown_artist"
+
+        # Multi-disc-in-one-folder: if the members' titles differ *only* by a
+        # disc suffix (e.g. "… (Disc 1)" / "… (Disc 2)"), it is one album — drop
+        # the suffix and mark it multi_disc. A standalone "… Vol. 2" (a single
+        # title variant) is left intact, so real volumed releases keep their name.
+        kind = "album"
+        raw_titles = {t for t in titles if t}
+        if len(raw_titles) >= 2 and len({strip_disc_suffix(t) for t in raw_titles}) == 1:
+            title = strip_disc_suffix(title)
+            kind = "multi_disc"
+
         clusters.append(
-            ClusterPlan(ids, "album", title, anchor, dict(result.basis),
+            ClusterPlan(ids, kind, title, anchor, dict(result.basis),
                         folder, discs, aa_key)
         )
 
