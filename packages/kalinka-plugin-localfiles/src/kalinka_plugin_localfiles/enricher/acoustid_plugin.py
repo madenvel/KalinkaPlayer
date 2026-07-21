@@ -9,9 +9,9 @@ import requests
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
-from ..utils.name_utils import album_folder_for_path, clean_display_name
+from ..utils.name_utils import clean_display_name
 from .enricher_plugin import EnricherPlugin
-from .id_generator import generate_artist_id, generate_album_id
+from .id_generator import generate_artist_id
 from .match_utils import duration_bonus
 
 
@@ -515,55 +515,6 @@ class AcoustIdPlugin(EnricherPlugin):
         await self.db_manager.insert_artist(artist_data)
         return artist_data["id"]
 
-    async def _create_or_get_album(
-        self,
-        album_title: str,
-        artist_id: Optional[str],
-        file_path: str,
-        album_mbid: Optional[str] = None,
-    ) -> Optional[str]:
-        """
-        Find album by folder+title or MBID, or create if not exists.
-
-        ``file_path`` is used to derive the album folder so quality variants
-        in sibling directories get distinct album IDs. ``artist_id`` is
-        stored on the row but no longer part of the ID key, so an album
-        with a known title and an unknown anchor artist is still useful
-        and is created as an orphan rather than dropped.
-
-        Returns:
-            Album ID, or None if the title is missing.
-        """
-        album_title = clean_display_name(album_title) if album_title else ""
-        if not album_title:
-            return None
-
-        # Try to find existing album by MBID first
-        if album_mbid:
-            existing_album = await self.db_manager.get_album_by_mbid(album_mbid)
-            if existing_album:
-                return existing_album["id"]
-
-        # Create new album (the folder-bounded ID is what disambiguates
-        # quality variants; we no longer fuzzy-match by title alone).
-        album_id = generate_album_id(album_title, album_folder_for_path(file_path))
-        existing_by_id = await self.db_manager.get_album_by_id(album_id)
-        if existing_by_id:
-            if album_mbid and not existing_by_id.get("mbid"):
-                await self.db_manager.update_album(album_id, {"mbid": album_mbid})
-            return album_id
-
-        album_data = {
-            "id": album_id,
-            "title": album_title,
-            "artist_id": artist_id or "unknown_artist",
-            "mbid": album_mbid,
-            "enriched": 0,
-            "last_updated": int(time.time()),
-        }
-
-        await self.db_manager.insert_album(album_data)
-        return album_id
 
     def can_enrich_artist(self) -> bool:
         return False  # This plugin doesn't directly enrich artists, only via track identification
@@ -630,6 +581,13 @@ class AcoustIdPlugin(EnricherPlugin):
                     f"Could not generate fingerprint for {track.get('file_path')}"
                 )
                 return None
+
+            # Persist the (expensive) chromaprint for reuse. Best-effort: a
+            # write failure must not abort the lookup.
+            try:
+                await self.db_manager.save_fingerprint(track["id"], fingerprint)
+            except Exception as e:
+                logger.debug("Could not persist fingerprint: %s", e)
 
             # Look up fingerprint
             results = await asyncio.to_thread(
@@ -702,28 +660,10 @@ class AcoustIdPlugin(EnricherPlugin):
                         )
                         changed_items["artists"].add(artist_id)
 
-                    # Create or get album if we have artist and album info
-                    if match_info.get("album_title") and artist_id:
-                        # Store original album ID to check if a new one was created
-                        original_album_id = track.get("album_id")
-
-                        album_id = await self._create_or_get_album(
-                            match_info["album_title"],
-                            artist_id,
-                            track["file_path"],
-                            match_info.get("album_mbid"),
-                        )
-
-                        if album_id:
-                            updates["album_id"] = album_id
-                            updates["album_title"] = match_info["album_title"]
-
-                            # Check if this is a newly created or different album
-                            if album_id != original_album_id:
-                                logger.debug(
-                                    f"Adding album {album_id} to changed items for further enrichment"
-                                )
-                                changed_items["albums"].add(album_id)
+            # AcoustID no longer creates albums or moves a track between them:
+            # album membership is owned by the clustering pass (§3 invariant),
+            # so a single confident fingerprint match can't fragment a
+            # coherent local album by re-pointing one track to a new album row.
 
             result = {"updates": updates}
 

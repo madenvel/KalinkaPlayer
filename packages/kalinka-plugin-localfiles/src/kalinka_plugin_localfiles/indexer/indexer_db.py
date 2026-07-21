@@ -138,6 +138,13 @@ class AsyncIndexerDb:
         """Update track information"""
         await self._update("tracks", track_id, data)
 
+    async def reassign_album(self, track_id: str, album_id: str) -> None:
+        """The single owner of tracks.album_id writes — clustering / reconciler
+        only. Album membership must flow through here, never through an
+        enrichment plugin (§3 invariant: membership changes only in the
+        clustering pass)."""
+        await self._update("tracks", track_id, {"album_id": album_id})
+
     async def update_album(self, album_id: str, data: Dict[str, Any]) -> None:
         """Update album information (only columns that exist in the table)."""
         await self._update("albums", album_id, data)
@@ -184,6 +191,113 @@ class AsyncIndexerDb:
             await cursor.execute(query, values)
             await conn.commit()
 
+    async def upsert_library_file(
+        self,
+        file_id: str,
+        current_path: str,
+        size_bytes: int,
+        modified_at: int,
+        device_id: Optional[str],
+        inode: Optional[str],
+    ) -> None:
+        """Maintain the file-identity row. first_indexed is written once and
+        never rewritten (the durable add-time; last_updated is bumped by
+        enrichment). Path/size/mtime/device/inode refresh on every pass."""
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO library_file
+                    (file_id, current_path, size_bytes, modified_at,
+                     device_id, inode, first_indexed)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    current_path = excluded.current_path,
+                    size_bytes   = excluded.size_bytes,
+                    modified_at  = excluded.modified_at,
+                    device_id    = excluded.device_id,
+                    inode        = excluded.inode
+                """,
+                (
+                    file_id,
+                    current_path,
+                    size_bytes,
+                    modified_at,
+                    device_id,
+                    inode,
+                    int(time.time()),
+                ),
+            )
+            await conn.commit()
+
+    async def get_library_file_by_inode(
+        self, device_id: str, inode: str
+    ) -> Optional[Dict]:
+        """The library_file row for a (device, inode) pair, if any — the
+        move-detection lookup."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT * FROM library_file WHERE device_id = ? AND inode = ?",
+                (device_id, inode),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def move_track(self, track_id: str, new_path: str) -> None:
+        """Re-point a moved/renamed file to its new path, keeping identity.
+
+        Updates tracks.file_path and library_file.current_path together; the
+        id, first_indexed, evidence and enrichment all stay. This is the
+        "rename is an UPDATE, not delete-plus-create" half of stable file
+        identity.
+        """
+        async with self._open() as conn:
+            await conn.execute(
+                "UPDATE tracks SET file_path = ? WHERE id = ?",
+                (new_path, track_id),
+            )
+            await conn.execute(
+                "UPDATE library_file SET current_path = ? WHERE file_id = ?",
+                (new_path, track_id),
+            )
+            await conn.commit()
+
+    async def upsert_track_evidence(
+        self, track_id: str, evidence: Dict[str, Any]
+    ) -> None:
+        """Upsert the current-snapshot evidence row (only named columns, so
+        fingerprint/cue set later survive). art_phash/import_batch are kept
+        when a refresh omits them — a retag without art shouldn't drop the
+        hash."""
+        raw_tags = evidence.get("raw_tags")
+        stream_info = evidence.get("stream_info")
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO track_evidence
+                    (track_id, raw_tags, stream_info, art_phash,
+                     import_batch, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(track_id) DO UPDATE SET
+                    raw_tags     = excluded.raw_tags,
+                    stream_info  = excluded.stream_info,
+                    art_phash    = COALESCE(excluded.art_phash,
+                                            track_evidence.art_phash),
+                    import_batch = COALESCE(excluded.import_batch,
+                                            track_evidence.import_batch),
+                    updated_at   = excluded.updated_at
+                """,
+                (
+                    track_id,
+                    json.dumps(raw_tags) if raw_tags is not None else None,
+                    json.dumps(stream_info) if stream_info is not None else None,
+                    evidence.get("art_phash"),
+                    evidence.get("import_batch"),
+                    int(time.time()),
+                ),
+            )
+            await conn.commit()
+
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration)"""
         async with self._open() as conn:
@@ -198,6 +312,29 @@ class AsyncIndexerDb:
                 (album_id, album_id, album_id),
             )
             await conn.commit()
+
+    async def get_tracks_with_evidence(self) -> List[Tuple[Dict, Dict]]:
+        """All tracks paired with their track_evidence (empty dict if none),
+        for the clustering pass."""
+        _ev_cols = ("raw_tags", "stream_info", "art_phash", "cue_sheet",
+                    "import_batch")
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                """
+                SELECT t.*, e.raw_tags, e.stream_info, e.art_phash,
+                       e.cue_sheet, e.import_batch
+                FROM tracks t
+                LEFT JOIN track_evidence e ON e.track_id = t.id
+                """
+            )
+            rows = await cur.fetchall()
+        out: List[Tuple[Dict, Dict]] = []
+        for r in rows:
+            d = dict(r)
+            ev = {c: d.pop(c) for c in _ev_cols}
+            out.append((d, ev))
+        return out
 
     async def get_all_tracks(self) -> List[Dict]:
         """Get all tracks in the database"""

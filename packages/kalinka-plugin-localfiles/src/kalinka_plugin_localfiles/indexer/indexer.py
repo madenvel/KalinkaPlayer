@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import io
+import json
 import time
 import logging
 import asyncio
@@ -30,6 +31,7 @@ from ..utils.name_utils import (
     album_folder_for_path,
     clean_display_name,
     expand_music_folders,
+    parse_leading_track_number,
     path_within_roots,
 )
 from ..worker_utils import set_proc_title
@@ -41,29 +43,16 @@ from .id_generator import (
 from .indexer_db import AsyncIndexerDb
 
 
-# A folder's tracks coalesce into a single V/A compilation album when:
-#   1. they span at least this many distinct artists, AND
-#   2. at least this fraction of tracks have unique artists.
-# Both have to be true so we don't misfire on mistagged albums (e.g.
-# Abbey Road with 2-3 wrong-artist tags out of 17 tracks).
-VA_MIN_DISTINCT_ARTISTS = 4
-VA_MIN_ARTIST_UNIQUENESS = 0.5
-
-# Folder names that are dumping grounds / structural dirs, not compilations or
-# artists. Used both to keep such folders' tracks loose under unknown_album and
-# to reject them as a parent-artist (e.g. ".../unused/8bit Remixes").
-_GENERIC_FOLDER_RE = re.compile(
-    r"^(music|musik|audio|downloads?|mp3s?|tracks?|songs?|various|"
-    r"streamed_music|unused|unsorted|sorted|misc|miscellaneous|temp|tmp|"
-    r"incoming|untitled|new folder|to ?sort|todo|.*\bmix(?:es)?\b.*)$",
-    re.IGNORECASE,
+# V/A-compilation classification (thresholds, folder heuristics, title
+# helpers) lives in clustering.classify so the planner and this pass share it.
+from ..clustering.classify import (  # noqa: E402
+    GENERIC_FOLDER_RE as _GENERIC_FOLDER_RE,
+    VA_MIN_ARTIST_UNIQUENESS,
+    VA_MIN_DISTINCT_ARTISTS,
+    VARIOUS_ARTISTS_ID,
+    compilation_title as _compilation_title,
+    strip_artist_prefix as _strip_artist_prefix,
 )
-# Bare disc/volume folder names that need the parent dir for a meaningful title.
-_BARE_DISC_RE = re.compile(
-    r"^(cd[-_ ]?\d+|disc\s*\d+|disk\s*\d+|volume\s*\d+|vol\.?\s*\d+)$", re.IGNORECASE
-)
-_VA_PREFIX_RE = re.compile(r"^(va|various artists?)\s*[-–—]\s*", re.IGNORECASE)
-VARIOUS_ARTISTS_ID = "various_artists"
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
@@ -196,18 +185,27 @@ class FileIndexer:
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
             )
 
-        # Coalesce V/A folders into compilation albums (or leave generic
-        # dumps loose under unknown_album). Each track keeps its real artist
-        # and still surfaces under it via the orphan-tracks fallback. Runs
-        # after the stale-track cleanup so it doesn't operate on rows about to
-        # be removed, and before notifying the enricher so it sees the result.
-        va_results = await self.orphan_va_folder_tracks()
-        if va_results["folders"]:
-            logger.info(
-                f"V/A coalesce: {va_results['folders']} folder(s), "
-                f"{va_results['tracks']} track(s) re-pointed, "
-                f"{va_results['orphans']} orphan album(s) deleted"
-            )
+        # Group tracks into albums. Folder-first clustering (when enabled)
+        # supersedes the V/A-only coalesce pass — it does V/A folding plus
+        # tag-variance merging, untagged-rip titling and multi-album splits.
+        # Both run after stale-track cleanup and before the enricher nudge.
+        if getattr(self.config, "folder_first_clustering", False):
+            res = await self.recluster()
+            if res.get("reassigned"):
+                logger.info(
+                    "Clustering: %d album(s), %d track(s) re-pointed, "
+                    "%d alias(es), %d orphan album(s) deleted",
+                    res["clusters"], res["reassigned"],
+                    res["aliases"], res["orphans"],
+                )
+        else:
+            va_results = await self.orphan_va_folder_tracks()
+            if va_results["folders"]:
+                logger.info(
+                    f"V/A coalesce: {va_results['folders']} folder(s), "
+                    f"{va_results['tracks']} track(s) re-pointed, "
+                    f"{va_results['orphans']} orphan album(s) deleted"
+                )
 
         # If anything changed and we have an enricher callback, notify it
         if any(changed_items.values()):
@@ -396,6 +394,8 @@ class FileIndexer:
 
         file_size = stat.st_size
         modified_time = int(stat.st_mtime)
+        device_id = str(stat.st_dev)
+        inode = str(stat.st_ino)
         # Nanosecond mtime for the failure-cache key. With second resolution a
         # broken file that gets fixed within the same integer second and keeps
         # the same size would collide on the key and never be retried. The
@@ -403,11 +403,38 @@ class FileIndexer:
         mtime_ns = stat.st_mtime_ns
 
         existing_track = await self.db_manager.get_track_by_path(file_path)
+        if existing_track is None:
+            # Move/rename detection: an unknown path whose (device, inode)
+            # matches a known file — with the same size and the old path gone —
+            # is that file after a rename, not a new one. Re-point the paths
+            # and keep the identity (id, first_indexed, evidence, enrichment).
+            # A copy (old path still present) or a cross-device move (new
+            # inode) legitimately mints a new identity. Works for both inotify
+            # moves and rescans, because stale-row cleanup runs after this.
+            known = await self.db_manager.get_library_file_by_inode(
+                device_id, inode
+            )
+            if (
+                known
+                and known["current_path"] != file_path
+                and known["size_bytes"] == file_size
+                and not os.path.exists(known["current_path"])
+            ):
+                logger.info(
+                    f"File moved: {known['current_path']} -> {file_path}"
+                )
+                await self.db_manager.move_track(known["file_id"], file_path)
+                existing_track = await self.db_manager.get_track_by_path(
+                    file_path
+                )
         if (
             existing_track
             and existing_track["modified_time"] == modified_time
             and existing_track["file_size"] == file_size
         ):
+            # Unchanged content (incl. a pure rename — the paths were just
+            # re-pointed above; regrouping for a folder move happens in the
+            # clustering pass at the end of this scan).
             logger.debug(f"File unchanged, skipping: {file_path}")
             return None
 
@@ -492,6 +519,16 @@ class FileIndexer:
             await self.db_manager.insert_album(album_data)
             changes["albums"] = album_id
 
+        # Track number: prefer the tag; otherwise parse a leading "NN." from
+        # the filename so albums sort correctly at scan time, not only after
+        # the enricher's filesystem fallback runs (same patterns, so the two
+        # agree). The fallback still fills it later when a file has neither.
+        track_number = metadata.get("track_number")
+        if track_number is None:
+            track_number = parse_leading_track_number(
+                os.path.splitext(os.path.basename(file_path))[0]
+            )
+
         track_id = generate_track_id(file_path)
         track_data: Dict[str, Any] = {
             "id": track_id,
@@ -502,7 +539,7 @@ class FileIndexer:
             "album_id": album_id,
             "artist_id": artist_id,
             "duration": metadata.get("duration", 0),
-            "track_number": metadata.get("track_number"),
+            "track_number": track_number,
             "disc_number": metadata.get("disc_number"),
             "file_path": file_path,
             "format": metadata.get("format", "unknown"),
@@ -513,8 +550,32 @@ class FileIndexer:
             "enriched": 0,
             "last_updated": int(time.time()),
         }
-        await self.db_manager.insert_track(track_data)
+        if existing_track is None:
+            await self.db_manager.insert_track(track_data)
+        else:
+            # Surgical update, not INSERT OR REPLACE: track_data carries only
+            # indexer-owned columns, so mbid/embeddings/mood survive. enriched
+            # resets to 0, so a changed file re-enriches but reuses embeddings.
+            await self.db_manager.update_track(track_id, track_data)
         changes["tracks"] = track_id
+
+        await self.db_manager.upsert_library_file(
+            track_id, file_path, file_size, modified_time, device_id, inode
+        )
+
+        art_phash = (
+            await asyncio.to_thread(self._art_phash, metadata["album_art"])
+            if "album_art" in metadata
+            else None
+        )
+        await self.db_manager.upsert_track_evidence(
+            track_id,
+            {
+                "raw_tags": metadata.get("raw_tags"),
+                "stream_info": metadata.get("stream_info"),
+                "art_phash": art_phash,
+            },
+        )
 
         await self.db_manager.update_album_stats(album_id)
         # Successfully indexed — drop any stale failure record (e.g. an
@@ -607,6 +668,22 @@ class FileIndexer:
                 apic = id3[tag]
                 metadata["album_art"] = apic.data
                 break
+        # Verbatim text frames (incl. TPE2 album-artist, TCMP compilation) +
+        # stream info for the clusterer. Binary frames (APIC) skipped.
+        metadata["raw_tags"] = {
+            key: str(frame)
+            for key, frame in id3.items()
+            if not key.startswith("APIC")
+        }
+        metadata["stream_info"] = {
+            "sample_rate": getattr(mp3.info, "sample_rate", None),
+            "channels": getattr(mp3.info, "channels", None),
+            "bitrate": getattr(mp3.info, "bitrate", None),
+            "codec": "mp3",
+            "encoder": str(id3["TSSE"])
+            if "TSSE" in id3
+            else (str(id3["TENC"]) if "TENC" in id3 else None),
+        }
         return metadata
 
     def _extract_flac_metadata(self, file_path: str, metadata: Dict) -> Dict:
@@ -665,7 +742,40 @@ class FileIndexer:
                     break
             else:
                 metadata["album_art"] = pictures[0].data
+        # Every Vorbis comment verbatim (incl. albumartist/compilation) +
+        # stream info. Keys can repeat, so values are lists.
+        metadata["raw_tags"] = {key: list(flac[key]) for key in flac.keys()}
+        metadata["stream_info"] = {
+            "sample_rate": getattr(flac.info, "sample_rate", None),
+            "bits_per_sample": getattr(flac.info, "bits_per_sample", None),
+            "channels": getattr(flac.info, "channels", None),
+            "codec": "flac",
+            "encoder": flac["encoder"][0] if "encoder" in flac else None,
+        }
         return metadata
+
+    @staticmethod
+    def _art_phash(image_data: bytes) -> Optional[str]:
+        """64-bit row-difference hash (dHash) of embedded art, 16 hex or None.
+
+        Adjacent-pixel brightness on a 9x8 grayscale downscale. Same cover ->
+        small Hamming distance; robust to re-encoding/resize.
+        """
+        try:
+            img = Image.open(io.BytesIO(image_data)).convert("L").resize(
+                (9, 8), Image.Resampling.LANCZOS
+            )
+            px = img.tobytes()  # 72 bytes, one grayscale value per pixel
+            bits = 0
+            for row in range(8):
+                for col in range(8):
+                    left = px[row * 9 + col]
+                    right = px[row * 9 + col + 1]
+                    bits = (bits << 1) | (1 if left > right else 0)
+            return f"{bits:016x}"
+        except Exception as e:
+            logger.debug("art phash failed: %s", e)
+            return None
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
         """Save artwork images in different sizes"""
@@ -699,6 +809,104 @@ class FileIndexer:
                 f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
             )
             return False
+
+    async def recluster(self) -> Dict[str, int]:
+        """Folder-first album grouping over the whole library.
+
+        Plans each folder (folder-first partition + V/A classification), merges
+        disc-sibling folders, assigns stable album ids (overlap reattach so an
+        unchanged library is a no-op), then applies: album rows, guarded
+        album_id reassignment, album_cluster rows, and id aliases. Replaces the
+        V/A-only pass when folder_first_clustering is on.
+        """
+        from ..clustering.cluster_db import AsyncClusterDb
+        from ..clustering.identity import assign_stable_ids
+        from ..clustering.merge import merge_disc_siblings
+        from ..clustering.planner import plan_folder
+
+        rows = await self.db_manager.get_tracks_with_evidence()
+        if not rows:
+            return {"clusters": 0, "reassigned": 0, "aliases": 0, "orphans": 0}
+
+        by_folder: Dict[str, List] = {}
+        current_album_of: Dict[str, str] = {}
+        for track, ev in rows:
+            folder = album_folder_for_path(track.get("file_path") or "")
+            if not folder:
+                continue
+            by_folder.setdefault(folder, []).append((track, ev))
+            current_album_of[track["id"]] = track.get("album_id") or "unknown_album"
+
+        clusters = []
+        for folder, folder_rows in by_folder.items():
+            clusters.extend(plan_folder(folder, folder_rows).clusters)
+        clusters = merge_disc_siblings(clusters)
+
+        ids, aliases = assign_stable_ids(clusters, current_album_of)
+
+        cluster_db = AsyncClusterDb(self.config)
+        va_seeded = False
+        reassigned = 0
+        affected_albums: Set[str] = set()
+
+        for cluster, album_id in zip(clusters, ids):
+            if cluster.kind != "singles_pool":
+                anchor = cluster.anchor_artist_id
+                if cluster.kind == "compilation" and not va_seeded:
+                    await self._ensure_various_artists()
+                    va_seeded = True
+                existing = await self.db_manager.get_album_by_id(album_id)
+                if existing is None:
+                    await self.db_manager.insert_album(
+                        {
+                            "id": album_id,
+                            "title": cluster.title or "Unknown Album",
+                            "artist_id": anchor,
+                            "enriched": 0,
+                            "last_updated": int(time.time()),
+                        }
+                    )
+                else:
+                    # Refresh the anchor (e.g. re-point to Various Artists) and
+                    # the title. Titles are always locally derived (MusicBrainz
+                    # never sets one), so cleaning a folder/tag-junk title here
+                    # can't clobber an external title; covers are untouched.
+                    fixes = {}
+                    if existing.get("artist_id") != anchor:
+                        fixes["artist_id"] = anchor
+                    if cluster.title and existing.get("title") != cluster.title:
+                        fixes["title"] = cluster.title
+                    if fixes:
+                        await self.db_manager.update_album(album_id, fixes)
+                await cluster_db.upsert_cluster(
+                    album_id,
+                    primary_folder=cluster.folder,
+                    grouping_conf=1.0,
+                    grouping_basis=json.dumps(cluster.grouping_basis),
+                    kind=cluster.kind,
+                    bump_generation=True,
+                )
+            affected_albums.add(album_id)
+            for tid in cluster.track_ids:
+                if current_album_of.get(tid) != album_id:
+                    await self.db_manager.reassign_album(tid, album_id)
+                    affected_albums.add(current_album_of.get(tid) or "unknown_album")
+                    reassigned += 1
+
+        for old_id, new_id in aliases:
+            await cluster_db.add_alias(old_id, new_id, "album")
+
+        for album_id in affected_albums:
+            if album_id and album_id != "unknown_album":
+                await self.db_manager.update_album_stats(album_id)
+
+        deleted_albums, _ = await self.db_manager.delete_orphaned_albums_and_artists()
+        return {
+            "clusters": len(clusters),
+            "reassigned": reassigned,
+            "aliases": len(aliases),
+            "orphans": deleted_albums,
+        }
 
     async def orphan_va_folder_tracks(self) -> Dict[str, int]:
         """Coalesce a V/A folder's per-track albums into one compilation album.
@@ -777,7 +985,7 @@ class FileIndexer:
             #     tracks are remixer-credited -> that artist's album (so it
             #     doesn't masquerade as a Various-Artists compilation)
             #   * otherwise           -> a Various-Artists compilation album
-            comp_title = self._compilation_title(folder)
+            comp_title = _compilation_title(folder)
             album_reanchored = False
             if comp_title is None:
                 target_id = "unknown_album"
@@ -788,7 +996,7 @@ class FileIndexer:
                 )
                 if parent_artist is not None:
                     owner_id = parent_artist["id"]
-                    display_title = self._strip_artist_prefix(
+                    display_title = _strip_artist_prefix(
                         comp_title, parent_artist["name"]
                     )
                     dest = f"album '{display_title}' under {parent_artist['name']}"
@@ -855,31 +1063,6 @@ class FileIndexer:
             "orphans": deleted_albums,
         }
 
-    def _compilation_title(self, folder: str) -> Optional[str]:
-        """Album title for a V/A folder, or None if it's a generic dump that
-        shouldn't become an album (a top-level ``music`` dir, a personal
-        ``90s Mixes`` pile, etc.).
-
-        A folder explicitly marked ``VA -`` / ``Various Artists -`` is a
-        declared compilation, so it bypasses the generic-dump heuristic (e.g.
-        ``VA - Trance Mixes`` must not be rejected by the ``mix`` rule)."""
-        name = os.path.basename(folder).strip()
-        # Strip the V/A marker first so the heuristic and the title both see
-        # the real name.
-        title = _VA_PREFIX_RE.sub("", name).strip()
-        explicit_va = title != name
-        if not title:
-            return None
-        if not explicit_va and _GENERIC_FOLDER_RE.match(title):
-            return None
-        # A bare "Disc 1" / "Volume 2" folder is meaningless on its own — most
-        # disc subdirs are already collapsed by album_folder_for_path, but for
-        # the rest borrow the parent dir for a real title.
-        if _BARE_DISC_RE.match(title):
-            parent = os.path.basename(os.path.dirname(folder)).strip()
-            title = f"{parent} {title}".strip() if parent else title
-        return title or None
-
     async def _ensure_various_artists(self) -> None:
         """Seed the Various-Artists sentinel artist (compilation albums hang
         off it; real per-track artists are preserved on the tracks)."""
@@ -910,18 +1093,6 @@ class FileIndexer:
         if not (artist_folders.get(artist_id, set()) - {folder}):
             return None
         return await self.db_manager.get_artist_by_id(artist_id)
-
-    @staticmethod
-    def _strip_artist_prefix(title: str, artist_name: str) -> str:
-        """Drop a leading artist name from a title so it reads cleanly once the
-        album is attributed to that artist (``Ratatat Remixes Vol. 2`` ->
-        ``Remixes Vol. 2``). Only strips at a separator/word boundary, so
-        artist ``AB`` does not corrupt ``ABBA Gold``."""
-        if title.lower().startswith(artist_name.lower()):
-            rest = title[len(artist_name) :]
-            if not rest or rest[0] in " -–—":  # boundary required
-                return rest.lstrip(" -–—") or title
-        return title
 
     async def _ensure_compilation_album(
         self, album_id: str, title: str, artist_id: str
