@@ -26,9 +26,6 @@ class EmbedderClapConfig(BaseModel):
         ),
         json_schema_extra={"widget": "path"},
     )
-    dimensions: int = Field(
-        default=512, frozen=True, title="Embedding dimensions"
-    )
     current_version: int = Field(
         # v4: float32 -> int8 vectors. Keys embedding_jobs.model_version to
         # reschedule the embed jobs; independent of (and need not match)
@@ -41,25 +38,11 @@ class EmbedderClapConfig(BaseModel):
 
 
 class AiSearchConfig(BaseModel):
-    weight_clap_similarity: float = Field(
-        default=0.75, ge=0.0, le=1.0, title="CLAP similarity weight",
-    )
-    weight_popularity: float = Field(
-        default=0.10, ge=0.0, le=1.0, title="Popularity weight",
-    )
     max_results: int = Field(
         default=20, title="Max results per entity type",
     )
     knn_candidates: int = Field(
         default=50, title="KNN candidates before re-ranking",
-    )
-    fallback_coverage_threshold: float = Field(
-        default=10.0,
-        title="Fallback coverage threshold",
-        json_schema_extra={
-            "help": "Warn when less than this share of the library is indexed for AI search",
-            "constraints": {"unit": "%"},
-        },
     )
 
 
@@ -327,7 +310,7 @@ class LocalFilesConfig(ModuleConfig):
         json_schema_extra={"help": "Rescan on filesystem changes", **_SIMPLE},
     )
     folder_first_clustering: bool = Field(
-        default=False,
+        default=True,
         title="Folder-first album grouping",
         json_schema_extra={
             "help": (
