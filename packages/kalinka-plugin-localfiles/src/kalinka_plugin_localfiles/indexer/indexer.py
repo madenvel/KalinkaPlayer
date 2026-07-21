@@ -8,7 +8,6 @@ import time
 import logging
 import asyncio
 import mimetypes
-import multiprocessing
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pathlib import Path
@@ -34,7 +33,6 @@ from ..utils.name_utils import (
     parse_leading_track_number,
     path_within_roots,
 )
-from ..worker_utils import set_proc_title
 from .id_generator import (
     generate_artist_id,
     generate_album_id,
@@ -73,7 +71,10 @@ _indexer_queue: asyncio.Queue = asyncio.Queue()
 _file_watcher_task: Optional[asyncio.Task] = None
 _file_watcher_stop_event: asyncio.Event = asyncio.Event()
 _shutdown_event = asyncio.Event()
-_enricher_queue: Optional[multiprocessing.Queue] = None
+# In-process handoff to the enricher worker (both run in the librarian
+# process). Set by librarian.async_main; None only in unit tests that
+# exercise FileIndexer without a running enricher.
+_enricher_queue: Optional[asyncio.Queue] = None
 
 
 async def trigger_enricher_update(data):
@@ -85,13 +86,10 @@ async def trigger_enricher_update(data):
     logger.debug(f"Triggering enricher update with data: {data}")
 
     if _enricher_queue is None:
-        logger.error("Enricher queue is not initialized; cannot trigger update")
+        logger.debug("Enricher queue not initialized; skipping enrich trigger")
         return
 
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None, lambda: _enricher_queue.put(data, block=True, timeout=30.0)
-    )
+    await _enricher_queue.put(data)
 
 
 def is_supported_audio_file(filename: str) -> bool:
@@ -1531,66 +1529,6 @@ def start_file_watcher(config: LocalFilesConfig) -> Optional[asyncio.Task]:
     return _file_watcher_task
 
 
-async def async_main(config: LocalFilesConfig):
-    """Runs the main application logic asynchronously."""
-    global _indexer_task, _file_watcher_task, _shutdown_event
-
-    db_manager = AsyncIndexerDb(config)
-
-    loop = asyncio.get_running_loop()
-
-    import signal
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown_event.set)
-
-    _indexer_task = start_indexer(config, db_manager)
-    _file_watcher_task = start_file_watcher(config)
-
-    try:
-        await _shutdown_event.wait()
-    except asyncio.CancelledError:
-        logger.info("Server cancelled, shutting down...")
-    except Exception as e:
-        logger.exception(f"Error in main loop: {str(e)}")
-    finally:
-        logger.info("Main async runner initiating shutdown of tasks...")
-        if _file_watcher_task and not _file_watcher_task.done():
-            logger.info("Stopping file watcher task...")
-            await stop_file_watcher()
-        else:
-            logger.info("File watcher task was not running or already done.")
-
-        if _indexer_task and not _indexer_task.done():
-            logger.info("Stopping indexer task...")
-            await stop_indexer()
-        else:
-            logger.info("Indexer task was not running or already done.")
-
-        logger.info("All background tasks processed for shutdown.")
-
-
-def main(config: LocalFilesConfig, enricher_queue, logger_queue):
-    """Main entry point for the indexer daemon."""
-
-    set_proc_title("kal-indexer")
-
-    global _enricher_queue
-    _enricher_queue = enricher_queue
-    try:
-        import logging.handlers
-
-        root = logging.getLogger()
-        for handler in root.handlers[:]:
-            root.removeHandler(handler)
-        # Set root logger level to DEBUG to allow all logs through to the queue
-        root.setLevel(logging.DEBUG)
-        root.addHandler(logging.handlers.QueueHandler(logger_queue))
-
-        asyncio.run(async_main(config))
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
-    except Exception as e:
-        logger.critical(f"Unhandled exception in asyncio.run: {e}", exc_info=True)
-    finally:
-        logger.info("Indexer daemon finished.")
+# Process orchestration lives in librarian.py, which runs this indexer's
+# worker loops and the enricher's in one event loop (Phase 2b). The
+# start_indexer / start_file_watcher / stop_* helpers above are its API.
