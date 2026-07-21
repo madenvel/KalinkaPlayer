@@ -234,6 +234,71 @@ async def init_db(db_path: str) -> None:
             "ON entity_id_alias(current_id)"
         )
 
+        # Field-level claims (Phase 2c). SPARSE: only rows worth keeping are
+        # stored — winning non-local claims (external/inference values that can
+        # expire or be rejected), pinned claims, and conflicts. Uncontested
+        # purely-local values resolve straight into the entity row and are
+        # re-derivable from track_evidence, so they are not stored here; their
+        # provenance still lands in resolved_origin.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata_claims (
+                entity_type TEXT NOT NULL,
+                entity_id   TEXT NOT NULL,
+                field       TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                tier        TEXT NOT NULL,
+                created_at  INTEGER,
+                PRIMARY KEY (entity_type, entity_id, field, source)
+            )
+            """
+        )
+
+        # Provenance for EVERY resolved field, including uncontested ones. This
+        # is what keeps sparse claims compatible with re-derivability: claims
+        # record only conflicts, but the winner's origin is always known, so the
+        # resolver can tell whether a value must be recomputed when its source's
+        # evidence changes or a provider is disabled.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS resolved_origin (
+                entity_type  TEXT NOT NULL,
+                entity_id    TEXT NOT NULL,
+                field        TEXT NOT NULL,
+                source       TEXT NOT NULL,
+                tier         TEXT NOT NULL,
+                evidence_ref TEXT,
+                resolved_at  INTEGER,
+                PRIMARY KEY (entity_type, entity_id, field)
+            )
+            """
+        )
+
+        # Semantic links between two live entities (same_identity, variant_of,
+        # release_group_member, ...) — the propagation channels the library-wide
+        # inference pass depends on. Distinct from entity_id_alias, which only
+        # redirects a replaced id; a relation asserts a fact ABOUT two entities.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS entity_relation (
+                source_type TEXT NOT NULL,
+                source_id   TEXT NOT NULL,
+                relation    TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                created_at  INTEGER NOT NULL,
+                PRIMARY KEY (source_type, source_id, relation, target_type, target_id)
+            )
+            """
+        )
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entity_relation_target "
+            "ON entity_relation(target_type, target_id)"
+        )
+
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS playlists (
@@ -400,6 +465,16 @@ async def init_db(db_path: str) -> None:
             if col not in track_cols:
                 await cursor.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
                 logger.info("Added tracks.%s column", col)
+        # Per-field origin/era columns (Phase 2c) — one column, one meaning, so
+        # inference can never launder a release fact into a recording fact.
+        # recording_year: a track can predate the release it appears on;
+        # language: a track can differ from the release's language.
+        if "recording_year" not in track_cols:
+            await cursor.execute("ALTER TABLE tracks ADD COLUMN recording_year INTEGER")
+            logger.info("Added tracks.recording_year column")
+        if "language" not in track_cols:
+            await cursor.execute("ALTER TABLE tracks ADD COLUMN language TEXT")
+            logger.info("Added tracks.language column")
 
         # Origin/era metadata (nationality + language + first-release year) so
         # queries like "italian 80s" resolve on structured facts instead of CLAP,
@@ -421,6 +496,11 @@ async def init_db(db_path: str) -> None:
         if "original_year" not in album_cols:
             await cursor.execute("ALTER TABLE albums ADD COLUMN original_year INTEGER")
             logger.info("Added albums.original_year column")
+        # Release country (Phase 2c) — distinct from artists.country (origin);
+        # a release can be issued in a different country than the artist's.
+        if "country" not in album_cols:
+            await cursor.execute("ALTER TABLE albums ADD COLUMN country TEXT")
+            logger.info("Added albums.country column")
         # Marks covers produced by the procedural artwork generator, so the
         # FAILED-row retry sweep can clear them and give real sources
         # another chance when the enrichment setup changes.
