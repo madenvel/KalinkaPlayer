@@ -60,7 +60,7 @@ async def async_main(
     enricher_task = None
     if enricher_enabled:
         enricher_mod._enricher_queue = enrich_queue
-        enricher_mod._embedder_nudge_queue = searcher_nudge_queue
+        enricher_mod._searcher_nudge_queue = searcher_nudge_queue
         enricher_mod._shutdown_event = shutdown_event
         enricher_task = enricher_mod.start_enricher(config, AsyncEnricherDb(config))
 

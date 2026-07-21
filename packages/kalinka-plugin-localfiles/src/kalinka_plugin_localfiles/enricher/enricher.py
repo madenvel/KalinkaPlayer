@@ -42,7 +42,9 @@ TRACK_REQUIRED_FIELDS = [
 # in-process asyncio queue, and the searcher nudge stays cross-process.
 _enricher_task: Optional[asyncio.Task] = None
 _enricher_queue: Optional[asyncio.Queue] = None
-_embedder_nudge_queue: Optional[multiprocessing.Queue] = None
+# Nudges the searcher (a separate process) to re-tag once enrichment finishes;
+# the searcher in turn nudges the embedder. Stays a cross-process queue.
+_searcher_nudge_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
@@ -475,9 +477,9 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                 elif command == "enrich":
                     logger.debug("Manual enrichment triggered")
                     await enricher_instance.start()
-                    if _embedder_nudge_queue is not None:
+                    if _searcher_nudge_queue is not None:
                         try:
-                            _embedder_nudge_queue.put_nowait("nudge")
+                            _searcher_nudge_queue.put_nowait("nudge")
                         except Exception:
                             pass
 
