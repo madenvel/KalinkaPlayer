@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -48,8 +49,10 @@ class WikidataPlugin(EnricherPlugin):
             # Get MusicBrainz artist with relations
             artist_mbid = artist["mbid"]
 
-            mb_result = musicbrainzngs.get_artist_by_id(
-                artist_mbid, includes=["url-rels"]
+            mb_result = await asyncio.to_thread(
+                musicbrainzngs.get_artist_by_id,
+                artist_mbid,
+                includes=["url-rels"],
             )
             mb_artist = mb_result["artist"]
 
