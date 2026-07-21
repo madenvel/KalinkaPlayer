@@ -124,8 +124,8 @@ class TestFilesystemFallbackPlugin:
 
 
 class TestNoSpaceDotPrefix:
-    """"N.Title" filenames (no space after the dot) parse number + clean title,
-    and a stem-echo title (basename minus extension) still counts as a
+    """Filenames shaped N.Title (no space after the dot) parse number + clean
+    title, and a stem-echo title (basename minus extension) still counts as a
     filename placeholder so a retry can improve it."""
 
     def test_extract_number_and_title_no_space(self, plugin):

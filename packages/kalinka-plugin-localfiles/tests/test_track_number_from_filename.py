@@ -37,6 +37,15 @@ def test_parse_no_space_dot_prefix():
     assert parse_leading_track_number("2001.A Space Odyssey") is None
 
 
+def test_year_prefix_not_eaten_in_spaced_forms():
+    # The spaced patterns are capped at three digits, so a 4-digit year is
+    # never a track number — while 100+ tracks on big sets still parse.
+    assert parse_leading_track_number("1985. Some Song") is None
+    assert parse_leading_track_number("1985- Some Song") is None
+    assert parse_leading_track_number("1985_ Some Song") is None
+    assert parse_leading_track_number("100. Title") == 100
+
+
 @pytest_asyncio.fixture
 async def indexer(tmp_path):
     music = tmp_path / "music"
