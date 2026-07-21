@@ -229,6 +229,39 @@ class AsyncIndexerDb:
             )
             await conn.commit()
 
+    async def get_library_file_by_inode(
+        self, device_id: str, inode: str
+    ) -> Optional[Dict]:
+        """The library_file row for a (device, inode) pair, if any — the
+        move-detection lookup."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT * FROM library_file WHERE device_id = ? AND inode = ?",
+                (device_id, inode),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def move_track(self, track_id: str, new_path: str) -> None:
+        """Re-point a moved/renamed file to its new path, keeping identity.
+
+        Updates tracks.file_path and library_file.current_path together; the
+        id, first_indexed, evidence and enrichment all stay. This is the
+        "rename is an UPDATE, not delete-plus-create" half of stable file
+        identity.
+        """
+        async with self._open() as conn:
+            await conn.execute(
+                "UPDATE tracks SET file_path = ? WHERE id = ?",
+                (new_path, track_id),
+            )
+            await conn.execute(
+                "UPDATE library_file SET current_path = ? WHERE file_id = ?",
+                (new_path, track_id),
+            )
+            await conn.commit()
+
     async def upsert_track_evidence(
         self, track_id: str, evidence: Dict[str, Any]
     ) -> None:

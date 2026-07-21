@@ -403,11 +403,38 @@ class FileIndexer:
         mtime_ns = stat.st_mtime_ns
 
         existing_track = await self.db_manager.get_track_by_path(file_path)
+        if existing_track is None:
+            # Move/rename detection: an unknown path whose (device, inode)
+            # matches a known file — with the same size and the old path gone —
+            # is that file after a rename, not a new one. Re-point the paths
+            # and keep the identity (id, first_indexed, evidence, enrichment).
+            # A copy (old path still present) or a cross-device move (new
+            # inode) legitimately mints a new identity. Works for both inotify
+            # moves and rescans, because stale-row cleanup runs after this.
+            known = await self.db_manager.get_library_file_by_inode(
+                device_id, inode
+            )
+            if (
+                known
+                and known["current_path"] != file_path
+                and known["size_bytes"] == file_size
+                and not os.path.exists(known["current_path"])
+            ):
+                logger.info(
+                    f"File moved: {known['current_path']} -> {file_path}"
+                )
+                await self.db_manager.move_track(known["file_id"], file_path)
+                existing_track = await self.db_manager.get_track_by_path(
+                    file_path
+                )
         if (
             existing_track
             and existing_track["modified_time"] == modified_time
             and existing_track["file_size"] == file_size
         ):
+            # Unchanged content (incl. a pure rename — the paths were just
+            # re-pointed above; regrouping for a folder move happens in the
+            # clustering pass at the end of this scan).
             logger.debug(f"File unchanged, skipping: {file_path}")
             return None
 
