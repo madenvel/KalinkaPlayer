@@ -160,7 +160,9 @@ def find_cue_for(audio_path: str) -> Optional[str]:
         entries = os.listdir(directory)
     except OSError:
         return None
-    for entry in entries:
+    # listdir order is filesystem-defined; sort so a folder with several cue
+    # files always resolves to the same one.
+    for entry in sorted(entries):
         if not entry.lower().endswith(".cue"):
             continue
         cue_path = os.path.join(directory, entry)

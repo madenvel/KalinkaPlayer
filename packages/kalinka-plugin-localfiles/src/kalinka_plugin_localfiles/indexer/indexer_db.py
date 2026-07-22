@@ -265,10 +265,11 @@ class AsyncIndexerDb:
     async def upsert_track_evidence(
         self, track_id: str, evidence: Dict[str, Any]
     ) -> None:
-        """Upsert the current-snapshot evidence row (only named columns, so
-        fingerprint/cue set later survive). art_phash/import_batch are kept
-        when a refresh omits them — a retag without art shouldn't drop the
-        hash."""
+        """Upsert the current-snapshot evidence row (only named columns, so a
+        fingerprint set later survives). art_phash/cue_sheet/cue_tracks/
+        import_batch are kept when a refresh omits them — a transient miss (no
+        embedded art this pass, a momentarily missing or unparseable cue)
+        shouldn't erase evidence already captured."""
         raw_tags = evidence.get("raw_tags")
         stream_info = evidence.get("stream_info")
         cue_tracks = evidence.get("cue_tracks")
@@ -284,8 +285,10 @@ class AsyncIndexerDb:
                     stream_info  = excluded.stream_info,
                     art_phash    = COALESCE(excluded.art_phash,
                                             track_evidence.art_phash),
-                    cue_sheet    = excluded.cue_sheet,
-                    cue_tracks   = excluded.cue_tracks,
+                    cue_sheet    = COALESCE(excluded.cue_sheet,
+                                            track_evidence.cue_sheet),
+                    cue_tracks   = COALESCE(excluded.cue_tracks,
+                                            track_evidence.cue_tracks),
                     import_batch = COALESCE(excluded.import_batch,
                                             track_evidence.import_batch),
                     updated_at   = excluded.updated_at
