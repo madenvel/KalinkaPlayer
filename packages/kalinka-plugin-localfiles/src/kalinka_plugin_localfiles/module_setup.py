@@ -21,8 +21,7 @@ from .db_schema import init_db
 from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
 from .optional_packages import OPTIONAL_PACKAGES
-from . import enricher
-from . import indexer
+from . import librarian
 from . import embedder
 from . import searcher
 
@@ -99,11 +98,11 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     }
 
     def __init__(self):
-        self._enricher_proc = None
-        self._indexer_proc = None
+        # The indexer and enricher share one "librarian" process (single DB
+        # writer); the searcher and embedder stay separate.
+        self._librarian_proc = None
         self._searcher_proc = None
         self._embedder_proc = None
-        self._enricher_queue = multiprocessing.Queue()
         self._searcher_nudge_queue = multiprocessing.Queue()
         self._embedder_nudge_queue = multiprocessing.Queue()
         self._logging_queue = multiprocessing.Queue()
@@ -197,25 +196,18 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         # any subprocess starts, so there is no lock contention.
         await init_db(config.db_path)
 
-        self._indexer_proc = multiprocessing.Process(
-            target=indexer.main,
-            args=(config, self._enricher_queue, self._logging_queue),
+        # Indexer + enricher run in one process, wired by an in-process queue.
+        # It nudges the searcher (not the embedder directly) when enrichment
+        # completes; the enricher leg only runs if config.enricher.enabled.
+        self._librarian_proc = multiprocessing.Process(
+            target=librarian.main,
+            args=(
+                config,
+                self._logging_queue,
+                self._searcher_nudge_queue,
+            ),
         )
-
-        self._indexer_proc.start()
-
-        if config.enricher.enabled:
-            # Enricher nudges the searcher (not the embedder directly)
-            self._enricher_proc = multiprocessing.Process(
-                target=enricher.main,
-                args=(
-                    config,
-                    self._enricher_queue,
-                    self._logging_queue,
-                    self._searcher_nudge_queue,
-                ),
-            )
-            self._enricher_proc.start()
+        self._librarian_proc.start()
 
         # The embedder process must run when:
         # 1. embedder.enabled — to compute CLAP audio/text embeddings, or
@@ -286,14 +278,18 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         """
         await asyncio.sleep(0.2)
 
-        # Indexer: always starts. Mark ERROR only if the Process failed to start.
+        # Indexer: always starts (as the librarian process). Mark ERROR only
+        # if that process failed to start.
+        librarian_alive = (
+            self._librarian_proc is not None and self._librarian_proc.is_alive()
+        )
         idx = self._subfeatures["indexer"]
-        if self._indexer_proc is not None and self._indexer_proc.is_alive():
+        if librarian_alive:
             idx.state = ModuleHealthState.READY
             idx.message = ""
         else:
             idx.state = ModuleHealthState.ERROR
-            idx.message = "Indexer subprocess failed to start."
+            idx.message = "Librarian subprocess failed to start."
 
         # Music folders: a missing or unreadable folder doesn't crash the
         # indexer — it just finds nothing — which makes it the most silent
@@ -325,9 +321,9 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         if not config.enricher.enabled:
             enr.state = ModuleHealthState.DISABLED
             enr.message = "Disabled in configuration."
-        elif self._enricher_proc is None or not self._enricher_proc.is_alive():
+        elif not librarian_alive:
             enr.state = ModuleHealthState.ERROR
-            enr.message = "Enricher subprocess failed to start."
+            enr.message = "Librarian subprocess failed to start."
         elif config.enricher.plugins.procedural_artwork.enabled and not _is_importable(
             "numpy"
         ):
@@ -540,8 +536,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     async def shutdown(self) -> None:
         logger.info("Shutting down localfiles input module")
 
-        self._shutdown_process(self._indexer_proc)
-        self._shutdown_process(self._enricher_proc)
+        self._shutdown_process(self._librarian_proc)
         self._shutdown_process(self._searcher_proc)
         self._shutdown_process(self._embedder_proc)
 
@@ -550,7 +545,6 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
         # Ensure multiprocessing queues release their semaphores
         for q in (
-            self._enricher_queue,
             self._searcher_nudge_queue,
             self._embedder_nudge_queue,
             self._logging_queue,

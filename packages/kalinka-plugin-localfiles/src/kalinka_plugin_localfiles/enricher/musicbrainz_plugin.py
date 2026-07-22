@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import musicbrainzngs
 import re
@@ -264,7 +265,8 @@ class MusicBrainzPlugin(EnricherPlugin):
             logger.debug(f"Enriching artist: {artist['name']}")
 
             # Use alias to improve search, and limit results for faster processing
-            result = musicbrainzngs.search_artists(
+            result = await asyncio.to_thread(
+                musicbrainzngs.search_artists,
                 artist["name"],
                 strict=True,  # Use strict search mode
                 limit=20,  # Limit results to top matches
@@ -392,7 +394,8 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             logger.debug(f"Enriching album: {album['title']} by {album['artist_name']}")
 
-            result = musicbrainzngs.search_releases(
+            result = await asyncio.to_thread(
+                musicbrainzngs.search_releases,
                 album["title"],
                 artistname=album["artist_name"],
                 strict=True,
@@ -426,7 +429,8 @@ class MusicBrainzPlugin(EnricherPlugin):
             scored: List[Tuple[Dict, float, float, Dict]] = []
             for cand, base_score, similarity in shortlist[:3]:
                 try:
-                    details = musicbrainzngs.get_release_by_id(
+                    details = await asyncio.to_thread(
+                        musicbrainzngs.get_release_by_id,
                         cand["id"],
                         includes=["recordings", "artist-credits", "tags",
                                   "release-groups"],
@@ -552,8 +556,10 @@ class MusicBrainzPlugin(EnricherPlugin):
         if cached is not None:
             return cached
         try:
-            details = musicbrainzngs.get_release_by_id(
-                release_mbid, includes=["recordings"]
+            details = await asyncio.to_thread(
+                musicbrainzngs.get_release_by_id,
+                release_mbid,
+                includes=["recordings"],
             )
         except Exception as e:
             logger.debug(
@@ -713,7 +719,8 @@ class MusicBrainzPlugin(EnricherPlugin):
             )
 
             # ---- Path 2: fallback global recording search ----
-            result = musicbrainzngs.search_recordings(
+            result = await asyncio.to_thread(
+                musicbrainzngs.search_recordings,
                 track["title"],
                 artistname=track["artist_name"],
                 release=track["album_title"],

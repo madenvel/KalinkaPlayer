@@ -5,12 +5,9 @@ import enum
 import importlib.util
 import json
 import logging
-import queue
-import signal
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
-from ..worker_utils import set_proc_title
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -40,10 +37,14 @@ TRACK_REQUIRED_FIELDS = [
     "track_number",
 ]
 
-# Global variables to manage enricher state
+# Global variables to manage enricher state. The enricher runs inside the
+# librarian process (Phase 2b); the indexer feeds it "enrich"/"stop" over an
+# in-process asyncio queue, and the searcher nudge stays cross-process.
 _enricher_task: Optional[asyncio.Task] = None
-_enricher_queue: Optional[multiprocessing.Queue] = None
-_embedder_nudge_queue: Optional[multiprocessing.Queue] = None
+_enricher_queue: Optional[asyncio.Queue] = None
+# Nudges the searcher (a separate process) to re-tag once enrichment finishes;
+# the searcher in turn nudges the embedder. Stays a cross-process queue.
+_searcher_nudge_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
@@ -407,8 +408,13 @@ class MetadataEnricher:
             not is_fully_enriched
             and updated_track.get("enriched") != EnrichmentStatus.ENRICHED
         ):
-            logger.info(
-                f"Track {track['id']} failed enrichment - missing required fields"
+            missing = [f for f in TRACK_REQUIRED_FIELDS if not updated_track.get(f)]
+            # file_path identifies the track even when title/artist are missing
+            where = updated_track.get("file_path") or track["id"]
+            logger.debug(
+                "Track %s failed enrichment - missing: %s",
+                where,
+                ", ".join(missing),
             )
             updated_track["enriched"] = EnrichmentStatus.FAILED
             had_updates = True
@@ -463,10 +469,8 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
         try:
             # Check for commands with timeout
             try:
-                # Use run_in_executor to call the blocking get() in a non-blocking way
-                loop = asyncio.get_running_loop()
-                command = await loop.run_in_executor(
-                    None, lambda: _enricher_queue.get(block=True, timeout=30.0)
+                command = await asyncio.wait_for(
+                    _enricher_queue.get(), timeout=30.0
                 )
 
                 logger.debug("Received command from queue: %s", command)
@@ -478,13 +482,13 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                 elif command == "enrich":
                     logger.debug("Manual enrichment triggered")
                     await enricher_instance.start()
-                    if _embedder_nudge_queue is not None:
+                    if _searcher_nudge_queue is not None:
                         try:
-                            _embedder_nudge_queue.put_nowait("nudge")
+                            _searcher_nudge_queue.put_nowait("nudge")
                         except Exception:
                             pass
 
-            except queue.Empty:
+            except asyncio.TimeoutError:
                 # No command in the timeout window; loop and wait again.
                 logger.debug("No enricher commands received; continuing to wait")
                 continue
@@ -529,7 +533,7 @@ async def stop_enricher() -> bool:
             if _enricher_queue is None:
                 logger.error("Enricher queue is not initialized; cannot send stop")
                 return False
-            _enricher_queue.put("stop")
+            _enricher_queue.put_nowait("stop")
 
             await asyncio.wait_for(_enricher_task, timeout=10.0)
             return True
@@ -551,64 +555,6 @@ async def stop_enricher() -> bool:
     return False
 
 
-async def async_main(config: LocalFilesConfig):
-    """Runs the main application logic asynchronously."""
-    global _enricher_task, _shutdown_event
-
-    db_manager = AsyncEnricherDb(config)
-
-    loop = asyncio.get_running_loop()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown_event.set)
-
-    _enricher_task = start_enricher(config, db_manager)
-
-    try:
-        await _shutdown_event.wait()
-    except asyncio.CancelledError:
-        logger.info("Server cancelled, shutting down...")
-    except Exception as e:
-        logger.exception(f"Error in main loop: {str(e)}")
-    finally:
-        logger.info("Main async runner initiating shutdown of tasks...")
-
-        if _enricher_task and not _enricher_task.done():
-            await stop_enricher()
-        else:
-            logger.info("Enricher task already finished.")
-
-        logger.info("All background tasks processed for shutdown.")
-
-
-def main(
-    config: LocalFilesConfig,
-    enricher_queue: multiprocessing.Queue,
-    logger_queue: multiprocessing.Queue,
-    embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
-):
-    """Main entry point for the enricher daemon."""
-
-    set_proc_title("kal-enricher")
-
-    global _enricher_queue, _embedder_nudge_queue
-
-    _enricher_queue = enricher_queue
-    _embedder_nudge_queue = embedder_nudge_queue
-    try:
-        import logging.handlers
-
-        root = logging.getLogger()
-        for handler in root.handlers[:]:
-            root.removeHandler(handler)
-        # Set root logger level to DEBUG to allow all logs through to the queue
-        root.setLevel(logging.DEBUG)
-        root.addHandler(logging.handlers.QueueHandler(logger_queue))
-
-        asyncio.run(async_main(config))
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
-    except Exception as e:
-        logger.critical(f"Unhandled exception in asyncio.run: {e}", exc_info=True)
-    finally:
-        logger.info("Enricher daemon finished.")
+# Process orchestration lives in librarian.py, which runs this enricher's
+# worker loop and the indexer's in one event loop (Phase 2b). start_enricher /
+# stop_enricher above are its API.
