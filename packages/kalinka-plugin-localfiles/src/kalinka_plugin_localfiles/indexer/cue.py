@@ -1,13 +1,7 @@
-"""Minimal CUE-sheet parser.
+"""Minimal CUE-sheet parser for single-file CD rips.
 
-Full-CD rips are often a single audio file plus a sibling ``.cue`` that holds
-the real disc metadata (album, performer) and per-track titles + offsets. That
-metadata is authoritative — far better than parsing it back out of a folder
-name — so the indexer reads it when a file's own tags are empty.
-
-This parses the subset we use: disc-level PERFORMER/TITLE/REM GENRE/REM DATE and
-per-track TITLE/PERFORMER/INDEX. Playback splitting (seeking to INDEX offsets)
-is out of scope here; only metadata is captured.
+Reads the disc header (PERFORMER/TITLE/REM GENRE/REM DATE) and per-track
+TITLE/PERFORMER/INDEX. Playback splitting is out of scope; metadata only.
 """
 
 from __future__ import annotations
@@ -17,9 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-# CUE keywords are ASCII, so they survive every candidate encoding; only the
-# quoted values differ. utf-16 (BOM) and utf-8 are the common real-world
-# encodings; cp1251 before latin-1 keeps Cyrillic titles readable.
+# cp1251 before latin-1 keeps Cyrillic titles readable; see _decode.
 _ENCODINGS = ("utf-8-sig", "utf-16", "cp1251", "latin-1")
 
 _INDEX_RE = re.compile(r"^\s*INDEX\s+(\d+)\s+(\d+):(\d+):(\d+)")
@@ -60,9 +52,8 @@ class CueSheet:
 
 
 def _decode(raw: bytes) -> str:
-    # A wrong encoding can still decode without error (e.g. utf-16 on
-    # single-byte text yields CJK garbage). CUE keywords are ASCII and survive
-    # only the correct decoding, so prefer whichever produces them.
+    # A wrong encoding can decode without erroring (utf-16 on single-byte text
+    # yields garbage), so prefer whichever produces the ASCII cue keywords.
     fallback: Optional[str] = None
     for enc in _ENCODINGS:
         try:

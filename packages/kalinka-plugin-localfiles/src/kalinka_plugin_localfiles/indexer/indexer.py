@@ -612,11 +612,9 @@ class FileIndexer:
             return None
 
     def _augment_with_cue(self, file_path: str, metadata: Dict) -> None:
-        """Fill missing disc metadata from a sibling .cue and stash the parsed
-        tracklist as evidence. A full-CD single-file rip carries its real album,
-        artist and per-track titles in the .cue; that beats parsing them back
-        out of the folder name. Embedded tags still win — the cue only fills
-        fields the file itself left blank."""
+        """Fill blank fields from a sibling .cue (embedded tags still win) and
+        stash the tracklist as evidence. Untagged single-file rips carry their
+        real metadata in the .cue, not the folder name."""
         cue_path = find_cue_for(file_path)
         if not cue_path:
             return
@@ -626,9 +624,7 @@ class FileIndexer:
 
         my_tracks = sheet.tracks_for(os.path.basename(file_path))
         metadata["cue_sheet"] = cue_path
-        # Store the disc header alongside this file's track list so clustering
-        # can prefer the cue's album title over a folder-name guess without
-        # re-reading the file.
+        # Disc header stored too, so clustering can prefer the cue album title.
         metadata["cue_tracks"] = {
             "album": sheet.title,
             "artist": sheet.performer,
@@ -643,9 +639,8 @@ class FileIndexer:
             ],
         }
 
-        # A file that maps to exactly one cue track is a per-track rip: take
-        # that track's title/number. Many tracks in one file is a whole-disc
-        # rip: the disc title labels the single blob until splitting exists.
+        # One cue track for this file -> per-track rip (use its title/number);
+        # many tracks in one file -> whole-disc blob (use the disc title).
         one = my_tracks[0] if len(my_tracks) == 1 else None
 
         if not metadata.get("artist") and sheet.performer:
