@@ -407,8 +407,13 @@ class MetadataEnricher:
             not is_fully_enriched
             and updated_track.get("enriched") != EnrichmentStatus.ENRICHED
         ):
-            logger.info(
-                f"Track {track['id']} failed enrichment - missing required fields"
+            missing = [f for f in TRACK_REQUIRED_FIELDS if not updated_track.get(f)]
+            # file_path identifies the track even when title/artist are missing
+            where = updated_track.get("file_path") or track["id"]
+            logger.debug(
+                "Track %s failed enrichment - missing: %s",
+                where,
+                ", ".join(missing),
             )
             updated_track["enriched"] = EnrichmentStatus.FAILED
             had_updates = True
