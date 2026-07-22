@@ -158,6 +158,7 @@ async def init_db(db_path: str) -> None:
                 stream_info    TEXT,
                 art_phash      TEXT,
                 cue_sheet      TEXT,
+                cue_tracks     TEXT,
                 fingerprint    TEXT,
                 fp_computed_at INTEGER,
                 import_batch   TEXT,
@@ -509,6 +510,13 @@ async def init_db(db_path: str) -> None:
                 "ALTER TABLE albums ADD COLUMN image_generated INTEGER DEFAULT 0"
             )
             logger.info("Added albums.image_generated column")
+
+        # Parsed cue tracklist (JSON) for single-file CD rips.
+        await cursor.execute("PRAGMA table_info(track_evidence)")
+        ev_cols = {row[1] for row in await cursor.fetchall()}
+        if "cue_tracks" not in ev_cols:
+            await cursor.execute("ALTER TABLE track_evidence ADD COLUMN cue_tracks TEXT")
+            logger.info("Added track_evidence.cue_tracks column")
 
         # Backfill file identity from existing tracks (path-hash id becomes
         # file_id; last_updated is the best first_indexed for legacy rows).

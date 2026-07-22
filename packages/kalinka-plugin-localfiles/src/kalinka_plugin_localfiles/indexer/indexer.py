@@ -33,6 +33,7 @@ from ..utils.name_utils import (
     parse_leading_track_number,
     path_within_roots,
 )
+from .cue import find_cue_for, parse_cue
 from .id_generator import (
     generate_artist_id,
     generate_album_id,
@@ -572,6 +573,8 @@ class FileIndexer:
                 "raw_tags": metadata.get("raw_tags"),
                 "stream_info": metadata.get("stream_info"),
                 "art_phash": art_phash,
+                "cue_sheet": metadata.get("cue_sheet"),
+                "cue_tracks": metadata.get("cue_tracks"),
             },
         )
 
@@ -593,17 +596,70 @@ class FileIndexer:
                 "format": mime_type,
             }
             if "audio/mpeg" in mime_type:
-                return self._extract_mp3_metadata(file_path, metadata)
+                metadata = self._extract_mp3_metadata(file_path, metadata)
             elif "audio/flac" in mime_type:
-                return self._extract_flac_metadata(file_path, metadata)
+                metadata = self._extract_flac_metadata(file_path, metadata)
             else:
                 logger.warning(
                     f"Unsupported file format: {file_path}, format: {mime_type}"
                 )
                 return None
+            if metadata is not None:
+                self._augment_with_cue(file_path, metadata)
+            return metadata
         except Exception as e:
             logger.exception(f"Error extracting metadata from {file_path}: {str(e)}")
             return None
+
+    def _augment_with_cue(self, file_path: str, metadata: Dict) -> None:
+        """Fill blank fields from a sibling .cue (embedded tags still win) and
+        stash the tracklist as evidence. Untagged single-file rips carry their
+        real metadata in the .cue, not the folder name."""
+        cue_path = find_cue_for(file_path)
+        if not cue_path:
+            return
+        sheet = parse_cue(cue_path)
+        if sheet is None:
+            return
+
+        my_tracks = sheet.tracks_for(os.path.basename(file_path))
+        metadata["cue_sheet"] = cue_path
+        # Disc header stored too, so clustering can prefer the cue album title.
+        metadata["cue_tracks"] = {
+            "album": sheet.title,
+            "artist": sheet.performer,
+            "tracks": [
+                {
+                    "number": t.number,
+                    "title": t.title,
+                    "performer": t.performer,
+                    "start_seconds": t.start_seconds,
+                }
+                for t in my_tracks
+            ],
+        }
+
+        # One cue track for this file -> per-track rip (use its title/number);
+        # many tracks in one file -> whole-disc blob (use the disc title).
+        one = my_tracks[0] if len(my_tracks) == 1 else None
+
+        if not metadata.get("artist") and sheet.performer:
+            metadata["artist"] = sheet.performer
+        if not metadata.get("album") and sheet.title:
+            metadata["album"] = sheet.title
+        if not metadata.get("title"):
+            if one and one.title:
+                metadata["title"] = one.title
+            elif sheet.title:
+                metadata["title"] = sheet.title
+        if one and one.number and not metadata.get("track_number"):
+            metadata["track_number"] = one.number
+        if not metadata.get("genre") and sheet.genre:
+            metadata["genre"] = sheet.genre
+        if not metadata.get("year") and sheet.date:
+            m = re.search(r"\d{4}", sheet.date)
+            if m:
+                metadata["year"] = int(m.group())
 
     def _extract_mp3_metadata(self, file_path: str, metadata: Dict) -> Dict:
         """Extract metadata from an MP3 file.

@@ -55,6 +55,12 @@ def _album_display(raw: Dict) -> Optional[str]:
     return clean_display_name(album) if album else None
 
 
+def _cue_album(cue: Dict) -> Optional[str]:
+    """Disc title from a parsed cue sheet (single-file CD rip), if any."""
+    album = cue.get("album") if isinstance(cue, dict) else None
+    return clean_display_name(album) if album else None
+
+
 def build_features(track: Dict, evidence: Optional[Dict]) -> TrackFeatures:
     """Assemble the scorer's per-track features from a track row + evidence."""
     evidence = evidence or {}
@@ -127,7 +133,11 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         return FolderPlan(folder=folder, clusters=[], split=False)
     features = [build_features(t, e) for t, e in rows]
     display_by_id = {
-        t["id"]: (t, _album_display(_loads((e or {}).get("raw_tags"))))
+        t["id"]: (
+            t,
+            _album_display(_loads((e or {}).get("raw_tags"))),
+            _cue_album(_loads((e or {}).get("cue_tracks"))),
+        )
         for t, e in rows
     }
 
@@ -160,10 +170,15 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
             )
             continue
 
-        # A normal album: title from tag consensus, else the folder name so an
-        # untagged rip still gets a real album (today it falls to unknown_album).
+        # Title: tag consensus, else a sibling cue's disc title, else folder.
         titles = [display_by_id[i][1] for i in ids]
-        title = _dominant(titles) or os.path.basename(folder.rstrip("/")) or ""
+        cue_titles = [display_by_id[i][2] for i in ids]
+        title = (
+            _dominant(titles)
+            or _dominant(cue_titles)
+            or os.path.basename(folder.rstrip("/"))
+            or ""
+        )
         anchor = _dominant(t.get("artist_id") for t in member_tracks) or "unknown_artist"
 
         # Multi-disc-in-one-folder: if the members' titles differ *only* by a
