@@ -98,6 +98,45 @@ async def test_cue_supplies_artist_album_for_tagless_rip(indexer):
     assert after["title"] == "Avalon"
 
 
+MULTI_FILE_CUE = """PERFORMER "Roxy Music"
+TITLE "Avalon"
+FILE "01 - More Than This.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "More Than This"
+    INDEX 01 00:00:00
+FILE "02 - The Space Between.flac" WAVE
+  TRACK 02 AUDIO
+    TITLE "The Space Between"
+    INDEX 01 00:00:00
+"""
+
+
+@pytest.mark.asyncio
+async def test_multi_file_cue_uses_per_track_title_and_number(indexer):
+    # A cue with a FLAC per track: each file must get its own title + number,
+    # not the disc title (the whole-disc-blob case is the other test).
+    fi, music, config = indexer
+    folder = music / "Roxy Music - Avalon"
+    folder.mkdir(parents=True)
+    for name in ("01 - More Than This.flac", "02 - The Space Between.flac"):
+        sf.write(str(folder / name), np.zeros(2205, dtype="float32"), 44100,
+                 format="FLAC")
+    (folder / "album.cue").write_bytes(MULTI_FILE_CUE.encode("utf-8"))
+
+    for name in ("01 - More Than This.flac", "02 - The Space Between.flac"):
+        await fi.process_file(str(folder / name))
+
+    rows = {}
+    async with aiosqlite.connect(config.db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT title, track_number FROM tracks ORDER BY track_number"
+        )
+        for r in await cur.fetchall():
+            rows[r["track_number"]] = r["title"]
+    assert rows == {1: "More Than This", 2: "The Space Between"}
+
+
 @pytest.mark.asyncio
 async def test_embedded_tags_win_over_cue(indexer):
     fi, music, config = indexer

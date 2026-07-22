@@ -624,9 +624,10 @@ class FileIndexer:
         if sheet is None:
             return
 
+        my_tracks = sheet.tracks_for(os.path.basename(file_path))
         metadata["cue_sheet"] = cue_path
-        # Store the disc header alongside the per-track list so clustering can
-        # prefer the cue's album title over a folder-name guess without
+        # Store the disc header alongside this file's track list so clustering
+        # can prefer the cue's album title over a folder-name guess without
         # re-reading the file.
         metadata["cue_tracks"] = {
             "album": sheet.title,
@@ -638,18 +639,26 @@ class FileIndexer:
                     "performer": t.performer,
                     "start_seconds": t.start_seconds,
                 }
-                for t in sheet.tracks_for(os.path.basename(file_path))
+                for t in my_tracks
             ],
         }
 
+        # A file that maps to exactly one cue track is a per-track rip: take
+        # that track's title/number. Many tracks in one file is a whole-disc
+        # rip: the disc title labels the single blob until splitting exists.
+        one = my_tracks[0] if len(my_tracks) == 1 else None
+
         if not metadata.get("artist") and sheet.performer:
             metadata["artist"] = sheet.performer
-        # One playable file = the whole disc, so the disc title is both the
-        # album and the single track's title until playback splitting exists.
         if not metadata.get("album") and sheet.title:
             metadata["album"] = sheet.title
-        if not metadata.get("title") and sheet.title:
-            metadata["title"] = sheet.title
+        if not metadata.get("title"):
+            if one and one.title:
+                metadata["title"] = one.title
+            elif sheet.title:
+                metadata["title"] = sheet.title
+        if one and one.number and not metadata.get("track_number"):
+            metadata["track_number"] = one.number
         if not metadata.get("genre") and sheet.genre:
             metadata["genre"] = sheet.genre
         if not metadata.get("year") and sheet.date:
