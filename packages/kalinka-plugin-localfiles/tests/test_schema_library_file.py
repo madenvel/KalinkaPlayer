@@ -30,6 +30,7 @@ TRACK_EVIDENCE_COLS = {
     "stream_info",
     "art_phash",
     "cue_sheet",
+    "cue_tracks",
     "fingerprint",
     "fp_computed_at",
     "import_batch",

@@ -33,6 +33,7 @@ from ..utils.name_utils import (
     parse_leading_track_number,
     path_within_roots,
 )
+from .cue import find_cue_for, parse_cue
 from .id_generator import (
     generate_artist_id,
     generate_album_id,
@@ -572,6 +573,8 @@ class FileIndexer:
                 "raw_tags": metadata.get("raw_tags"),
                 "stream_info": metadata.get("stream_info"),
                 "art_phash": art_phash,
+                "cue_sheet": metadata.get("cue_sheet"),
+                "cue_tracks": metadata.get("cue_tracks"),
             },
         )
 
@@ -593,17 +596,66 @@ class FileIndexer:
                 "format": mime_type,
             }
             if "audio/mpeg" in mime_type:
-                return self._extract_mp3_metadata(file_path, metadata)
+                metadata = self._extract_mp3_metadata(file_path, metadata)
             elif "audio/flac" in mime_type:
-                return self._extract_flac_metadata(file_path, metadata)
+                metadata = self._extract_flac_metadata(file_path, metadata)
             else:
                 logger.warning(
                     f"Unsupported file format: {file_path}, format: {mime_type}"
                 )
                 return None
+            if metadata is not None:
+                self._augment_with_cue(file_path, metadata)
+            return metadata
         except Exception as e:
             logger.exception(f"Error extracting metadata from {file_path}: {str(e)}")
             return None
+
+    def _augment_with_cue(self, file_path: str, metadata: Dict) -> None:
+        """Fill missing disc metadata from a sibling .cue and stash the parsed
+        tracklist as evidence. A full-CD single-file rip carries its real album,
+        artist and per-track titles in the .cue; that beats parsing them back
+        out of the folder name. Embedded tags still win — the cue only fills
+        fields the file itself left blank."""
+        cue_path = find_cue_for(file_path)
+        if not cue_path:
+            return
+        sheet = parse_cue(cue_path)
+        if sheet is None:
+            return
+
+        metadata["cue_sheet"] = cue_path
+        # Store the disc header alongside the per-track list so clustering can
+        # prefer the cue's album title over a folder-name guess without
+        # re-reading the file.
+        metadata["cue_tracks"] = {
+            "album": sheet.title,
+            "artist": sheet.performer,
+            "tracks": [
+                {
+                    "number": t.number,
+                    "title": t.title,
+                    "performer": t.performer,
+                    "start_seconds": t.start_seconds,
+                }
+                for t in sheet.tracks_for(os.path.basename(file_path))
+            ],
+        }
+
+        if not metadata.get("artist") and sheet.performer:
+            metadata["artist"] = sheet.performer
+        # One playable file = the whole disc, so the disc title is both the
+        # album and the single track's title until playback splitting exists.
+        if not metadata.get("album") and sheet.title:
+            metadata["album"] = sheet.title
+        if not metadata.get("title") and sheet.title:
+            metadata["title"] = sheet.title
+        if not metadata.get("genre") and sheet.genre:
+            metadata["genre"] = sheet.genre
+        if not metadata.get("year") and sheet.date:
+            m = re.search(r"\d{4}", sheet.date)
+            if m:
+                metadata["year"] = int(m.group())
 
     def _extract_mp3_metadata(self, file_path: str, metadata: Dict) -> Dict:
         """Extract metadata from an MP3 file.

@@ -271,18 +271,21 @@ class AsyncIndexerDb:
         hash."""
         raw_tags = evidence.get("raw_tags")
         stream_info = evidence.get("stream_info")
+        cue_tracks = evidence.get("cue_tracks")
         async with self._open() as conn:
             await conn.execute(
                 """
                 INSERT INTO track_evidence
-                    (track_id, raw_tags, stream_info, art_phash,
-                     import_batch, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (track_id, raw_tags, stream_info, art_phash, cue_sheet,
+                     cue_tracks, import_batch, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(track_id) DO UPDATE SET
                     raw_tags     = excluded.raw_tags,
                     stream_info  = excluded.stream_info,
                     art_phash    = COALESCE(excluded.art_phash,
                                             track_evidence.art_phash),
+                    cue_sheet    = excluded.cue_sheet,
+                    cue_tracks   = excluded.cue_tracks,
                     import_batch = COALESCE(excluded.import_batch,
                                             track_evidence.import_batch),
                     updated_at   = excluded.updated_at
@@ -292,6 +295,8 @@ class AsyncIndexerDb:
                     json.dumps(raw_tags) if raw_tags is not None else None,
                     json.dumps(stream_info) if stream_info is not None else None,
                     evidence.get("art_phash"),
+                    evidence.get("cue_sheet"),
+                    json.dumps(cue_tracks) if cue_tracks is not None else None,
                     evidence.get("import_batch"),
                     int(time.time()),
                 ),
@@ -317,13 +322,13 @@ class AsyncIndexerDb:
         """All tracks paired with their track_evidence (empty dict if none),
         for the clustering pass."""
         _ev_cols = ("raw_tags", "stream_info", "art_phash", "cue_sheet",
-                    "import_batch")
+                    "cue_tracks", "import_batch")
         async with self._open() as conn:
             conn.row_factory = aiosqlite.Row
             cur = await conn.execute(
                 """
                 SELECT t.*, e.raw_tags, e.stream_info, e.art_phash,
-                       e.cue_sheet, e.import_batch
+                       e.cue_sheet, e.cue_tracks, e.import_batch
                 FROM tracks t
                 LEFT JOIN track_evidence e ON e.track_id = t.id
                 """
