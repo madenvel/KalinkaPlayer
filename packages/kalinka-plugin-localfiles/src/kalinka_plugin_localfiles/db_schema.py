@@ -511,8 +511,7 @@ async def init_db(db_path: str) -> None:
             )
             logger.info("Added albums.image_generated column")
 
-        # Parsed cue tracklist (JSON) captured for single-file CD rips, kept
-        # beside the cue_sheet path for a future playback-splitting consumer.
+        # Parsed cue tracklist (JSON) for single-file CD rips.
         await cursor.execute("PRAGMA table_info(track_evidence)")
         ev_cols = {row[1] for row in await cursor.fetchall()}
         if "cue_tracks" not in ev_cols:

@@ -170,9 +170,7 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
             )
             continue
 
-        # A normal album: title from tag consensus, else a sibling cue's disc
-        # title (single-file CD rips), else the folder name so an untagged rip
-        # still gets a real album (today it falls to unknown_album).
+        # Title: tag consensus, else a sibling cue's disc title, else folder.
         titles = [display_by_id[i][1] for i in ids]
         cue_titles = [display_by_id[i][2] for i in ids]
         title = (
