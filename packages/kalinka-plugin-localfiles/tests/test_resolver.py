@@ -5,6 +5,7 @@ per-field source precedence decides; ties favour the incumbent value.
 
 from kalinka_plugin_localfiles.resolution.resolver import (
     Claim,
+    resolve_display_name,
     resolve_entity,
     resolve_field,
 )
@@ -94,3 +95,41 @@ def test_resolve_entity_returns_one_winner_per_field():
     winners = {w.field: w for w in resolve_entity(claims)}
     assert winners["album_title"].value == "Title A"
     assert winners["year"].value == "2001"
+
+
+# resolve_display_name: external re-formats but never replaces (§7)
+
+def _ext(value, tier, mbid="x"):
+    return Claim("name", value, f"musicbrainz:{mbid}", tier)
+
+
+def test_display_name_external_recases_matching_local():
+    w = resolve_display_name("THE BEATLES", [_ext("The Beatles", "inferred")])
+    assert w.value == "The Beatles"
+    assert w.source.startswith("musicbrainz:")
+
+
+def test_display_name_keeps_local_when_external_differs():
+    w = resolve_display_name("The Beatles", [_ext("The Beetles", "inferred")])
+    assert w.value == "The Beatles"
+    assert w.tier == "observed"
+
+
+def test_display_name_verified_replaces_outright():
+    w = resolve_display_name("beatles", [_ext("The Beatles", "verified")])
+    assert w.value == "The Beatles"
+
+
+def test_display_name_no_external_keeps_local():
+    w = resolve_display_name("THE BEATLES", [])
+    assert w.value == "THE BEATLES"
+    assert w.tier == "observed"
+
+
+def test_display_name_recase_is_order_independent():
+    # Two same-value externals in either order resolve to the same winner
+    # (by source precedence, not input order).
+    a = _ext("The Beatles", "inferred", mbid="1")
+    b = Claim("name", "The Beatles", "deezer:2", "inferred")
+    assert resolve_display_name("THE BEATLES", [a, b]).source == \
+        resolve_display_name("THE BEATLES", [b, a]).source

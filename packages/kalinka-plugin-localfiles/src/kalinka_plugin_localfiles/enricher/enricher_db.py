@@ -478,6 +478,73 @@ class AsyncEnricherDb:
         """Update track information"""
         await self._update("tracks", track_id, data)
 
+    async def record_claim(
+        self,
+        entity_type: str,
+        entity_id: str,
+        field: str,
+        value: str,
+        source: str,
+        tier: str,
+    ) -> None:
+        """Record one field-level claim (upsert per entity/field/source)."""
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO metadata_claims
+                    (entity_type, entity_id, field, value, source, tier, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_type, entity_id, field, source) DO UPDATE SET
+                    value = excluded.value,
+                    tier = excluded.tier,
+                    created_at = excluded.created_at
+                """,
+                (entity_type, entity_id, field, value, source, tier,
+                 int(time.time())),
+            )
+            await conn.commit()
+
+    async def get_claims(
+        self, entity_type: str, entity_id: str, field: str
+    ) -> List[Dict[str, Any]]:
+        """All claims for one entity field."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT value, source, tier FROM metadata_claims "
+                "WHERE entity_type=? AND entity_id=? AND field=?",
+                (entity_type, entity_id, field),
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def record_resolved_origin(
+        self,
+        entity_type: str,
+        entity_id: str,
+        field: str,
+        source: str,
+        tier: str,
+        evidence_ref: Optional[str] = None,
+    ) -> None:
+        """Record where a resolved field value came from (upsert per field)."""
+        async with self._open() as conn:
+            await conn.execute(
+                """
+                INSERT INTO resolved_origin
+                    (entity_type, entity_id, field, source, tier, evidence_ref,
+                     resolved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entity_type, entity_id, field) DO UPDATE SET
+                    source = excluded.source,
+                    tier = excluded.tier,
+                    evidence_ref = excluded.evidence_ref,
+                    resolved_at = excluded.resolved_at
+                """,
+                (entity_type, entity_id, field, source, tier, evidence_ref,
+                 int(time.time())),
+            )
+            await conn.commit()
+
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration)"""
         async with self._open() as conn:

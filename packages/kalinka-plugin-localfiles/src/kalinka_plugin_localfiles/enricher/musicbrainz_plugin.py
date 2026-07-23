@@ -313,8 +313,21 @@ class MusicBrainzPlugin(EnricherPlugin):
             if area_name:
                 updates["area"] = area_name
 
-            # Return data for further enrichment if needed
-            return {"updates": updates, "mbid": artist_mbid}
+            # The canonical name is emitted as an inferred claim, not a direct
+            # update: resolution uses it to re-case a matching local name
+            # ("THE BEATLES" -> "The Beatles") but never to replace a
+            # different local name (a fuzzy match can misidentify the artist).
+            claims = []
+            canonical = best_match.get("name")
+            if canonical:
+                claims.append({
+                    "field": "name",
+                    "value": canonical,
+                    "source": f"musicbrainz:{artist_mbid}",
+                    "tier": "inferred",
+                })
+
+            return {"updates": updates, "mbid": artist_mbid, "claims": claims}
 
         except Exception as e:
             logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
