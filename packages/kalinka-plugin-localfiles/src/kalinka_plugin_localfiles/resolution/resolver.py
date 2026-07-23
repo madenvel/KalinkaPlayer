@@ -128,6 +128,33 @@ def resolve_field(
     return best
 
 
+def _norm(s: str) -> str:
+    return " ".join((s or "").split()).casefold()
+
+
+def resolve_display_name(local_value: str, external: Iterable[Claim]) -> Claim:
+    """Resolve a display-identity field (artist/title) under the §7 rule that a
+    fuzzy external match may re-format but not replace it.
+
+    The locally observed value wins, except: a verified/pinned external (direct
+    identifier or user confirmation) replaces it outright; otherwise a same-
+    value external (equal up to case/whitespace) supplies the canonical surface
+    form ("THE BEATLES" -> "The Beatles"). An external with a genuinely
+    different value never wins.
+    """
+    local = Claim("name", local_value, "tag_consensus", "observed")
+    external = list(external)
+
+    strong = [c for c in external if TIER_RANK.get(c.tier, 0) >= TIER_RANK["verified"]]
+    if strong:
+        return max(strong, key=lambda c: TIER_RANK.get(c.tier, 0))
+
+    for c in external:
+        if _norm(c.value) == _norm(local_value):
+            return c
+    return local
+
+
 def resolve_entity(
     claims: Iterable[Claim], current: Optional[dict] = None
 ) -> List[Claim]:

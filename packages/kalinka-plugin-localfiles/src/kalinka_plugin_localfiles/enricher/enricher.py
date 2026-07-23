@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
+from ..resolution.resolver import Claim, resolve_display_name
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -232,6 +233,7 @@ class MetadataEnricher:
         logger.debug(
             f"Artist {artist.get('name', artist['id'])} missing fields - starting plugin enrichment"
         )
+        emitted_claims: list[dict] = []
         for plugin in self.plugins:
             if not plugin.can_enrich_artist():
                 continue
@@ -240,6 +242,8 @@ class MetadataEnricher:
                 f"Enriching artist {artist['name'] if 'name' in artist else artist['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_artist(updated_artist)
+            if result:
+                emitted_claims.extend(result.get("claims") or [])
             if result and "updates" in result:
                 # Apply updates to our working copy
                 updated_artist.update(result["updates"])
@@ -255,6 +259,11 @@ class MetadataEnricher:
                     updated_artist["enriched"] = EnrichmentStatus.ENRICHED
                     break  # No need to check further plugins
 
+        # Resolve the display name from claims: a matching external match
+        # supplies canonical casing without replacing a different local name.
+        if await self._resolve_artist_name(artist, updated_artist, emitted_claims):
+            had_updates = True
+
         # After all plugins, if still not fully enriched, mark as failed
         if (
             not is_fully_enriched
@@ -269,6 +278,41 @@ class MetadataEnricher:
         # Only update the database once at the end if we had any updates
         if had_updates:
             await self.db_manager.update_artist(artist["id"], updated_artist)
+
+    async def _resolve_artist_name(
+        self, artist: dict, updated_artist: dict, emitted_claims: list
+    ) -> bool:
+        """Resolve the artist display name from claims. Returns True if the name
+        changed. First field wired through the claims/resolution path (Phase
+        2d): an external match re-cases a matching local name but never replaces
+        a different one; provenance lands in resolved_origin."""
+        local_name = artist.get("name")
+        name_claims = [c for c in emitted_claims if c.get("field") == "name"]
+        if not local_name or not name_claims:
+            return False
+
+        entity_id = artist["id"]
+        external = []
+        for c in name_claims:
+            await self.db_manager.record_claim(
+                "artist", entity_id, "name", c["value"], c["source"], c["tier"]
+            )
+            external.append(
+                Claim("name", c["value"], c["source"], c["tier"])
+            )
+
+        winner = resolve_display_name(local_name, external)
+        await self.db_manager.record_resolved_origin(
+            "artist", entity_id, "name", winner.source, winner.tier
+        )
+        if winner.value != local_name:
+            updated_artist["name"] = winner.value
+            logger.debug(
+                "Artist name resolved: %r -> %r (%s)",
+                local_name, winner.value, winner.source,
+            )
+            return True
+        return False
 
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
