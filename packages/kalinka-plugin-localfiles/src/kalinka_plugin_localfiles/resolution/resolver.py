@@ -145,13 +145,15 @@ def resolve_display_name(local_value: str, external: Iterable[Claim]) -> Claim:
     local = Claim("name", local_value, "tag_consensus", "observed")
     external = list(external)
 
+    # Order-independent: pick by the resolver's (tier, source-precedence) score,
+    # not by input order, so multiple external claims resolve deterministically.
     strong = [c for c in external if TIER_RANK.get(c.tier, 0) >= TIER_RANK["verified"]]
     if strong:
-        return max(strong, key=lambda c: TIER_RANK.get(c.tier, 0))
+        return max(strong, key=_score)
 
-    for c in external:
-        if _norm(c.value) == _norm(local_value):
-            return c
+    matching = [c for c in external if _norm(c.value) == _norm(local_value)]
+    if matching:
+        return max(matching, key=_score)
     return local
 
 

@@ -124,3 +124,12 @@ def test_display_name_no_external_keeps_local():
     w = resolve_display_name("THE BEATLES", [])
     assert w.value == "THE BEATLES"
     assert w.tier == "observed"
+
+
+def test_display_name_recase_is_order_independent():
+    # Two same-value externals in either order resolve to the same winner
+    # (by source precedence, not input order).
+    a = _ext("The Beatles", "inferred", mbid="1")
+    b = Claim("name", "The Beatles", "deezer:2", "inferred")
+    assert resolve_display_name("THE BEATLES", [a, b]).source == \
+        resolve_display_name("THE BEATLES", [b, a]).source

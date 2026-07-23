@@ -287,23 +287,28 @@ class MetadataEnricher:
         2d): an external match re-cases a matching local name but never replaces
         a different one; provenance lands in resolved_origin."""
         local_name = artist.get("name")
-        name_claims = [c for c in emitted_claims if c.get("field") == "name"]
-        if not local_name or not name_claims:
+        if not local_name:
             return False
 
         entity_id = artist["id"]
         external = []
-        for c in name_claims:
+        for c in emitted_claims:
+            if c.get("field") != "name":
+                continue
             await self.db_manager.record_claim(
                 "artist", entity_id, "name", c["value"], c["source"], c["tier"]
             )
             external.append(
-                Claim("name", c["value"], c["source"], c["tier"])
+                Claim("name", c["value"], c["source"], c["tier"],
+                      c.get("evidence_ref"))
             )
 
+        # Record provenance for the resolved name even when the local value
+        # wins uncontested (resolved_origin covers every resolved field).
         winner = resolve_display_name(local_name, external)
         await self.db_manager.record_resolved_origin(
-            "artist", entity_id, "name", winner.source, winner.tier
+            "artist", entity_id, "name", winner.source, winner.tier,
+            winner.evidence_ref,
         )
         if winner.value != local_name:
             updated_artist["name"] = winner.value

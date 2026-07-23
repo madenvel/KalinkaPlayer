@@ -65,7 +65,7 @@ async def test_keeps_local_name_when_mb_differs():
 
 
 @pytest.mark.asyncio
-async def test_no_name_claim_is_noop():
+async def test_no_name_claim_keeps_local_but_records_origin():
     enr = _enricher()
     artist = {"id": "a1", "name": "THE BEATLES"}
     updated = dict(artist)
@@ -73,3 +73,7 @@ async def test_no_name_claim_is_noop():
     assert changed is False
     assert updated["name"] == "THE BEATLES"
     assert enr.db_manager.claims == []
+    # Provenance is still recorded for the uncontested local value.
+    assert enr.db_manager.origins[0] == (
+        "artist", "a1", "name", "tag_consensus", "observed",
+    )
