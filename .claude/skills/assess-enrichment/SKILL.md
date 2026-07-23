@@ -1,6 +1,6 @@
 ---
 name: assess-enrichment
-description: Measure the quality of localfiles enrichment (MusicBrainz / AcoustID / Deezer / filesystem fallback) by scanning `localfiles.db`. Use when the user asks to "assess enrichment", "score the metadata quality", "find bad album / artist matches", "check enrichment coverage", or wants a before/after baseline to evaluate a change to the enricher. Emits `tmp/enrichment_assess/findings.json` (machine-diffable) and `tmp/enrichment_assess/REPORT.md` (human-readable).
+description: Measure the quality of localfiles enrichment (MusicBrainz / AcoustID / Deezer / filesystem fallback) by scanning `localfiles.db`. Use when the user asks to "assess enrichment", "score the metadata quality", "find bad album / artist matches", "check enrichment coverage", "evaluate enrichment against filenames", or wants a before/after baseline to evaluate a change to the enricher. Six internal-signal metric families plus a filename-ground-truth section that, for flat `Artist - Title` libraries, compares enriched fields against the filename to surface diverged/bad matches (self-calibrates and suppresses itself when the convention doesn't hold). Emits `tmp/enrichment_assess/findings.json` (machine-diffable) and `tmp/enrichment_assess/REPORT.md` (human-readable).
 ---
 
 # assess-enrichment
@@ -16,7 +16,7 @@ It does **not** require any external API calls and runs in ~1 second.
 
 ## What it measures
 
-Six families of signals. Each maps directly to a fix discussed in the enrichment review:
+Seven families of signals. The first six are internal-signal metrics (the DB judged against itself); the seventh (filename ground truth) adds an external reference for flat `Artist - Title` libraries. Each maps directly to a fix discussed in the enrichment review:
 
 ### 1. Coverage
 
@@ -78,6 +78,24 @@ Once `duration_bonus` is applied to album matching, this should improve:
 - For each track with `tracks.mbid` and a non-null local `duration`, the script can't fetch MB length here (no API), so it instead reports the **distribution of local durations of low-score matches**. After fixing, low-score matches should cluster outside ±15s of plausible candidates — but that's only measurable with a live MB call, out of scope for the offline scan.
 - Reported here for now: how many tracks have a duration **at all** (the input to the bonus). If many tracks are missing duration, the indexer is dropping it and the fix won't help until that's repaired.
 
+### 7. Filename ground truth
+
+The other six families are *internal-signal* metrics: they judge the DB against itself and have no notion of what's *correct*. This one adds a cheap external reference. When a library uses a flat **`Artist - Title.ext`** filename convention, the filename encodes the intended artist/title independently of the pipeline — so comparing the enriched fields against it surfaces where enrichment **diverged**, which nothing else here can see.
+
+For every track whose basename parses (split on the first ` - `, after stripping a leading track number; filenames whose artist field carries a 4+ digit catalog/id run — e.g. Jamendo `NN-<id>-Artist-Title` — are rejected as non-flat), the enriched artist and title each land in a bucket:
+
+| Bucket | Meaning |
+|---|---|
+| `exact` | equal up to case/whitespace — enrichment kept the filename value |
+| `reformatted` | equal only after diacritic/punct folding — a **canonicalization** (casing/accents, e.g. `THE BEATLES`→`The Beatles`). Confirms the casing work is landing, not breaking. |
+| `replaced` | a genuinely different value — the **actionable** signal. Split by whether an MBID is present: an external match that either canonicalized correctly or **corrupted** (the `ABBA → The Singles` class of bug). |
+| `unknown` | enrichment left the `unknown_artist` sentinel, or a title that's still a raw filename echo → a **parser miss** on a name it could have extracted. |
+| `ambiguous` | (title only) the stem has 2+ ` - ` separators (`Artist - Album - NN - Title`), so the naive first-split title is unreliable — excluded from divergence rather than counted as a false positive. |
+
+**Self-calibration (critical).** The metric is only trustworthy when the library actually follows the flat convention. The scanner computes an **artist agreement rate** = `(exact + reformatted) / parseable`; if it's below **70%** (or fewer than 20 parseable rows), `convention_reliable` is set false, the report prints a warning banner, and the `replaced`/`unknown` **example lists are suppressed** — because on an artist-last, folder-structured, or hyphenated-title library those buckets are dominated by false positives (a title like `Красно-желтые дни` or `Over The Rainbow - Simple Gifts` mis-splits, and enrichment is actually right). Only read the divergence examples when the report says the convention is reliable.
+
+This is what makes a large flat-convention library (e.g. an 8k-track dump of `Artist - Title.mp3`) a genuine evaluation corpus: point the scanner at it and the `replaced`-with-MBID list is a ranked set of suspected bad external matches to inspect.
+
 ## Procedure
 
 ```bash
@@ -110,6 +128,8 @@ A change is only an improvement if at least one targeted metric drops AND no unr
 - `probable_duplicates` collapses on a permissive normalization. Some legitimate "different artist, similar name" pairs will show up (e.g. "Beach Boys" vs "The Beach Boys" — that's actually a real dup case, but the principle stands). Treat the list as candidates, not facts.
 - `folder_splits` doesn't know about discs. A 2-disc album legitimately spans two folders (`CD1`, `CD2`) — those folders won't be flagged because they share a parent. But a deluxe release split into `Standard/` and `Bonus/` siblings *would* be flagged. Inspect before merging.
 - Match-score histograms only mean something if the score is actually populated. The current enricher writes `100` for every artist/album match (a known limitation surfaced by this skill).
+- The §7 filename-ground-truth buckets are only meaningful when the report says the convention is **reliable** (artist agreement ≥70%). On a folder-structured or artist-last library the section self-suppresses its example lists and prints a warning — heed it; don't mine the buckets for findings there. `ambiguous` (multi-field filenames) and the digit-id rejection keep the reliable case clean, but the reference is still a heuristic: a filename can lie (mistagged at the source), so `replaced`-with-MBID is a list of rows **to inspect**, not confirmed bugs.
+- A large external flat-convention library makes a good evaluation corpus even when its audio isn't mounted locally (the scan only reads the DB). Point `--db` at it, e.g. a downloaded `localfiles.db` from another machine.
 
 ## Files in this skill
 

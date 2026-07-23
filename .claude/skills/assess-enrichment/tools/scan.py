@@ -78,6 +78,67 @@ def parent_dir(file_path: str) -> str:
     return os.path.dirname(file_path) if file_path else ""
 
 
+# --- filename ground truth --------------------------------------------------
+# A flat "Artist - Title.ext" filename encodes the intended artist/title
+# independently of the enrichment pipeline, so it is a cheap per-track
+# reference. Comparing the enriched fields against it surfaces where the
+# pipeline *diverged* — the one thing the internal-signal metrics can't see.
+
+_UNKNOWN_NAMES = {"", "unknown", "unknown artist", "unknown_artist"}
+# Leading track number a filename may carry ("01. ", "3.", "12-", "7_ "). It
+# is never part of the artist/title, so strip it from BOTH the filename side
+# and nothing else — we are cleaning the reference, not re-parsing like prod.
+_TRACK_NO_PREFIX_RE = re.compile(r"^\s*\d{1,3}\s*[.\-_]?\s+|^\s*\d{1,2}\.(?=\S)")
+
+
+def _strip_track_no(text: str) -> str:
+    return _TRACK_NO_PREFIX_RE.sub("", text, count=1).strip()
+
+
+def parse_artist_title(file_path: str) -> Tuple[str, str] | Tuple[None, None]:
+    """Split a flat "Artist - Title" filename. Returns (artist, title) or
+    (None, None) when the basename has no " - " separator (unparseable)."""
+    if not file_path:
+        return None, None
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    work = _strip_track_no(stem)
+    if " - " not in work:
+        return None, None
+    artist, title = work.split(" - ", 1)
+    artist = artist.strip()
+    # A 4+ digit run in the artist field means the "filename" is an encoded
+    # scheme (e.g. Jamendo "NN-<id>-Artist-Title"), not the flat convention —
+    # the first-split artist would be garbage, so treat it as unparseable
+    # rather than scoring the whole library against a broken reference.
+    if re.search(r"\d{4,}", artist):
+        return None, None
+    return artist, _strip_track_no(title.strip())
+
+
+def _light(s: str) -> str:
+    """Surface-level compare key: casefold + whitespace-collapse only."""
+    return re.sub(r"\s+", " ", (s or "").strip()).casefold()
+
+
+def _bucket(enriched: str, reference: str, *, is_unknown: bool, has_mbid: bool) -> str:
+    """Classify an enriched value against its filename reference.
+
+    exact       — equal up to case/whitespace
+    reformatted — equal only after diacritic/punct folding (a canonicalization:
+                  casing, accents, "Jean-Michel" ≡ "Jean Michel")
+    unknown     — enrichment left the sentinel / a raw filename echo
+    replaced    — a genuinely different value (the actionable bug signal); the
+                  caller tags it external/other by whether an MBID is present
+    """
+    if is_unknown:
+        return "unknown"
+    if _light(enriched) == _light(reference):
+        return "exact"
+    if normalize_artist(enriched) == normalize_artist(reference):
+        return "reformatted"
+    return "replaced"
+
+
 def percentiles(values: List[float], pcts: Iterable[int]) -> Dict[str, float]:
     if not values:
         return {f"p{p}": None for p in pcts}
@@ -118,6 +179,7 @@ def scan(db_path: str) -> Dict[str, Any]:
         "match_scores": {},
         "cross_entity": {},
         "duration": {},
+        "filename_truth": {},
     }
 
     # ---- raw counts ----
@@ -413,6 +475,116 @@ def scan(db_path: str) -> Dict[str, Any]:
         ).fetchone()[0],
     }
 
+    # ---- filename ground truth ----
+    # Compare each enriched (artist, title) against the "Artist - Title"
+    # split of its filename. Only the parseable subset is scored; the report
+    # states that coverage so the reader knows the evaluation's reach.
+    art_buckets: Dict[str, int] = defaultdict(int)
+    title_buckets: Dict[str, int] = defaultdict(int)
+    replaced_artist_ext: List[Dict[str, str]] = []
+    replaced_title_ext: List[Dict[str, str]] = []
+    unknown_examples: List[Dict[str, str]] = []
+    n_total = 0
+    n_parseable = 0
+    CAP = 40  # example-list cap per bucket
+
+    for row in conn.execute(
+        """
+        SELECT t.file_path, t.title AS trk_title, t.mbid AS trk_mbid,
+               t.artist_id, ar.name AS artist_name, ar.mbid AS artist_mbid
+        FROM tracks t LEFT JOIN artists ar ON ar.id = t.artist_id
+        WHERE t.file_path IS NOT NULL
+        """
+    ):
+        n_total += 1
+        ref_artist, ref_title = parse_artist_title(row["file_path"])
+        if ref_artist is None:
+            continue
+        n_parseable += 1
+        base = os.path.basename(row["file_path"])
+        stem = os.path.splitext(base)[0]
+
+        # Artist
+        a_name = row["artist_name"] or ""
+        a_unknown = (
+            row["artist_id"] == "unknown_artist" or a_name.casefold() in _UNKNOWN_NAMES
+        )
+        a_has_mbid = bool(row["artist_mbid"])
+        a_b = _bucket(a_name, ref_artist, is_unknown=a_unknown, has_mbid=a_has_mbid)
+        art_buckets[a_b] += 1
+        if a_b == "replaced" and a_has_mbid and len(replaced_artist_ext) < CAP:
+            replaced_artist_ext.append(
+                {"file": base, "filename_artist": ref_artist, "enriched_artist": a_name}
+            )
+
+        # Title — an enriched title equal to the raw basename/stem is a
+        # filename echo (never extracted), counted as unknown, not replaced.
+        # A stem with 2+ " - " is "Artist - Album - NN - Title" (or similar):
+        # the naive first-split title is unreliable, so it's bucketed
+        # "ambiguous" rather than counted as a divergence — an echo still
+        # scores as unknown because that's a real miss regardless of shape.
+        t_title = row["trk_title"] or ""
+        t_unknown = _light(t_title) in ("", _light(base), _light(stem))
+        t_has_mbid = bool(row["trk_mbid"])
+        ambiguous_title = _strip_track_no(stem).count(" - ") >= 2
+        if t_unknown:
+            t_b = "unknown"
+        elif ambiguous_title:
+            t_b = "ambiguous"
+        else:
+            t_b = _bucket(t_title, ref_title, is_unknown=False, has_mbid=t_has_mbid)
+        title_buckets[t_b] += 1
+        if t_b == "replaced" and t_has_mbid and len(replaced_title_ext) < CAP:
+            replaced_title_ext.append(
+                {"file": base, "filename_title": ref_title, "enriched_title": t_title}
+            )
+        if (a_b == "unknown" or t_b == "unknown") and len(unknown_examples) < CAP:
+            unknown_examples.append(
+                {
+                    "file": base,
+                    "filename_artist": ref_artist,
+                    "enriched_artist": a_name,
+                    "filename_title": ref_title,
+                    "enriched_title": t_title,
+                }
+            )
+
+    # Self-calibration: if the flat convention really holds, most parseable
+    # artists match the filename. A low agreement rate means the library uses
+    # a different scheme (artist-last, title-with-hyphen, folder-structured),
+    # so the divergence buckets are dominated by false positives and must not
+    # be read as findings.
+    def _dedup(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        seen, out = set(), []
+        for r in rows:
+            key = tuple(sorted(r.items()))
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+        return out
+
+    replaced_artist_ext = _dedup(replaced_artist_ext)
+    replaced_title_ext = _dedup(replaced_title_ext)
+    unknown_examples = _dedup(unknown_examples)
+
+    agree = art_buckets.get("exact", 0) + art_buckets.get("reformatted", 0)
+    agreement_rate = round(agree / n_parseable, 4) if n_parseable else 0.0
+    convention_reliable = n_parseable >= 20 and agreement_rate >= 0.7
+
+    findings["filename_truth"] = {
+        "convention": "flat 'Artist - Title.ext' basename",
+        "tracks_total": n_total,
+        "tracks_parseable": n_parseable,
+        "parseable_frac": round(n_parseable / n_total, 4) if n_total else 0.0,
+        "artist_agreement_rate": agreement_rate,
+        "convention_reliable": convention_reliable,
+        "artist_buckets": dict(art_buckets),
+        "title_buckets": dict(title_buckets),
+        "replaced_artist_external": replaced_artist_ext,
+        "replaced_title_external": replaced_title_ext,
+        "unknown_examples": unknown_examples,
+    }
+
     conn.close()
     return findings
 
@@ -591,6 +763,95 @@ def render_markdown(findings: Dict[str, Any]) -> str:
     )
     lines.append("")
 
+    # Filename ground truth
+    ft = findings.get("filename_truth") or {}
+    if ft:
+        lines.append("## 7. Filename ground truth")
+        lines.append("")
+        cov_frac = ft["parseable_frac"]
+        reliable = ft.get("convention_reliable", False)
+        lines.append(
+            f"Reference: {ft['convention']}. "
+            f"**{ft['tracks_parseable']}/{ft['tracks_total']}** tracks "
+            f"({fmt_pct(cov_frac)}) are parseable and scored below; the rest "
+            f"lack a ` - ` separator and are out of this evaluation's reach."
+        )
+        lines.append("")
+        lines.append(
+            f"Artist agreement (exact+reformatted): "
+            f"**{fmt_pct(ft.get('artist_agreement_rate'))}** → convention is "
+            f"**{'reliable' if reliable else 'NOT reliable'}** for this library."
+        )
+        lines.append("")
+        if not reliable:
+            lines.append(
+                "> ⚠️ Agreement is below 70%: this library does **not** follow a "
+                "flat `Artist - Title` filename scheme (it may be artist-last, "
+                "folder-structured, or use hyphenated titles). The buckets below "
+                "are dominated by false positives — do not treat `replaced` / "
+                "`unknown` as findings here. This evaluation is meaningful only "
+                "for libraries whose filenames encode `Artist - Title`."
+            )
+            lines.append("")
+        if ft["tracks_parseable"]:
+            lines.append("| Bucket | Artist | Title |")
+            lines.append("|---|---|---|")
+            denom = ft["tracks_parseable"]
+            for b, label in (
+                ("exact", "exact"),
+                ("reformatted", "reformatted (canonicalized)"),
+                ("replaced", "replaced (diverged)"),
+                ("unknown", "unknown / echo"),
+                ("ambiguous", "ambiguous (multi-field filename)"),
+            ):
+                a = ft["artist_buckets"].get(b, 0)
+                t = ft["title_buckets"].get(b, 0)
+                lines.append(
+                    f"| {label} | {a} ({fmt_pct(a / denom)}) | {t} ({fmt_pct(t / denom)}) |"
+                )
+            lines.append("")
+            lines.append(
+                "_exact + reformatted = enrichment agrees with the filename "
+                "(reformatted = a casing/accent canonicalization). "
+                "**replaced** and **unknown** are the actionable rows._"
+            )
+            lines.append("")
+        if ft["tracks_parseable"] and reliable:
+            if ft["replaced_artist_external"]:
+                lines.append(
+                    "**Artist replaced by an external match** "
+                    "(has MBID, name differs from filename — inspect for bad matches):"
+                )
+                for r in ft["replaced_artist_external"][:15]:
+                    lines.append(
+                        f"- `{r['file']}` — filename `{r['filename_artist']}` "
+                        f"→ enriched `{r['enriched_artist']}`"
+                    )
+                lines.append("")
+            if ft["replaced_title_external"]:
+                lines.append(
+                    "**Title replaced by an external match** "
+                    "(has MBID, title differs from filename):"
+                )
+                for r in ft["replaced_title_external"][:15]:
+                    lines.append(
+                        f"- `{r['file']}` — filename `{r['filename_title']}` "
+                        f"→ enriched `{r['enriched_title']}`"
+                    )
+                lines.append("")
+            if ft["unknown_examples"]:
+                lines.append(
+                    "**Parseable filename but enrichment left it unknown / a raw "
+                    "echo** (parser misses):"
+                )
+                for r in ft["unknown_examples"][:15]:
+                    lines.append(
+                        f"- `{r['file']}` — filename `{r['filename_artist']} "
+                        f"- {r['filename_title']}` → enriched "
+                        f"`{r['enriched_artist']} - {r['enriched_title']}`"
+                    )
+                lines.append("")
+
     return "\n".join(lines)
 
 
@@ -626,6 +887,17 @@ def main() -> None:
     ah = findings["artist_hygiene"]
     bh = findings["album_hygiene"]
     ce = findings["cross_entity"]
+    ft = findings.get("filename_truth") or {}
+    ft_headline = ""
+    if ft.get("tracks_parseable"):
+        ab = ft["artist_buckets"]
+        tb = ft["title_buckets"]
+        ft_headline = (
+            f" | fn_truth={ft['tracks_parseable']}/{ft['tracks_total']} "
+            f"artist_replaced={ab.get('replaced', 0)} "
+            f"artist_unknown={ab.get('unknown', 0)} "
+            f"title_replaced={tb.get('replaced', 0)}"
+        )
     print(
         f"artists={findings['counts']['artists']} "
         f"albums={findings['counts']['albums']} "
@@ -637,6 +909,7 @@ def main() -> None:
         f"folder_splits={len(bh['folder_splits'])} "
         f"mistag={len(ce['mistagging_candidates'])} "
         f"va_coalesce={len(ce['va_albums_to_coalesce'])}"
+        f"{ft_headline}"
     )
     print(f"Wrote {out_dir/'findings.json'} and {out_dir/'REPORT.md'}")
 
