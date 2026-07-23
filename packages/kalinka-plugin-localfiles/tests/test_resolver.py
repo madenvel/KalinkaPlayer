@@ -133,3 +133,13 @@ def test_display_name_recase_is_order_independent():
     b = Claim("name", "The Beatles", "deezer:2", "inferred")
     assert resolve_display_name("THE BEATLES", [a, b]).source == \
         resolve_display_name("THE BEATLES", [b, a]).source
+
+
+def test_display_name_title_field_labels_local_claim():
+    # Album titles resolve under the same rule; the field param labels the
+    # synthesized local claim so recorded provenance is per-field accurate.
+    ext = Claim("title", "Abbey Road", "musicbrainz:r1", "inferred")
+    w = resolve_display_name("ABBEY ROAD", [ext], field="title")
+    assert w.value == "Abbey Road"
+    kept = resolve_display_name("Oxygène", [], field="title")
+    assert kept.value == "Oxygène" and kept.field == "title"
