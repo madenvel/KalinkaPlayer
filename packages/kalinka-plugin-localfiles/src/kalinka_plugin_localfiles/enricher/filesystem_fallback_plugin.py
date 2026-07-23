@@ -99,20 +99,8 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         Returns:
             Tuple of (track_number, clean_title, artist_name)
         """
-        track_number = None
-        clean_title = filename
         artist_name = None
-
-        # First, try to extract track number if present
-        for pattern in self.track_number_patterns:
-            match = pattern.match(filename)
-            if match:
-                try:
-                    track_number = int(match.group(1))
-                    clean_title = filename[match.end() :].strip()
-                    break
-                except (ValueError, IndexError):
-                    continue
+        track_number, clean_title = self._strip_leading_number(filename)
 
         # Try to split the clean title into "artist - track" format
         # Handle various dash variants: -, –, —, and with/without spaces
@@ -142,7 +130,24 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                         clean_title = potential_title
                         break
 
+        # A track number can sit after the "Artist - " prefix
+        # ("Artist - 01.Title"); retry on the post-split title.
+        if track_number is None:
+            track_number, clean_title = self._strip_leading_number(clean_title)
+
         return track_number, clean_title, artist_name
+
+    def _strip_leading_number(self, text: str) -> tuple[Optional[int], str]:
+        """Split a leading track number off, if present, using the shared
+        TRACK_NUMBER_PREFIX_PATTERNS ("NN ", "NN.", "NN- ", "NN_ ", "NN.Title")."""
+        for pattern in self.track_number_patterns:
+            match = pattern.match(text)
+            if match:
+                try:
+                    return int(match.group(1)), text[match.end() :].strip()
+                except (ValueError, IndexError):
+                    continue
+        return None, text
 
     def _parse_album_folder(self, album_folder: str) -> tuple[str, Optional[str]]:
         """

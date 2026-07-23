@@ -328,9 +328,11 @@ class AsyncIndexerDb:
             conn.row_factory = aiosqlite.Row
             cur = await conn.execute(
                 """
-                SELECT t.*, e.raw_tags, e.stream_info, e.art_phash,
+                SELECT t.*, ar.name AS artist_name,
+                       e.raw_tags, e.stream_info, e.art_phash,
                        e.cue_sheet, e.cue_tracks, e.import_batch
                 FROM tracks t
+                LEFT JOIN artists ar ON ar.id = t.artist_id
                 LEFT JOIN track_evidence e ON e.track_id = t.id
                 """
             )

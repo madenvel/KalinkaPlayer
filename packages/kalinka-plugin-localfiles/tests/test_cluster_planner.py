@@ -39,9 +39,10 @@ def _ev(album=None, albumartist=None, compilation=None, art=None,
     }
 
 
-def _track(tid, artist_id="artist_a", track_number=1, disc_number=None):
+def _track(tid, artist_id="artist_a", track_number=1, disc_number=None,
+           artist_name=None):
     return {"id": tid, "artist_id": artist_id, "track_number": track_number,
-            "disc_number": disc_number}
+            "disc_number": disc_number, "artist_name": artist_name}
 
 
 def test_build_features_reads_albumartist_and_disc_suffix():
@@ -72,6 +73,29 @@ def test_plan_untagged_folder_gets_folder_name_title():
     assert c.kind == "album"
     assert c.title == "Some Album"        # folder name, not unknown_album
     assert len(c.track_ids) == 5
+
+
+def test_plan_strips_artist_prefix_from_folder_title():
+    # Untagged rip in "The Beatles - Abbey Road": the folder-derived album
+    # title keeps only "Abbey Road" once the artist prefix is stripped.
+    rows = [
+        (_track(f"t{i}", artist_id="beatles", track_number=i,
+                artist_name="The Beatles"), _ev())
+        for i in range(1, 6)
+    ]
+    plan = plan_folder("/music/The Beatles - Abbey Road", rows)
+    assert plan.clusters[0].title == "Abbey Road"
+
+
+def test_plan_keeps_eponymous_album_title():
+    # An album actually named after the artist isn't stripped to empty.
+    rows = [
+        (_track(f"t{i}", artist_id="metallica", track_number=i,
+                artist_name="Metallica"), _ev())
+        for i in range(1, 6)
+    ]
+    plan = plan_folder("/music/Metallica", rows)
+    assert plan.clusters[0].title == "Metallica"
 
 
 def test_plan_coherent_album_uses_tag_title():
