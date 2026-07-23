@@ -34,23 +34,25 @@ def test_render_covers_variant_is_deterministic():
     a = render.render_catalog_art(covers, [], "seed:x", width=320, height=180)
     b = render.render_catalog_art(covers, [], "seed:x", width=320, height=180)
     assert a.size == (320, 180)
+    assert a.mode == "RGB"  # opaque, full-bleed tile
     assert a.tobytes() == b.tobytes()
 
 
-def test_render_textual_variant_differs_by_names():
-    base = render.render_catalog_art([], ["Rock", "Jazz"], "seed:y", width=320, height=180)
-    other = render.render_catalog_art([], ["Pop", "Folk"], "seed:y", width=320, height=180)
-    assert base.tobytes() != other.tobytes()
+def test_render_coverless_tile_varies_by_seed():
+    # No covers -> a background-only tile; its key hue is seeded from the id, so
+    # different catalogs don't all look the same.
+    rock = render.render_catalog_art([], [], "cat:rock", width=320, height=180)
+    jazz = render.render_catalog_art([], [], "cat:jazz", width=320, height=180)
+    assert rock.mode == "RGB"
+    assert rock.tobytes() != jazz.tobytes()
 
 
-def test_render_empty_is_still_dark_and_valid():
-    img = render.render_catalog_art([], [], "seed:z", width=200, height=120)
-    assert img.mode == "RGB"
-    # A dark-by-design backdrop: mean luminance stays low.
+def test_render_is_dark_by_design():
     import numpy as np
 
+    img = render.render_catalog_art([], [], "seed:z", width=200, height=120)
     mean = float(np.asarray(img.resize((20, 12)), dtype=np.float32).mean())
-    assert mean < 90
+    assert mean < 120  # dark backdrop overall
 
 
 def test_encode_jpeg_roundtrips():
@@ -186,6 +188,8 @@ async def test_process_generates_cover_variant(tmp_path):
     first_file = entry["file"]
     await svc._process(cat_id, textual=False)
     assert svc._entries[cat_id]["file"] == first_file
+    # Atomic writes must not leave temp litter behind.
+    assert list(svc._dir.glob("*.tmp")) == []
 
 
 async def test_process_textual_when_children_are_catalogs(tmp_path):
@@ -200,16 +204,88 @@ async def test_process_textual_when_children_are_catalogs(tmp_path):
     svc = _service(tmp_path, resolver=lambda eid: module)
     cat_id = "kalinka:localfiles:catalog:genres"
     await svc._process(cat_id, textual=True)
+    # Cover-less catalogs still get a background-only tile.
     assert (svc._dir / svc._entries[cat_id]["file"]).is_file()
 
 
-async def test_process_empty_page_records_retry(tmp_path):
+async def test_process_empty_page_still_makes_background_tile(tmp_path):
+    # A flaky/empty upstream must not leave the card blank: ship a provisional
+    # background-only tile now and retry soon to add covers.
     module = _FakeModule([])
     svc = _service(tmp_path, resolver=lambda eid: module)
     cat_id = "kalinka:localfiles:catalog:albums"
     await svc._process(cat_id, textual=False)
-    assert svc._entries[cat_id]["next_check_at"] > 0
-    assert "file" not in svc._entries[cat_id]
+    entry = svc._entries[cat_id]
+    assert entry["file"] and (svc._dir / entry["file"]).is_file()
+    assert entry["provisional"] is True
+
+
+async def test_process_browse_error_still_makes_background_tile(tmp_path):
+    class _Boom:
+        async def browse(self, *args, **kwargs):
+            raise RuntimeError("jamendo down")
+
+    svc = _service(tmp_path, resolver=lambda eid: _Boom())
+    cat_id = "kalinka:jamendo:catalog:popular-tracks"
+    await svc._process(cat_id, textual=False)
+    entry = svc._entries[cat_id]
+    assert entry["file"] and (svc._dir / entry["file"]).is_file()
+    assert entry["provisional"] is True
+
+
+async def test_provisional_tile_upgrades_when_covers_arrive(tmp_path):
+    # First pass: no covers -> provisional background tile.
+    svc = _service(tmp_path, resolver=lambda eid: _FakeModule([]))
+    cat_id = "kalinka:jamendo:catalog:popular-tracks"
+    await svc._process(cat_id, textual=False)
+    bg_file = svc._entries[cat_id]["file"]
+    assert svc._entries[cat_id]["provisional"] is True
+
+    # Second pass (fresh service on the same dir = a restart) with covers now
+    # available -> upgrade, and the old background file is kept so a client still
+    # showing it doesn't 404.
+    covers = {}
+    blob = render.encode_jpeg(_solid_cover((30, 90, 160)))
+    for local in ("a1", "a2"):
+        path = tmp_path / f"{local}.jpg"
+        path.write_bytes(blob)
+        covers[f"album/{local}_large.jpg"] = str(path)
+    svc2 = _service(
+        tmp_path,
+        resolver=lambda eid: _FakeModule(
+            [_album_child("a1"), _album_child("a2")], covers
+        ),
+    )
+    await svc2._process(cat_id, textual=False)
+    entry = svc2._entries[cat_id]
+    assert entry["file"] != bg_file
+    assert entry["provisional"] is False
+    assert (svc2._dir / bg_file).is_file()
+
+
+async def test_transient_failure_keeps_existing_full_tile(tmp_path):
+    covers = {}
+    blob = render.encode_jpeg(_solid_cover((200, 50, 50)))
+    for local in ("a1", "a2"):
+        path = tmp_path / f"{local}.jpg"
+        path.write_bytes(blob)
+        covers[f"album/{local}_large.jpg"] = str(path)
+    svc = _service(
+        tmp_path,
+        resolver=lambda eid: _FakeModule(
+            [_album_child("a1"), _album_child("a2")], covers
+        ),
+    )
+    cat_id = "kalinka:jamendo:catalog:popular-tracks"
+    await svc._process(cat_id, textual=False)
+    full_file = svc._entries[cat_id]["file"]
+    assert svc._entries[cat_id]["provisional"] is False
+
+    # Upstream goes flaky (empty) -> keep the good tile, don't downgrade it.
+    svc2 = _service(tmp_path, resolver=lambda eid: _FakeModule([]))
+    await svc2._process(cat_id, textual=False)
+    assert svc2._entries[cat_id]["file"] == full_file
+    assert (svc2._dir / full_file).is_file()
 
 
 async def test_index_reload_drops_missing_files(tmp_path):

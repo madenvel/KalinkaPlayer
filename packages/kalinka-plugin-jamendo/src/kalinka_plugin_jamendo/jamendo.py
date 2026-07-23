@@ -661,6 +661,7 @@ class JamendoInputModule(InputModule):
                 "Most played this month",
                 PreviewType.TILE,
                 PreviewContentType.TRACK,
+                "popular",
                 CatalogRole.DISCOVERY,
             ),
             (
@@ -669,6 +670,7 @@ class JamendoInputModule(InputModule):
                 "Fresh albums, just added",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ALBUM,
+                "new_releases",
                 CatalogRole.DISCOVERY,
             ),
             (
@@ -677,6 +679,7 @@ class JamendoInputModule(InputModule):
                 "Trending albums this month",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ALBUM,
+                "album",
                 CatalogRole.DISCOVERY,
             ),
             (
@@ -685,6 +688,7 @@ class JamendoInputModule(InputModule):
                 "The most followed artists",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.ARTIST,
+                "artist",
                 CatalogRole.DISCOVERY,
             ),
             (
@@ -693,6 +697,7 @@ class JamendoInputModule(InputModule):
                 "Hand-picked collections",
                 PreviewType.IMAGE_TEXT,
                 PreviewContentType.PLAYLIST,
+                "playlist",
                 CatalogRole.HIDE_ON_HOME,
             ),
         ]
@@ -711,6 +716,7 @@ class JamendoInputModule(InputModule):
                     preview_config=Preview(
                         type=ptype,
                         content_type=ctype,
+                        icon=icon,
                         items_count=20,
                         rows_count=2,
                         aspect_ratio=1.0,
@@ -718,7 +724,7 @@ class JamendoInputModule(InputModule):
                     role=role,
                 ),
             )
-            for slug, title, description, ptype, ctype, role in shelves
+            for slug, title, description, ptype, ctype, icon, role in shelves
         ]
         return BrowseItemList(
             offset=offset,

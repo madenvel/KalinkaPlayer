@@ -316,6 +316,7 @@ class LocalFilesInputModule(InputModule):
             preview = Preview(
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.TRACK,
+                icon="recent",
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -346,6 +347,7 @@ class LocalFilesInputModule(InputModule):
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
                 content_type=PreviewContentType.ALBUM,
+                icon="album",
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -376,6 +378,7 @@ class LocalFilesInputModule(InputModule):
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
                 content_type=PreviewContentType.ARTIST,
+                icon="artist",
                 items_count=10,  # Fixed value: maximum number of items to display in preview
                 rows_count=1,
                 card_size=CardSize.SMALL,
@@ -406,6 +409,7 @@ class LocalFilesInputModule(InputModule):
             preview = Preview(
                 type=PreviewType.IMAGE_TEXT,
                 content_type=PreviewContentType.PLAYLIST,
+                icon="playlist",
                 items_count=10,
                 rows_count=1,
                 card_size=CardSize.SMALL,

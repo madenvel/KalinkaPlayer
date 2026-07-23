@@ -93,6 +93,24 @@ def _textual_hint(item: BrowseItem) -> bool:
     )
 
 
+def _write_atomic(target: Path, data: bytes) -> None:
+    """Write *data* to *target* via a temp file in the same dir, renamed into
+    place. The temp is removed if the rename never happens, so an interrupted
+    write leaves no ``.tmp`` litter behind."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 class CatalogArtService:
     """Generates, caches and serves composed catalog-card backgrounds."""
 
@@ -141,22 +159,20 @@ class CatalogArtService:
                 else:
                     del self._entries[cat_id]
         try:
-            for path in self._dir.glob("*.jpg"):
-                if path.name not in referenced:
-                    path.unlink(missing_ok=True)
+            # *.png/*.tmp sweep transparent-era and interrupted-write leftovers.
+            for pattern in ("*.jpg", "*.png", "*.tmp"):
+                for path in self._dir.glob(pattern):
+                    if path.name not in referenced:
+                        path.unlink(missing_ok=True)
         except OSError:
             pass
 
     def _save_index(self) -> None:
         try:
-            self._dir.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=str(self._dir), suffix=".tmp")
-            with os.fdopen(fd, "w") as handle:
-                json.dump(
-                    {"style_version": STYLE_VERSION, "entries": self._entries},
-                    handle,
-                )
-            os.replace(tmp, self._index_path)
+            payload = json.dumps(
+                {"style_version": STYLE_VERSION, "entries": self._entries}
+            ).encode()
+            _write_atomic(self._index_path, payload)
         except OSError as exc:
             logger.warning("Could not persist catalog art index: %s", exc)
 
@@ -236,25 +252,28 @@ class CatalogArtService:
             self._record_failure(cat_id)
             return
 
-        children = await module.browse(entity_id, offset=0, limit=FETCH_LIMIT)
-        items = children.items or []
-        if not items:
-            # Empty page — often a remote cache still warming; retry soon.
-            self._record_failure(cat_id)
-            return
+        items: list[BrowseItem] = []
+        try:
+            children = await module.browse(entity_id, offset=0, limit=FETCH_LIMIT)
+            items = children.items or []
+        except Exception as exc:
+            # The source is flaky (Jamendo especially); fall through with no
+            # items -> a background-only tile now, covers added on a later retry.
+            logger.debug("Catalog art browse failed for %s: %r", cat_id, exc)
 
-        names = [item.name for item in items if item.name]
         catalog_children = sum(1 for item in items if item.catalog is not None)
         textual = textual or catalog_children > len(items) / 2
 
         covers: list[Image.Image] = []
         cover_bytes: list[bytes] = []
-        if not textual:
+        wanted_covers = False
+        if items and not textual:
             seen: set[str] = set()
             for item in items:
                 path = _item_image_path(item)
                 if not path or path in seen:
                     continue
+                wanted_covers = True
                 seen.add(path)
                 blob = await self._fetch_cover(path, item)
                 if blob is None:
@@ -269,50 +288,57 @@ class CatalogArtService:
                 if len(covers) >= MAX_COVERS:
                     break
 
-        baked_names = names[:3] if not covers else []
-        fingerprint = content_fingerprint(cover_bytes, baked_names, cat_id)
+        # "Provisional" = a cover catalog we couldn't get any covers for (empty
+        # page or every fetch failed). Still ship a background-only tile now so
+        # the card isn't blank, and retry soon to add the cascade.
+        provisional = (not textual) and (not items or (wanted_covers and not covers))
+        next_check = FAIL_RETRY_SECONDS if provisional else REFRESH_SECONDS
 
         entry = self._entries.get(cat_id)
-        if (
-            entry
-            and entry.get("fingerprint") == fingerprint
-            and entry.get("file")
-            and (self._dir / entry["file"]).is_file()
-        ):
-            entry["next_check_at"] = time.time() + REFRESH_SECONDS
+        have_file = bool(
+            entry and entry.get("file") and (self._dir / entry["file"]).is_file()
+        )
+
+        # A transient failure must not downgrade a good tile: keep the existing
+        # (non-provisional) art and just retry soon.
+        if provisional and have_file and not entry.get("provisional"):
+            entry["next_check_at"] = time.time() + next_check
             self._save_index()
             return
 
-        image = await asyncio.to_thread(
-            render_catalog_art, covers, baked_names, cat_id
-        )
+        fingerprint = content_fingerprint(cover_bytes, [], cat_id)
+        if entry and entry.get("fingerprint") == fingerprint and have_file:
+            entry["next_check_at"] = time.time() + next_check
+            self._save_index()
+            return
+
+        image = await asyncio.to_thread(render_catalog_art, covers, [], cat_id)
         data = await asyncio.to_thread(encode_jpeg, image)
 
         file_name = (
             f"{hashlib.sha1(cat_id.encode()).hexdigest()[:16]}-{fingerprint[:8]}.jpg"
         )
-        self._dir.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(self._dir), suffix=".tmp")
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        os.replace(tmp, self._dir / file_name)
+        _write_atomic(self._dir / file_name, data)
 
+        # Keep the previous file when upgrading a provisional tile, so a client
+        # still showing it doesn't 404 before it re-fetches the richer one.
         old_file = entry.get("file") if entry else None
-        if old_file and old_file != file_name:
+        if old_file and old_file != file_name and not (entry and entry.get("provisional")):
             (self._dir / old_file).unlink(missing_ok=True)
 
         self._entries[cat_id] = {
             "file": file_name,
             "fingerprint": fingerprint,
-            "next_check_at": time.time() + REFRESH_SECONDS,
+            "next_check_at": time.time() + next_check,
+            "provisional": provisional,
         }
         self._save_index()
         logger.info(
-            "Generated catalog art for %s (%s, %d covers, %d names)",
+            "Generated catalog art for %s (%s, %d covers%s)",
             cat_id,
             file_name,
             len(covers),
-            len(baked_names),
+            ", provisional" if provisional else "",
         )
 
     async def _fetch_cover(self, path: str, item: BrowseItem) -> Optional[bytes]:

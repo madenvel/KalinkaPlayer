@@ -1,9 +1,14 @@
 """Composed background art for catalog cards. Pure, synchronous Pillow/NumPy.
 
-Two variants: a cover collage (up to three covers, blurred hero + tiles) and
-a coverless textual card (procedural blobs + baked category names). Rendering
-is deterministic in its inputs. STYLE_VERSION is part of the content
-fingerprint, so bumping it regenerates every card.
+Renders the whole tile the app displays full-bleed: a generated background (a
+non-linear diagonal gradient with seeded concentric geometry drawn over it, plus
+film grain) with an album cascade on the right when covers are available.
+No text, chevron or frame — the app draws the icon/title/description column on
+the left and strokes a source-coloured frame around the tile. The gradient key
+colour is derived from the artwork (dominant cover colour, or a seeded hue for
+cover-less catalogs), not the source. Rendering is deterministic in its inputs;
+STYLE_VERSION is part of the content fingerprint, so bumping it regenerates
+every tile.
 """
 
 from __future__ import annotations
@@ -11,30 +16,39 @@ from __future__ import annotations
 import colorsys
 import hashlib
 import io
+import math
 from typing import Sequence
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter
 
-STYLE_VERSION = 1
+STYLE_VERSION = 2
 
-CANVAS_W = 960
-CANVAS_H = 540
+CANVAS_W = 1200
+CANVAS_H = 400  # 3:1
 
-# Berry/brass accent family shared with the localfiles procedural artwork.
-_ACCENT_BERRY = (176, 66, 106)
-_ACCENT_BRASS = (201, 168, 106)
+# Background palette.
+_BASE = (16, 16, 20)          # near-black ground under the gradient
+_GRAD_START = 0.42            # diagonal t where the gradient starts to build
+_GRAIN = 5.0                 # film-grain sigma
+# Horizontal darkening so the left (the app's text column) is near-black.
+_LEFT_DARK = 0.92            # strength toward black on the far left
+_LEFT_DARK_HOLD = 0.38       # fully dark up to this x fraction
+_LEFT_DARK_END = 0.60        # eased back to the artwork by this x fraction
 
-# Bold fonts for baked names, in preference order; DejaVu/Liberation cover
-# Cyrillic, the bundled Pillow fallback is Latin-only.
-_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+# Album cascade, front tile last: (centre x / W, centre y / H, angle). Shifted
+# left of the right edge so the app can place a chevron there.
+_COLLAGE_LAYOUT = [
+    (0.525, 0.46, -7.0),
+    (0.645, 0.50, 2.0),
+    (0.765, 0.53, 9.0),
 ]
+_COVER_FRACTION = 0.68  # tile side as a fraction of canvas height
+_SUPERSAMPLE = 2        # render at 2x for clean rings and rotated edges
+
+# Rich, dark-saturated key colour so the wash reads regardless of source hue.
+_KEY_SAT = 0.60
+_KEY_LIGHT = 0.32
 
 
 def _rng(seed: str) -> np.random.Generator:
@@ -42,29 +56,9 @@ def _rng(seed: str) -> np.random.Generator:
     return np.random.default_rng(int.from_bytes(digest[:8], "big"))
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    for path in _FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    try:
-        # Pillow >= 10.1 renders its bundled font at any size.
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
-
-def _fit_cover(image: Image.Image, width: int, height: int) -> Image.Image:
-    """Scale keeping aspect and centre-crop to exactly width x height."""
-    scale = max(width / image.width, height / image.height)
-    resized = image.resize(
-        (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
-        Image.Resampling.LANCZOS,
-    )
-    left = (resized.width - width) // 2
-    top = (resized.height - height) // 2
-    return resized.crop((left, top, left + width, top + height))
+def _hue_color(hue_deg: float, saturation: float, lightness: float) -> tuple[int, int, int]:
+    r, g, b = colorsys.hls_to_rgb((hue_deg % 360.0) / 360.0, lightness, saturation)
+    return (int(r * 255), int(g * 255), int(b * 255))
 
 
 def _dominant_color(image: Image.Image) -> tuple[int, int, int]:
@@ -81,122 +75,87 @@ def _dominant_color(image: Image.Image) -> tuple[int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
-def _hue_color(hue_deg: float, saturation: float, lightness: float) -> tuple[int, int, int]:
-    r, g, b = colorsys.hls_to_rgb((hue_deg % 360.0) / 360.0, lightness, saturation)
-    return (int(r * 255), int(g * 255), int(b * 255))
+def _key_color(covers: Sequence[Image.Image], seed: str) -> tuple[int, int, int]:
+    """Gradient key: the dominant cover hue for cover catalogs, else a hue
+    seeded from the id (so cover-less catalogs vary), at a fixed rich tone."""
+    if covers:
+        h, _, _ = colorsys.rgb_to_hls(*(c / 255.0 for c in _dominant_color(covers[0])))
+        return _hue_color(h * 360.0, _KEY_SAT, _KEY_LIGHT)
+    hue = int.from_bytes(hashlib.md5(seed.encode()).digest()[:2], "big") % 360
+    return _hue_color(hue, _KEY_SAT, _KEY_LIGHT + 0.02)
 
 
-def _name_color(name: str) -> tuple[int, int, int]:
-    """Stable per-name tint for textual rows (md5-based, not runtime hash)."""
-    digest = hashlib.md5(name.strip().lower().encode()).digest()
-    hue = int.from_bytes(digest[:2], "big") % 360
-    return _hue_color(hue, 0.55, 0.66)
+def _draw_geometry(base: Image.Image, rng: np.random.Generator) -> None:
+    """Seeded concentric bands + satellites drawn over the gradient, so every
+    card has visible, deterministic geometry rather than a flat wash. Biased to
+    the mid/right, where the left darkening doesn't swallow it. Inner discs
+    overwrite outer ones, leaving soft alternating concentric bands."""
+    width, height = base.size
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    cx = width * (0.48 + rng.random() * 0.42)
+    cy = height * (0.1 + rng.random() * 0.8)
+    maxr = height * (1.1 + rng.random() * 0.9)
+    rings = 6 + int(rng.random() * 5)
+    for i in range(rings, 0, -1):
+        r = maxr * i / rings
+        fill = (255, 255, 255, 22) if i % 2 else (0, 0, 0, 30)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+
+    for _ in range(2 + int(rng.random() * 3)):
+        ang = rng.random() * 2 * math.pi
+        dist = (0.5 + rng.random() * 0.6) * maxr
+        sr = height * (0.04 + rng.random() * 0.07)
+        sx = cx + math.cos(ang) * dist
+        sy = cy + math.sin(ang) * dist
+        draw.ellipse([sx - sr, sy - sr, sx + sr, sy + sr], fill=(255, 255, 255, 26))
+
+    base.alpha_composite(layer.filter(ImageFilter.GaussianBlur(round(height * 0.02))))
 
 
-def _radial_glow(
-    width: int,
-    height: int,
-    center: tuple[float, float],
-    radius: float,
-    color: tuple[int, int, int],
-    alpha: float,
+def _background(
+    width: int, height: int, key: tuple[int, int, int], rng: np.random.Generator
 ) -> Image.Image:
-    """RGBA layer holding one soft radial gradient blob."""
-    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
-    dist = np.sqrt((xs - center[0]) ** 2 + (ys - center[1]) ** 2)
-    fall = np.clip(1.0 - dist / max(radius, 1.0), 0.0, 1.0) ** 2
-    layer = np.zeros((height, width, 4), dtype=np.uint8)
-    layer[..., 0] = color[0]
-    layer[..., 1] = color[1]
-    layer[..., 2] = color[2]
-    layer[..., 3] = (fall * alpha * 255).astype(np.uint8)
-    return Image.fromarray(layer, "RGBA")
+    """Near-black ground under a non-linear diagonal gradient (black -> key),
+    with seeded concentric geometry on top, and the left held near-black for the
+    app's text column."""
+    xs, ys = np.linspace(0, 1, width), np.linspace(0, 1, height)
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    t = (grid_x + grid_y) * 0.5  # 0 at top-left, 1 at bottom-right
+
+    ground = np.empty((height, width, 3), float)
+    ground[:] = _BASE
+    col = t[..., None] * np.array(key, float)
+    u = np.clip((t - _GRAD_START) / (1 - _GRAD_START), 0, 1)
+    a = (u * u * (3 - 2 * u))[..., None]  # smoothstep ease-in
+    arr = ground * (1 - a) + col * a
+    result = Image.fromarray(arr.astype("uint8"), "RGB").convert("RGBA")
+
+    # Geometry over the gradient (so it isn't erased by it), then hold the left
+    # near-black for the text column — the scrim darkens any bands that reach it.
+    _draw_geometry(result, rng)
+
+    ld = np.clip(
+        (_LEFT_DARK_END - grid_x) / (_LEFT_DARK_END - _LEFT_DARK_HOLD), 0, 1
+    )
+    ld = ld * ld * (3 - 2 * ld)  # smoothstep, holding full-dark on the far left
+    scrim = np.zeros((height, width, 4), dtype="uint8")
+    scrim[..., 3] = (ld * _LEFT_DARK * 255).astype("uint8")
+    result.alpha_composite(Image.fromarray(scrim, "RGBA"))
+    return result
 
 
-def _linear_scrim(
-    width: int,
-    height: int,
-    *,
-    horizontal: bool,
-    start_alpha: float,
-    mid_alpha: float,
-    end_alpha: float,
-) -> Image.Image:
-    """Black RGBA gradient along one axis (start -> mid at 50% -> end)."""
-    steps = width if horizontal else height
-    ramp = np.interp(
-        np.linspace(0.0, 1.0, steps),
-        [0.0, 0.5, 1.0],
-        [start_alpha, mid_alpha, end_alpha],
-    ).astype(np.float32)
-    alpha = np.tile(ramp, (height, 1)) if horizontal else np.tile(ramp[:, None], (1, width))
-    layer = np.zeros((height, width, 4), dtype=np.uint8)
-    layer[..., 3] = (alpha * 255).astype(np.uint8)
-    return Image.fromarray(layer, "RGBA")
-
-
-def _vignette(width: int, height: int, strength: float = 0.28) -> Image.Image:
-    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
-    nx = (xs / width) * 2.0 - 1.0
-    ny = (ys / height) * 2.0 - 1.0
-    dist = np.sqrt(nx * nx + ny * ny)
-    fall = np.clip((dist - 0.7) / 0.6, 0.0, 1.0)
-    layer = np.zeros((height, width, 4), dtype=np.uint8)
-    layer[..., 3] = (fall * strength * 255).astype(np.uint8)
-    return Image.fromarray(layer, "RGBA")
-
-
-# Left fraction of the card the client draws title/description over; the
-# frontend bounds its text column to the same TEXT_ZONE_W.
-TEXT_ZONE_W = 0.62
-TEXT_ZONE_TOP = 0.5
-
-
-def _text_scrim(
-    width: int, height: int, *, strength: float = 0.82
-) -> Image.Image:
-    """Dark wedge under the top-left text, fading to nothing past TEXT_ZONE_W
-    so the art on the right stays bright. Drawn above the tiles, so text over a
-    tile edge stays legible."""
-    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
-    nx = xs / width
-    ny = ys / height
-    left = np.clip((TEXT_ZONE_W - nx) / TEXT_ZONE_W, 0.0, 1.0) ** 0.9
-    top = np.clip((TEXT_ZONE_TOP - ny) / TEXT_ZONE_TOP, 0.0, 1.0)
-    alpha = strength * left * (0.5 + 0.5 * top)
-    layer = np.zeros((height, width, 4), dtype=np.uint8)
-    layer[..., 3] = (np.clip(alpha, 0.0, 1.0) * 255).astype(np.uint8)
-    return Image.fromarray(layer, "RGBA")
-
-
-def _apply_grain(image: Image.Image, rng: np.random.Generator, amplitude: float) -> Image.Image:
-    array = np.asarray(image.convert("RGB"), dtype=np.float32)
-    noise = rng.standard_normal((image.height, image.width, 1)).astype(np.float32)
-    array += noise * amplitude
-    np.clip(array, 0.0, 255.0, out=array)
-    return Image.fromarray(array.astype(np.uint8), "RGB")
-
-
-def _rings_and_dots(base: Image.Image, rng: np.random.Generator) -> None:
-    """Faint concentric rings and two accent dots on the right, away from the
-    title area."""
-    draw = ImageDraw.Draw(base, "RGBA")
-    cx = base.width * (0.62 + rng.random() * 0.3)
-    cy = base.height * (0.2 + rng.random() * 0.6)
-    for radius, alpha in ((base.height * 0.42, 9), (base.height * 0.26, 7)):
-        draw.ellipse(
-            [cx - radius, cy - radius, cx + radius, cy + radius],
-            outline=(255, 255, 255, alpha),
-            width=2,
-        )
-    for color in (_ACCENT_BERRY, _ACCENT_BRASS):
-        dot_x = base.width * (0.45 + rng.random() * 0.45)
-        dot_y = base.height * (0.15 + rng.random() * 0.7)
-        radius = 2.0 + rng.random() * 1.5
-        draw.ellipse(
-            [dot_x - radius, dot_y - radius, dot_x + radius, dot_y + radius],
-            fill=(*color, 210),
-        )
+def _fit_cover(image: Image.Image, width: int, height: int) -> Image.Image:
+    """Scale keeping aspect and centre-crop to exactly width x height."""
+    scale = max(width / image.width, height / image.height)
+    resized = image.resize(
+        (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    left = (resized.width - width) // 2
+    top = (resized.height - height) // 2
+    return resized.crop((left, top, left + width, top + height))
 
 
 def _rounded_tile(cover: Image.Image, side: int, radius: int) -> Image.Image:
@@ -212,132 +171,51 @@ def _rounded_tile(cover: Image.Image, side: int, radius: int) -> Image.Image:
     out.paste(tile, (0, 0), mask)
     border = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     ImageDraw.Draw(border).rounded_rectangle(
-        [0, 0, side - 1, side - 1],
-        radius=radius,
-        outline=(255, 255, 255, 36),
-        width=1,
+        [0, 0, side - 1, side - 1], radius=radius, outline=(255, 255, 255, 36), width=1
     )
     return Image.alpha_composite(out, border)
 
 
 def _paste_with_shadow(
-    base: Image.Image,
-    tile: Image.Image,
-    center: tuple[int, int],
-    angle_deg: float,
+    base: Image.Image, tile: Image.Image, center: tuple[int, int], angle_deg: float
 ) -> None:
-    """Rotate a tile, put a soft drop shadow under it, paste both in place."""
+    """Rotate a tile, drop a soft shadow under it, paste both — shadow sized to
+    the tile so it scales with the canvas."""
     rotated = tile.rotate(angle_deg, expand=True, resample=Image.Resampling.BICUBIC)
+    blur = max(4, round(rotated.width * 0.03))
     shadow_src = Image.new("RGBA", rotated.size, (0, 0, 0, 0))
-    shadow_alpha = rotated.split()[3].point(lambda a: int(a * 0.55))
-    shadow_src.paste((0, 0, 0, 255), (0, 0), shadow_alpha)
-    pad = 24
-    shadow = Image.new("RGBA", (rotated.width + pad * 2, rotated.height + pad * 2), (0, 0, 0, 0))
+    shadow_src.paste(
+        (0, 0, 0, 255), (0, 0), rotated.getchannel("A").point(lambda a: int(a * 0.5))
+    )
+    pad = blur * 3
+    shadow = Image.new(
+        "RGBA", (rotated.width + pad * 2, rotated.height + pad * 2), (0, 0, 0, 0)
+    )
     shadow.paste(shadow_src, (pad, pad))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(10))
-    sx = center[0] - shadow.width // 2
-    sy = center[1] - shadow.height // 2 + 8
-    base.alpha_composite(shadow, (sx, sy))
-    base.alpha_composite(rotated, (center[0] - rotated.width // 2, center[1] - rotated.height // 2))
-
-
-def _procedural_base(
-    width: int, height: int, rng: np.random.Generator
-) -> Image.Image:
-    """Seeded near-black ground with saturated colour fields grading in from
-    the right, keeping the left (text) dark."""
-    base = Image.new("RGBA", (width, height), (11, 12, 16, 255))
-
-    # Primary berry/brass field anchored past the right edge.
-    berry = rng.random() < 0.6
-    primary_hue = (330.0 + rng.random() * 30.0) if berry else (28.0 + rng.random() * 22.0)
-    base.alpha_composite(_radial_glow(
-        width, height,
-        (width * (1.02 + rng.random() * 0.1), height * (0.15 + rng.random() * 0.7)),
-        height * (1.1 + rng.random() * 0.4),
-        _hue_color(primary_hue, 0.68, 0.34),
-        1.0,
-    ))
-    # Sibling family, upper-right.
-    secondary_hue = (28.0 + rng.random() * 22.0) if berry else (330.0 + rng.random() * 30.0)
-    base.alpha_composite(_radial_glow(
-        width, height,
-        (width * (0.55 + rng.random() * 0.3), height * (-0.1 + rng.random() * 0.35)),
-        height * (0.5 + rng.random() * 0.3),
-        _hue_color(secondary_hue, 0.62, 0.30),
-        0.9,
-    ))
-    # Cool violet counterweight, low-centre.
-    base.alpha_composite(_radial_glow(
-        width, height,
-        (width * (0.35 + rng.random() * 0.3), height * (0.95 + rng.random() * 0.2)),
-        height * (0.5 + rng.random() * 0.3),
-        _hue_color(255.0 + rng.random() * 30.0, 0.55, 0.24),
-        0.85,
-    ))
-    return base.filter(ImageFilter.GaussianBlur(16))
-
-
-def _ellipsize(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> str:
-    if draw.textlength(text, font=font) <= max_width:
-        return text
-    while text and draw.textlength(text + "…", font=font) > max_width:
-        text = text[:-1]
-    return text + "…"
-
-
-def _bake_names(base: Image.Image, names: Sequence[str]) -> None:
-    """Up to three category rows in the lower-left: colour dot + tinted name."""
-    width, height = base.size
-    font = _load_font(max(18, round(height * 0.062)))
-    row_h = round(height * 0.105)
-    pad_x = round(width * 0.055)
-    pad_y = round(height * 0.085)
-    rows = list(names[:3])
-
-    shadow_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(shadow_layer)
-    text_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    text_draw = ImageDraw.Draw(text_layer)
-
-    for i, name in enumerate(reversed(rows)):
-        baseline = height - pad_y - i * row_h
-        color = _name_color(name)
-        dot_r = round(height * 0.014)
-        ascent, descent = font.getmetrics()
-        cy = baseline - (ascent + descent) // 2
-        text_draw.ellipse(
-            [pad_x - dot_r, cy - dot_r, pad_x + dot_r, cy + dot_r],
-            fill=(*color, 255),
-        )
-        text_x = pad_x + dot_r + round(width * 0.018)
-        label = _ellipsize(text_draw, name, font, round(width * 0.58) - text_x)
-        shadow_draw.text(
-            (text_x, baseline + 2), label,
-            font=font, fill=(0, 0, 0, 190), anchor="ls",
-        )
-        text_draw.text(
-            (text_x, baseline), label, font=font, fill=(*color, 242), anchor="ls"
-        )
-
-    base.alpha_composite(shadow_layer.filter(ImageFilter.GaussianBlur(3)))
-    base.alpha_composite(text_layer)
-
-
-def _scrims(base: Image.Image, *, floor_alpha: int = 70) -> None:
-    """Flat floor + directional gradients. Applied before the tiles so they
-    stay bright against the darkened ground."""
-    width, height = base.size
-    if floor_alpha:
-        base.alpha_composite(Image.new("RGBA", base.size, (0, 0, 0, floor_alpha)))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
+    drop = max(3, round(rotated.width * 0.025))
     base.alpha_composite(
-        _linear_scrim(width, height, horizontal=True,
-                      start_alpha=0.60, mid_alpha=0.20, end_alpha=0.0)
+        shadow, (center[0] - shadow.width // 2, center[1] - shadow.height // 2 + drop)
     )
     base.alpha_composite(
-        _linear_scrim(width, height, horizontal=False,
-                      start_alpha=0.26, mid_alpha=0.02, end_alpha=0.28)
+        rotated, (center[0] - rotated.width // 2, center[1] - rotated.height // 2)
     )
+
+
+def _collage(base: Image.Image, covers: Sequence[Image.Image], width: int, height: int) -> None:
+    side = round(height * _COVER_FRACTION)
+    radius = round(side * 0.055)
+    picks = list(covers[:3])
+    for idx in reversed(range(len(picks))):  # back to front
+        cx_f, cy_f, angle = _COLLAGE_LAYOUT[idx]
+        tile = _rounded_tile(picks[idx], side, radius)
+        _paste_with_shadow(base, tile, (round(width * cx_f), round(height * cy_f)), angle)
+
+
+def _grain(image: Image.Image, rng: np.random.Generator, strength: float) -> Image.Image:
+    arr = np.asarray(image, dtype=np.float32)
+    noise = rng.standard_normal((image.height, image.width, 1)).astype(np.float32) * strength
+    return Image.fromarray(np.clip(arr + noise, 0, 255).astype("uint8"), "RGB")
 
 
 def render_catalog_art(
@@ -348,66 +226,24 @@ def render_catalog_art(
     width: int = CANVAS_W,
     height: int = CANVAS_H,
 ) -> Image.Image:
-    """Render one card background. Covers present -> collage (names ignored);
-    else the textual variant with up to three ``names`` baked in."""
+    """Render one opaque tile: generated background + album cascade (when covers
+    are present). ``names`` is unused (the app draws text) but kept for a stable
+    call/fingerprint signature."""
     rng = _rng(seed)
-
+    key = _key_color(covers, seed)
+    ss = _SUPERSAMPLE
+    base = _background(width * ss, height * ss, key, rng)
     if covers:
-        hero = _fit_cover(covers[0].convert("RGB"), width, height)
-        hero = hero.filter(ImageFilter.GaussianBlur(38))
-        hero = ImageEnhance.Brightness(hero).enhance(0.52)
-        hero = ImageEnhance.Color(hero).enhance(0.85)
-        base = hero.convert("RGBA")
-
-        for cover in covers[:3]:
-            color = _dominant_color(cover)
-            center = (width * (0.2 + rng.random() * 0.6), height * rng.random())
-            radius = width * (0.30 + rng.random() * 0.25)
-            base.alpha_composite(
-                _radial_glow(width, height, center, radius, color, 0.45)
-            )
-        _rings_and_dots(base, rng)
-        _scrims(base)
-
-        # Tiles cascade to the lower-right, largest in front (drawn last), clear
-        # of the top-left text zone.
-        slots = [
-            (0.56, 0.66, 0.585),  # (tile side / H, cx / W, cy / H), front
-            (0.45, 0.83, 0.49),
-            (0.375, 0.935, 0.65),
-        ]
-        order = list(range(min(len(covers), 3)))[::-1]  # back to front
-        for idx in order:
-            side_f, cx_f, cy_f = slots[idx]
-            side = round(height * side_f)
-            tile = _rounded_tile(covers[idx], side, radius=round(side * 0.055))
-            angle = float(rng.uniform(-7.0, 7.0))
-            _paste_with_shadow(
-                base, tile, (round(width * cx_f), round(height * cy_f)), angle
-            )
-
-        # Above the tiles, so the text zone is dark even over a tile edge.
-        base.alpha_composite(_text_scrim(width, height))
-        base.alpha_composite(_vignette(width, height, 0.20))
-        out = base.convert("RGB")
-        out = ImageEnhance.Contrast(out).enhance(1.06)
-        return _apply_grain(out, rng, amplitude=5.0)
-
-    base = _procedural_base(width, height, rng)
-    _rings_and_dots(base, rng)
-    _scrims(base, floor_alpha=36)
-    base.alpha_composite(_text_scrim(width, height, strength=0.5))
-    base.alpha_composite(_vignette(width, height, 0.22))
-    if names:
-        _bake_names(base, names)
-    out = base.convert("RGB")
-    out = ImageEnhance.Contrast(out).enhance(1.05)
-    return _apply_grain(out, rng, amplitude=4.0)
+        _collage(base, covers, width * ss, height * ss)
+    out = base.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
+    return _grain(out, rng, _GRAIN)
 
 
 def encode_jpeg(image: Image.Image, quality: int = 85) -> bytes:
     buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=quality, progressive=True, optimize=True)
+    image.convert("RGB").save(
+        buffer, format="JPEG", quality=quality, progressive=True, optimize=True
+    )
     return buffer.getvalue()
 
 
