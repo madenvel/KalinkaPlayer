@@ -138,7 +138,8 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         return track_number, clean_title, artist_name
 
     def _strip_leading_number(self, text: str) -> tuple[Optional[int], str]:
-        """Split a leading "NN." track number off, if present."""
+        """Split a leading track number off, if present, using the shared
+        TRACK_NUMBER_PREFIX_PATTERNS ("NN ", "NN.", "NN- ", "NN_ ", "NN.Title")."""
         for pattern in self.track_number_patterns:
             match = pattern.match(text)
             if match:
