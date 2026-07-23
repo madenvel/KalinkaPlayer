@@ -548,7 +548,21 @@ class MusicBrainzPlugin(EnricherPlugin):
             # per album vs N calls per album of N tracks.
             self._release_cache[release_mbid] = mb_release_data
 
-            return {"updates": updates, "mbid": release_mbid}
+            # Title claim: an inferred canonicalization, resolved the same way
+            # as the artist name — it re-cases a matching local title but never
+            # replaces a different one (a fuzzy release match can misidentify
+            # the edition). Album titles are otherwise locally derived.
+            claims = []
+            canonical_title = mb_release_data.get("title") or best.get("title")
+            if canonical_title:
+                claims.append({
+                    "field": "title",
+                    "value": canonical_title,
+                    "source": f"musicbrainz:{release_mbid}",
+                    "tier": "inferred",
+                })
+
+            return {"updates": updates, "mbid": release_mbid, "claims": claims}
 
         except Exception as e:
             logger.error(f"Error enriching album {album['title']}: {str(e)}")
