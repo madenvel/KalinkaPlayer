@@ -20,6 +20,7 @@ from .classify import (
     compilation_title,
     is_va_folder,
     normalize_album_title,
+    strip_artist_prefix,
     strip_disc_suffix,
 )
 from .engine import partition_folder
@@ -140,6 +141,11 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         )
         for t, e in rows
     }
+    name_by_id = {
+        t.get("artist_id"): t.get("artist_name")
+        for t, _ in rows
+        if t.get("artist_id") and t.get("artist_name")
+    }
 
     result = partition_folder(features)
     clusters: List[ClusterPlan] = []
@@ -191,6 +197,12 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
             title = strip_disc_suffix(title)
             kind = "multi_disc"
         title = normalize_album_title(title)
+        # Drop a leading "Artist - " a folder name leaves on the album title
+        # ("The Beatles - Abbey Road" -> "Abbey Road"). Guarded against
+        # eponymous albums by strip_artist_prefix.
+        anchor_name = name_by_id.get(anchor)
+        if anchor_name:
+            title = strip_artist_prefix(title, anchor_name)
 
         clusters.append(
             ClusterPlan(ids, kind, title, anchor, dict(result.basis),
