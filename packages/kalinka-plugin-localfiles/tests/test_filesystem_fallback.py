@@ -156,3 +156,24 @@ class TestNoSpaceDotPrefix:
         updates = result["updates"]
         assert updates["title"] == "Кончится лето"   # prefix stripped
         assert updates["track_number"] == 1
+
+
+class TestTrackNumberAfterArtistPrefix:
+    """A track number after the "Artist - " prefix ("Artist - 01.Title")
+    is still parsed — the number sits mid-filename, not at the start."""
+
+    def test_number_after_artist_prefix(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "THE BEATLES - 01.Come Together (Lennon-McCartney)"
+        )
+        assert num == 1
+        assert title == "Come Together (Lennon-McCartney)"
+        assert artist == "THE BEATLES"
+
+    def test_no_false_number_when_title_has_no_prefix(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "Pink Floyd - Time"
+        )
+        assert num is None
+        assert title == "Time"
+        assert artist == "Pink Floyd"
