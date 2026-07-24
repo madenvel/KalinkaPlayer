@@ -8,7 +8,7 @@ import logging
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
-from ..resolution.resolver import Claim, resolve_display_name
+from ..resolution.resolver import Claim, resolve_display_name, resolve_field
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -37,6 +37,14 @@ TRACK_REQUIRED_FIELDS = [
     "duration",
     "track_number",
 ]
+
+# Origin/era fields resolved external-first (Phase 2d slice 3). A local tag
+# value is an `observed` claim; a fuzzy MB match is `inferred`, so for
+# genre/year/language the local tag wins when present, while country/area/
+# original_year (no competing local tag) are filled by MB. See resolver
+# `_EXTERNAL_FIRST_FIELDS`.
+ARTIST_EXTERNAL_FIELDS = ("country", "area")
+ALBUM_EXTERNAL_FIELDS = ("genre", "year", "original_year", "language")
 
 # Global variables to manage enricher state. The enricher runs inside the
 # librarian process (Phase 2b); the indexer feeds it "enrich"/"stop" over an
@@ -264,6 +272,12 @@ class MetadataEnricher:
         if await self._resolve_artist_name(artist, updated_artist, emitted_claims):
             had_updates = True
 
+        # Resolve external-first origin fields (country/area) from claims.
+        if await self._resolve_external_fields(
+            "artist", artist, updated_artist, emitted_claims, ARTIST_EXTERNAL_FIELDS
+        ):
+            had_updates = True
+
         # After all plugins, if still not fully enriched, mark as failed
         if (
             not is_fully_enriched
@@ -357,6 +371,57 @@ class MetadataEnricher:
             return True
         return False
 
+    async def _resolve_external_fields(
+        self,
+        entity_type: str,
+        entity: dict,
+        updated: dict,
+        emitted_claims: list,
+        fields,
+    ) -> bool:
+        """Resolve external-first origin/era fields from claims (Phase 2d slice
+        3). For each field, the pre-plugin local value is an `observed`
+        tag_consensus claim and each emitted external value is `inferred`; the
+        resolver picks the winner (local tag beats fuzzy MB for genre/year/
+        language; MB fills country/area/original_year uncontested). Records the
+        winner in resolved_origin and returns True if any value changed."""
+        entity_id = entity["id"]
+        ext_by_field: dict[str, list] = {}
+        for c in emitted_claims:
+            f = c.get("field")
+            if f in fields:
+                ext_by_field.setdefault(f, []).append(c)
+
+        changed = False
+        for field in fields:
+            externals = ext_by_field.get(field, [])
+            local_value = entity.get(field)
+            claims = []
+            if local_value not in (None, ""):
+                claims.append(
+                    Claim(field, local_value, "tag_consensus", "observed")
+                )
+            for c in externals:
+                await self.db_manager.record_claim(
+                    entity_type, entity_id, field, c["value"], c["source"], c["tier"]
+                )
+                claims.append(
+                    Claim(field, c["value"], c["source"], c["tier"],
+                          c.get("evidence_ref"))
+                )
+            if not claims:
+                continue
+
+            winner = resolve_field(claims, current_value=local_value)
+            await self.db_manager.record_resolved_origin(
+                entity_type, entity_id, field, winner.source, winner.tier,
+                winner.evidence_ref,
+            )
+            if winner.value != updated.get(field):
+                updated[field] = winner.value
+                changed = True
+        return changed
+
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
         processed_albums = set()
@@ -419,6 +484,13 @@ class MetadataEnricher:
         # Resolve the display title from claims: a matching external match
         # supplies canonical casing without replacing a different local title.
         if await self._resolve_album_title(album, updated_album, emitted_claims):
+            had_updates = True
+
+        # Resolve external-first origin/era fields (genre/year/original_year/
+        # language): local tags win over fuzzy MB where present.
+        if await self._resolve_external_fields(
+            "album", album, updated_album, emitted_claims, ALBUM_EXTERNAL_FIELDS
+        ):
             had_updates = True
 
         # After all plugins, if still not fully enriched, mark as failed
