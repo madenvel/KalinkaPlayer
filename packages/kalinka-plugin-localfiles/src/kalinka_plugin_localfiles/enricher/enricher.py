@@ -25,17 +25,22 @@ musicbrainz_logger.setLevel(logging.WARNING)
 aiosqlite_logger = logging.getLogger("aiosqlite")
 aiosqlite_logger.setLevel(logging.WARNING)
 
-# Required fields for each entity type
-# These define what metadata fields are required for an entity to be considered fully enriched
-ARTIST_REQUIRED_FIELDS = ["name", "mbid", "image_url"]
-ALBUM_REQUIRED_FIELDS = ["title", "artist_id", "mbid", "image_url", "year", "genre"]
-TRACK_REQUIRED_FIELDS = [
-    "title",
-    "artist_id",
-    "album_id",
-    "mbid",
-    "duration",
-    "track_number",
+# REQUIRED = the genuinely-local fields that gate ENRICHED vs FAILED (Phase
+# 2e). A cluster whose local identity resolves is done — "ENRICHED
+# (local-only)", not FAILED — even with no external match or cover. This
+# deletes the old failure mode "correct MB match without a cover ⇒ FAILED".
+ARTIST_REQUIRED_FIELDS = ["name"]
+ALBUM_REQUIRED_FIELDS = ["title", "artist_id"]
+TRACK_REQUIRED_FIELDS = ["title", "artist_id", "album_id", "duration", "track_number"]
+
+# DESIRED = the full target set (the previous required lists). Reaching it
+# means external matching succeeded and covers are filled, so the enricher can
+# stop early; NOT reaching it is fine — mbid/image_url/year/genre are desirable,
+# not required, and their absence never fails a row.
+ARTIST_DESIRED_FIELDS = ["name", "mbid", "image_url"]
+ALBUM_DESIRED_FIELDS = ["title", "artist_id", "mbid", "image_url", "year", "genre"]
+TRACK_DESIRED_FIELDS = [
+    "title", "artist_id", "album_id", "mbid", "duration", "track_number",
 ]
 
 # Origin/era fields resolved external-first (Phase 2d slice 3). A local tag
@@ -226,12 +231,13 @@ class MetadataEnricher:
         updated_artist = artist.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Check if all required fields already exist and have values
-        is_fully_enriched = all(
-            updated_artist.get(field) for field in ARTIST_REQUIRED_FIELDS
+        # Desired = the full target set (id + cover). Reaching it lets us skip
+        # the plugins entirely; not reaching it is fine (see the tail).
+        is_desired_complete = all(
+            updated_artist.get(field) for field in ARTIST_DESIRED_FIELDS
         )
-        if is_fully_enriched:
-            logger.debug(f"Artist {artist['id']} already has all required fields")
+        if is_desired_complete:
+            logger.debug(f"Artist {artist['id']} already has all desired fields")
             updated_artist["enriched"] = EnrichmentStatus.ENRICHED
             await self.db_manager.update_artist(
                 artist["id"], {"enriched": EnrichmentStatus.ENRICHED}
@@ -258,12 +264,12 @@ class MetadataEnricher:
                 # Track that we had updates
                 had_updates = True
 
-                # Check if we're now fully enriched after this plugin
-                is_fully_enriched = all(
-                    updated_artist.get(field) for field in ARTIST_REQUIRED_FIELDS
+                # Stop early once every desired field is filled.
+                is_desired_complete = all(
+                    updated_artist.get(field) for field in ARTIST_DESIRED_FIELDS
                 )
-                if is_fully_enriched:
-                    logger.debug(f"Artist {artist['name']} now fully enriched")
+                if is_desired_complete:
+                    logger.debug(f"Artist {artist['name']} has all desired fields")
                     updated_artist["enriched"] = EnrichmentStatus.ENRICHED
                     break  # No need to check further plugins
 
@@ -278,15 +284,17 @@ class MetadataEnricher:
         ):
             had_updates = True
 
-        # After all plugins, if still not fully enriched, mark as failed
-        if (
-            not is_fully_enriched
-            and updated_artist.get("enriched") != EnrichmentStatus.ENRICHED
-        ):
-            logger.debug(
-                f"Artist {artist['id']} failed enrichment - missing required fields"
-            )
-            updated_artist["enriched"] = EnrichmentStatus.FAILED
+        # Status decision (Phase 2e): if external matching didn't fill every
+        # desired field, the artist is still ENRICHED when its required local
+        # fields resolved — only a missing required field is a FAILURE.
+        if updated_artist.get("enriched") != EnrichmentStatus.ENRICHED:
+            if all(updated_artist.get(f) for f in ARTIST_REQUIRED_FIELDS):
+                updated_artist["enriched"] = EnrichmentStatus.ENRICHED  # local-only
+            else:
+                missing = [f for f in ARTIST_REQUIRED_FIELDS if not updated_artist.get(f)]
+                logger.debug("Artist %s failed enrichment - missing: %s",
+                             artist["id"], ", ".join(missing))
+                updated_artist["enriched"] = EnrichmentStatus.FAILED
             had_updates = True
 
         # Only update the database once at the end if we had any updates
@@ -443,12 +451,13 @@ class MetadataEnricher:
         updated_album = album.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Check if all required fields already exist and have values
-        is_fully_enriched = all(
-            updated_album.get(field) for field in ALBUM_REQUIRED_FIELDS
+        # Desired = full target set (external id, cover, year, genre). Reaching
+        # it lets us skip the plugins; not reaching it is fine (see the tail).
+        is_desired_complete = all(
+            updated_album.get(field) for field in ALBUM_DESIRED_FIELDS
         )
-        if is_fully_enriched:
-            logger.debug(f"Album {album['id']} already has all required fields")
+        if is_desired_complete:
+            logger.debug(f"Album {album['id']} already has all desired fields")
             updated_album["enriched"] = EnrichmentStatus.ENRICHED
             await self.db_manager.update_album(
                 album["id"], {"enriched": EnrichmentStatus.ENRICHED}
@@ -472,12 +481,12 @@ class MetadataEnricher:
                 # Track that we had updates
                 had_updates = True
 
-                # Check if we're now fully enriched after this plugin
-                is_fully_enriched = all(
-                    updated_album.get(field) for field in ALBUM_REQUIRED_FIELDS
+                # Stop early once every desired field is filled.
+                is_desired_complete = all(
+                    updated_album.get(field) for field in ALBUM_DESIRED_FIELDS
                 )
-                if is_fully_enriched:
-                    logger.debug(f"Album {album['title']} now fully enriched")
+                if is_desired_complete:
+                    logger.debug(f"Album {album['title']} has all desired fields")
                     updated_album["enriched"] = EnrichmentStatus.ENRICHED
                     break
 
@@ -493,15 +502,18 @@ class MetadataEnricher:
         ):
             had_updates = True
 
-        # After all plugins, if still not fully enriched, mark as failed
-        if (
-            not is_fully_enriched
-            and updated_album.get("enriched") != EnrichmentStatus.ENRICHED
-        ):
-            logger.debug(
-                f"Album {album['id']} failed enrichment - missing required fields"
-            )
-            updated_album["enriched"] = EnrichmentStatus.FAILED
+        # Status decision (Phase 2e): an album whose required local fields
+        # (title + artist_id) resolved is ENRICHED even without an external
+        # match/cover/year/genre — "ENRICHED (local-only)". FAILED only when a
+        # required local field is still missing.
+        if updated_album.get("enriched") != EnrichmentStatus.ENRICHED:
+            if all(updated_album.get(f) for f in ALBUM_REQUIRED_FIELDS):
+                updated_album["enriched"] = EnrichmentStatus.ENRICHED  # local-only
+            else:
+                missing = [f for f in ALBUM_REQUIRED_FIELDS if not updated_album.get(f)]
+                logger.debug("Album %s failed enrichment - missing: %s",
+                             album["id"], ", ".join(missing))
+                updated_album["enriched"] = EnrichmentStatus.FAILED
             had_updates = True
 
         # Only update the database once at the end if we had any updates
@@ -529,12 +541,13 @@ class MetadataEnricher:
         updated_track = track.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
-        # Check if all required fields already exist and have values
-        is_fully_enriched = all(
-            updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
+        # Desired = full target set (incl. mbid). Reaching it lets us skip the
+        # plugins; not reaching it is fine (see the tail).
+        is_desired_complete = all(
+            updated_track.get(field) for field in TRACK_DESIRED_FIELDS
         )
-        if is_fully_enriched:
-            logger.debug(f"Track {track['id']} already has all required fields")
+        if is_desired_complete:
+            logger.debug(f"Track {track['id']} already has all desired fields")
             updated_track["enriched"] = EnrichmentStatus.ENRICHED
             await self.db_manager.update_track(
                 track["id"], {"enriched": EnrichmentStatus.ENRICHED}
@@ -562,28 +575,30 @@ class MetadataEnricher:
                 # Track that we had updates
                 had_updates = True
 
-                # Check if we're now fully enriched after this plugin
-                is_fully_enriched = all(
-                    updated_track.get(field) for field in TRACK_REQUIRED_FIELDS
+                # Stop early once every desired field is filled.
+                is_desired_complete = all(
+                    updated_track.get(field) for field in TRACK_DESIRED_FIELDS
                 )
-                if is_fully_enriched:
-                    logger.debug(f"Track {track['title']} now fully enriched")
+                if is_desired_complete:
+                    logger.debug(f"Track {track['title']} has all desired fields")
                     updated_track["enriched"] = EnrichmentStatus.ENRICHED
 
-        # After all plugins, if still not fully enriched, mark as failed
-        if (
-            not is_fully_enriched
-            and updated_track.get("enriched") != EnrichmentStatus.ENRICHED
-        ):
+        # Status decision (Phase 2e): a track whose required local fields
+        # resolved is ENRICHED even without an mbid — "ENRICHED (local-only)".
+        # FAILED only when a required local field is still missing.
+        if updated_track.get("enriched") != EnrichmentStatus.ENRICHED:
             missing = [f for f in TRACK_REQUIRED_FIELDS if not updated_track.get(f)]
-            # file_path identifies the track even when title/artist are missing
-            where = updated_track.get("file_path") or track["id"]
-            logger.debug(
-                "Track %s failed enrichment - missing: %s",
-                where,
-                ", ".join(missing),
-            )
-            updated_track["enriched"] = EnrichmentStatus.FAILED
+            if not missing:
+                updated_track["enriched"] = EnrichmentStatus.ENRICHED  # local-only
+            else:
+                # file_path identifies the track even when title/artist are missing
+                where = updated_track.get("file_path") or track["id"]
+                logger.debug(
+                    "Track %s failed enrichment - missing: %s",
+                    where,
+                    ", ".join(missing),
+                )
+                updated_track["enriched"] = EnrichmentStatus.FAILED
             had_updates = True
 
         # Only update the database once at the end if we had any updates
