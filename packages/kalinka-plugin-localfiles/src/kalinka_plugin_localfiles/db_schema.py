@@ -300,6 +300,45 @@ async def init_db(db_path: str) -> None:
             "ON entity_relation(target_type, target_id)"
         )
 
+        # Album-level external matching (Phase 3). A local album cluster is
+        # scored against candidate provider releases by tracklist alignment;
+        # the top few are kept here with their coverage + track_map so an
+        # accepted candidate can drive per-track lookups and its resolved
+        # values can be invalidated if it is later rejected/expired.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS release_candidates (
+                album_id     TEXT NOT NULL,
+                provider     TEXT NOT NULL,          -- musicbrainz|qobuz|deezer
+                release_id   TEXT NOT NULL,          -- release mbid / catalogue id
+                rg_id        TEXT,                   -- release-group mbid
+                score        REAL NOT NULL,
+                coverage     REAL NOT NULL,          -- fraction of members explained
+                track_map    TEXT,                   -- JSON: track_id -> [disc,pos,rec_id]
+                status       TEXT NOT NULL DEFAULT 'candidate',  -- candidate|accepted|rejected
+                fetched_at   INTEGER,
+                PRIMARY KEY (album_id, provider, release_id)
+            )
+            """
+        )
+        await cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_release_candidates_album "
+            "ON release_candidates(album_id, status)"
+        )
+
+        # Per-track recording identity (AcoustID / MB), separate from grouping.
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recording_identity (
+                track_id  TEXT NOT NULL,
+                provider  TEXT NOT NULL,
+                rec_id    TEXT NOT NULL,
+                score     REAL NOT NULL,
+                PRIMARY KEY (track_id, provider, rec_id)
+            )
+            """
+        )
+
         await cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS playlists (

@@ -33,6 +33,28 @@ async def test_claims_tables_and_columns_created(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_phase3_matching_tables_created(tmp_path):
+    db = str(tmp_path / "localfiles.db")
+    await init_db(db)
+    async with aiosqlite.connect(db) as conn:
+        assert {"release_candidates", "recording_identity"} <= await _tables(conn)
+        rc_cols = await _cols(conn, "release_candidates")
+        assert {"album_id", "provider", "release_id", "score", "coverage",
+                "track_map", "status"} <= rc_cols
+        # A candidate row round-trips.
+        await conn.execute(
+            "INSERT INTO release_candidates "
+            "(album_id, provider, release_id, score, coverage, status, fetched_at) "
+            "VALUES ('al1','musicbrainz','rel-1',0.9,0.95,'accepted',0)"
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT status FROM release_candidates WHERE album_id='al1'"
+        )
+        assert (await cur.fetchone())[0] == "accepted"
+
+
+@pytest.mark.asyncio
 async def test_init_db_is_idempotent(tmp_path):
     # Running init_db twice must not fail (the ALTER-TABLE migrations skip
     # columns that already exist) and must leave the 2c columns in place.
