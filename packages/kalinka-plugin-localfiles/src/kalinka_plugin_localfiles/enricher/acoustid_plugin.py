@@ -10,7 +10,7 @@ from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
 from ..utils.name_utils import clean_display_name
-from .enricher_plugin import EnricherPlugin
+from .enricher_plugin import EnricherPlugin, inferred_claims
 from .id_generator import generate_artist_id
 from .match_utils import duration_bonus
 
@@ -649,8 +649,14 @@ class AcoustIdPlugin(EnricherPlugin):
                 "match_score": int(match_info["score"] * 100),  # 0-100 scale
             }
 
-            if title_absent and match_info.get("title"):
-                updates["title"] = match_info["title"]
+            # Title is a resolvable display field, so it's a claim, never a
+            # direct write (resolution is the sole writer). Emitted only in the
+            # rescue case (no local title); resolution still keeps any present
+            # local title and never invents identity from a fuzzy match (§7).
+            claims = inferred_claims(
+                f"acoustid:{match_info['recording_mbid']}",
+                {"title": match_info.get("title") if title_absent else None},
+            )
 
             changed_items = {"artists": set(), "albums": set()}
 
@@ -668,7 +674,7 @@ class AcoustIdPlugin(EnricherPlugin):
 
             # Album membership stays with the clustering pass (§3); AcoustID
             # never creates albums or moves a track (powers removed in 1f).
-            result = {"updates": updates}
+            result = {"updates": updates, "claims": claims}
 
             # If we have any items that need further enrichment, add them to result
             if any(changed_items.values()):

@@ -156,7 +156,12 @@ async def test_absent_title_is_filled_from_match():
     result = await _run_with_match(plugin, track)
     updates = result["updates"]
     assert updates["mbid"] == "rec-mbid"
-    assert updates["title"] == "MB Title"
+    # Title is a resolvable field: emitted as a claim, not a direct write —
+    # resolution is the sole writer.
+    assert "title" not in updates
+    assert ("title", "MB Title") in {
+        (c["field"], c["value"]) for c in result["claims"]
+    }
     # Known artist must not be repointed.
     assert "artist_id" not in updates
 

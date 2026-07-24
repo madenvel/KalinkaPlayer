@@ -24,7 +24,7 @@ class FakeDb:
 
 def _enricher():
     # Skip __init__ (which builds the real plugin stack); we only exercise
-    # _resolve_album_title against a fake db.
+    # _resolve_display_field against a fake db.
     enr = MetadataEnricher.__new__(MetadataEnricher)
     enr.db_manager = FakeDb()
     return enr
@@ -43,7 +43,7 @@ async def test_recases_title_from_matching_mb_claim():
     enr = _enricher()
     album = {"id": "al1", "title": "ABBEY ROAD"}
     updated = dict(album)
-    changed = await enr._resolve_album_title(album, updated, [MB_CLAIM])
+    changed = await enr._resolve_display_field("album", album, updated, [MB_CLAIM], "title")
     assert changed is True
     assert updated["title"] == "Abbey Road"
     assert enr.db_manager.claims[0][:4] == ("album", "al1", "title", "Abbey Road")
@@ -58,7 +58,7 @@ async def test_keeps_local_title_when_mb_differs():
     album = {"id": "al1", "title": "The Singles - The First Ten Years"}
     updated = dict(album)
     diff = {**MB_CLAIM, "value": "Gold: Greatest Hits"}  # different release
-    changed = await enr._resolve_album_title(album, updated, [diff])
+    changed = await enr._resolve_display_field("album", album, updated, [diff], "title")
     assert changed is False
     assert updated["title"] == "The Singles - The First Ten Years"
 
@@ -68,7 +68,7 @@ async def test_no_title_claim_keeps_local_but_records_origin():
     enr = _enricher()
     album = {"id": "al1", "title": "Oxygène"}
     updated = dict(album)
-    changed = await enr._resolve_album_title(album, updated, [])
+    changed = await enr._resolve_display_field("album", album, updated, [], "title")
     assert changed is False
     assert updated["title"] == "Oxygène"
     assert enr.db_manager.claims == []
@@ -81,6 +81,40 @@ async def test_no_title_claim_keeps_local_but_records_origin():
 async def test_missing_local_title_is_a_noop():
     enr = _enricher()
     album = {"id": "al1"}
-    changed = await enr._resolve_album_title(album, dict(album), [MB_CLAIM])
+    changed = await enr._resolve_display_field("album", album, dict(album), [MB_CLAIM], "title")
     assert changed is False
     assert enr.db_manager.claims == [] and enr.db_manager.origins == []
+
+
+@pytest.mark.asyncio
+async def test_track_title_recased_from_acoustid_claim():
+    """The generic resolver serves tracks too (Phase: track-path claims): an
+    AcoustID rescue title re-cases a matching local track title, and provenance
+    is recorded against the track entity."""
+    enr = _enricher()
+    track = {"id": "t1", "title": "some song"}
+    updated = dict(track)
+    ac_claim = {"field": "title", "value": "Some Song",
+                "source": "acoustid:rec-1", "tier": "inferred"}
+    changed = await enr._resolve_display_field(
+        "track", track, updated, [ac_claim], "title"
+    )
+    assert changed is True
+    assert updated["title"] == "Some Song"
+    assert enr.db_manager.origins[0] == (
+        "track", "t1", "title", "acoustid:rec-1", "inferred",
+    )
+
+
+@pytest.mark.asyncio
+async def test_track_title_kept_when_claim_differs():
+    enr = _enricher()
+    track = {"id": "t1", "title": "Real Title"}
+    updated = dict(track)
+    diff = {"field": "title", "value": "Wrong Title",
+            "source": "acoustid:rec-1", "tier": "inferred"}
+    changed = await enr._resolve_display_field(
+        "track", track, updated, [diff], "title"
+    )
+    assert changed is False
+    assert updated["title"] == "Real Title"

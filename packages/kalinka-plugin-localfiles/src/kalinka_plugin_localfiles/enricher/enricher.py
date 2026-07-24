@@ -282,7 +282,9 @@ class MetadataEnricher:
 
         # Resolve the display name from claims: a matching external match
         # supplies canonical casing without replacing a different local name.
-        if await self._resolve_artist_name(artist, updated_artist, emitted_claims):
+        if await self._resolve_display_field(
+            "artist", artist, updated_artist, emitted_claims, "name"
+        ):
             had_updates = True
 
         # Resolve external-first origin fields (country/area) from claims.
@@ -308,81 +310,41 @@ class MetadataEnricher:
         if had_updates:
             await self.db_manager.update_artist(artist["id"], updated_artist)
 
-    async def _resolve_artist_name(
-        self, artist: dict, updated_artist: dict, emitted_claims: list
+    async def _resolve_display_field(
+        self, entity_type: str, entity: dict, updated: dict,
+        emitted_claims: list, field: str,
     ) -> bool:
-        """Resolve the artist display name from claims. Returns True if the name
-        changed. First field wired through the claims/resolution path (Phase
-        2d): an external match re-cases a matching local name but never replaces
-        a different one; provenance lands in resolved_origin."""
-        local_name = artist.get("name")
-        if not local_name:
+        """Resolve a display-identity field (artist ``name`` / album|track
+        ``title``) from claims: an external match re-cases a matching local value
+        but never replaces a different one, and never invents one from a fuzzy
+        match (§7 — display identity is locally derived). Provenance lands in
+        resolved_origin. Returns True if the value changed."""
+        local_value = entity.get(field)
+        if not local_value:
             return False
 
-        entity_id = artist["id"]
+        entity_id = entity["id"]
         external = []
         for c in emitted_claims:
-            if c.get("field") != "name":
+            if c.get("field") != field:
                 continue
             await self.db_manager.record_claim(
-                "artist", entity_id, "name", c["value"], c["source"], c["tier"]
+                entity_type, entity_id, field, c["value"], c["source"], c["tier"]
             )
             external.append(
-                Claim("name", c["value"], c["source"], c["tier"],
+                Claim(field, c["value"], c["source"], c["tier"],
                       c.get("evidence_ref"))
             )
 
-        # Record provenance for the resolved name even when the local value
-        # wins uncontested (resolved_origin covers every resolved field).
-        winner = resolve_display_name(local_name, external)
+        winner = resolve_display_name(local_value, external, field=field)
         await self.db_manager.record_resolved_origin(
-            "artist", entity_id, "name", winner.source, winner.tier,
+            entity_type, entity_id, field, winner.source, winner.tier,
             winner.evidence_ref,
         )
-        if winner.value != local_name:
-            updated_artist["name"] = winner.value
-            logger.debug(
-                "Artist name resolved: %r -> %r (%s)",
-                local_name, winner.value, winner.source,
-            )
-            return True
-        return False
-
-    async def _resolve_album_title(
-        self, album: dict, updated_album: dict, emitted_claims: list
-    ) -> bool:
-        """Resolve the album display title from claims. Returns True if the
-        title changed. Second field on the claims/resolution path (Phase 2d):
-        an external release match re-cases a matching local title but never
-        replaces a different one; provenance lands in resolved_origin."""
-        local_title = album.get("title")
-        if not local_title:
-            return False
-
-        entity_id = album["id"]
-        external = []
-        for c in emitted_claims:
-            if c.get("field") != "title":
-                continue
-            await self.db_manager.record_claim(
-                "album", entity_id, "title", c["value"], c["source"], c["tier"]
-            )
-            external.append(
-                Claim("title", c["value"], c["source"], c["tier"],
-                      c.get("evidence_ref"))
-            )
-
-        winner = resolve_display_name(local_title, external, field="title")
-        await self.db_manager.record_resolved_origin(
-            "album", entity_id, "title", winner.source, winner.tier,
-            winner.evidence_ref,
-        )
-        if winner.value != local_title:
-            updated_album["title"] = winner.value
-            logger.debug(
-                "Album title resolved: %r -> %r (%s)",
-                local_title, winner.value, winner.source,
-            )
+        if winner.value != updated.get(field):
+            updated[field] = winner.value
+            logger.debug("%s %s resolved: %r -> %r (%s)", entity_type, field,
+                         local_value, winner.value, winner.source)
             return True
         return False
 
@@ -517,7 +479,9 @@ class MetadataEnricher:
 
         # Resolve the display title from claims: a matching external match
         # supplies canonical casing without replacing a different local title.
-        if await self._resolve_album_title(album, updated_album, emitted_claims):
+        if await self._resolve_display_field(
+            "album", album, updated_album, emitted_claims, "title"
+        ):
             had_updates = True
 
         # Resolve external-first origin/era fields (genre/year/original_year/
@@ -582,6 +546,7 @@ class MetadataEnricher:
             )
             return
 
+        emitted_claims: list[dict] = []
         for plugin in self.plugins:
             if not plugin.can_enrich_track():
                 continue
@@ -597,6 +562,8 @@ class MetadataEnricher:
                 f"Enriching track {track['title'] if 'title' in track else track['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_track(updated_track)
+            if result:
+                emitted_claims.extend(result.get("claims") or [])
             if result and "updates" in result:
                 # Apply updates to our working copy
                 updated_track.update(result["updates"])
@@ -610,6 +577,14 @@ class MetadataEnricher:
                 if is_desired_complete:
                     logger.debug(f"Track {track['title']} has all desired fields")
                     updated_track["enriched"] = EnrichmentStatus.ENRICHED
+
+        # Resolve the display title from claims: an external match (e.g.
+        # AcoustID) re-cases a matching local title but never replaces or invents
+        # one (§7). Mostly a no-op that records the title's provenance.
+        if await self._resolve_display_field(
+            "track", track, updated_track, emitted_claims, "title"
+        ):
+            had_updates = True
 
         # Status decision (Phase 2e): a track whose required local fields
         # resolved is ENRICHED even without an mbid — "ENRICHED (local-only)".

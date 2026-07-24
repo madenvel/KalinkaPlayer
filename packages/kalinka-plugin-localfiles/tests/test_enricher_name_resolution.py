@@ -24,7 +24,7 @@ class FakeDb:
 
 def _enricher():
     # Skip __init__ (which builds the real plugin stack); we only exercise
-    # _resolve_artist_name against a fake db.
+    # _resolve_display_field against a fake db.
     enr = MetadataEnricher.__new__(MetadataEnricher)
     enr.db_manager = FakeDb()
     return enr
@@ -43,7 +43,7 @@ async def test_recases_name_from_matching_mb_claim():
     enr = _enricher()
     artist = {"id": "a1", "name": "THE BEATLES"}
     updated = dict(artist)
-    changed = await enr._resolve_artist_name(artist, updated, [MB_CLAIM])
+    changed = await enr._resolve_display_field("artist", artist, updated, [MB_CLAIM], "name")
     assert changed is True
     assert updated["name"] == "The Beatles"
     # Claim persisted and origin recorded as the MB source.
@@ -59,7 +59,7 @@ async def test_keeps_local_name_when_mb_differs():
     artist = {"id": "a1", "name": "The Beatles"}
     updated = dict(artist)
     diff = {**MB_CLAIM, "value": "The Beetles"}  # different artist
-    changed = await enr._resolve_artist_name(artist, updated, [diff])
+    changed = await enr._resolve_display_field("artist", artist, updated, [diff], "name")
     assert changed is False
     assert updated["name"] == "The Beatles"
 
@@ -69,7 +69,7 @@ async def test_no_name_claim_keeps_local_but_records_origin():
     enr = _enricher()
     artist = {"id": "a1", "name": "THE BEATLES"}
     updated = dict(artist)
-    changed = await enr._resolve_artist_name(artist, updated, [])
+    changed = await enr._resolve_display_field("artist", artist, updated, [], "name")
     assert changed is False
     assert updated["name"] == "THE BEATLES"
     assert enr.db_manager.claims == []
