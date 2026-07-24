@@ -63,6 +63,7 @@ def compilation_title(folder: str) -> Optional[str]:
     A folder explicitly marked ``VA -`` / ``Various Artists -`` is a declared
     compilation and bypasses the generic-dump heuristic.
     """
+    folder = folder.rstrip("/")  # a trailing "/" would make basename empty
     name = os.path.basename(folder).strip()
     title = VA_PREFIX_RE.sub("", name).strip()
     explicit_va = title != name

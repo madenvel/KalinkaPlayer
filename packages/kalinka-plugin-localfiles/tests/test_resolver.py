@@ -55,6 +55,21 @@ def test_within_tier_field_precedence_external_first_for_country():
     assert resolve_field(claims).value == "FR"
 
 
+def test_numeric_claim_values_resolve(  # Copilot review, PR #99
+):
+    # year/original_year are int claims: local observed tag beats fuzzy MB,
+    # and the returned value keeps its int type (resolution never compares by
+    # value, so mixed str/int is safe).
+    winner = resolve_field(
+        [
+            _c(1984, "tag_consensus", "observed", field="year"),
+            _c(1990, "musicbrainz:r1", "inferred", field="year"),
+        ],
+        current_value=1984,
+    )
+    assert winner.value == 1984 and isinstance(winner.value, int)
+
+
 def test_incumbency_breaks_ties():
     # Two equal-tier, equal-precedence rivals (same source base): the value
     # already shown keeps winning so display doesn't churn.

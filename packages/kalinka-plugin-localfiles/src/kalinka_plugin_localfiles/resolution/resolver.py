@@ -72,7 +72,10 @@ _EXTERNAL_FIRST_FIELDS = frozenset(
 @dataclass(frozen=True)
 class Claim:
     field: str
-    value: str
+    # str for identity/text fields; int for numeric origin/era fields
+    # (year, original_year). Resolution compares by (tier, source), never by
+    # the value itself, so the mixed type is safe here.
+    value: str | int
     source: str  # e.g. "tag_consensus" or "musicbrainz:0d7f…"
     tier: str
     evidence_ref: Optional[str] = None
@@ -104,7 +107,7 @@ def _score(claim: Claim) -> tuple:
 
 
 def resolve_field(
-    claims: Iterable[Claim], current_value: Optional[str] = None
+    claims: Iterable[Claim], current_value: Optional[str | int] = None
 ) -> Optional[Claim]:
     """Pick the winning claim for a single field.
 

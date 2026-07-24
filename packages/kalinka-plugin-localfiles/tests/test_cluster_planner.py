@@ -125,6 +125,20 @@ def test_plan_va_folder_is_compilation():
     assert c.anchor_artist_id == "various_artists"
 
 
+def test_plan_declared_va_with_trailing_slash():
+    # A trailing "/" must not make basename empty and misclassify a declared
+    # V/A compilation as a generic dump (Copilot review, PR #100).
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=i),
+         _ev(album=f"track by {i}"))
+        for i in range(1, 7)
+    ]
+    plan = plan_folder("/music/VA - Summer Hits/", rows)
+    assert len(plan.clusters) == 1
+    assert plan.clusters[0].kind == "compilation"
+    assert plan.clusters[0].title == "Summer Hits"
+
+
 def test_plan_generic_dump_is_singles_pool():
     rows = [
         (_track(f"t{i}", artist_id=f"artist_{i}", track_number=i), _ev())

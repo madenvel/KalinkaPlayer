@@ -483,11 +483,15 @@ class AsyncEnricherDb:
         entity_type: str,
         entity_id: str,
         field: str,
-        value: str,
+        value: str | int,
         source: str,
         tier: str,
     ) -> None:
-        """Record one field-level claim (upsert per entity/field/source)."""
+        """Record one field-level claim (upsert per entity/field/source).
+
+        ``value`` is str for text fields, int for numeric origin/era fields
+        (year, original_year); SQLite stores it in the TEXT column either way.
+        """
         async with self._open() as conn:
             await conn.execute(
                 """
