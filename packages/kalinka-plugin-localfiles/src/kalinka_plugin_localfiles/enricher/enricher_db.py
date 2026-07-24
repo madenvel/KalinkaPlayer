@@ -1,4 +1,5 @@
 import os
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 import aiosqlite
@@ -332,6 +333,28 @@ class AsyncEnricherDb:
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows if row[0]]
+
+    async def get_album_track_tags(self, album_id: str) -> List[Dict]:
+        """Decoded ``raw_tags`` for each of an album's tracks — the evidence
+        tag-consensus (§6.5) reads to derive the album's origin/era fields.
+        Skips tracks with no or unparseable tags."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT e.raw_tags FROM tracks t "
+                "JOIN track_evidence e ON e.track_id = t.id "
+                "WHERE t.album_id = ? AND e.raw_tags IS NOT NULL",
+                (album_id,),
+            )
+            out: List[Dict] = []
+            for (raw,) in await cursor.fetchall():
+                try:
+                    tags = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(tags, dict):
+                    out.append(tags)
+            return out
 
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""

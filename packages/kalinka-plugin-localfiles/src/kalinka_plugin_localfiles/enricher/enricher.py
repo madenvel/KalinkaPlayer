@@ -9,6 +9,7 @@ from typing import Optional
 
 from ..config_model import LocalFilesConfig
 from ..resolution.resolver import Claim, resolve_display_name, resolve_field
+from ..resolution.tag_consensus import album_tag_consensus
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -386,14 +387,21 @@ class MetadataEnricher:
         updated: dict,
         emitted_claims: list,
         fields,
+        local_overrides: Optional[dict] = None,
     ) -> bool:
         """Resolve external-first origin/era fields from claims (Phase 2d slice
-        3). For each field, the pre-plugin local value is an `observed`
-        tag_consensus claim and each emitted external value is `inferred`; the
-        resolver picks the winner (local tag beats fuzzy MB for genre/year/
-        language; MB fills country/area/original_year uncontested). Records the
-        winner in resolved_origin and returns True if any value changed."""
+        3). For each field, the local value is an `observed` tag_consensus claim
+        and each emitted external value is `inferred`; the resolver picks the
+        winner (local tag beats fuzzy MB for genre/year/language; MB fills
+        country/area/original_year uncontested). Records the winner in
+        resolved_origin and returns True if any value changed.
+
+        ``local_overrides`` (Phase 2g) supplies the local value from actual tag
+        evidence (§6.5 consensus) instead of the album row — the genuine
+        observed claim — and, being evidence-derived, is persisted as a
+        tag_consensus claim for provenance."""
         entity_id = entity["id"]
+        overrides = local_overrides or {}
         ext_by_field: dict[str, list] = {}
         for c in emitted_claims:
             f = c.get("field")
@@ -403,12 +411,17 @@ class MetadataEnricher:
         changed = False
         for field in fields:
             externals = ext_by_field.get(field, [])
-            local_value = entity.get(field)
+            local_value = overrides.get(field, entity.get(field))
             claims = []
             if local_value not in (None, ""):
                 claims.append(
                     Claim(field, local_value, "tag_consensus", "observed")
                 )
+                if field in overrides:
+                    await self.db_manager.record_claim(
+                        entity_type, entity_id, field, local_value,
+                        "tag_consensus", "observed",
+                    )
             for c in externals:
                 await self.db_manager.record_claim(
                     entity_type, entity_id, field, c["value"], c["source"], c["tier"]
@@ -429,6 +442,14 @@ class MetadataEnricher:
                 updated[field] = winner.value
                 changed = True
         return changed
+
+    # Album origin/era fields with a local tag source (original_year has none).
+    _ALBUM_TAG_FIELDS = ("genre", "year", "language")
+
+    async def _album_tag_consensus(self, album_id: str) -> dict:
+        """The album's genre/year/language as its tracks' tags agree (§6.5)."""
+        track_tags = await self.db_manager.get_album_track_tags(album_id)
+        return album_tag_consensus(track_tags, self._ALBUM_TAG_FIELDS)
 
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
@@ -496,9 +517,12 @@ class MetadataEnricher:
             had_updates = True
 
         # Resolve external-first origin/era fields (genre/year/original_year/
-        # language): local tags win over fuzzy MB where present.
+        # language): local tags win over fuzzy MB where present. The local tag
+        # value comes from tag-evidence consensus (§6.5), not the album row.
+        consensus = await self._album_tag_consensus(album["id"])
         if await self._resolve_external_fields(
-            "album", album, updated_album, emitted_claims, ALBUM_EXTERNAL_FIELDS
+            "album", album, updated_album, emitted_claims, ALBUM_EXTERNAL_FIELDS,
+            local_overrides=consensus,
         ):
             had_updates = True
 

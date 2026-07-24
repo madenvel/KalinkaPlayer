@@ -35,6 +35,9 @@ class FakeDb:
     async def record_resolved_origin(self, *_a, **_k):
         pass
 
+    async def get_album_track_tags(self, *_a, **_k):
+        return []
+
 
 def _enricher():
     enr = MetadataEnricher.__new__(MetadataEnricher)
