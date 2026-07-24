@@ -6,7 +6,7 @@ from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
-from .enricher_plugin import EnricherPlugin
+from .enricher_plugin import EnricherPlugin, inferred_claims
 from .match_utils import (
     album_duration_bonus,
     duration_bonus,
@@ -306,38 +306,18 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Soviet-era / historical artists. Both already ride along in the
             # search response, so this costs no extra request.
             country = best_match.get("country")
-            if country:
-                updates["country"] = country
             area = best_match.get("area") or best_match.get("begin-area") or {}
             area_name = area.get("name") if isinstance(area, dict) else None
-            if area_name:
-                updates["area"] = area_name
 
-            # The canonical name is emitted as an inferred claim, not a direct
-            # update: resolution uses it to re-case a matching local name
-            # ("THE BEATLES" -> "The Beatles") but never to replace a
-            # different local name (a fuzzy match can misidentify the artist).
-            claims = []
-            canonical = best_match.get("name")
-            if canonical:
-                claims.append({
-                    "field": "name",
-                    "value": canonical,
-                    "source": f"musicbrainz:{artist_mbid}",
-                    "tier": "inferred",
-                })
-            # Origin fields are external-first: a fuzzy match is inferred, but
-            # for country/area there's no competing local tag, so it fills
-            # uncontested. Emitted as claims (resolution finalizes + records
-            # provenance) in addition to the direct update.
-            for field in ("country", "area"):
-                if field in updates:
-                    claims.append({
-                        "field": field,
-                        "value": updates[field],
-                        "source": f"musicbrainz:{artist_mbid}",
-                        "tier": "inferred",
-                    })
+            # Every resolvable field is emitted as a claim only — resolution is
+            # the sole writer (updates carries just identity + match metadata).
+            # The canonical name re-cases a matching local name ("THE BEATLES"
+            # -> "The Beatles") but never replaces a different one; country/area
+            # are external-first and fill uncontested (no competing local tag).
+            claims = inferred_claims(
+                f"musicbrainz:{artist_mbid}",
+                {"name": best_match.get("name"), "country": country, "area": area_name},
+            )
 
             return {"updates": updates, "mbid": artist_mbid, "claims": claims}
 
@@ -517,20 +497,19 @@ class MusicBrainzPlugin(EnricherPlugin):
                 "match_similarity": round(best_similarity * 100),
             }
 
-            if "tag-list" in mb_release_data and mb_release_data["tag-list"]:
+            genre = None
+            if mb_release_data.get("tag-list"):
                 sorted_tags = sorted(
                     mb_release_data["tag-list"],
                     key=lambda x: int(x.get("count", 0)),
                     reverse=True,
                 )
-                updates["genre"] = sorted_tags[0]["name"]
-                logger.debug(
-                    f"Found genre for album {album['title']}: {updates['genre']}"
-                )
+                genre = sorted_tags[0]["name"]
 
+            year = None
             if "date" in mb_release_data:
                 try:
-                    updates["year"] = int(mb_release_data["date"].split("-")[0])
+                    year = int(mb_release_data["date"].split("-")[0])
                 except (ValueError, IndexError):
                     pass
 
@@ -539,18 +518,17 @@ class MusicBrainzPlugin(EnricherPlugin):
             # non-Italian artist).
             text_rep = mb_release_data.get("text-representation") or {}
             language = text_rep.get("language")
-            if language:
-                updates["language"] = language
 
             # First-release year of the *release group* — the era this music is
             # from, as opposed to `year` (this pressing/reissue). A 2010
             # compilation of 80s songs keeps year=2010 but original_year=198x, so
             # "80s" era queries match the music, not the CD manufacturing date.
             rg = mb_release_data.get("release-group") or {}
+            original_year = None
             first_release = rg.get("first-release-date")
             if first_release:
                 try:
-                    updates["original_year"] = int(first_release.split("-")[0])
+                    original_year = int(first_release.split("-")[0])
                 except (ValueError, IndexError):
                     pass
 
@@ -560,31 +538,23 @@ class MusicBrainzPlugin(EnricherPlugin):
             # per album vs N calls per album of N tracks.
             self._release_cache[release_mbid] = mb_release_data
 
-            # Title claim: an inferred canonicalization, resolved the same way
-            # as the artist name — it re-cases a matching local title but never
-            # replaces a different one (a fuzzy release match can misidentify
-            # the edition). Album titles are otherwise locally derived.
-            claims = []
-            canonical_title = mb_release_data.get("title") or best.get("title")
-            if canonical_title:
-                claims.append({
-                    "field": "title",
-                    "value": canonical_title,
-                    "source": f"musicbrainz:{release_mbid}",
-                    "tier": "inferred",
-                })
-            # External-first origin/era fields. genre/year/language have a
-            # competing local tag (observed) that outranks this inferred claim,
-            # so the local value wins when present; original_year has no local
-            # tag, so MB fills it. Resolution decides + records provenance.
-            for field in ("genre", "year", "original_year", "language"):
-                if field in updates:
-                    claims.append({
-                        "field": field,
-                        "value": updates[field],
-                        "source": f"musicbrainz:{release_mbid}",
-                        "tier": "inferred",
-                    })
+            # Every resolvable field is emitted as a claim only — resolution is
+            # the sole writer (updates carries just identity + match metadata).
+            # Title re-cases a matching local title but never replaces a
+            # different one (a fuzzy match can misidentify the edition).
+            # genre/year/language have a competing local tag (observed) that
+            # outranks this inferred claim, so the local value wins when present;
+            # original_year has no local tag, so MB fills it uncontested.
+            claims = inferred_claims(
+                f"musicbrainz:{release_mbid}",
+                {
+                    "title": mb_release_data.get("title") or best.get("title"),
+                    "genre": genre,
+                    "year": year,
+                    "original_year": original_year,
+                    "language": language,
+                },
+            )
 
             return {"updates": updates, "mbid": release_mbid, "claims": claims}
 

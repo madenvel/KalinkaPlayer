@@ -9,7 +9,7 @@ from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
-from .enricher_plugin import EnricherPlugin
+from .enricher_plugin import EnricherPlugin, inferred_claims
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -509,16 +509,18 @@ class DeezerPlugin(EnricherPlugin):
 
         updates = {}
 
-        # Save the image in different sizes
+        # Save the image in different sizes. The cover is Deezer's only direct
+        # write — genre is a resolvable field, so it's emitted as a claim and
+        # left to resolution (a local tag or MB outranks it).
         image_data = image_response.content
         if self._save_images(image_data, album["id"], "album"):
-            # Update album data
             updates["image_url"] = album["id"]
             logger.info(
                 f"Added cover image from Deezer for album: {album['title']} by {artist_name}"
             )
 
         # Add genre if available from Deezer
+        genre = None
         if "genre_id" in deezer_album and deezer_album.get("genre_id"):
             # Get detailed genre info
             try:
@@ -526,18 +528,14 @@ class DeezerPlugin(EnricherPlugin):
                     f"https://api.deezer.com/genre/{deezer_album['genre_id']}"
                 )
                 if genre_response.status_code == 200:
-                    genre_data = genre_response.json()
-                    if "name" in genre_data:
-                        updates["genre"] = genre_data["name"]
-                        logger.debug(
-                            f"Added genre from Deezer for album {album['title']}: {genre_data['name']}"
-                        )
+                    genre = genre_response.json().get("name")
             except Exception as genre_error:
                 logger.warning(
                     f"Error fetching genre for album {album['title']}: {str(genre_error)}"
                 )
 
-        return {"updates": updates}
+        claims = inferred_claims(f"deezer:{deezer_album.get('id', '')}", {"genre": genre})
+        return {"updates": updates, "claims": claims}
 
     async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """Placeholder for track enrichment - not implemented"""

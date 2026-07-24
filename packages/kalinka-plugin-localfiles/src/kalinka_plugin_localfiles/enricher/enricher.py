@@ -44,6 +44,12 @@ TRACK_DESIRED_FIELDS = [
     "title", "artist_id", "album_id", "mbid", "duration", "track_number",
 ]
 
+# The plugin-*fetched* subset of ALBUM_DESIRED. genre/year are written by
+# resolution after the plugin loop (from claims, not a plugin direct-write), so
+# they must not gate whether we keep calling fetch plugins — only these do. The
+# full DESIRED set still gates the top-level "already done, skip the pass" check.
+ALBUM_FETCH_FIELDS = ["title", "artist_id", "mbid", "image_url"]
+
 # Origin/era fields resolved external-first (Phase 2d slice 3). A local tag
 # value is an `observed` claim; a fuzzy MB match is `inferred`, so for
 # genre/year/language the local tag wins when present, while country/area/
@@ -502,12 +508,10 @@ class MetadataEnricher:
                 # Track that we had updates
                 had_updates = True
 
-                # Stop early once every desired field is filled.
-                is_desired_complete = all(
-                    updated_album.get(field) for field in ALBUM_DESIRED_FIELDS
-                )
-                if is_desired_complete:
-                    logger.debug(f"Album {album['title']} has all desired fields")
+                # Stop calling fetch plugins once every fetched field is filled.
+                # genre/year are resolved after the loop, so they don't gate this.
+                if all(updated_album.get(field) for field in ALBUM_FETCH_FIELDS):
+                    logger.debug(f"Album {album['title']} has all fetched fields")
                     updated_album["enriched"] = EnrichmentStatus.ENRICHED
                     break
 

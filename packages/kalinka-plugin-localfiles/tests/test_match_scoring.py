@@ -887,8 +887,13 @@ class TestEnrichAlbumStageB:
         result = await plugin.enrich_album(album)
         assert result is not None
         assert result["mbid"] == "standard"
-        assert result["updates"]["genre"] == "electronic"
-        assert result["updates"]["year"] == 2013
+        # genre/year are claims now, not direct updates — resolution is the sole
+        # writer (retirement of plugin direct-writes). updates carries only
+        # identity + match metadata.
+        assert set(result["updates"]) <= {"mbid", "match_score", "match_similarity"}
+        claims = {(c["field"], c["value"]) for c in result["claims"]}
+        assert ("genre", "electronic") in claims
+        assert ("year", 2013) in claims
 
     @pytest.mark.asyncio
     async def test_holds_orphan_when_top_candidates_indistinguishable(
@@ -1016,7 +1021,7 @@ class TestEnrichAlbumStageB:
         result = await plugin.enrich_album(album)
         assert result is not None, "Expected a commit when tied candidates share release-group"
         assert result["mbid"] in {"rel-cd", "rel-vinyl", "rel-remaster"}
-        assert result["updates"]["year"] == 1969
+        assert ("year", 1969) in {(c["field"], c["value"]) for c in result["claims"]}
 
     def test_same_release_group_helper(self):
         from kalinka_plugin_localfiles.enricher.musicbrainz_plugin import (

@@ -1,5 +1,18 @@
 import abc
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+
+
+def inferred_claims(source: str, fields: Dict[str, object]) -> List[Dict]:
+    """Build the enricher's claim dicts for each non-empty field, attributed to
+    ``source`` at the ``inferred`` tier — the shape every plugin emits and the
+    enricher resolves. Centralised so the plugin→enricher claim contract lives
+    in one place rather than being hand-built per plugin.
+    """
+    return [
+        {"field": field, "value": value, "source": source, "tier": "inferred"}
+        for field, value in fields.items()
+        if value
+    ]
 
 
 class EnricherPlugin(abc.ABC):
