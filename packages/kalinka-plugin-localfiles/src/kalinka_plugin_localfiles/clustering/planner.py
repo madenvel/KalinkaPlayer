@@ -18,6 +18,7 @@ from ..utils.name_utils import clean_display_name, normalize_for_id
 from .classify import (
     VARIOUS_ARTISTS_ID,
     compilation_title,
+    is_declared_va_folder,
     is_va_folder,
     normalize_album_title,
     strip_artist_prefix,
@@ -146,6 +147,48 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         for t, _ in rows
         if t.get("artist_id") and t.get("artist_name")
     }
+
+    # Folder-level V/A dump: a flat playlist folder (nearly every track a
+    # different artist) with no shared album tag. The partition engine would
+    # otherwise fragment it — tracks with their own cover art each split into a
+    # single-artist album, art-less ones clump into V/A umbrella albums. The
+    # V/A folder policy (detach to unknown_album so tracks surface as singles
+    # under their real artist) is the right outcome for the whole folder, so
+    # short-circuit before partitioning. A real compilation is protected two
+    # ways: its tracks share an album tag (fails the no-shared-album test), or
+    # the folder is an explicitly declared "VA - X" compilation (exempted).
+    folder_real_artists = {
+        t.get("artist_id")
+        for t, _ in rows
+        if t.get("artist_id") and t.get("artist_id") != "unknown_artist"
+    }
+    album_keys = [f.album_key for f in features if f.album_key]
+    dominant_album_cov = (
+        Counter(album_keys).most_common(1)[0][1] / len(rows) if album_keys else 0.0
+    )
+    if (
+        is_va_folder(len(folder_real_artists), len(rows))
+        and dominant_album_cov < 0.5
+        and not is_declared_va_folder(folder)
+    ):
+        return FolderPlan(
+            folder=folder,
+            clusters=[
+                ClusterPlan(
+                    [t["id"] for t, _ in rows],
+                    "singles_pool",
+                    "",
+                    "unknown_artist",
+                    {
+                        "reason": "va_dump_folder",
+                        "distinct_artists": len(folder_real_artists),
+                        "tracks": len(rows),
+                    },
+                    folder,
+                )
+            ],
+            split=False,
+        )
 
     result = partition_folder(features)
     clusters: List[ClusterPlan] = []

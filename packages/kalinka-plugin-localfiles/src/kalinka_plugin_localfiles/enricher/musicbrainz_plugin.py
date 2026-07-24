@@ -326,6 +326,18 @@ class MusicBrainzPlugin(EnricherPlugin):
                     "source": f"musicbrainz:{artist_mbid}",
                     "tier": "inferred",
                 })
+            # Origin fields are external-first: a fuzzy match is inferred, but
+            # for country/area there's no competing local tag, so it fills
+            # uncontested. Emitted as claims (resolution finalizes + records
+            # provenance) in addition to the direct update.
+            for field in ("country", "area"):
+                if field in updates:
+                    claims.append({
+                        "field": field,
+                        "value": updates[field],
+                        "source": f"musicbrainz:{artist_mbid}",
+                        "tier": "inferred",
+                    })
 
             return {"updates": updates, "mbid": artist_mbid, "claims": claims}
 
@@ -561,6 +573,18 @@ class MusicBrainzPlugin(EnricherPlugin):
                     "source": f"musicbrainz:{release_mbid}",
                     "tier": "inferred",
                 })
+            # External-first origin/era fields. genre/year/language have a
+            # competing local tag (observed) that outranks this inferred claim,
+            # so the local value wins when present; original_year has no local
+            # tag, so MB fills it. Resolution decides + records provenance.
+            for field in ("genre", "year", "original_year", "language"):
+                if field in updates:
+                    claims.append({
+                        "field": field,
+                        "value": updates[field],
+                        "source": f"musicbrainz:{release_mbid}",
+                        "tier": "inferred",
+                    })
 
             return {"updates": updates, "mbid": release_mbid, "claims": claims}
 

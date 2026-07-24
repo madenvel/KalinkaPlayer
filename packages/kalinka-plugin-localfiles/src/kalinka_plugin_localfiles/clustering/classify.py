@@ -48,12 +48,22 @@ def is_va_folder(distinct_artists: int, n_tracks: int) -> bool:
     )
 
 
+def is_declared_va_folder(folder: str) -> bool:
+    """True when the folder name explicitly declares a various-artists
+    compilation ("VA - X" / "Various Artists - X"). Such a folder is a
+    deliberate compilation even without shared album tags, so the flat-dump
+    detach heuristic must leave it alone."""
+    name = os.path.basename(folder.rstrip("/")).strip()
+    return bool(VA_PREFIX_RE.match(name))
+
+
 def compilation_title(folder: str) -> Optional[str]:
     """Album title for a V/A folder, or None if it's a generic dump.
 
     A folder explicitly marked ``VA -`` / ``Various Artists -`` is a declared
     compilation and bypasses the generic-dump heuristic.
     """
+    folder = folder.rstrip("/")  # a trailing "/" would make basename empty
     name = os.path.basename(folder).strip()
     title = VA_PREFIX_RE.sub("", name).strip()
     explicit_va = title != name
@@ -115,11 +125,18 @@ def _is_catalog_paren(contents: str) -> bool:
     """True for a pressing/catalog parenthetical (strip), False for a
     descriptive one like (Soundtrack) / (Remastered) / a bare year (keep)."""
     c = contents.strip()
-    if not c or _DESCRIPTIVE_RE.search(c):
+    if not c:
+        return False
+    # A 5+ digit run is a catalogue/pressing number — decisive even when a
+    # descriptive word rides along ("[CD 61407]", "[Disc 12345]"), so this is
+    # checked before the descriptive bail below (which keeps "(Disc 1)").
+    if _CATALOG_DIGITS_RE.search(c):
+        return True
+    if _DESCRIPTIVE_RE.search(c):
         return False
     if re.fullmatch(r"(?:19|20)\d{2}", c):   # a bare year -> keep
         return False
-    if _CATALOG_DIGITS_RE.search(c) or _FORMAT_TOKEN_RE.search(c):
+    if _FORMAT_TOKEN_RE.search(c):
         return True
     # "Label CAT123, Country" shape: has a comma and an uppercase label token.
     return "," in c and bool(re.search(r"[A-Z]{2,}", c))
