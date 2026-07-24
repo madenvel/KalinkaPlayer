@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
 
-    ENRICHER_VERSION = 1
+    ENRICHER_VERSION = 2  # 2f: rescue-mode gating + fill-only writes
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -539,29 +539,41 @@ class AcoustIdPlugin(EnricherPlugin):
         """
         return None
 
+    @staticmethod
+    def _artist_absent(track: Dict) -> bool:
+        """True when no local source resolved the track's artist."""
+        return track.get("artist_id") in (None, "", "unknown_artist")
+
+    @staticmethod
+    def _title_absent(track: Dict) -> bool:
+        """True when no local source resolved the track's title."""
+        return not (track.get("title") or "").strip()
+
     async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """
-        Enrich track using audio fingerprinting
+        Enrich track using audio fingerprinting (rescue mode, §6.3).
 
         This will:
-        1. Skip if track is already enriched
+        1. Skip unless a local source left the artist or title absent
         2. Generate fingerprint from audio file
         3. Look up fingerprint in AcoustID
-        4. Extract metadata and update track
-        5. Create missing artists and albums if necessary
+        4. Record the recording mbid and fill only the absent field(s) —
+           never overwrite a local title or repoint a known artist
         """
         try:
             # Skip if track is already enriched or no file path
             if track.get("enriched") or not track.get("file_path"):
                 return None
 
-            if (
-                track.get("artist_id") != "unknown_artist"
-                and track.get("album_id") != "unknown_album"
-            ):
+            # Rescue mode (§6.3): fire only when local evidence left the artist
+            # or title absent. A missing *album* no longer triggers a lookup —
+            # album identity is the clustering pass's job, not a fingerprint's.
+            artist_absent = self._artist_absent(track)
+            title_absent = self._title_absent(track)
+            if not (artist_absent or title_absent):
                 logger.debug(
                     f"Skipping acoustid enrichment for track {track.get('title', 'Unknown')} - "
-                    f"Already enriched or has known artist/album"
+                    f"artist and title already resolved locally"
                 )
                 return None
 
@@ -630,41 +642,32 @@ class AcoustIdPlugin(EnricherPlugin):
                 f"Artist: {match_info.get('artist_name')}"
             )
 
+            # The recording mbid is the rescue result and always recorded;
+            # everything else is fill-only (§6.3).
             updates = {
                 "mbid": match_info["recording_mbid"],
-                "match_score": int(match_info["score"] * 100),  # Convert to 0-100 scale
+                "match_score": int(match_info["score"] * 100),  # 0-100 scale
             }
 
-            updates["title"] = match_info["title"]
+            if title_absent and match_info.get("title"):
+                updates["title"] = match_info["title"]
 
-            # Track items that need further enrichment
             changed_items = {"artists": set(), "albums": set()}
 
-            # Create or get artist if needed
-            if match_info.get("artist_name"):
-                # Store original artist ID to check if a new one was created
+            # Fill the artist only when absent; never move a track off a known one.
+            if artist_absent and match_info.get("artist_name"):
                 original_artist_id = track.get("artist_id")
-
                 artist_id = await self._create_or_get_artist(
                     match_info["artist_name"], match_info.get("artist_mbid")
                 )
-
                 if artist_id:
                     updates["artist_id"] = artist_id
                     updates["artist_name"] = match_info["artist_name"]
-
-                    # Check if this is a newly created or different artist
                     if artist_id != original_artist_id:
-                        logger.debug(
-                            f"Adding artist {artist_id} to changed items for further enrichment"
-                        )
                         changed_items["artists"].add(artist_id)
 
-            # AcoustID no longer creates albums or moves a track between them:
-            # album membership is owned by the clustering pass (§3 invariant),
-            # so a single confident fingerprint match can't fragment a
-            # coherent local album by re-pointing one track to a new album row.
-
+            # Album membership stays with the clustering pass (§3); AcoustID
+            # never creates albums or moves a track (powers removed in 1f).
             result = {"updates": updates}
 
             # If we have any items that need further enrichment, add them to result
