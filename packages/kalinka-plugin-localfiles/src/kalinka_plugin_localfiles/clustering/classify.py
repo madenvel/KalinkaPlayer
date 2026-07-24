@@ -48,6 +48,15 @@ def is_va_folder(distinct_artists: int, n_tracks: int) -> bool:
     )
 
 
+def is_declared_va_folder(folder: str) -> bool:
+    """True when the folder name explicitly declares a various-artists
+    compilation ("VA - X" / "Various Artists - X"). Such a folder is a
+    deliberate compilation even without shared album tags, so the flat-dump
+    detach heuristic must leave it alone."""
+    name = os.path.basename(folder.rstrip("/")).strip()
+    return bool(VA_PREFIX_RE.match(name))
+
+
 def compilation_title(folder: str) -> Optional[str]:
     """Album title for a V/A folder, or None if it's a generic dump.
 
