@@ -138,6 +138,40 @@ def test_plan_generic_dump_is_singles_pool():
     assert c.anchor_artist_id == "unknown_artist"
 
 
+def test_plan_flat_va_dump_detaches_to_singles():
+    # A flat playlist folder (Jamendo-style): many artists, no shared album
+    # tag, each track its own cover art. Must NOT fragment into per-art albums
+    # + V/A umbrellas — the whole folder detaches to unknown_album so tracks
+    # surface as singles under their real artist.
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=i),
+         _ev(art=f"phash_{i}"))               # distinct per-track art
+        for i in range(1, 13)                 # 12 tracks, 12 artists, no album
+    ]
+    plan = plan_folder(
+        "/music/Playlist - Urban - 500604904 --- Jamendo - MP3", rows
+    )
+    assert len(plan.clusters) == 1
+    c = plan.clusters[0]
+    assert c.kind == "singles_pool"
+    assert c.anchor_artist_id == "unknown_artist"
+    assert c.grouping_basis["reason"] == "va_dump_folder"
+    assert len(c.track_ids) == 12             # every track detached, none lost
+
+
+def test_plan_shared_album_tag_survives_many_artists():
+    # A real V/A compilation with a shared album tag is NOT a dump even though
+    # every track is a different artist — the shared tag protects it.
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=i),
+         _ev(album="Now That's What I Call Music 50"))
+        for i in range(1, 13)
+    ]
+    plan = plan_folder("/music/Now 50", rows)
+    assert len(plan.clusters) == 1
+    assert plan.clusters[0].kind == "compilation"
+
+
 def test_multidisc_in_one_folder_strips_disc_suffix_from_title():
     # Both discs tagged "… (Disc N)" in one folder collapse to one album whose
     # title drops the disc marker.

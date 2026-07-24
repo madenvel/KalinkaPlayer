@@ -22,6 +22,11 @@ from kalinka_plugin_localfiles.clustering.classify import normalize_album_title
      "Ellington, Mingus, Roach - Money Jungle"),
     ("Playlist - Urban - 500604904 --- Jamendo - MP3",
      "Playlist - Urban"),
+    # Bracketed catalogue number ("CD" + a long digit run) — a pressing id,
+    # not the "(CD 1)" disc marker, so it is stripped.
+    ("Talks [CD 61407]", "Talks"),
+    ("Classic Queen [CD 61311]", "Classic Queen"),
+    ("Queen Talks [1992, Canada, CD 61407]", "Queen Talks"),
 ])
 def test_strips_junk(raw, clean):
     assert normalize_album_title(raw) == clean
@@ -37,6 +42,7 @@ def test_strips_junk(raw, clean):
     "The Best Of Michael Jackson (Disk 2)",  # disc marker left to disc logic
     "Discovery (2001)",                   # bare year in paren kept
     "1984",                               # a title that *is* a year
+    "Iceberg Forces [CC Edition]",        # descriptive bracket (no catalog id) kept
 ])
 def test_leaves_real_titles_untouched(title):
     assert normalize_album_title(title) == title
