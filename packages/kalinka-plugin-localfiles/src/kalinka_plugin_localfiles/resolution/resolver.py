@@ -132,17 +132,24 @@ def _norm(s: str) -> str:
     return " ".join((s or "").split()).casefold()
 
 
-def resolve_display_name(local_value: str, external: Iterable[Claim]) -> Claim:
-    """Resolve a display-identity field (artist/title) under the §7 rule that a
-    fuzzy external match may re-format but not replace it.
+def resolve_display_name(
+    local_value: str, external: Iterable[Claim], field: str = "name"
+) -> Claim:
+    """Resolve a display-identity field (artist ``name`` / album ``title``)
+    under the §7 rule that a fuzzy external match may re-format but not replace
+    it.
 
     The locally observed value wins, except: a verified/pinned external (direct
     identifier or user confirmation) replaces it outright; otherwise a same-
     value external (equal up to case/whitespace) supplies the canonical surface
     form ("THE BEATLES" -> "The Beatles"). An external with a genuinely
     different value never wins.
+
+    ``field`` labels the synthesized local claim; both name and title resolve
+    under the same local-first precedence, so it is cosmetic, but keeping it
+    accurate makes the returned/recorded provenance correct per field.
     """
-    local = Claim("name", local_value, "tag_consensus", "observed")
+    local = Claim(field, local_value, "tag_consensus", "observed")
     external = list(external)
 
     # Order-independent: pick by the resolver's (tier, source-precedence) score,

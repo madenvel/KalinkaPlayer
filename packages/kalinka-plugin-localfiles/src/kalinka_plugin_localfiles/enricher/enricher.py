@@ -319,6 +319,44 @@ class MetadataEnricher:
             return True
         return False
 
+    async def _resolve_album_title(
+        self, album: dict, updated_album: dict, emitted_claims: list
+    ) -> bool:
+        """Resolve the album display title from claims. Returns True if the
+        title changed. Second field on the claims/resolution path (Phase 2d):
+        an external release match re-cases a matching local title but never
+        replaces a different one; provenance lands in resolved_origin."""
+        local_title = album.get("title")
+        if not local_title:
+            return False
+
+        entity_id = album["id"]
+        external = []
+        for c in emitted_claims:
+            if c.get("field") != "title":
+                continue
+            await self.db_manager.record_claim(
+                "album", entity_id, "title", c["value"], c["source"], c["tier"]
+            )
+            external.append(
+                Claim("title", c["value"], c["source"], c["tier"],
+                      c.get("evidence_ref"))
+            )
+
+        winner = resolve_display_name(local_title, external, field="title")
+        await self.db_manager.record_resolved_origin(
+            "album", entity_id, "title", winner.source, winner.tier,
+            winner.evidence_ref,
+        )
+        if winner.value != local_title:
+            updated_album["title"] = winner.value
+            logger.debug(
+                "Album title resolved: %r -> %r (%s)",
+                local_title, winner.value, winner.source,
+            )
+            return True
+        return False
+
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
         processed_albums = set()
@@ -352,6 +390,7 @@ class MetadataEnricher:
             )
             return
 
+        emitted_claims: list[dict] = []
         for plugin in self.plugins:
             if not plugin.can_enrich_album():
                 continue
@@ -360,6 +399,8 @@ class MetadataEnricher:
                 f"Enriching album {album['name'] if 'name' in album else album['id']} with {plugin.__class__.__name__}"
             )
             result = await plugin.enrich_album(updated_album)
+            if result:
+                emitted_claims.extend(result.get("claims") or [])
             if result and "updates" in result:
                 # Apply updates to our working copy
                 updated_album.update(result["updates"])
@@ -374,6 +415,11 @@ class MetadataEnricher:
                     logger.debug(f"Album {album['title']} now fully enriched")
                     updated_album["enriched"] = EnrichmentStatus.ENRICHED
                     break
+
+        # Resolve the display title from claims: a matching external match
+        # supplies canonical casing without replacing a different local title.
+        if await self._resolve_album_title(album, updated_album, emitted_claims):
+            had_updates = True
 
         # After all plugins, if still not fully enriched, mark as failed
         if (
