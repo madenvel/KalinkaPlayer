@@ -34,16 +34,16 @@ async def _seed(db_path: str) -> None:
         )
         await conn.executemany(
             "INSERT INTO albums (id, title, artist_id, enriched, image_url, "
-            "image_generated) VALUES (?, ?, ?, ?, ?, ?)",
+            "image_generated, mbid) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
-                # Fully enriched EXCEPT it only has a generated cover.
-                ("al_gen_ok", "Gen OK", "ar1", 1, "al_gen_ok", 1),
+                # Enriched with only a generated cover (local-only, no mbid).
+                ("al_gen_ok", "Gen OK", "ar1", 1, "al_gen_ok", 1, None),
                 # FAILED and also carries a generated cover.
-                ("al_gen_failed", "Gen Failed", "ar1", 2, "al_gen_failed", 1),
+                ("al_gen_failed", "Gen Failed", "ar1", 2, "al_gen_failed", 1, None),
                 # FAILED with a real cover — must NOT be stripped.
-                ("al_real", "Real", "ar1", 2, "https://cover/real.jpg", 0),
-                # Enriched with a real cover — untouched entirely.
-                ("al_done", "Done", "ar1", 1, "https://cover/done.jpg", 0),
+                ("al_real", "Real", "ar1", 2, "https://cover/real.jpg", 0, None),
+                # Fully matched (mbid) with a real cover — untouched entirely.
+                ("al_done", "Done", "ar1", 1, "https://cover/done.jpg", 0, "mbid-done"),
             ],
         )
         await conn.commit()

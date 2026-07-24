@@ -160,15 +160,26 @@ class AsyncEnricherDb:
 
     @staticmethod
     async def _reset_failed_rows(cursor) -> Dict[str, int]:
-        """Flip every ``enriched=2`` (FAILED) row back to ``enriched=0``
-        on the given cursor (no commit). Returns per-entity row counts.
+        """Re-open every row that a changed enrichment setup deserves another
+        attempt at, flipping it back to ``enriched=0`` (no commit). Returns
+        per-entity row counts.
 
-        Albums carrying *generated* artwork are also re-opened, with the
-        generated cover cleared: this sweep only runs when the enrichment
-        setup changed, and a changed setup may now find a real cover that
-        the generated one would otherwise mask (the art-fetching plugins
-        skip albums whose ``image_url`` is set). If nothing better turns
-        up, the deterministic generator re-derives the identical cover.
+        Two populations qualify:
+
+        * ``enriched=2`` (FAILED) — a required local field never resolved.
+        * ``enriched=1`` with **no external identity** (``mbid`` empty) — a row
+          that is ENRICHED *local-only* (Phase 2e): local resolution succeeded
+          but no external match was found. Since 2e these are no longer FAILED,
+          so without this they would never be re-matched when a matcher
+          improves — restoring the pre-2e "retry the unmatched on a matcher
+          change" behaviour for artists/tracks (albums were partly covered via
+          the generated-art sweep below). Fully-matched rows (``mbid`` set) are
+          left untouched, so display never churns.
+
+        Albums carrying *generated* artwork are re-opened too, with the cover
+        cleared: a changed setup may now find a real cover the generated one
+        would mask (art plugins skip albums whose ``image_url`` is set). If
+        nothing better turns up, the generator re-derives the identical cover.
         """
         counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
         await cursor.execute(
@@ -177,7 +188,10 @@ class AsyncEnricherDb:
         )
         counts["albums"] = cursor.rowcount or 0
         for table in ("artists", "albums", "tracks"):
-            await cursor.execute(f"UPDATE {table} SET enriched = 0 WHERE enriched = 2")
+            await cursor.execute(
+                f"UPDATE {table} SET enriched = 0 WHERE enriched = 2 "
+                f"OR (enriched = 1 AND (mbid IS NULL OR mbid = ''))"
+            )
             counts[table] += cursor.rowcount or 0
         return counts
 
