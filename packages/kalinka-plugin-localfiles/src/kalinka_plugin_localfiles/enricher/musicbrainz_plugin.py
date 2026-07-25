@@ -74,6 +74,10 @@ class MusicBrainzPlugin(EnricherPlugin):
         # practice (one entry per album we enrich).
         self._release_cache: Dict[str, Dict] = {}
 
+        # Accepted release candidate per album_id (None = looked up, none
+        # accepted), so placing N tracks costs one query per album, not N.
+        self._accepted_map_cache: Dict[str, Optional[Dict]] = {}
+
         # Set up MusicBrainz API
         musicbrainzngs.set_useragent(
             self.user_agent.split("/")[0],
@@ -517,13 +521,10 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             release_mbid = best["id"]
 
-            # Record what was considered (Phase 3) — including on the orphan-hold
-            # path, which is precisely the case a human review wants to see.
-            # `accepted` marks a committed release whose tracklist alignment is
-            # strong enough to trust its track_map for per-track identity; the
-            # rest stay `candidate`. A weak alignment never rejects the album
-            # match itself — a partial local copy is common and is not evidence
-            # of a wrong release.
+            # Record what was considered — including on the orphan-hold path,
+            # which is exactly what a human review needs to see. `accepted`
+            # means the track_map is trustworthy for per-track identity; weak
+            # alignment never rejects a match (see tracklist_coverage_bonus).
             for row in candidate_rows:
                 row["status"] = (
                     "accepted"
@@ -647,6 +648,55 @@ class MusicBrainzPlugin(EnricherPlugin):
         if release is not None:
             self._release_cache[release_mbid] = release
         return release
+
+    async def _lookup_track_in_accepted_map(self, track: Dict) -> Optional[Dict]:
+        """Place a track from its album's accepted release candidate (Phase 3).
+
+        The album-level alignment assigned every slot in one pass, so this is
+        globally consistent — monotonic, no two tracks claiming one slot — which
+        independent per-track matching can't guarantee. Falls through (None) to
+        the existing paths whenever the map can't answer.
+        """
+        album_id = track.get("album_id")
+        if not album_id or album_id == "unknown_album":
+            return None
+
+        if album_id not in self._accepted_map_cache:
+            try:
+                accepted = await self.db_manager.get_accepted_release_candidate(
+                    album_id
+                )
+            except Exception as e:
+                logger.debug(f"Could not read accepted release candidate: {e}")
+                accepted = None
+            self._accepted_map_cache[album_id] = accepted
+
+        accepted = self._accepted_map_cache[album_id]
+        if not accepted:
+            return None
+        entry = (accepted.get("track_map") or {}).get(track["id"])
+        # Shape-guard rather than pad: a malformed map should fall through to
+        # per-track matching, not half-fill a row.
+        if not isinstance(entry, (list, tuple)) or len(entry) < 3:
+            return None
+
+        disc, pos, rec_id = entry[0], entry[1], entry[2]
+        updates: Dict[str, object] = {}
+        if disc is not None:
+            updates["disc_number"] = disc
+        if pos is not None:
+            updates["track_number"] = pos
+        if rec_id:
+            updates["mbid"] = rec_id
+        if not updates:
+            return None
+        # The confidence is the album alignment's, not a per-track score.
+        updates["match_score"] = int(float(accepted.get("coverage") or 0) * 100)
+        if self.debug_matching:
+            logger.debug(
+                f"  Track map: '{track.get('title')}' -> disc={disc} pos={pos}"
+            )
+        return {"updates": updates, "mbid": rec_id}
 
     @staticmethod
     def _align_release(local_tracks: List[Dict], release_data: Dict) -> Alignment:
@@ -787,6 +837,11 @@ class MusicBrainzPlugin(EnricherPlugin):
                 elif "album_title" not in track:
                     logger.error(f"Could not find album for track: {track['title']}")
                     return None
+
+            # ---- Path 0: accepted release candidate's track_map ----
+            mapped = await self._lookup_track_in_accepted_map(track)
+            if mapped is not None:
+                return mapped
 
             # ---- Path 1: in-release tracklist lookup ----
             if album_mbid:

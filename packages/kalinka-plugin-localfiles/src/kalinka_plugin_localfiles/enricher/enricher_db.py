@@ -407,6 +407,30 @@ class AsyncEnricherDb:
             )
             await conn.commit()
 
+    async def get_accepted_release_candidate(self, album_id: str) -> Optional[Dict]:
+        """The album's accepted release candidate with its ``track_map`` decoded,
+        or None if none was accepted (Phase 3). An unparseable map degrades to
+        empty rather than raising — callers fall back to per-track matching."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT release_id, rg_id, score, coverage, track_map "
+                "FROM release_candidates "
+                "WHERE album_id = ? AND status = 'accepted' "
+                "ORDER BY score DESC LIMIT 1",
+                (album_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            out = dict(row)
+            try:
+                out["track_map"] = json.loads(out["track_map"] or "{}")
+            except (ValueError, TypeError):
+                out["track_map"] = {}
+            return out
+
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
         async with self._open() as conn:

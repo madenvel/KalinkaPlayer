@@ -83,6 +83,7 @@ def _make_mb_plugin():
     # keep exercising the pre-alignment scoring in isolation.
     plugin.db_manager.get_album_tracks_for_alignment = _async_returning([])
     plugin.db_manager.save_release_candidates = _async_returning(None)
+    plugin.db_manager.get_accepted_release_candidate = _async_returning(None)
     return plugin
 
 
@@ -1479,3 +1480,84 @@ class TestStageBTracklistAlignment:
         assert result is None                      # held as orphan
         assert {r["release_id"] for r in saved} == {"right", "wrong"}
         assert all(r["status"] == "candidate" for r in saved)
+
+
+class TestAcceptedTrackMapPlacement:
+    """Phase 3c-2: an accepted release candidate's track_map places tracks
+    directly — globally consistent (the album alignment assigned every slot in
+    one pass) and free of both scoring and requests."""
+
+    def _plugin(self, accepted):
+        plugin = _make_mb_plugin()
+        calls = []
+
+        async def _get(album_id):
+            calls.append(album_id)
+            return accepted
+
+        plugin.db_manager.get_accepted_release_candidate = _get
+        return plugin, calls
+
+    @pytest.mark.asyncio
+    async def test_places_track_from_map(self):
+        plugin, _ = self._plugin({
+            "release_id": "rel-1", "coverage": 1.0,
+            "track_map": {"t1": [2, 7, "rec-xyz"]},
+        })
+        got = await plugin._lookup_track_in_accepted_map({"id": "t1", "album_id": "al1"})
+        assert got["mbid"] == "rec-xyz"
+        assert got["updates"]["disc_number"] == 2
+        assert got["updates"]["track_number"] == 7
+        assert got["updates"]["match_score"] == 100
+
+    @pytest.mark.asyncio
+    async def test_unmatched_track_falls_through(self):
+        plugin, _ = self._plugin({
+            "release_id": "rel-1", "coverage": 0.9, "track_map": {"other": [1, 1, "r"]},
+        })
+        assert await plugin._lookup_track_in_accepted_map(
+            {"id": "t1", "album_id": "al1"}) is None
+
+    @pytest.mark.asyncio
+    async def test_no_accepted_candidate_falls_through(self):
+        plugin, _ = self._plugin(None)
+        assert await plugin._lookup_track_in_accepted_map(
+            {"id": "t1", "album_id": "al1"}) is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_album_is_skipped_without_a_query(self):
+        plugin, calls = self._plugin(None)
+        assert await plugin._lookup_track_in_accepted_map(
+            {"id": "t1", "album_id": "unknown_album"}) is None
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_candidate_is_looked_up_once_per_album(self):
+        plugin, calls = self._plugin({
+            "release_id": "rel-1", "coverage": 1.0,
+            "track_map": {"t1": [1, 1, "r1"], "t2": [1, 2, "r2"]},
+        })
+        await plugin._lookup_track_in_accepted_map({"id": "t1", "album_id": "al1"})
+        await plugin._lookup_track_in_accepted_map({"id": "t2", "album_id": "al1"})
+        assert calls == ["al1"]   # cached: N tracks, one query
+
+    @pytest.mark.asyncio
+    async def test_db_failure_degrades_to_fallback(self):
+        plugin = _make_mb_plugin()
+
+        async def _boom(album_id):
+            raise RuntimeError("db down")
+
+        plugin.db_manager.get_accepted_release_candidate = _boom
+        assert await plugin._lookup_track_in_accepted_map(
+            {"id": "t1", "album_id": "al1"}) is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_map_entry_falls_through(self):
+        plugin, _ = self._plugin({
+            "release_id": "rel-1", "coverage": 1.0,
+            "track_map": {"t1": [2], "t2": "garbage"},
+        })
+        for tid in ("t1", "t2"):
+            assert await plugin._lookup_track_in_accepted_map(
+                {"id": tid, "album_id": "al1"}) is None
