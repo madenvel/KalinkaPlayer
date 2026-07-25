@@ -10,6 +10,7 @@ from typing import Optional
 from ..config_model import LocalFilesConfig
 from ..resolution.resolver import Claim, resolve_display_name, resolve_field
 from ..resolution.tag_consensus import album_tag_consensus
+from ..clustering.classify import strip_artist_prefix
 
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
@@ -411,6 +412,27 @@ class MetadataEnricher:
                 changed = True
         return changed
 
+    async def _strip_album_artist_prefix(self, album: dict, updated: dict) -> bool:
+        """Drop a leading artist name the folder left on the album title.
+        Returns True if the title changed. ``strip_artist_prefix`` only cuts at
+        a word boundary and never empties the title, so an eponymous album
+        ("Boston - Boston") keeps its name."""
+        artist_name = album.get("artist_name")
+        title = updated.get("title")
+        if not artist_name or not title:
+            return False
+        cleaned = strip_artist_prefix(title, artist_name)
+        if cleaned == title:
+            return False
+        logger.debug("Album title artist-prefix stripped: %r -> %r", title, cleaned)
+        # Correct the entity too, not just the working copy: the stripped form
+        # *is* the local observed title, and display-field resolution reads its
+        # local value from the entity — leaving it stale would restore the
+        # prefix straight after the plugin loop.
+        album["title"] = cleaned
+        updated["title"] = cleaned
+        return True
+
     # Album origin/era fields with a local tag source (original_year has none).
     _ALBUM_TAG_FIELDS = ("genre", "year", "language")
 
@@ -452,6 +474,16 @@ class MetadataEnricher:
                 album["id"], {"enriched": EnrichmentStatus.ENRICHED}
             )
             return
+
+        # An untagged rip's album title is folder-derived and keeps the artist
+        # prefix ("The Beatles - Abbey Road") until clustering learns the
+        # artist — which for such libraries only happens after the filename
+        # fallback runs. Searching a provider with that stale title fails, and
+        # by the time the title is corrected the album is already enriched.
+        # Strip it here, where the album's artist is known, so matching sees the
+        # real title on this pass.
+        if await self._strip_album_artist_prefix(album, updated_album):
+            had_updates = True
 
         emitted_claims: list[dict] = []
         for plugin in self.plugins:
