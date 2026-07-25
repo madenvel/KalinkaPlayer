@@ -118,3 +118,35 @@ async def test_track_title_kept_when_claim_differs():
     )
     assert changed is False
     assert updated["title"] == "Real Title"
+
+
+@pytest.mark.asyncio
+async def test_plugin_refined_title_survives_resolution():
+    """Regression: resolution must read the local baseline from the working
+    copy, not the stale row. An untagged rip's row title is the raw basename;
+    FilesystemFallbackPlugin parses it into a real title mid-pass, and
+    resolving against the row value used to revert that parse."""
+    enr = _enricher()
+    basename = "THE BEATLES - 01.Come Together (Lennon-McCartney).flac"
+    track = {"id": "t1", "title": basename}
+    updated = {**track, "title": "Come Together (Lennon-McCartney)"}
+    changed = await enr._resolve_display_field("track", track, updated, [], "title")
+    assert changed is False
+    assert updated["title"] == "Come Together (Lennon-McCartney)"
+    assert enr.db_manager.origins[0] == (
+        "track", "t1", "title", "tag_consensus", "observed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_refined_title_not_reverted_by_differing_claim():
+    """A differing external claim must not restore the basename either — the
+    refined working-copy title is the local value the §7 rule protects."""
+    enr = _enricher()
+    track = {"id": "t1", "title": "ARTIST - 02.Something.flac"}
+    updated = {**track, "title": "Something"}
+    diff = {"field": "title", "value": "Something (Remastered)",
+            "source": "musicbrainz:rec-9", "tier": "inferred"}
+    changed = await enr._resolve_display_field("track", track, updated, [diff], "title")
+    assert changed is False
+    assert updated["title"] == "Something"

@@ -319,8 +319,13 @@ class MetadataEnricher:
         ``title``) from claims: an external match re-cases a matching local value
         but never replaces a different one, and never invents one from a fuzzy
         match (§7 — display identity is locally derived). Provenance lands in
-        resolved_origin. Returns True if the value changed."""
-        local_value = entity.get(field)
+        resolved_origin. Returns True if the value changed.
+
+        The local baseline is read from ``updated``, not ``entity``: local
+        plugins refine it via direct writes (FilesystemFallbackPlugin parses
+        "Artist - Title" out of a filename-echo title), and resolving against
+        the stale row would revert that refinement."""
+        local_value = updated.get(field)
         if not local_value:
             return False
 
