@@ -20,6 +20,7 @@ from kalinka_plugin_localfiles.enricher.match_utils import (
     parse_mb_track_count,
     release_total_length_seconds,
     track_count_bonus,
+    tracklist_coverage_bonus,
 )
 from kalinka_plugin_localfiles.enricher.acoustid_plugin import AcoustIdPlugin
 from kalinka_plugin_localfiles.enricher.musicbrainz_plugin import MusicBrainzPlugin
@@ -1561,3 +1562,19 @@ class TestAcceptedTrackMapPlacement:
         for tid in ("t1", "t2"):
             assert await plugin._lookup_track_in_accepted_map(
                 {"id": tid, "album_id": "al1"}) is None
+
+
+class TestCoverageBonusTrackCountGate:
+    """Coverage can't discriminate on a tiny local album: with 1-2 tracks every
+    release containing them scores 1.0, so the bonus is withheld."""
+
+    def test_bonus_applies_with_enough_tracks(self):
+        assert tracklist_coverage_bonus(1.0, 12) == 20.0
+        assert tracklist_coverage_bonus(0.6, 12) == 5.0
+
+    def test_bonus_withheld_on_tiny_albums(self):
+        assert tracklist_coverage_bonus(1.0, 1) == 0.0
+        assert tracklist_coverage_bonus(1.0, 2) == 0.0
+
+    def test_count_omitted_keeps_old_behaviour(self):
+        assert tracklist_coverage_bonus(1.0) == 20.0

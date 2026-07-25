@@ -473,7 +473,7 @@ class MusicBrainzPlugin(EnricherPlugin):
                 cand_duration = release_total_length_seconds(release_data)
                 d_bonus = album_duration_bonus(local_duration_s, cand_duration)
                 alignment = self._align_release(local_tracks, release_data)
-                c_bonus = tracklist_coverage_bonus(alignment.coverage)
+                c_bonus = tracklist_coverage_bonus(alignment.coverage, len(local_tracks))
                 combined = base_score + d_bonus + c_bonus
                 if self.debug_matching:
                     logger.debug(

@@ -202,7 +202,14 @@ def flatten_mb_tracklist(mb_release: Dict) -> List[Dict]:
     return flat
 
 
-def tracklist_coverage_bonus(coverage: Optional[float]) -> float:
+# Below this many local tracks, tracklist coverage can't discriminate between
+# candidate releases (see tracklist_coverage_bonus).
+MIN_ALIGNABLE_TRACKS = 3
+
+
+def tracklist_coverage_bonus(
+    coverage: Optional[float], local_track_count: Optional[int] = None
+) -> float:
     """Additive score adjustment for how much of the local album a candidate
     release's tracklist explains (see ``tracklist_align``). Same 0-100 scale as
     the other bonuses.
@@ -219,6 +226,13 @@ def tracklist_coverage_bonus(coverage: Optional[float]) -> float:
     coverage withholds support rather than arguing against.
     """
     if coverage is None:
+        return 0.0
+    # Coverage carries no information on a tiny local album: with one or two
+    # tracks, *every* release containing them scores 1.0, so the bonus would be
+    # applied uniformly across candidates — inflating scores while separating
+    # nothing. Measured: "Oxygene" (1 local track) drew 3 candidates all at
+    # score 59.3 / coverage 1.0 and was orphan-held.
+    if local_track_count is not None and local_track_count < MIN_ALIGNABLE_TRACKS:
         return 0.0
     if coverage >= 0.9:
         return 20.0
