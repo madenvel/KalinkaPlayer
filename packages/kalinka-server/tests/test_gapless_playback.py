@@ -373,6 +373,109 @@ def _waveform_path(samples: np.ndarray, width: int, height: int, peak: float) ->
 
 TITLE_BAND = 22
 PLOT_HEIGHT = 112
+COLOUR_A = "#3b6fd4"  # frames that came from track A
+COLOUR_B = "#e07b1f"  # frames that came from track B
+
+
+def _sample_points(
+    values: np.ndarray, first_index: int, total: int, width: int, height: int, peak: float
+) -> list[tuple[float, float]]:
+    """Pixel positions for `values`, whose first element is `first_index` of `total`."""
+    mid, scale = height / 2, (height / 2) * 0.9 / max(peak, 1.0)
+    step = (width - 1) / max(total - 1, 1)
+    return [
+        ((first_index + i) * step, mid - float(v) * scale) for i, v in enumerate(values)
+    ]
+
+
+def _source_split_panel(
+    title: str,
+    samples: np.ndarray,
+    split: int,
+    width: int,
+    peak: float,
+    dots: bool,
+) -> str:
+    """One panel of captured audio, coloured by which track each frame came from.
+
+    `split` is the index of the first frame that came from track B. With `dots`
+    the individual samples are drawn as stems, the way an editor shows them at
+    high zoom; otherwise the samples are joined into a filled waveform.
+    """
+    mid = PLOT_HEIGHT / 2
+    parts = [
+        f'<text x="1" y="14" font-family="sans-serif" font-size="12.5" '
+        f'fill="#33333d">{title}</text>',
+        f'<rect x="0" y="{TITLE_BAND}" width="{width}" height="{PLOT_HEIGHT}" '
+        f'fill="#fbfbfd" stroke="#d8d8e0" stroke-width="1"/>',
+    ]
+    body = [
+        f'<line x1="0" y1="{mid}" x2="{width}" y2="{mid}" stroke="#e2e2ea" '
+        f'stroke-width="1"/>'
+    ]
+
+    total = len(samples)
+    # Overlap by one sample so the two colours meet without a visual gap.
+    segments = [
+        (samples[: split + 1], 0, COLOUR_A),
+        (samples[split:], split, COLOUR_B),
+    ]
+    for values, first, colour in segments:
+        points = _sample_points(values, first, total, width, PLOT_HEIGHT, peak)
+        if dots:
+            for x, y in points:
+                body.append(
+                    f'<line x1="{x:.2f}" y1="{mid}" x2="{x:.2f}" y2="{y:.2f}" '
+                    f'stroke="{colour}" stroke-width="1.3"/>'
+                    f'<circle cx="{x:.2f}" cy="{y:.2f}" r="2.4" fill="{colour}"/>'
+                )
+        else:
+            # Stroke only. Filling to the centre line self-intersects at every
+            # zero crossing, which the nonzero fill rule renders as a band.
+            line = "M" + " L".join(f"{x:.2f},{y:.2f}" for x, y in points)
+            body.append(
+                f'<path d="{line}" fill="none" stroke="{colour}" stroke-width="1.6" '
+                f'stroke-linejoin="round"/>'
+            )
+
+    x_split = _sample_points(samples[split : split + 1], split, total, width, PLOT_HEIGHT, peak)[0][0]
+    body.append(
+        f'<line x1="{x_split:.2f}" y1="0" x2="{x_split:.2f}" y2="{PLOT_HEIGHT}" '
+        f'stroke="#8a8a99" stroke-width="1" stroke-dasharray="4 3"/>'
+    )
+
+    parts.append(f'<g transform="translate(0,{TITLE_BAND})">' + "".join(body) + "</g>")
+    return "".join(parts)
+
+
+def _write_source_split_svg(
+    path: Path, panels: list[tuple[str, np.ndarray, int, bool]]
+) -> None:
+    width, gap = 880, 16
+    panel_height = TITLE_BAND + PLOT_HEIGHT
+    legend_height = 26
+    total = len(panels) * (panel_height + gap) - gap + legend_height
+    peak = max(float(np.abs(s).max()) for _, s, _, _ in panels)
+
+    body = []
+    for i, (title, samples, split, dots) in enumerate(panels):
+        body.append(f'<g transform="translate(0,{i * (panel_height + gap)})">')
+        body.append(_source_split_panel(title, samples, split, width, peak, dots))
+        body.append("</g>")
+
+    y = len(panels) * (panel_height + gap) - gap + 17
+    body.append(
+        f'<rect x="1" y="{y - 9}" width="11" height="11" fill="{COLOUR_A}"/>'
+        f'<text x="18" y="{y}" font-family="sans-serif" font-size="12" '
+        f'fill="#33333d">frames decoded from a.flac</text>'
+        f'<rect x="215" y="{y - 9}" width="11" height="11" fill="{COLOUR_B}"/>'
+        f'<text x="232" y="{y}" font-family="sans-serif" font-size="12" '
+        f'fill="#33333d">frames decoded from b.flac</text>'
+    )
+    path.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total}" '
+        f'viewBox="0 0 {width} {total}">' + "".join(body) + "</svg>"
+    )
 
 
 def _panel(
@@ -474,23 +577,25 @@ def _write_artifacts(out_dir: Path, result: dict) -> None:
     boundary = result["boundary"]
     captured = result["captured"][:, 0]
 
-    _write_svg(
-        out_dir / "gapless-tracks.svg",
+    # The captured output, coloured by which file each frame was decoded from.
+    # Both files hold the same tone, so an uncoloured plot of this would be an
+    # unremarkable sine; the colour is what shows the two tracks meeting.
+    close = 22  # ~0.5 ms either side of the join: individual samples
+    _write_source_split_svg(
+        out_dir / "gapless-join.svg",
         [
             (
-                f"Track A ({FREQ:g} Hz) — its final 12 ms, decoded from a.flac",
-                result["track_a"][-span:, 0],
-                None,
-            ),
-            (
-                f"Track B — its first 12 ms; the same tone, resumed in phase",
-                result["track_b"][:span, 0],
-                None,
-            ),
-            (
-                "Captured ALSA output — A's last 6 ms and B's first 6 ms: one unbroken tone",
+                "Captured ALSA output across the track boundary (12 ms)",
                 captured[boundary - half : boundary + half],
                 half,
+                False,
+            ),
+            (
+                "The same boundary at sample resolution (1 ms): A's last frame, "
+                "then B's first",
+                captured[boundary - close : boundary + close],
+                close,
+                True,
             ),
         ],
     )
