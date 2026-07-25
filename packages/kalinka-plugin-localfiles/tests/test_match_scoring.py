@@ -77,7 +77,13 @@ def _make_mb_plugin():
     config.enricher.plugins.musicbrainz.string_similarity = 0.6
     config.enricher.plugins.musicbrainz.debug_matching = False
     config.enricher.plugins.user_agent = "test/1.0 (test@example.com)"
-    return MusicBrainzPlugin(config, db_manager=MagicMock())
+    plugin = MusicBrainzPlugin(config, db_manager=MagicMock())
+    # Phase 3 stage-B reads the local tracklist and records candidates; default
+    # to "no local tracks", so alignment contributes a 0 bonus and these tests
+    # keep exercising the pre-alignment scoring in isolation.
+    plugin.db_manager.get_album_tracks_for_alignment = _async_returning([])
+    plugin.db_manager.save_release_candidates = _async_returning(None)
+    return plugin
 
 
 class TestMusicBrainzFindBestMatch:
@@ -1368,3 +1374,108 @@ class TestMusicBrainzInReleaseTrackLookup:
         cached = await plugin._get_release_detail("rel-the-wall")
         assert cached is release
         assert fetch_count["n"] == before  # no refetch
+
+
+class TestStageBTracklistAlignment:
+    """Phase 3: stage B aligns the local tracklist against each candidate and
+    records what it considered. Alignment reuses the recordings stage B already
+    fetches, so it costs no extra MB requests."""
+
+    @staticmethod
+    def _search():
+        return {"release-list": [
+            {"id": "wrong", "title": "Album", "ext:score": "100",
+             "medium-track-count": "3"},
+            {"id": "right", "title": "Album", "ext:score": "100",
+             "medium-track-count": "3"},
+        ]}
+
+    @staticmethod
+    def _fake_release(rid, includes=None):
+        titles = {
+            # Same score/track-count; only the tracklist tells them apart.
+            "wrong": ["Zzz Unrelated", "Qqq Nothing", "Www Other"],
+            "right": ["Alpha Song", "Beta Song", "Gamma Song"],
+        }[rid]
+        return {"release": {
+            "id": rid, "title": "Album",
+            "release-group": {"id": f"rg-{rid}"},
+            "medium-list": [{"position": "1", "track-list": [
+                {"position": str(i + 1), "title": t, "length": "200000",
+                 "recording": {"id": f"rec-{rid}-{i}"}}
+                for i, t in enumerate(titles)]}],
+        }}
+
+    def _plugin_with_local(self, monkeypatch, saved):
+        plugin = _make_mb_plugin()
+        plugin.db_manager.get_album_tracks_for_alignment = _async_returning([
+            {"id": "t0", "title": "Alpha Song", "duration": 200},
+            {"id": "t1", "title": "Beta Song", "duration": 200},
+            {"id": "t2", "title": "Gamma Song", "duration": 200},
+        ])
+
+        async def _save(album_id, provider, rows):
+            saved.extend(rows)
+
+        plugin.db_manager.save_release_candidates = _save
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin."
+            "musicbrainzngs.search_releases", lambda *a, **k: self._search())
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin."
+            "musicbrainzngs.get_release_by_id", self._fake_release)
+        return plugin
+
+    @pytest.mark.asyncio
+    async def test_alignment_picks_the_matching_tracklist(self, monkeypatch):
+        saved = []
+        plugin = self._plugin_with_local(monkeypatch, saved)
+        album = {"id": "alb1", "title": "Album", "artist_name": "Artist",
+                 "track_count": 3, "duration": 600}
+        result = await plugin.enrich_album(album)
+        assert result is not None
+        # Identical ext:score and track count; the tracklist alignment decides.
+        assert result["mbid"] == "right"
+
+    @pytest.mark.asyncio
+    async def test_candidates_recorded_with_status_and_coverage(self, monkeypatch):
+        saved = []
+        plugin = self._plugin_with_local(monkeypatch, saved)
+        album = {"id": "alb1", "title": "Album", "artist_name": "Artist",
+                 "track_count": 3, "duration": 600}
+        await plugin.enrich_album(album)
+        by_id = {r["release_id"]: r for r in saved}
+        assert set(by_id) == {"right", "wrong"}
+        # The winner's tracklist lines up -> accepted, with a usable track_map.
+        assert by_id["right"]["status"] == "accepted"
+        assert by_id["right"]["coverage"] == 1.0
+        assert by_id["right"]["track_map"]["t0"][2] == "rec-right-0"
+        # The loser is retained for review, never silently dropped.
+        assert by_id["wrong"]["status"] == "candidate"
+        assert by_id["wrong"]["coverage"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_candidates_recorded_even_when_held_as_orphan(self, monkeypatch):
+        """An ambiguous match is held as orphan — but what was considered is
+        still recorded, since that is exactly what a human review needs."""
+        saved = []
+        plugin = self._plugin_with_local(monkeypatch, saved)
+        # Both candidates have an unrelated tracklist, so neither gets a
+        # coverage bonus: scores tie, release-groups differ -> orphan hold.
+        monkeypatch.setattr(
+            "kalinka_plugin_localfiles.enricher.musicbrainz_plugin."
+            "musicbrainzngs.get_release_by_id",
+            lambda rid, includes=None: {"release": {
+                "id": rid, "title": "Album",
+                "release-group": {"id": f"rg-{rid}"},
+                "medium-list": [{"position": "1", "track-list": [
+                    {"position": str(i + 1), "title": f"Unrelated {i}",
+                     "length": "200000", "recording": {"id": f"rec-{rid}-{i}"}}
+                    for i in range(3)]}],
+            }})
+        album = {"id": "alb1", "title": "Album", "artist_name": "Artist",
+                 "track_count": 3, "duration": 600}
+        result = await plugin.enrich_album(album)
+        assert result is None                      # held as orphan
+        assert {r["release_id"] for r in saved} == {"right", "wrong"}
+        assert all(r["status"] == "candidate" for r in saved)

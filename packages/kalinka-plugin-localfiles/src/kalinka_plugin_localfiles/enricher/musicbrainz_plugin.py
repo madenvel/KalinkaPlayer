@@ -15,7 +15,9 @@ from .match_utils import (
     parse_mb_track_count,
     release_total_length_seconds,
     track_count_bonus,
+    tracklist_coverage_bonus,
 )
+from .tracklist_align import Alignment, align_tracklist
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -25,6 +27,10 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # disambiguating signal (track count + total duration) — a 3-point gap
 # between two stage-B candidates is already meaningful.
 ALBUM_MATCH_MIN_MARGIN = 3.0
+
+# Tracklist coverage at or above which an accepted release's track_map is
+# trustworthy enough to drive per-track identity (Phase 3, §6.2).
+TRACKLIST_ACCEPT_COVERAGE = 0.9
 
 
 def _same_release_group(a: Dict, b: Dict) -> bool:
@@ -431,7 +437,21 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Fetching the winner's recordings is something we'd do anyway
             # below; doing it for two extras costs ~2 additional MB calls
             # per album but lets us tell std/deluxe/reissue apart.
+            # Local tracklist for alignment (Phase 3): fetched once and reused
+            # for every candidate, so alignment costs no extra MB requests —
+            # stage B already retrieves each candidate's recordings. Alignment
+            # only *adds* evidence, so a failure here degrades to the
+            # pre-alignment scoring rather than costing the album its match.
+            try:
+                local_tracks = await self.db_manager.get_album_tracks_for_alignment(
+                    album["id"]
+                )
+            except Exception as e:
+                logger.debug(f"Could not load local tracklist for alignment: {e}")
+                local_tracks = []
+
             scored: List[Tuple[Dict, float, float, Dict]] = []
+            candidate_rows: List[Dict] = []
             for cand, base_score, similarity in shortlist[:3]:
                 try:
                     details = await asyncio.to_thread(
@@ -448,15 +468,25 @@ class MusicBrainzPlugin(EnricherPlugin):
                 release_data = details["release"]
                 cand_duration = release_total_length_seconds(release_data)
                 d_bonus = album_duration_bonus(local_duration_s, cand_duration)
-                combined = base_score + d_bonus
+                alignment = self._align_release(local_tracks, release_data)
+                c_bonus = tracklist_coverage_bonus(alignment.coverage)
+                combined = base_score + d_bonus + c_bonus
                 if self.debug_matching:
                     logger.debug(
                         f"  Stage B: '{release_data.get('title')}' "
                         f"local_dur={local_duration_s} cand_dur={cand_duration} "
                         f"base={base_score:.1f} d_bonus={d_bonus:+.0f} "
+                        f"coverage={alignment.coverage:.2f} c_bonus={c_bonus:+.0f} "
                         f"combined={combined:.1f}"
                     )
                 scored.append((cand, combined, similarity, release_data))
+                candidate_rows.append({
+                    "release_id": cand["id"],
+                    "rg_id": (release_data.get("release-group") or {}).get("id"),
+                    "score": combined,
+                    "coverage": alignment.coverage,
+                    "track_map": alignment.track_map,
+                })
 
             if not scored:
                 logger.debug(
@@ -477,20 +507,46 @@ class MusicBrainzPlugin(EnricherPlugin):
             # album, where picking either is correct enough. Without
             # this carve-out the guard wrongly orphans common cases
             # like "Abbey Road" (every reissue scores identically).
+            held = False
             if len(scored) > 1:
                 runner_up_cand, runner_up_score, _runner_sim, _runner_rel = scored[1]
-                if (
+                held = (
                     best_score - runner_up_score < ALBUM_MATCH_MIN_MARGIN
                     and not _same_release_group(best, runner_up_cand)
-                ):
-                    logger.info(
-                        f"Ambiguous album match for '{album['title']}': "
-                        f"best={best_score:.1f} runner_up={runner_up_score:.1f} — "
-                        f"holding as orphan rather than committing"
-                    )
-                    return None
+                )
 
             release_mbid = best["id"]
+
+            # Record what was considered (Phase 3) — including on the orphan-hold
+            # path, which is precisely the case a human review wants to see.
+            # `accepted` marks a committed release whose tracklist alignment is
+            # strong enough to trust its track_map for per-track identity; the
+            # rest stay `candidate`. A weak alignment never rejects the album
+            # match itself — a partial local copy is common and is not evidence
+            # of a wrong release.
+            for row in candidate_rows:
+                row["status"] = (
+                    "accepted"
+                    if not held
+                    and row["release_id"] == release_mbid
+                    and row["coverage"] >= TRACKLIST_ACCEPT_COVERAGE
+                    else "candidate"
+                )
+            try:
+                await self.db_manager.save_release_candidates(
+                    album["id"], "musicbrainz", candidate_rows
+                )
+            except Exception as e:  # observability must never break enrichment
+                logger.debug(f"Could not save release candidates: {e}")
+
+            if held:
+                logger.info(
+                    f"Ambiguous album match for '{album['title']}': "
+                    f"best={best_score:.1f} runner_up={runner_up_score:.1f} — "
+                    f"holding as orphan rather than committing"
+                )
+                return None
+
             updates = {
                 "mbid": release_mbid,
                 "match_score": int(best.get("ext:score", 0)),
@@ -591,6 +647,21 @@ class MusicBrainzPlugin(EnricherPlugin):
         if release is not None:
             self._release_cache[release_mbid] = release
         return release
+
+    @staticmethod
+    def _align_release(local_tracks: List[Dict], release_data: Dict) -> Alignment:
+        """Align the local tracklist against one candidate release (Phase 3)."""
+        release_tracks = [
+            {
+                "title": t.get("title"),
+                "length_s": parse_mb_length_seconds(t.get("length")),
+                "disc": t.get("medium"),
+                "pos": t.get("track"),
+                "rec_id": t.get("recording_id"),
+            }
+            for t in flatten_mb_tracklist(release_data)
+        ]
+        return align_tracklist(local_tracks, release_tracks)
 
     async def _lookup_track_in_release(
         self, track: Dict, release_mbid: str

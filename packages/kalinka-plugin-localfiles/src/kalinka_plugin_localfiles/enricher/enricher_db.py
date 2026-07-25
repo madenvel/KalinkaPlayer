@@ -356,6 +356,57 @@ class AsyncEnricherDb:
                     out.append(tags)
             return out
 
+    async def get_album_tracks_for_alignment(self, album_id: str) -> List[Dict]:
+        """An album's tracks in play order — the local side of the tracklist
+        alignment (Phase 3), so the order must match the release's."""
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT id, title, duration FROM tracks WHERE album_id = ? "
+                "ORDER BY disc_number, track_number, title",
+                (album_id,),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def save_release_candidates(
+        self, album_id: str, provider: str, candidates: List[Dict]
+    ) -> None:
+        """Upsert the scored release candidates for an album (Phase 3).
+
+        Each candidate carries release_id, rg_id, score, coverage, track_map
+        (dict, stored as JSON) and status. Recorded even when not accepted, so a
+        later pass or review can see what was considered and why.
+        """
+        if not candidates:
+            return
+        async with self._open() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO release_candidates
+                    (album_id, provider, release_id, rg_id, score, coverage,
+                     track_map, status, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(album_id, provider, release_id) DO UPDATE SET
+                    rg_id = excluded.rg_id,
+                    score = excluded.score,
+                    coverage = excluded.coverage,
+                    track_map = excluded.track_map,
+                    status = excluded.status,
+                    fetched_at = excluded.fetched_at
+                """,
+                [
+                    (
+                        album_id, provider, c["release_id"], c.get("rg_id"),
+                        float(c.get("score") or 0.0), float(c.get("coverage") or 0.0),
+                        json.dumps(c.get("track_map") or {}),
+                        c.get("status", "candidate"), int(time.time()),
+                    )
+                    for c in candidates
+                ],
+            )
+            await conn.commit()
+
     async def get_non_enriched_artists(self, limit: int = 50) -> List[Dict]:
         """Get artists that haven't been enriched yet"""
         async with self._open() as conn:

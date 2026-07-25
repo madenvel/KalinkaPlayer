@@ -200,3 +200,28 @@ def flatten_mb_tracklist(mb_release: Dict) -> List[Dict]:
                 }
             )
     return flat
+
+
+def tracklist_coverage_bonus(coverage: Optional[float]) -> float:
+    """Additive score adjustment for how much of the local album a candidate
+    release's tracklist explains (see ``tracklist_align``). Same 0-100 scale as
+    the other bonuses.
+
+    Tiers:
+      ≥ 0.9 → +20  (the tracklists line up: almost certainly this release)
+      ≥ 0.5 → +5
+      else  →   0  (uninformative, NOT evidence against)
+
+    Deliberately never negative. Measured over a real library, 11 of 38
+    correctly-matched albums score under 0.9 — dominated by *partial* local
+    copies (5 tracks owned of a 16-track release) and titles carrying suffixes
+    the provider lacks. Penalising those would un-match ~29% of albums, so low
+    coverage withholds support rather than arguing against.
+    """
+    if coverage is None:
+        return 0.0
+    if coverage >= 0.9:
+        return 20.0
+    if coverage >= 0.5:
+        return 5.0
+    return 0.0
