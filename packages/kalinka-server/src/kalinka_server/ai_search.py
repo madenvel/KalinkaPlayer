@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import Counter
 from dataclasses import dataclass
 from typing import List, Optional
@@ -228,6 +229,7 @@ async def _search_one_source(
     four ``search()`` types, in parallel. A failing leg is logged and skipped:
     one bad source must not sink the whole query."""
     name = module.module_name()
+    started = time.monotonic()
     search_coros = (
         [module.search(t, query, 0, cfg.candidate_limit) for t in _CANDIDATE_TYPES]
         if navigational
@@ -253,6 +255,19 @@ async def _search_one_source(
         if isinstance(ai_leg, BaseException):
             logger.warning("ai_search failed for %s: %s", name, ai_leg)
         ai_sections = []
+
+    # Per-source outcome, always: a source silently missing from the results
+    # (an upstream that returned empty-success rather than raising) is
+    # otherwise untraceable. Failed legs already warned above.
+    logger.info(
+        "ai_search legs for %s: %d candidate(s), %d ai section(s) in %.2fs%s",
+        name,
+        len(candidates),
+        len(ai_sections),
+        time.monotonic() - started,
+        "" if ai_sections or not isinstance(ai_leg, BrowseItemList)
+        else " (ai leg empty)",
+    )
 
     return _SourceResults(
         source=name,
