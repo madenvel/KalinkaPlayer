@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from collections import OrderedDict
 from datetime import date, timedelta
 from typing import List, Optional
@@ -119,6 +120,10 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.ProxyError,
 )
 
+# Pause before retrying a success-with-0-results response (see request()).
+# Short: the flaky empties return in ~0.15s, so the total detour is ~0.5s.
+_EMPTY_RETRY_DELAY_S = 0.2
+
 
 class RetryTransport(httpx.AsyncHTTPTransport):
     def __init__(self, read_retries=2, **kwargs):
@@ -189,15 +194,49 @@ class JamendoClient:
         A failed call still returns HTTP 200 with ``headers.status == "failed"``;
         we log and return an empty list so the UI degrades to "no results"
         rather than throwing.
+
+        A *successful* response with an empty ``results`` array gets one
+        retry: Jamendo's API intermittently serves ``status: success`` with
+        zero results for queries that plainly have them (measured ~50% of
+        requests during a 2026-07 episode; the empties return in ~0.15s vs
+        ~0.45s for real payloads — a bad cache node, not a timeout). A
+        genuinely empty result just repeats one fast round-trip.
         """
+        results = await self._request_once(path, params)
+        if results is None or results:
+            return results or []
+
+        await asyncio.sleep(_EMPTY_RETRY_DELAY_S)
+        retried = await self._request_once(path, params)
+        if retried:
+            logger.info(
+                "Jamendo %s: empty success healed by retry (params=%s)",
+                path, params,
+            )
+            return retried
+        if retried is not None:
+            # Twice empty with success status: either genuinely no data, or
+            # the upstream flake outlasted the retry. Params tell which.
+            logger.info(
+                "Jamendo %s: empty success twice (params=%s)", path, params
+            )
+        return []
+
+    async def _request_once(self, path: str, params: dict) -> Optional[list]:
+        """One GET attempt. Error paths log and return None (never retried
+        here — the transport already retries what is safe to retry); a
+        successful call returns its ``results`` list, possibly empty."""
         merged = {"client_id": self.client_id, "format": "json", **params}
+        started = time.monotonic()
         response = await self.session.get(self.base + path, params=merged)
+        elapsed_ms = (time.monotonic() - started) * 1000
 
         if not response.is_success:
             logger.warning(
-                "Jamendo %s failed: HTTP %s", path, response.status_code
+                "Jamendo %s failed: HTTP %s (%.0fms)",
+                path, response.status_code, elapsed_ms,
             )
-            return []
+            return None
 
         try:
             rjson = response.json()
@@ -205,7 +244,7 @@ class JamendoClient:
             # Truncated body, HTML error page, etc. Degrade to "no results"
             # rather than breaking browse/search.
             logger.warning("Jamendo %s returned non-JSON body: %s", path, exc)
-            return []
+            return None
         headers = rjson.get("headers", {})
         if headers.get("status") != "success":
             logger.warning(
@@ -213,8 +252,10 @@ class JamendoClient:
                 path,
                 headers.get("error_message") or headers,
             )
-            return []
+            return None
 
+        # Empty-success is not logged here — request() logs the retried
+        # outcome once, so a legitimately empty search doesn't warn twice.
         return rjson.get("results", [])
 
     async def resolve_audio_url(self, track_id: str, audioformat: str) -> str:
