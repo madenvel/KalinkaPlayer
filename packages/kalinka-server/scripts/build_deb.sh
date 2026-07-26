@@ -108,6 +108,12 @@ chmod 755 "$TARGET_DIR/opt/kalinka/bootstrap.sh"
 cp scripts/kalinka.service "$TARGET_DIR/etc/systemd/system/"
 cp scripts/kalinka-restart.path "$TARGET_DIR/etc/systemd/system/"
 cp scripts/kalinka-restart.service "$TARGET_DIR/etc/systemd/system/"
+cp scripts/kalinka-upgrade.path "$TARGET_DIR/etc/systemd/system/"
+cp scripts/kalinka-upgrade.service "$TARGET_DIR/etc/systemd/system/"
+# In-place upgrade support: the root-side kalinka-upgrade.service runs this
+# copy of the repo's installer when the server requests an upgrade.
+cp ../../scripts/install-release.sh "$TARGET_DIR/opt/kalinka/install-release.sh"
+chmod 755 "$TARGET_DIR/opt/kalinka/install-release.sh"
 cp scripts/kalinka.tmpfiles.conf "$TARGET_DIR/usr/lib/tmpfiles.d/kalinka.conf"
 cp ../../README.md "$TARGET_DIR/opt/kalinka/"
 cp LICENSE "$TARGET_DIR/opt/kalinka/"

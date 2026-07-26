@@ -180,19 +180,23 @@ for url in "${URLS[@]}"; do
 done
 
 # --- install ------------------------------------------------------------------
+# Wait for a held dpkg/apt lock (e.g. unattended-upgrades) instead of failing
+# outright — this script also runs unattended from kalinka-upgrade.service.
+APT_OPTS=(-o DPkg::Lock::Timeout=300)
+
 if [ "${NO_APT_UPDATE:-0}" != "1" ]; then
   echo ">> apt-get update"
-  $SUDO apt-get update
+  $SUDO apt-get "${APT_OPTS[@]}" update
 fi
 
 echo ">> Installing ${#URLS[@]} package(s) with apt ..."
 # apt resolves install order among the bundle packages (server depends on the
 # SDK) and pulls system dependencies from the configured repos. A leading ./ or
 # absolute path tells apt these are local files, not repo package names.
-if ! $SUDO apt-get install -y "$TMPDIR_DL"/*.deb; then
+if ! $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL"/*.deb; then
   echo ">> apt-get install failed; falling back to dpkg -i + apt-get -f install"
   $SUDO dpkg -i "$TMPDIR_DL"/*.deb || true
-  $SUDO apt-get -f install -y
+  $SUDO apt-get "${APT_OPTS[@]}" -f install -y
 fi
 
 # --- report -------------------------------------------------------------------

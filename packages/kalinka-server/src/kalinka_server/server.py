@@ -61,6 +61,7 @@ from .optional_packages_registry import (
 from .player_setup import modules, setup, shutdown, ModuleHealthState
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
+from . import update_check
 from .version import get_rest_api_version, get_version
 from .state_keeper import save_state, restore_state
 from .test_tone import VALID_CHANNELS, play_test_tone
@@ -898,6 +899,54 @@ async def create_app(
             "api_version": get_rest_api_version(),
             "name": "kalinka-player",
         }
+
+    @app.get("/server/update")
+    async def get_update_info():
+        """Check whether a newer server release is published on GitHub.
+
+        Intended to be called once per app start; the lookup is cached
+        server-side. The app should show its upgrade banner only when
+        both ``update_available`` and ``upgrade_supported`` are true
+        (dev installs report ``upgrade_supported: false``); dismissing
+        the banner is purely client-side state.
+        """
+        current = get_version()
+        latest = await update_check.checker.latest_version()
+        return {
+            "current_version": current,
+            "latest_version": latest,
+            "update_available": bool(latest and update_check.is_newer(latest, current)),
+            "upgrade_supported": update_check.upgrade_supported(),
+        }
+
+    @app.put("/server/upgrade")
+    async def upgrade_server():
+        """Upgrade the server to the latest published release.
+
+        Touches the trigger file watched by the root-owned
+        kalinka-upgrade.path unit; its oneshot runs the deb-shipped
+        install-release.sh, and the new package's postinst restarts
+        kalinka.service — so a successful upgrade looks to clients like
+        a (long) restart. Progress/failure detail stays in the systemd
+        journal; the app confirms the outcome by re-reading
+        /server/version after reconnect.
+        """
+        if not update_check.upgrade_supported():
+            raise HTTPException(
+                status_code=501,
+                detail="Upgrade is not supported on this install "
+                "(root-side upgrade units are missing)",
+            )
+        trigger = Path(paths.run_dir()) / "upgrade-request"
+        try:
+            trigger.parent.mkdir(parents=True, exist_ok=True)
+            trigger.touch()
+        except OSError as e:
+            logger.error("Failed to write upgrade trigger %s: %s", trigger, e)
+            raise HTTPException(
+                status_code=500, detail="Failed to request upgrade"
+            ) from e
+        return {"message": "upgrading"}
 
     @app.put("/server/restart")
     async def restart_server(payload: Optional[Dict[str, Any]] = None):

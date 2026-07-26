@@ -9,6 +9,8 @@ UNIT_NAME="kalinka.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
 RESTART_PATH_UNIT="kalinka-restart.path"
 RESTART_PATH_UNIT_PATH="/etc/systemd/system/${RESTART_PATH_UNIT}"
+UPGRADE_PATH_UNIT="kalinka-upgrade.path"
+UPGRADE_PATH_UNIT_PATH="/etc/systemd/system/${UPGRADE_PATH_UNIT}"
 
 case "$1" in
   configure)
@@ -50,6 +52,11 @@ case "$1" in
       systemctl enable --now "$RESTART_PATH_UNIT"
     else
       echo "Note: $RESTART_PATH_UNIT not found at $RESTART_PATH_UNIT_PATH. Skipping."
+    fi
+    if [ -f "$UPGRADE_PATH_UNIT_PATH" ]; then
+      systemctl enable --now "$UPGRADE_PATH_UNIT"
+    else
+      echo "Note: $UPGRADE_PATH_UNIT not found at $UPGRADE_PATH_UNIT_PATH. Skipping."
     fi
     if [ -f "$UNIT_PATH" ]; then
       systemctl enable "$UNIT_NAME"

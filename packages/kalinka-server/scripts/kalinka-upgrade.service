@@ -1,0 +1,12 @@
+[Unit]
+Description=Upgrade kalinka to the latest release on request
+
+[Service]
+Type=oneshot
+# Downloading debs + apt on a Pi can take many minutes; the new server
+# deb's postinst also restarts kalinka.service inside this run, which
+# waits for bootstrap.sh (wheel installs) to finish. No safe upper bound
+# — same reasoning as kalinka.service's own TimeoutStartSec.
+TimeoutStartSec=infinity
+ExecStart=/opt/kalinka/install-release.sh
+ExecStartPost=-/bin/rm -f /run/kalinka/upgrade-request
