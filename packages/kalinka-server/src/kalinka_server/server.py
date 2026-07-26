@@ -924,10 +924,10 @@ async def create_app(
         """Upgrade the server to the latest published release.
 
         Touches the trigger file watched by the root-owned
-        kalinka-upgrade.path unit; its oneshot runs the deb-shipped
-        install-release.sh, and the new package's postinst restarts
-        kalinka.service — so a successful upgrade looks to clients like
-        a (long) restart. Progress/failure detail stays in the systemd
+        kalinka-upgrade.path unit; its oneshot fetches the published
+        installer from kalinkaplayer.com and runs it, and the new
+        package's postinst restarts kalinka.service — so a successful
+        upgrade looks to clients like a (long) restart. Progress/failure detail stays in the systemd
         journal; the app confirms the outcome by re-reading
         /server/version after reconnect.
         """

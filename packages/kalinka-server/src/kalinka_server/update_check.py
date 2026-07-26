@@ -2,13 +2,17 @@
 
 Backs ``GET /server/update``: the app asks once at startup whether a newer
 ``kalinka-v*`` release exists and shows an upgrade banner (dismissal is
-client-side). Results are cached per process so several clients don't
-hammer the anonymous GitHub API (60 req/hr per source IP).
+client-side). The lookup reads the public ``releases.atom`` feed — the
+machine-readable form of the repo's releases page — which needs no token
+and is not subject to the anonymous API rate limit, so it works out of
+the box on any install. Results are still cached per process to keep the
+check to roughly one fetch per app start.
 
 The actual upgrade (``PUT /server/upgrade``) is performed by root-side
 systemd units shipped in the deb — kalinka-upgrade.path watches a trigger
-file the kalusr server touches and runs the bundled install-release.sh.
-This module only detects whether that machinery is installed.
+file the kalusr server touches and runs upgrade.sh, which fetches the
+current published installer from kalinkaplayer.com. This module only
+detects whether that machinery is installed.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import asyncio
 import logging
 import os
 import time
+import xml.etree.ElementTree as ET
 
 import httpx
 from packaging.version import InvalidVersion, Version
@@ -33,7 +38,7 @@ _FAILURE_TTL = 60  # retry failed lookups sooner, but never in a tight loop
 # KALINKA_PREFIX-resolved: a dev fakeroot has no systemd watching its run
 # dir, so upgrade must read as unsupported there even when a deb install
 # also exists on the same machine.
-_UPGRADE_SCRIPT = "/opt/kalinka/install-release.sh"
+_UPGRADE_SCRIPT = "/opt/kalinka/upgrade.sh"
 _UPGRADE_PATH_UNIT = "/etc/systemd/system/kalinka-upgrade.path"
 
 
@@ -51,19 +56,25 @@ def upgrade_supported() -> bool:
     )
 
 
-def latest_release_version(releases: list) -> str | None:
-    """Version of the newest non-draft, non-prerelease ``kalinka-v*`` release.
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
-    The GitHub list endpoint returns newest-first; mirrors the selection
-    logic in scripts/install-release.sh so the check and the installer
-    always agree on what "latest" means.
+
+def latest_release_version(feed_xml: str) -> str | None:
+    """Version of the newest ``kalinka-v*`` release in a releases.atom feed.
+
+    Entries come newest-first; each entry's ``<id>`` ends in the release
+    tag (``tag:github.com,2008:Repository/<id>/<tag>``). Foreign tag
+    families in the same repo (e.g. ``jamendo-ai-v*`` asset releases) are
+    skipped, matching the selection in scripts/install-release.sh. Drafts
+    never appear in the public feed.
     """
-    for release in releases:
-        if not isinstance(release, dict):
-            continue
-        if release.get("draft") or release.get("prerelease"):
-            continue
-        tag = str(release.get("tag_name", ""))
+    try:
+        root = ET.fromstring(feed_xml)
+    except ET.ParseError as e:
+        logger.warning("Cannot parse releases feed: %s", e)
+        return None
+    for entry in root.iter(f"{_ATOM_NS}entry"):
+        tag = (entry.findtext(f"{_ATOM_NS}id") or "").rsplit("/", 1)[-1]
         if tag.startswith(_TAG_PREFIX):
             return tag[len(_TAG_PREFIX) :]
     return None
@@ -100,22 +111,17 @@ class UpdateChecker:
             return self._cached
 
     async def _fetch(self) -> str | None:
-        url = f"https://api.github.com/repos/{_repo()}/releases?per_page=30"
-        headers = {"Accept": "application/vnd.github+json"}
-        if os.environ.get("GITHUB_TOKEN"):
-            headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+        url = f"https://github.com/{_repo()}/releases.atom"
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(url, headers=headers)
+            async with httpx.AsyncClient(
+                timeout=10, follow_redirects=True
+            ) as client:
+                response = await client.get(url)
                 response.raise_for_status()
-                releases = response.json()
-        except (httpx.HTTPError, ValueError) as e:
-            logger.warning("Release lookup failed: %s", e)
+        except httpx.HTTPError as e:
+            logger.warning("Release feed lookup failed: %s", e)
             return None
-        if not isinstance(releases, list):
-            logger.warning("Unexpected releases payload from GitHub")
-            return None
-        return latest_release_version(releases)
+        return latest_release_version(response.text)
 
 
 #: Process-wide instance backing GET /server/update.

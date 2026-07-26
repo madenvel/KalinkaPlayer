@@ -15,34 +15,35 @@ from kalinka_server.update_check import (
 )
 
 
-def _release(tag, draft=False, prerelease=False):
-    return {"tag_name": tag, "draft": draft, "prerelease": prerelease}
+def _feed(*tags):
+    """Minimal GitHub releases.atom document with the given tags, newest first."""
+    entries = "".join(
+        f"<entry><id>tag:github.com,2008:Repository/12345/{tag}</id>"
+        f"<title>{tag}</title></entry>"
+        for tag in tags
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        f"<title>Release notes</title>{entries}</feed>"
+    )
 
 
 class TestLatestReleaseVersion:
     def test_picks_first_matching_release(self):
-        releases = [_release("kalinka-v3.3.0"), _release("kalinka-v3.2.0")]
-        assert latest_release_version(releases) == "3.3.0"
-
-    def test_skips_drafts_and_prereleases(self):
-        releases = [
-            _release("kalinka-v4.0.0", draft=True),
-            _release("kalinka-v3.9.0", prerelease=True),
-            _release("kalinka-v3.3.0"),
-        ]
-        assert latest_release_version(releases) == "3.3.0"
+        feed = _feed("kalinka-v3.3.0", "kalinka-v3.2.0")
+        assert latest_release_version(feed) == "3.3.0"
 
     def test_skips_foreign_tags(self):
-        releases = [_release("jamendo-ai-v1"), _release("kalinka-v3.3.0")]
-        assert latest_release_version(releases) == "3.3.0"
+        feed = _feed("jamendo-ai-v2", "kalinka-v3.3.0")
+        assert latest_release_version(feed) == "3.3.0"
 
     def test_none_when_no_matching_release(self):
-        assert latest_release_version([_release("jamendo-ai-v1")]) is None
-        assert latest_release_version([]) is None
+        assert latest_release_version(_feed("jamendo-ai-v1")) is None
+        assert latest_release_version(_feed()) is None
 
-    def test_tolerates_malformed_entries(self):
-        releases = ["garbage", {"no_tag": True}, _release("kalinka-v1.0.0")]
-        assert latest_release_version(releases) == "1.0.0"
+    def test_none_on_malformed_feed(self):
+        assert latest_release_version("<html>not a feed") is None
 
 
 class TestIsNewer:
