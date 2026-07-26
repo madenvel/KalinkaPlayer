@@ -1,14 +1,14 @@
-"""Check GitHub for a newer Kalinka server release.
+"""Daily check for a newer Kalinka server release.
 
-Backs ``GET /server/update``: the app asks once at startup whether a newer
-``kalinka-v*`` release exists and shows an upgrade banner (dismissal is
-client-side). The lookup reads the public ``releases.atom`` feed — the
-machine-readable form of the repo's releases page — which needs no token
-and is not subject to the anonymous API rate limit, so it works out of
-the box on any install. Results are still cached per process to keep the
-check to roughly one fetch per app start.
+A background task (started from the app lifecycle) reads the repo's public
+``releases.atom`` feed once a day — no token, not subject to the GitHub API
+rate limit. ``GET /server/update`` serves the cached result only and never
+does network I/O.
 
-The actual upgrade (``PUT /server/upgrade``) is performed by root-side
+``PUT /server/upgrade`` must name the version the client is upgrading to;
+it is rejected unless that matches the cached latest release and is newer
+than the running version, so a stale banner or a retried request can't
+fire a second upgrade. The upgrade itself is performed by root-side
 systemd units shipped in the deb — kalinka-upgrade.path watches a trigger
 file the kalusr server touches and runs upgrade.sh, which fetches the
 current published installer from kalinkaplayer.com. This module only
@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -31,8 +30,8 @@ from kalinka_plugin_sdk import paths
 logger = logging.getLogger(__name__)
 
 _TAG_PREFIX = "kalinka-v"
-_SUCCESS_TTL = 15 * 60  # seconds a successful lookup is served from cache
-_FAILURE_TTL = 60  # retry failed lookups sooner, but never in a tight loop
+_CHECK_INTERVAL = 24 * 3600
+_RETRY_INTERVAL = 3600  # retry sooner after a failed lookup
 
 # Root-side upgrade machinery shipped by the deb. Deliberately not
 # KALINKA_PREFIX-resolved: a dev fakeroot has no systemd watching its run
@@ -84,31 +83,56 @@ def is_newer(latest: str, current: str) -> bool:
     try:
         return Version(latest) > Version(current)
     except InvalidVersion:
-        logger.warning(
-            "Cannot compare versions %r and %r", latest, current
-        )
+        logger.warning("Cannot compare versions %r and %r", latest, current)
         return False
 
 
+def validate_upgrade_request(
+    target: str, latest: str | None, current: str
+) -> str | None:
+    """Reason a PUT /server/upgrade must be rejected, or None to proceed.
+
+    The client echoes the version it saw in GET /server/update; no known
+    update, already upgraded, or a different release published since all
+    reject rather than firing the installer again.
+    """
+    if not latest or not is_newer(latest, current):
+        return "No update available"
+    if target != latest:
+        return (
+            f"Requested version {target!r} is not the available "
+            f"update {latest!r}"
+        )
+    return None
+
+
 class UpdateChecker:
-    """TTL-cached lookup of the latest published release version."""
+    """Once-a-day background lookup of the latest published release.
+
+    ``run()`` is started as a task from the app lifecycle; endpoints read
+    ``latest`` only. A transient fetch failure keeps the last known
+    result (an available update must not vanish on a network blip) and
+    retries on the shorter interval.
+    """
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._cached: str | None = None
-        self._expires = 0.0
+        self._latest: str | None = None
 
-    async def latest_version(self) -> str | None:
-        """Latest release version, or None when the lookup fails."""
-        async with self._lock:
-            now = time.monotonic()
-            if now < self._expires:
-                return self._cached
-            self._cached = await self._fetch()
-            self._expires = now + (
-                _SUCCESS_TTL if self._cached else _FAILURE_TTL
-            )
-            return self._cached
+    @property
+    def latest(self) -> str | None:
+        """Latest known release version — None until a check succeeds."""
+        return self._latest
+
+    async def check_now(self) -> str | None:
+        latest = await self._fetch()
+        if latest:
+            self._latest = latest
+        return latest
+
+    async def run(self) -> None:
+        while True:
+            found = await self.check_now()
+            await asyncio.sleep(_CHECK_INTERVAL if found else _RETRY_INTERVAL)
 
     async def _fetch(self) -> str | None:
         url = f"https://github.com/{_repo()}/releases.atom"
@@ -124,5 +148,5 @@ class UpdateChecker:
         return latest_release_version(response.text)
 
 
-#: Process-wide instance backing GET /server/update.
+#: Process-wide instance; run() is started from the server lifecycle.
 checker = UpdateChecker()

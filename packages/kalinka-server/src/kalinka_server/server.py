@@ -101,9 +101,8 @@ async def lifespan(app: FastAPI):
 
     finally:
         logger.info("Shutting down...")
-        # The suggestion engine's refresh loop and the catalog-art worker
-        # both run forever by design; cancel them and swallow the result.
-        for attr in ("suggestions_task", "catalog_art_task"):
+        # These loops run forever by design; cancel them and swallow the result.
+        for attr in ("suggestions_task", "catalog_art_task", "update_check_task"):
             task = getattr(app.state, attr, None)
             if task is not None:
                 task.cancel()
@@ -297,6 +296,9 @@ async def create_app(
         _art_module_resolver,
     )
     app.state.catalog_art_task = asyncio.create_task(app.state.catalog_art.run())
+
+    # Once-a-day release check backing GET /server/update.
+    app.state.update_check_task = asyncio.create_task(update_check.checker.run())
 
     # Persist the overrides dict if plugin setup reconciled it — i.e. a
     # plugin mutated config fields that came from the overrides file, so
@@ -901,17 +903,17 @@ async def create_app(
         }
 
     @app.get("/server/update")
-    async def get_update_info():
-        """Check whether a newer server release is published on GitHub.
+    def get_update_info():
+        """Report whether a newer server release is available.
 
-        Intended to be called once per app start; the lookup is cached
-        server-side. The app should show its upgrade banner only when
-        both ``update_available`` and ``upgrade_supported`` are true
-        (dev installs report ``upgrade_supported: false``); dismissing
-        the banner is purely client-side state.
+        Served entirely from the daily background check's cache — never
+        does network I/O. The app should show its upgrade banner only
+        when both ``update_available`` and ``upgrade_supported`` are
+        true (dev installs report ``upgrade_supported: false``);
+        dismissing the banner is purely client-side state.
         """
         current = get_version()
-        latest = await update_check.checker.latest_version()
+        latest = update_check.checker.latest
         return {
             "current_version": current,
             "latest_version": latest,
@@ -920,16 +922,21 @@ async def create_app(
         }
 
     @app.put("/server/upgrade")
-    async def upgrade_server():
-        """Upgrade the server to the latest published release.
+    async def upgrade_server(payload: Dict[str, Any]):
+        """Upgrade the server to the release named in ``{"version": ...}``.
+
+        The version must match the update currently advertised by
+        GET /server/update; a stale banner or a retried request (e.g.
+        after the upgrade already happened) gets a 409 instead of
+        firing the installer again.
 
         Touches the trigger file watched by the root-owned
         kalinka-upgrade.path unit; its oneshot fetches the published
         installer from kalinkaplayer.com and runs it, and the new
         package's postinst restarts kalinka.service — so a successful
-        upgrade looks to clients like a (long) restart. Progress/failure detail stays in the systemd
-        journal; the app confirms the outcome by re-reading
-        /server/version after reconnect.
+        upgrade looks to clients like a (long) restart. Progress and
+        failure detail stay in the systemd journal; the app confirms
+        the outcome by re-reading /server/version after reconnect.
         """
         if not update_check.upgrade_supported():
             raise HTTPException(
@@ -937,6 +944,16 @@ async def create_app(
                 detail="Upgrade is not supported on this install "
                 "(root-side upgrade units are missing)",
             )
+        target = str(payload.get("version") or "")
+        if not target:
+            raise HTTPException(
+                status_code=400, detail="'version' is required"
+            )
+        rejection = update_check.validate_upgrade_request(
+            target, update_check.checker.latest, get_version()
+        )
+        if rejection:
+            raise HTTPException(status_code=409, detail=rejection)
         trigger = Path(paths.run_dir()) / "upgrade-request"
         try:
             trigger.parent.mkdir(parents=True, exist_ok=True)

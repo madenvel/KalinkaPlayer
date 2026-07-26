@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from kalinka_server import update_check
 from kalinka_server.update_check import (
     UpdateChecker,
     is_newer,
     latest_release_version,
     upgrade_supported,
+    validate_upgrade_request,
 )
 
 
@@ -99,37 +98,49 @@ class TestUpgradeSupported:
         assert not upgrade_supported()
 
 
+class TestValidateUpgradeRequest:
+    def test_accepts_matching_available_update(self):
+        assert validate_upgrade_request("3.3.0", "3.3.0", "3.2.0") is None
+
+    def test_rejects_when_no_update_known(self):
+        assert validate_upgrade_request("3.3.0", None, "3.2.0") is not None
+
+    def test_rejects_after_upgrade_already_happened(self):
+        # Server upgraded to 3.3.0; a retried request for 3.3.0 must not
+        # fire the installer again.
+        assert validate_upgrade_request("3.3.0", "3.3.0", "3.3.0") is not None
+
+    def test_rejects_stale_target_version(self):
+        # A newer release was published since the client saw the banner.
+        assert validate_upgrade_request("3.3.0", "3.4.0", "3.2.0") is not None
+
+
 class TestUpdateChecker:
     def _checker_with_fetches(self, results):
         checker = UpdateChecker()
-        calls = []
+        fetches = iter(results)
 
         async def fake_fetch():
-            calls.append(1)
-            return results[min(len(calls), len(results)) - 1]
+            return next(fetches)
 
         checker._fetch = fake_fetch
-        return checker, calls
+        return checker
 
-    def test_success_is_cached(self):
-        checker, calls = self._checker_with_fetches(["3.3.0"])
+    def test_starts_with_no_known_release(self):
+        assert UpdateChecker().latest is None
+
+    def test_check_updates_latest(self):
+        checker = self._checker_with_fetches(["3.3.0"])
+        assert asyncio.run(checker.check_now()) == "3.3.0"
+        assert checker.latest == "3.3.0"
+
+    def test_failed_check_keeps_last_known_result(self):
+        # An available update must not vanish on a network blip.
+        checker = self._checker_with_fetches(["3.3.0", None])
 
         async def run():
-            assert await checker.latest_version() == "3.3.0"
-            assert await checker.latest_version() == "3.3.0"
+            await checker.check_now()
+            assert await checker.check_now() is None
 
         asyncio.run(run())
-        assert len(calls) == 1
-
-    def test_failure_is_cached_then_retried_after_expiry(self):
-        checker, calls = self._checker_with_fetches([None, "3.3.0"])
-
-        async def run():
-            assert await checker.latest_version() is None
-            # Within the failure TTL the None is served from cache.
-            assert await checker.latest_version() is None
-            checker._expires = 0.0
-            assert await checker.latest_version() == "3.3.0"
-
-        asyncio.run(run())
-        assert len(calls) == 2
+        assert checker.latest == "3.3.0"
