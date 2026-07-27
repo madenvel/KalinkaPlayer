@@ -512,6 +512,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             # this carve-out the guard wrongly orphans common cases
             # like "Abbey Road" (every reissue scores identically).
             held = False
+            runner_up_score = None
             if len(scored) > 1:
                 runner_up_cand, runner_up_score, _runner_sim, _runner_rel = scored[1]
                 held = (
