@@ -116,6 +116,7 @@ def test_simple_view_includes_simple_fields_and_excludes_expert():
     # Audit-defaulted EXPERT tuning must NOT leak in:
     assert "base_config.output.alsa.latency_ms" not in paths
     assert "base_config.output.alsa.period_ms" not in paths
+    assert "base_config.server.oobe_complete" not in paths
     assert "input_modules.localfiles.db_path" not in paths
     assert "input_modules.localfiles.searcher.weight_knn" not in paths
     assert "input_modules.localfiles.embedder.batch_size_clap" not in paths
@@ -229,6 +230,8 @@ def test_expert_list_includes_both_simple_and_expert_fields():
     # An audit-defaulted EXPERT field:
     assert "input_modules.localfiles.db_path" in paths
     assert "base_config.output.alsa.latency_ms" in paths
+    # The app-written first-run flag stays expert-only but settable:
+    assert "base_config.server.oobe_complete" in paths
     # Nested expert leaves:
     assert "input_modules.localfiles.searcher.knn_candidate_limit" in paths
 

@@ -79,6 +79,17 @@ class ServerConfig(BaseModel):
         title="Log level",
         json_schema_extra=_SIMPLE,
     )
+    # App-written when the first-run wizard finishes; expert-tier on purpose.
+    oobe_complete: bool = Field(
+        default=False,
+        title="Initial setup complete",
+        json_schema_extra={
+            "help": (
+                "Set when the app's first-run setup wizard finishes — "
+                "reset to run the wizard again from a newly connected app"
+            ),
+        },
+    )
 
 
 class AlsaConfig(BaseModel):
@@ -429,6 +440,7 @@ class KalinkaConfig(BaseModel):
                 leaf("server.interface"),
                 leaf("server.port"),
                 leaf("server.log_level"),
+                leaf("server.oobe_complete"),
             ],
         )
 
