@@ -79,6 +79,18 @@ class ServerConfig(BaseModel):
         title="Log level",
         json_schema_extra=_SIMPLE,
     )
+    auto_upgrade: bool = Field(
+        default=False,
+        title="Auto upgrade",
+        json_schema_extra={
+            "help": (
+                "Install server updates automatically at night (between 3 "
+                "and 6 AM) when nothing is playing; the server restarts "
+                "itself when done"
+            ),
+            **_SIMPLE,
+        },
+    )
     # App-written when the first-run wizard finishes; expert-tier on purpose.
     oobe_complete: bool = Field(
         default=False,
@@ -440,6 +452,7 @@ class KalinkaConfig(BaseModel):
                 leaf("server.interface"),
                 leaf("server.port"),
                 leaf("server.log_level"),
+                leaf("server.auto_upgrade"),
                 leaf("server.oobe_complete"),
             ],
         )

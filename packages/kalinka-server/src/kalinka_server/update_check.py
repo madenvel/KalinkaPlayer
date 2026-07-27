@@ -1,9 +1,10 @@
-"""Daily check for a newer Kalinka server release.
+"""Background check for a newer Kalinka server release.
 
 A background task (started from the app lifecycle) reads the repo's public
-``releases.atom`` feed once a day — no token, not subject to the GitHub API
-rate limit. ``GET /server/update`` serves the cached result only and never
-does network I/O.
+``releases.atom`` feed once an hour — no token, not subject to the GitHub
+API rate limit. ``GET /server/update`` serves the cached result only and
+never does network I/O. With ``server.auto_upgrade`` on, the task also
+fires the upgrade itself during quiet hours while playback is stopped.
 
 ``PUT /server/upgrade`` must name the version the client is upgrading to;
 it is rejected unless that matches the cached latest release and is newer
@@ -21,17 +22,22 @@ import asyncio
 import logging
 import os
 import xml.etree.ElementTree as ET
+from datetime import date, datetime
+from pathlib import Path
+from typing import Awaitable, Callable
 
 import httpx
 from packaging.version import InvalidVersion, Version
 
 from kalinka_plugin_sdk import paths
 
+from .version import get_version
+
 logger = logging.getLogger(__name__)
 
 _TAG_PREFIX = "kalinka-v"
-_CHECK_INTERVAL = 24 * 3600
-_RETRY_INTERVAL = 3600  # retry sooner after a failed lookup
+_TICK_INTERVAL = 3600  # check hourly; also guarantees ticks inside quiet hours
+_QUIET_HOURS = range(3, 6)  # local time — auto-upgrade fires in [3:00, 6:00)
 
 # Root-side upgrade machinery shipped by the deb. Deliberately not
 # KALINKA_PREFIX-resolved: a dev fakeroot has no systemd watching its run
@@ -87,6 +93,13 @@ def is_newer(latest: str, current: str) -> bool:
         return False
 
 
+def request_upgrade() -> None:
+    """Touch the trigger watched by kalinka-upgrade.path. Raises OSError."""
+    trigger = Path(paths.run_dir()) / "upgrade-request"
+    trigger.parent.mkdir(parents=True, exist_ok=True)
+    trigger.touch()
+
+
 def validate_upgrade_request(
     target: str, latest: str | None, current: str
 ) -> str | None:
@@ -107,16 +120,16 @@ def validate_upgrade_request(
 
 
 class UpdateChecker:
-    """Once-a-day background lookup of the latest published release.
+    """Hourly background lookup of the latest published release.
 
     ``run()`` is started as a task from the app lifecycle; endpoints read
     ``latest`` only. A transient fetch failure keeps the last known
-    result (an available update must not vanish on a network blip) and
-    retries on the shorter interval.
+    result (an available update must not vanish on a network blip).
     """
 
     def __init__(self) -> None:
         self._latest: str | None = None
+        self._last_auto_attempt: date | None = None
 
     @property
     def latest(self) -> str | None:
@@ -129,10 +142,58 @@ class UpdateChecker:
             self._latest = latest
         return latest
 
-    async def run(self) -> None:
+    async def run(
+        self,
+        auto_upgrade_enabled: Callable[[], bool] = lambda: False,
+        playback_stopped: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Hourly tick: refresh the release info and, when the (live-read)
+        config toggle is on, fire the auto-upgrade in the quiet-hours
+        window."""
         while True:
-            found = await self.check_now()
-            await asyncio.sleep(_CHECK_INTERVAL if found else _RETRY_INTERVAL)
+            await self.check_now()
+            if auto_upgrade_enabled():
+                await self.maybe_auto_upgrade(playback_stopped)
+            await asyncio.sleep(_TICK_INTERVAL)
+
+    async def maybe_auto_upgrade(
+        self,
+        playback_stopped: Callable[[], Awaitable[bool]] | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Trigger the root-side upgrade during quiet hours, but never
+        while something is playing — a later tick in the same window
+        retries once playback stops.
+
+        At most one attempt per day: a failed install (server still up
+        next tick) retries the following night rather than hammering,
+        and a successful one restarts the process anyway.
+        """
+        now = now or datetime.now()
+        if now.hour not in _QUIET_HOURS:
+            return
+        if self._last_auto_attempt == now.date():
+            return
+        latest = self._latest
+        if not latest or not is_newer(latest, get_version()):
+            return
+        if not upgrade_supported():
+            return
+        if playback_stopped is not None:
+            try:
+                if not await playback_stopped():
+                    logger.info("Auto-upgrade postponed: playback active")
+                    return
+            except Exception as e:  # noqa: BLE001 — don't upgrade blind
+                logger.warning("Auto-upgrade playback probe failed: %s", e)
+                return
+        self._last_auto_attempt = now.date()
+        try:
+            request_upgrade()
+        except OSError as e:
+            logger.error("Auto-upgrade trigger failed: %s", e)
+            return
+        logger.info("Auto-upgrade to %s requested", latest)
 
     async def _fetch(self) -> str | None:
         url = f"https://github.com/{_repo()}/releases.atom"

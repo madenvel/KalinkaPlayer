@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from kalinka_server import update_check
 from kalinka_server.update_check import (
@@ -113,6 +114,72 @@ class TestValidateUpgradeRequest:
     def test_rejects_stale_target_version(self):
         # A newer release was published since the client saw the banner.
         assert validate_upgrade_request("3.3.0", "3.4.0", "3.2.0") is not None
+
+
+class TestMaybeAutoUpgrade:
+    def _armed_checker(self, monkeypatch, latest="3.3.0", supported=True):
+        """Checker with an available update; records request_upgrade calls."""
+        checker = UpdateChecker()
+        checker._latest = latest
+        requests = []
+        monkeypatch.setattr(
+            update_check, "request_upgrade", lambda: requests.append(1)
+        )
+        monkeypatch.setattr(
+            update_check, "upgrade_supported", lambda: supported
+        )
+        monkeypatch.setattr(update_check, "get_version", lambda: "3.2.0")
+        return checker, requests
+
+    def _attempt(self, checker, at, stopped=None):
+        async def probe():
+            return stopped
+
+        asyncio.run(
+            checker.maybe_auto_upgrade(None if stopped is None else probe, at)
+        )
+
+    def test_fires_in_quiet_hours(self, monkeypatch):
+        checker, requests = self._armed_checker(monkeypatch)
+        self._attempt(checker, datetime(2026, 7, 27, 3, 30))
+        assert requests == [1]
+
+    def test_does_not_fire_outside_quiet_hours(self, monkeypatch):
+        checker, requests = self._armed_checker(monkeypatch)
+        self._attempt(checker, datetime(2026, 7, 27, 14, 0))
+        self._attempt(checker, datetime(2026, 7, 27, 6, 0))
+        assert requests == []
+
+    def test_at_most_one_attempt_per_day(self, monkeypatch):
+        checker, requests = self._armed_checker(monkeypatch)
+        self._attempt(checker, datetime(2026, 7, 27, 3, 0))
+        self._attempt(checker, datetime(2026, 7, 27, 4, 0))
+        assert requests == [1]
+        # A failed install leaves the server running; retry next night.
+        self._attempt(checker, datetime(2026, 7, 28, 3, 0))
+        assert requests == [1, 1]
+
+    def test_does_not_fire_without_newer_release(self, monkeypatch):
+        checker, requests = self._armed_checker(monkeypatch, latest=None)
+        self._attempt(checker, datetime(2026, 7, 27, 3, 0))
+        checker._latest = "3.2.0"  # equal to running version
+        self._attempt(checker, datetime(2026, 7, 27, 4, 0))
+        assert requests == []
+
+    def test_does_not_fire_when_unsupported(self, monkeypatch):
+        checker, requests = self._armed_checker(monkeypatch, supported=False)
+        self._attempt(checker, datetime(2026, 7, 27, 3, 0))
+        assert requests == []
+
+    def test_postponed_while_playing_then_fires_when_stopped(
+        self, monkeypatch
+    ):
+        checker, requests = self._armed_checker(monkeypatch)
+        self._attempt(checker, datetime(2026, 7, 27, 3, 0), stopped=False)
+        assert requests == []
+        # Playback stopping later in the same window still upgrades tonight.
+        self._attempt(checker, datetime(2026, 7, 27, 4, 0), stopped=True)
+        assert requests == [1]
 
 
 class TestUpdateChecker:

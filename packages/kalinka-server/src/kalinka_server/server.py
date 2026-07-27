@@ -27,6 +27,7 @@ from kalinka_plugin_sdk.datamodel import (
     FavoriteIds,
     GenreList,
     PlaybackState,
+    PlayerStateEnum,
 )
 from kalinka_plugin_sdk.ext_device import DeviceVolume, ExternalOutputDevice
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
@@ -297,8 +298,18 @@ async def create_app(
     )
     app.state.catalog_art_task = asyncio.create_task(app.state.catalog_art.run())
 
-    # Once-a-day release check backing GET /server/update.
-    app.state.update_check_task = asyncio.create_task(update_check.checker.run())
+    # Hourly release check backing GET /server/update; reads the auto-upgrade
+    # toggle live so a settings change applies without restart. Auto-upgrade
+    # additionally requires stopped playback (None: nothing ever played).
+    async def _playback_stopped() -> bool:
+        playback = await app.state.player_context.playqueue.get_playback_state()
+        return playback.state in (PlayerStateEnum.STOPPED, None)
+
+    app.state.update_check_task = asyncio.create_task(
+        update_check.checker.run(
+            lambda: app.state.config.server.auto_upgrade, _playback_stopped
+        )
+    )
 
     # Persist the overrides dict if plugin setup reconciled it — i.e. a
     # plugin mutated config fields that came from the overrides file, so
@@ -954,12 +965,10 @@ async def create_app(
         )
         if rejection:
             raise HTTPException(status_code=409, detail=rejection)
-        trigger = Path(paths.run_dir()) / "upgrade-request"
         try:
-            trigger.parent.mkdir(parents=True, exist_ok=True)
-            trigger.touch()
+            update_check.request_upgrade()
         except OSError as e:
-            logger.error("Failed to write upgrade trigger %s: %s", trigger, e)
+            logger.error("Failed to write upgrade trigger: %s", e)
             raise HTTPException(
                 status_code=500, detail="Failed to request upgrade"
             ) from e
