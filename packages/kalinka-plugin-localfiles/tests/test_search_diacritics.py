@@ -98,3 +98,32 @@ def test_artist_search_is_unicode_case_insensitive(db, query):
     artists, total = db.search_artists(query, 0, 50)
     assert total == 1
     assert artists[0]["name"] == "Борис Гребенщиков"
+
+
+class TestTokenizedRecall:
+    """Multi-token queries may span fields: "oxygene jarre" names a track and
+    its artist, which no single column contains. Every token must match
+    somewhere in the row's own + joined names (issue: work+artist queries
+    returned zero candidates, so BEST MATCH had nothing to rank)."""
+
+    def test_track_plus_artist_query_finds_the_track(self, db):
+        # "Oxygène" is by Ed Starink here; the track title + artist name
+        # together cover the query even though neither column does alone.
+        tracks, total = db.search_tracks("oxygene starink", 0, 50)
+        assert total == 1
+        assert tracks[0]["title"] == "Oxygène"
+
+    def test_album_plus_artist_query_finds_the_album(self, db):
+        albums, total = db.search_albums("synthesizer starink", 0, 50)
+        assert total == 1
+        assert albums[0]["title"] == "Synthesizer Gréatest"
+
+    def test_unrelated_token_still_excludes(self, db):
+        # A token no field explains must keep the row out — tokenization must
+        # not degrade into any-token OR matching.
+        tracks, total = db.search_tracks("oxygene jarre", 0, 50)
+        assert total == 0
+
+    def test_single_token_behaves_as_before(self, db):
+        tracks, total = db.search_tracks("oxygene", 0, 50)
+        assert total == 1

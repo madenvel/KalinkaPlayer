@@ -326,39 +326,60 @@ class LocalFilesInputModuleDb:
         finally:
             conn.close()
 
+    @staticmethod
+    def _token_where(query: str, fields: Tuple[str, ...]) -> Tuple[str, List[str]]:
+        """WHERE clause requiring every folded query token to match at least
+        one of ``fields`` (fold()-wrapped SQL expressions).
+
+        Per-token matching lets a query span fields — "come together beatles"
+        is title + artist, which a single whole-query LIKE can never match.
+        A single-token query behaves exactly like the old whole-string scan."""
+        tokens = fold_for_match(query).split()
+        if not tokens:
+            # Preserve the old empty-query behavior: match everything.
+            return "1=1", []
+        clause = " AND ".join(
+            "(" + " OR ".join(f"{f} LIKE ?" for f in fields) + ")"
+            for _ in tokens
+        )
+        params = [f"%{t}%" for t in tokens for _ in fields]
+        return clause, params
+
     def search_tracks(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
-        """Search tracks by query"""
+        """Search tracks by query (every token must match title/album/artist)"""
+        where, params = self._token_where(
+            query, ("fold(t.title)", "fold(a.title)", "fold(ar.name)")
+        )
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
-                """
+                f"""
                 SELECT COUNT(*) as count FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
-                WHERE fold(t.title) LIKE ? OR fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
+                WHERE {where}
             """,
-                (search_term, search_term, search_term),
+                params,
             )
             total = cursor.fetchone()["count"]
 
             # Get results
             cursor.execute(
-                """
+                f"""
                 SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
                 FROM tracks t
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
-                WHERE fold(t.title) LIKE ? OR fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
+                WHERE {where}
                 ORDER BY t.title
                 LIMIT ? OFFSET ?
             """,
-                (search_term, search_term, search_term, limit, offset),
+                (*params, limit, offset),
             )
 
             return [dict(row) for row in cursor.fetchall()], total
@@ -368,34 +389,36 @@ class LocalFilesInputModuleDb:
     def search_albums(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
-        """Search albums by query"""
+        """Search albums by query (every token must match title/artist)"""
+        where, params = self._token_where(
+            query, ("fold(a.title)", "fold(ar.name)")
+        )
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
-                """
+                f"""
                 SELECT COUNT(*) as count FROM albums a
                 JOIN artists ar ON a.artist_id = ar.id
-                WHERE fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
+                WHERE {where}
             """,
-                (search_term, search_term),
+                params,
             )
             total = cursor.fetchone()["count"]
 
             # Get results
             cursor.execute(
-                """
+                f"""
                 SELECT a.*, ar.name as artist_name
                 FROM albums a
                 JOIN artists ar ON a.artist_id = ar.id
-                WHERE fold(a.title) LIKE ? OR fold(ar.name) LIKE ?
+                WHERE {where}
                 ORDER BY a.title
                 LIMIT ? OFFSET ?
             """,
-                (search_term, search_term, limit, offset),
+                (*params, limit, offset),
             )
 
             return [dict(row) for row in cursor.fetchall()], total
@@ -406,27 +429,27 @@ class LocalFilesInputModuleDb:
         self, query: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
         """Search artists by query"""
+        where, params = self._token_where(query, ("fold(name)",))
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            search_term = f"%{fold_for_match(query)}%"
 
             # Get total count
             cursor.execute(
-                "SELECT COUNT(*) as count FROM artists WHERE fold(name) LIKE ?",
-                (search_term,),
+                f"SELECT COUNT(*) as count FROM artists WHERE {where}",
+                params,
             )
             total = cursor.fetchone()["count"]
 
             # Get results
             cursor.execute(
-                """
+                f"""
                 SELECT * FROM artists
-                WHERE fold(name) LIKE ?
+                WHERE {where}
                 ORDER BY name
                 LIMIT ? OFFSET ?
             """,
-                (search_term, limit, offset),
+                (*params, limit, offset),
             )
 
             return [dict(row) for row in cursor.fetchall()], total
