@@ -519,14 +519,25 @@ class LocalFilesInputModuleDb:
     def get_album_tracks(
         self, album_id: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
-        """Get tracks for an album"""
+        """Get tracks for an album.
+
+        The "Unknown Album" sentinel only owns tracks whose artist is also
+        unknown: a loose track WITH a known artist already surfaces under
+        that artist (``get_artist_orphan_tracks``), so listing it here too
+        would show the same track in two places in the library."""
+        artist_cond = (
+            " AND t.artist_id = 'unknown_artist'"
+            if album_id == "unknown_album" else ""
+        )
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
 
             # Get total count
             cursor.execute(
-                "SELECT COUNT(*) as count FROM tracks WHERE album_id = ?", (album_id,)
+                "SELECT COUNT(*) as count FROM tracks t WHERE t.album_id = ?"
+                + artist_cond,
+                (album_id,),
             )
             total = cursor.fetchone()["count"]
 
@@ -538,6 +549,9 @@ class LocalFilesInputModuleDb:
                 JOIN albums a ON t.album_id = a.id
                 JOIN artists ar ON t.artist_id = ar.id
                 WHERE t.album_id = ?
+                """
+                + artist_cond
+                + """
                 ORDER BY COALESCE(t.disc_number, 1), t.track_number, t.title
                 LIMIT ? OFFSET ?
             """,
