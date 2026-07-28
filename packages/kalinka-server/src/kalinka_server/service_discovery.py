@@ -42,39 +42,25 @@ def get_interface_ip_mappings() -> dict[str, str]:
     return interface_ips
 
 
-def get_service_info(
-    config: KalinkaConfig,
-    interface_name: str,
-    ip_address: str,
-) -> ServiceInfo:
+def get_service_info(config: KalinkaConfig, ip_addresses: list[str]) -> ServiceInfo:
     """
-    Create ServiceInfo for a specific interface or for all interfaces.
+    Create the single ServiceInfo announced for this server.
 
-    Args:
-        config: The Kalinka configuration
-        interface_name: Specific interface name (optional, used for logging)
-        ip_address: Specific IP address to use. If None, uses config interface logic
-
-    Returns:
-        ServiceInfo object configured for the specified interface/IP
+    One instance, named exactly after the configured service name, carrying an
+    A record per address. A single responder announcing the same record set on
+    every interface cannot conflict with itself, so no per-interface suffix is
+    needed (RFC 6762 name defense only applies between independent responders).
     """
 
-    # Get dynamic version and API version
-    desc = {"kalinka_api_version": get_rest_api_version(), "server_version": get_version()}
-
-    if ip_address is not None:
-        # Use the provided IP address (for multi-interface setup)
-        logger.info(
-            f"[Zeroconf] Creating service info for interface {interface_name}: {ip_address}"
-        )
-        addresses = [socket.inet_aton(ip_address)]
-
-    service_name = f"{config.server.service_name} ({interface_name})"
+    desc = {
+        "kalinka_api_version": get_rest_api_version(),
+        "server_version": get_version(),
+    }
 
     return ServiceInfo(
         type_="_kalinkaplayer._tcp.local.",
-        name=f"{service_name}._kalinkaplayer._tcp.local.",
-        addresses=addresses,
+        name=f"{config.server.service_name}._kalinkaplayer._tcp.local.",
+        addresses=[socket.inet_aton(ip) for ip in ip_addresses],
         port=config.server.port,
         properties=desc,
     )
@@ -83,94 +69,72 @@ def get_service_info(
 class ServiceDiscovery:
     def __init__(self, config: KalinkaConfig):
         self.config = config
-        self.services = []
+        self.zeroconf: AsyncZeroconf | None = None
+        self.service_info: ServiceInfo | None = None
+        self.ip_addresses: list[str] = []
 
-        self.interface_ips = get_interface_ip_mappings()
-        configured_interface = config.server.interface
-
-        if not self.interface_ips:
+        interface_ips = get_interface_ip_mappings()
+        if not interface_ips:
             logger.warning("[Zeroconf] No network interfaces found, skip")
             return
 
-        # Determine which services to create
+        configured_interface = config.server.interface
         if (
-            configured_interface == "all"
-            or configured_interface not in self.interface_ips
+            configured_interface != "all"
+            and configured_interface not in interface_ips
         ):
-            # Create separate service instances for each interface
+            logger.warning(
+                f"[Zeroconf] Configured interface '{configured_interface}' not found, falling back to all interfaces"
+            )
+            configured_interface = "all"
 
-            if (
-                configured_interface not in self.interface_ips
-                and configured_interface != "all"
-            ):
-                logger.warning(
-                    f"[Zeroconf] Configured interface '{configured_interface}' not found, falling back to all interfaces"
-                )
-
+        if configured_interface == "all":
+            # Deduplicate while keeping interface order
+            self.ip_addresses = list(dict.fromkeys(interface_ips.values()))
             logger.info(
-                f"[Zeroconf] Creating service instances for {len(self.interface_ips)} interfaces"
+                f"[Zeroconf] Announcing on {len(interface_ips)} interfaces: "
+                + ", ".join(f"{name} ({ip})" for name, ip in interface_ips.items())
             )
-            for interface_name, ip_address in self.interface_ips.items():
-                service_info = get_service_info(config, interface_name, ip_address)
-                self.services.append((None, service_info, interface_name))
         else:
-            # Single interface case
-            self.services.append(
-                (
-                    None,
-                    get_service_info(
-                        config,
-                        configured_interface,
-                        self.interface_ips[configured_interface],
-                    ),
-                    configured_interface,
-                )
+            self.ip_addresses = [interface_ips[configured_interface]]
+            logger.info(
+                f"[Zeroconf] Announcing on interface {configured_interface} "
+                f"({self.ip_addresses[0]})"
             )
+
+        self.service_info = get_service_info(config, self.ip_addresses)
 
     async def register_service(self):
-        """Register all service instances."""
-        logger.info(
-            f"[Zeroconf] Registering {len(self.services)} service instance(s)..."
-        )
+        """Register the service instance."""
+        if self.service_info is None:
+            return
 
-        for i, (_, service_info, interface_name) in enumerate(self.services):
-            try:
-                ip_address = self.interface_ips[interface_name]
-                # Convert IP address to interface specification for zeroconf
-                interfaces = [ip_address]
-                logger.info(
-                    f"[Zeroconf] Binding service to interface {interface_name} ({ip_address})"
-                )
-                zci = AsyncZeroconf(ip_version=IPVersion.V4Only, interfaces=interfaces)
-
-                await zci.async_register_service(service_info)
-                # Update the zeroconf instance in our list
-                self.services[i] = (zci, service_info, interface_name)
-                logger.info(
-                    f"[Zeroconf] Registered service: {service_info.name} on {[socket.inet_ntoa(addr) for addr in service_info.addresses]}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"[Zeroconf] Failed to register service {service_info.name}: {e}"
-                )
-
-        logger.info("[Zeroconf] Completed registering all services.")
+        try:
+            self.zeroconf = AsyncZeroconf(
+                ip_version=IPVersion.V4Only, interfaces=self.ip_addresses
+            )
+            await self.zeroconf.async_register_service(self.service_info)
+            logger.info(
+                f"[Zeroconf] Registered service: {self.service_info.name} on "
+                f"{[socket.inet_ntoa(addr) for addr in self.service_info.addresses]}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[Zeroconf] Failed to register service {self.service_info.name}: {e}"
+            )
 
     async def unregister_service(self):
-        """Unregister all service instances."""
-        logger.info("[Zeroconf] Unregistering all services...")
+        """Unregister the service instance."""
+        if self.zeroconf is None or self.service_info is None:
+            return
 
-        for zci, service_info, interface_name in self.services:
-            if zci is not None:
-                try:
-                    logger.info(
-                        f"[Zeroconf] Unregistering service: {service_info.name} from interface {interface_name}"
-                    )
-                    await zci.async_unregister_service(service_info)
-                    await zci.async_close()
-                except Exception as e:
-                    logger.error(
-                        f"[Zeroconf] Failed to unregister service {service_info.name}: {e}"
-                    )
-
-        logger.info("[Zeroconf] Completed unregistering all services.")
+        try:
+            logger.info(f"[Zeroconf] Unregistering service: {self.service_info.name}")
+            await self.zeroconf.async_unregister_service(self.service_info)
+            await self.zeroconf.async_close()
+        except Exception as e:
+            logger.error(
+                f"[Zeroconf] Failed to unregister service {self.service_info.name}: {e}"
+            )
+        finally:
+            self.zeroconf = None
