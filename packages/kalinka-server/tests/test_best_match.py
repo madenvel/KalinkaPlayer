@@ -418,3 +418,69 @@ class TestFullMatchScore:
         assert full_match_score("jarre", "Jean-Michel Jarre") < 88      # fragment of name
         assert full_match_score("happy birthday song", "Happy Birthday") < 88
         assert full_match_score("something melancholic for tonight", "Something") < 88
+
+
+class TestCompositeScoring:
+    """Tracks/albums score against "<name> <artist_name>" so a query naming
+    both the work and its artist survives the cutoff (real scorer, no stub)."""
+
+    def _mj(self):
+        return [
+            Entity(id="t-bj", type="track", name="Billie Jean",
+                   album_id="al-thriller", artist_id="ar-mj",
+                   artist_name="Michael Jackson"),
+            Entity(id="ar-mj", type="artist", name="Michael Jackson"),
+        ]
+
+    def test_work_plus_artist_query_finds_the_track(self):
+        # Regression: "billie jean michael jackson" covered neither name
+        # alone (~55 each, both filtered) even when the source's API had
+        # returned the right track.
+        result = assemble_best_match(self._mj(), "billie jean michael jackson")
+        assert [e.id for e in result] == ["t-bj"]
+        assert result[0].score == 100.0
+
+    def test_artist_only_query_still_collapses_to_artist(self):
+        # "michael jackson" gives the track 100 via its composite too, but
+        # the artist ties, leads on granularity, and dominates it (Rule 2).
+        result = assemble_best_match(self._mj(), "michael jackson")
+        assert [e.id for e in result] == ["ar-mj"]
+
+    def test_work_only_query_unchanged(self):
+        result = assemble_best_match(self._mj(), "billie jean")
+        assert [e.id for e in result] == ["t-bj"]
+
+
+class TestTypedSlots:
+    """The best entity of each type is guaranteed a window slot, so tied
+    same-named artists can no longer evict an equally-scoring album/track."""
+
+    def test_album_not_evicted_by_tied_artists(self):
+        # Regression: "wish you were here" → several artists tie at 100,
+        # fill max_results, and the Pink Floyd album becomes unreachable.
+        candidates = [
+            Entity(id=f"ar-{i}", type="artist", name="Wish You Were Here")
+            for i in range(3)
+        ] + [
+            Entity(id="al-wywh", type="album", name="Wish You Were Here",
+                   artist_id="ar-pf", artist_name="Pink Floyd"),
+            Entity(id="t-wywh", type="track", name="Wish You Were Here",
+                   album_id="al-wywh", artist_id="ar-pf",
+                   artist_name="Pink Floyd"),
+        ]
+        result = assemble_best_match(candidates, "wish you were here",
+                                     max_results=3)
+        ids = [e.id for e in result]
+        assert "al-wywh" in ids            # album got its slot
+        assert ids[0] == "ar-0"            # best artist still leads
+        # the track is dominated by its own equally-scoring album
+        assert "t-wywh" not in ids
+
+    def test_source_order_breaks_ties_within_a_type(self):
+        candidates = [
+            Entity(id="ar-second", type="artist", name="Wish You Were Here"),
+            Entity(id="ar-first", type="artist", name="Wish You Were Here"),
+        ]
+        result = assemble_best_match(candidates, "wish you were here")
+        # stable: the source's own ordering survives among equals
+        assert [e.id for e in result] == ["ar-second", "ar-first"]

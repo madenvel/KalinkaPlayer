@@ -12,10 +12,13 @@ This is the literal/FTS side; the semantic suggestions come from each module's
 against each other — overlap is expected.
 
 Algorithm (executed in this exact order — see :func:`assemble_best_match`):
-    1. Score every candidate against the query; discard score < cutoff.
+    1. Score every candidate against the query — tracks/albums against
+       "<name> <artist name>" so work-plus-artist queries cover; discard
+       score < cutoff.
     2. Sort surviving entities (all types mixed) by score descending, breaking
-       ties by granularity so the less granular entity leads (artist < album <
-       track); keep the top ``max_results``.
+       ties by granularity (artist < album < track) then input order; fill the
+       ``max_results`` window with the best of EACH type guaranteed a slot
+       first, remaining places by rank.
     3. Remove redundancy on the truncated list (strictly-by-id):
          a. album dominates its tracks (album.score >= track.score)
          b. artist dominates its tracks/albums (artist.score >= entity.score)
@@ -200,7 +203,12 @@ class Entity:
     """A scored candidate. ``id`` / ``album_id`` / ``artist_id`` are the full
     ``EntityId`` strings (``kalinka:source:type:id``) so dominance rules match
     by-id and never collapse entities from different sources. ``score`` is
-    filled in by :func:`assemble_best_match`."""
+    filled in by :func:`assemble_best_match`.
+
+    ``artist_name`` (tracks and albums) extends the scoring surface: a query
+    naming both the work and its artist ("billie jean michael jackson")
+    covers neither name alone (~55 each, under the cutoff) but covers
+    "<name> <artist_name>" fully. Display always uses ``name``."""
 
     id: str
     type: str  # "artist" | "album" | "track" | "playlist"
@@ -208,6 +216,7 @@ class Entity:
     score: float = 0.0
     album_id: Optional[str] = None  # tracks only
     artist_id: Optional[str] = None  # tracks and albums
+    artist_name: Optional[str] = None  # tracks and albums; scoring only
 
 
 def browse_item_to_entity(item: BrowseItem) -> Entity:
@@ -222,17 +231,24 @@ def browse_item_to_entity(item: BrowseItem) -> Entity:
     etype = item.id.type
     album_id: Optional[str] = None
     artist_id: Optional[str] = None
+    artist_name: Optional[str] = None
 
     if etype == EntityType.TRACK and item.track is not None:
         if item.track.album is not None:
             album_id = item.track.album.id.to_string
             if item.track.album.artist is not None:
                 artist_id = item.track.album.artist.id.to_string
-        if artist_id is None and item.track.performer is not None:
-            artist_id = item.track.performer.id.to_string
+                artist_name = item.track.album.artist.name
+        if item.track.performer is not None:
+            if artist_id is None:
+                artist_id = item.track.performer.id.to_string
+            # The performer is the better scoring surface than the
+            # album-anchor artist when both exist (V/A compilations).
+            artist_name = item.track.performer.name or artist_name
     elif etype == EntityType.ALBUM and item.album is not None:
         if item.album.artist is not None:
             artist_id = item.album.artist.id.to_string
+            artist_name = item.album.artist.name
 
     return Entity(
         id=item.id.to_string,
@@ -240,6 +256,7 @@ def browse_item_to_entity(item: BrowseItem) -> Entity:
         name=item.name,
         album_id=album_id,
         artist_id=artist_id,
+        artist_name=artist_name,
     )
 
 
@@ -265,18 +282,45 @@ def assemble_best_match(
     """
     # Score candidates, discard below cutoff. Fold diacritics + case so matching
     # is case-insensitive and ASCII queries still match accented names.
+    # Tracks/albums score against "<name> <artist_name>": coverage_ratio never
+    # penalises extra name words, so this equals max(name, composite) while
+    # additionally covering work-plus-artist queries ("billie jean michael
+    # jackson") that neither name explains alone.
     folded_query = fold_diacritics(query).casefold()
-    survivors: list[Entity] = []
-    for entity in candidates:
-        entity.score = SCORER(folded_query, fold_diacritics(entity.name).casefold())
+    survivors: list[tuple[int, Entity]] = []
+    for idx, entity in enumerate(candidates):
+        surface = entity.name
+        if entity.artist_name:
+            surface = f"{entity.name} {entity.artist_name}"
+        entity.score = SCORER(folded_query, fold_diacritics(surface).casefold())
         if entity.score >= cutoff:
-            survivors.append(entity)
+            survivors.append((idx, entity))
 
     # Sort by score descending, breaking ties so the less granular entity leads
-    # (a tied album before its tracks), then keep the top ``max_results`` — the
-    # list the redundancy rules below operate on.
-    survivors.sort(key=lambda e: (-e.score, _GRANULARITY.get(e.type, 99)))
-    the_list = survivors[:max_results]
+    # (a tied album before its tracks), then by input order — modules return
+    # their own ranking, so among equals the source's #1 stays first.
+    survivors.sort(key=lambda ie: (-ie[1].score, _GRANULARITY.get(ie[1].type, 99), ie[0]))
+    ranked = [e for _, e in survivors]
+
+    # Typed slots: the best entity of each type is guaranteed a place before
+    # the window fills by raw rank. Without this, several same-named artists
+    # tie at 100 and evict an equally-scoring album/track from the window
+    # entirely ("wish you were here" → three artists, the album unreachable).
+    slot_positions: set[int] = set()
+    seen_types: set[str] = set()
+    for i, e in enumerate(ranked):
+        if e.type not in seen_types:
+            seen_types.add(e.type)
+            slot_positions.add(i)
+    the_list = [ranked[i] for i in sorted(slot_positions)][:max_results]
+    for i, e in enumerate(ranked):
+        if len(the_list) >= max_results:
+            break
+        if i not in slot_positions:
+            the_list.append(e)
+    # Restore global rank order after the interleaved picks.
+    order = {id(e): i for i, e in enumerate(ranked)}
+    the_list.sort(key=lambda e: order[id(e)])
 
     # Remove redundancy. Index by id so a track and its same-named album/artist
     # never collide.
