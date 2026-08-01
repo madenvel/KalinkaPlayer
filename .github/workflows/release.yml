@@ -66,7 +66,9 @@ jobs:
             libasound2-dev libspdlog-dev libfmt-dev
           # build/setuptools-scm/pybind11 for wheel builds; pydantic is needed
           # by the localfiles plugin's build-time optional_packages export.
-          pip install --upgrade build setuptools-scm pybind11 pydantic
+          # --ignore-installed: these deps pull a newer `packaging` than the
+          # dpkg-installed one, which pip cannot uninstall (no RECORD file).
+          pip install --upgrade --ignore-installed build setuptools-scm pybind11 pydantic
 
       - name: Checkout (tag)
         uses: actions/checkout@v4
