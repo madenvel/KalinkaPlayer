@@ -62,9 +62,11 @@ class RendererRegistry:
         self,
         offline_timeout_s: float = DEFAULT_OFFLINE_TIMEOUT_S,
         replace_session: Optional[Callable[[Any], Awaitable[None]]] = None,
+        on_removed: Optional[Callable[[str], None]] = None,
     ):
         self.offline_timeout_s = offline_timeout_s
         self._replace_session = replace_session
+        self._on_removed = on_removed
         self._renderers: dict[str, RendererRecord] = {}
         self._reap_tasks: dict[str, asyncio.Task] = {}
 
@@ -141,6 +143,7 @@ class RendererRegistry:
                 record.friendly_name,
                 renderer_id,
             )
+            self._notify_removed(renderer_id)
             return
         record.status = RendererStatus.OFFLINE
         logger.info(
@@ -150,6 +153,10 @@ class RendererRegistry:
             self.offline_timeout_s,
         )
         self._schedule_reap(renderer_id)
+
+    def _notify_removed(self, renderer_id: str) -> None:
+        if self._on_removed is not None:
+            self._on_removed(renderer_id)
 
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
@@ -185,6 +192,7 @@ class RendererRegistry:
                 renderer_id,
                 self.offline_timeout_s,
             )
+            self._notify_removed(renderer_id)
 
     async def shutdown(self) -> None:
         for task in self._reap_tasks.values():

@@ -14,6 +14,8 @@ from google.protobuf.message import DecodeError
 from .config_model import KalinkaConfig
 from .renderer_proto import renderer_pb2 as pb
 from .renderer_registry import RendererRegistry
+from .renderer_sessions import CloseReason, SessionPool
+from .server_identity import get_server_id
 from .version import get_rest_api_version, get_version
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -22,6 +24,12 @@ logger = logging.getLogger(__name__.split(".")[-1])
 PROTOCOL_VERSION = 1
 
 INBOX_SIZE = 256
+
+_CLOSE_REASON_TO_PB = {
+    CloseReason.STALE: pb.SessionClose.REASON_STALE,
+    CloseReason.CLOSED_BY_SERVER: pb.SessionClose.REASON_CLOSED_BY_SERVER,
+    CloseReason.SHUTDOWN: pb.SessionClose.REASON_CLOSED_BY_SERVER,
+}
 
 
 def _kind_name(kind: int) -> str:
@@ -50,10 +58,24 @@ class RendererSession:
         env = self._envelope()
         welcome = env.welcome
         welcome.protocol_version = PROTOCOL_VERSION
+        welcome.server_id = get_server_id()
         welcome.server_name = config.server.service_name
         welcome.server_version = get_version()
         welcome.api_version = get_rest_api_version()
         welcome.server_time_unix_ms = int(time.time() * 1000)
+        await self._send(env)
+
+    async def send_session_open(self, session_id: str) -> None:
+        env = self._envelope()
+        env.session_open.session_id = session_id
+        await self._send(env)
+
+    async def send_session_close(self, session_id: str, reason) -> None:
+        env = self._envelope()
+        env.session_close.session_id = session_id
+        env.session_close.reason = _CLOSE_REASON_TO_PB.get(
+            reason, pb.SessionClose.REASON_CLOSED_BY_SERVER
+        )
         await self._send(env)
 
     async def send_goodbye(self, reason, detail: str) -> None:
@@ -78,6 +100,7 @@ async def handle_renderer_connection(
     websocket: WebSocket,
     config: KalinkaConfig,
     registry: RendererRegistry,
+    sessions: SessionPool,
 ):
     await websocket.accept()
     session = RendererSession(websocket)
@@ -147,6 +170,31 @@ async def handle_renderer_connection(
                 )
                 registered_id = hello.renderer_id
                 await session.send_welcome(config)
+                await sessions.reconcile(
+                    renderer_id=hello.renderer_id,
+                    reported_session_id=hello.active_session_id,
+                    reported_owner_server_id=hello.session_owner_server_id,
+                    ws_session=session,
+                )
+            elif payload == "session_open_result":
+                result = env.session_open_result
+                sessions.handle_open_result(
+                    registered_id or "",
+                    session_id=result.session_id,
+                    accepted=result.accepted,
+                    busy=result.error == pb.SessionOpenResult.ERROR_BUSY,
+                    detail=result.detail,
+                    owner_server_id=result.owner_server_id,
+                )
+            elif payload == "session_closed":
+                closed = env.session_closed
+                sessions.handle_closed(
+                    registered_id or "",
+                    session_id=closed.session_id,
+                    renderer_error=closed.reason
+                    == pb.SessionClosed.REASON_RENDERER_ERROR,
+                    detail=closed.detail,
+                )
             elif payload == "goodbye":
                 clean_goodbye = True
                 logger.info(
@@ -177,6 +225,7 @@ async def handle_renderer_connection(
                 logger.error("Renderer %s connection error: %s", renderer_desc, exc)
         if registered_id is not None:
             registry.disconnect(registered_id, session, clean=clean_goodbye)
+            sessions.suspend(registered_id, session)
         else:
             logger.info("Renderer connection closed before registration")
         try:

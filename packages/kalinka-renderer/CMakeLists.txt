@@ -43,6 +43,7 @@ add_executable(kalinka-renderer
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
   src/net/Session.cpp
+  src/session/SessionManager.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE
   KALINKA_RENDERER_VERSION="${PROJECT_VERSION}"

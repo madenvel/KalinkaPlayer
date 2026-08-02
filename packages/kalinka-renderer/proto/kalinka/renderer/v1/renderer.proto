@@ -1,9 +1,9 @@
 // Kalinka renderer protocol — MVP subset.
 //
 // One Envelope per binary WebSocket message on ws://<core>/renderer/ws.
-// This file currently carries only the registration handshake
-// (Hello -> Welcome) and Goodbye. Field numbers follow the full design in
-// docs/native-renderer-design.md §4 so later additions extend, not renumber.
+// This file currently carries the registration handshake (Hello -> Welcome),
+// playback-session lifecycle and Goodbye. Field numbers follow the full design
+// in docs/native-renderer-design.md §4 so later additions extend, not renumber.
 
 syntax = "proto3";
 
@@ -18,11 +18,19 @@ message Envelope {
   oneof payload {
     // renderer -> core: 1000-1999
     Hello hello = 1000;
+    SessionOpenResult session_open_result = 1012;
+    SessionClosed session_closed = 1014;
     // core -> renderer: 2000-2999
     Welcome welcome = 2000;
+    SessionOpen session_open = 2003;
+    SessionClose session_close = 2004;
     // either direction
     Goodbye goodbye = 3000;
   }
+
+  // 1013 / 2002 were considered for an application-level Pong / Ping and must
+  // not be reused (design §4).
+  reserved 1013, 2002;
 }
 
 message ProtocolVersionRange {
@@ -54,17 +62,69 @@ message Hello {
   RendererKind kind = 6;
   Platform platform = 7;
   // 8-10 held for capabilities / supported_controls / state (full design).
+
+  // Playback session the renderer is currently running, if any. Reported to
+  // every Core; only the one whose server_id matches acts on it.
+  string active_session_id = 11;
+  string session_owner_server_id = 12;
 }
 
 // Core's response to a valid Hello.
 message Welcome {
   uint32 protocol_version = 1;  // the version the Core selected
-  string server_id = 2;         // stable Core identity (empty until implemented)
+  string server_id = 2;         // stable Core identity, persisted across restarts
   // 3 held for server_instance_id (full design).
   string server_name = 4;       // config.server.service_name
   string server_version = 5;
   string api_version = 6;       // REST_API_VERSION
   int64 server_time_unix_ms = 7;
+}
+
+// ============================================================================
+// Playback session lifecycle.
+//
+// A session is the Core's exclusive claim on the renderer's audio graph. The
+// id is minted by the Core and held in memory on both sides, so a crash on
+// either side ends the session: what survives is reconciled at the next Hello
+// (design §7.1).
+// ============================================================================
+
+message SessionOpen {
+  string session_id = 1;
+}
+
+message SessionOpenResult {
+  enum Error {
+    ERROR_UNSPECIFIED = 0;
+    ERROR_BUSY = 1;       // a session with another Core is already running
+    ERROR_INTERNAL = 2;
+  }
+  string session_id = 1;
+  bool accepted = 2;
+  Error error = 3;
+  string detail = 4;
+  string owner_server_id = 5;  // set on ERROR_BUSY
+}
+
+message SessionClose {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_CLOSED_BY_SERVER = 1;
+    REASON_STALE = 2;  // the Core no longer knows this session (it restarted)
+  }
+  string session_id = 1;
+  Reason reason = 2;
+}
+
+message SessionClosed {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_ACK = 1;              // acknowledges SessionClose
+    REASON_RENDERER_ERROR = 2;   // renderer gave up on the session
+  }
+  string session_id = 1;
+  Reason reason = 2;
+  string detail = 3;
 }
 
 message Goodbye {
