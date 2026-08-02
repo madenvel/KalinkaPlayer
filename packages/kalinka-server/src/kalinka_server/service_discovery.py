@@ -1,5 +1,6 @@
 import logging
 from .config_model import KalinkaConfig
+from .renderer_ws_handler import PROTOCOL_VERSION as RENDERER_PROTOCOL_VERSION
 from .version import get_version, get_rest_api_version
 
 from zeroconf import IPVersion, ServiceInfo
@@ -55,6 +56,9 @@ def get_service_info(config: KalinkaConfig, ip_addresses: list[str]) -> ServiceI
     desc = {
         "kalinka_api_version": get_rest_api_version(),
         "server_version": get_version(),
+        # Renderer capability: presence = /renderer/ws exists, value = protocol
+        # version. Renderers skip servers without a compatible value.
+        "renderer_proto": str(RENDERER_PROTOCOL_VERSION),
     }
 
     return ServiceInfo(

@@ -72,7 +72,8 @@ from .queue_ws_handler import (
 from .device_ws_handler import (
     handle_websocket_connection as handle_device_websocket_connection,
 )
-from .renderer_ws_handler import handle_renderer_connection
+from .renderer_ws_handler import RendererSession, handle_renderer_connection
+from .renderer_registry import RendererRegistry
 
 
 @asynccontextmanager
@@ -1339,10 +1340,24 @@ async def create_app(
             websocket, player_context.ext_device_eventbus, device
         )
 
+    # Renderer registration only; the playback path is untouched.
+    async def _replace_renderer_session(old_session: RendererSession):
+        await old_session.replace()
+
+    renderer_registry = RendererRegistry(
+        replace_session=_replace_renderer_session
+    )
+    app.state.renderer_registry = renderer_registry
+
     @app.websocket("/renderer/ws")
     async def renderer_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for native renderers (binary protobuf)."""
-        await handle_renderer_connection(websocket, config)
+        await handle_renderer_connection(websocket, config, renderer_registry)
+
+    @app.get("/renderer/list")
+    async def renderer_list():
+        """Known renderers and their connection status."""
+        return {"renderers": renderer_registry.list()}
 
     # Browser player (optional kalinka-web package). Mounted last so every API
     # route above wins; check_dir=False resolves per request, so installing the

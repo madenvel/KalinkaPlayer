@@ -3,25 +3,19 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
-#include <set>
+#include <map>
 #include <string>
 #include <thread>
 
 #include "Discovery.h"
 
-// Self-contained DNS-SD browser for _kalinkaplayer._tcp built on the vendored
-// public-domain mdns.h (third_party/mdns) — plain multicast sockets, no
-// avahi/Bonjour daemon dependency, same code on every platform.
-//
-// One socket bound to port 5353 (joined to the mDNS group) both hears
-// unsolicited announcements/goodbyes and receives responses to the periodic
-// PTR queries this class sends (interval doubling 1s -> 60s, per RFC 6762).
-// A service is added when a response carries PTR+SRV+A together — which the
-// Core's python-zeroconf does, per DNS-SD's additional-records rule — and
-// removed on a goodbye (PTR with TTL 0).
-//
-// Callbacks are invoked on the discovery thread and must not block; the
-// ConnectionManager posts them onto the io_context.
+// Self-contained DNS-SD browser for _kalinkaplayer._tcp (vendored mdns.h, no
+// avahi/Bonjour daemon). Socket on 5353 hears announcements/goodbyes and
+// answers to the periodic PTR queries (doubling 1s -> 60s). Servers without a
+// matching "renderer_proto" TXT value are never connected; a TXT change (e.g.
+// a server upgrade re-announcing) flips them in or out, so no request
+// bombardment of servers that would only reject us. Callbacks run on the
+// discovery thread and must not block.
 class MdnsDiscovery {
 public:
   using AddFn = std::function<void(CoreEndpoint)>;
@@ -49,7 +43,7 @@ private:
   int sock_ = -1;
   std::thread thread_;
   std::atomic<bool> stopping_{false};
-  std::set<std::string> known_;  // instance names currently reported as added
+  std::map<std::string, bool> known_;  // instance -> renderer-capable
   std::chrono::steady_clock::time_point nextQuery_;
   std::chrono::seconds queryInterval_{1};
 };

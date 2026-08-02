@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <sys/utsname.h>
 
+#include "../Protocol.h"
 #include "kalinka/renderer/v1/renderer.pb.h"
 
 namespace asio = boost::asio;
@@ -12,9 +13,19 @@ using tcp = asio::ip::tcp;
 namespace pb = kalinka::renderer::v1;
 
 namespace {
-constexpr uint32_t kProtocolVersion = 1;
+constexpr uint32_t kProtocolVersion = kRendererProtocolVersion;
 constexpr auto kMaxRetryDelay = std::chrono::seconds(30);
 constexpr auto kCloseDeadline = std::chrono::seconds(2);
+constexpr size_t kInboxLimit = 256;
+
+// Liveness: Beast answers server pings, pings when idle, drops a silent peer.
+boost::beast::websocket::stream_base::timeout wsTimeouts() {
+  boost::beast::websocket::stream_base::timeout t{};
+  t.handshake_timeout = std::chrono::seconds(10);
+  t.idle_timeout = std::chrono::seconds(60);
+  t.keep_alive_pings = true;
+  return t;
+}
 }  // namespace
 
 Session::Session(asio::io_context &ioc, CoreEndpoint endpoint,
@@ -27,6 +38,7 @@ void Session::start() { connect(); }
 
 void Session::connect() {
   welcomed_ = false;
+  inbox_.clear();  // discard messages from a previous connection
   ws_.emplace(ioc_);
   auto self = shared_from_this();
   resolver_.async_resolve(
@@ -40,6 +52,7 @@ void Session::connect() {
               if (self->stopping_) return;
               if (ec) return self->fail("connect", ec);
               self->ws_->binary(true);
+              self->ws_->set_option(wsTimeouts());
               const std::string host =
                   self->endpoint_.host + ":" +
                   std::to_string(self->endpoint_.port);
@@ -90,12 +103,36 @@ void Session::readLoop() {
   ws_->async_read(readBuffer_, [self](beast::error_code ec, std::size_t) {
     if (self->stopping_) return;
     if (ec) return self->fail("read", ec);
-    self->handleMessage(beast::buffers_to_string(self->readBuffer_.data()));
+    self->enqueueMessage(
+        beast::buffers_to_string(self->readBuffer_.data()));
     self->readBuffer_.consume(self->readBuffer_.size());
     if (!self->gaveUp_) {
       self->readLoop();
     }
   });
+}
+
+void Session::enqueueMessage(std::string data) {
+  if (inbox_.size() >= kInboxLimit) {
+    spdlog::error("[{}] Inbox full ({} messages); dropping incoming message",
+                  endpoint_.name, inbox_.size());
+    return;
+  }
+  inbox_.push_back(std::move(data));
+  if (!drainScheduled_) {
+    drainScheduled_ = true;
+    asio::post(ioc_, [self = shared_from_this()] { self->drainInbox(); });
+  }
+}
+
+void Session::drainInbox() {
+  drainScheduled_ = false;
+  while (!inbox_.empty() && !stopping_ && !gaveUp_) {
+    const std::string data = std::move(inbox_.front());
+    inbox_.pop_front();
+    handleMessage(data);
+  }
+  inbox_.clear();
 }
 
 void Session::handleMessage(const std::string &data) {
@@ -121,6 +158,15 @@ void Session::handleMessage(const std::string &data) {
     if (g.reason() == pb::Goodbye::REASON_VERSION_UNSUPPORTED) {
       spdlog::error("[{}] Server rejected protocol version; giving up: {}",
                     endpoint_.name, g.detail());
+      gaveUp_ = true;
+      beast::error_code ec;
+      ws_->next_layer().close(ec);
+    } else if (g.reason() == pb::Goodbye::REASON_REPLACED) {
+      // Duplicated renderer_id; reconnecting would displace it back and forth.
+      spdlog::error(
+          "[{}] Replaced by another connection with the same renderer_id; "
+          "giving up (duplicated renderer identity?): {}",
+          endpoint_.name, g.detail());
       gaveUp_ = true;
       beast::error_code ec;
       ws_->next_layer().close(ec);
