@@ -1,0 +1,183 @@
+// kalinka-renderer — standalone native renderer for Kalinka Core (MVP).
+//
+// Browses for _kalinkaplayer._tcp Cores via avahi (or connects to fixed
+// endpoints given with --server), registers with each via the Hello/Welcome
+// handshake, and waits. SIGINT/SIGTERM shut it down gracefully (Goodbye,
+// WebSocket close, joined threads).
+
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/spdlog.h>
+#include <unistd.h>
+
+#include <boost/asio.hpp>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "Daemon.h"
+#include "Identity.h"
+#include "discovery/MdnsDiscovery.h"
+#include "net/ConnectionManager.h"
+
+namespace asio = boost::asio;
+
+namespace {
+
+struct Options {
+  bool daemon = false;
+  std::string friendlyName;
+  std::string logFile;
+  std::vector<CoreEndpoint> staticServers;  // skip discovery when non-empty
+};
+
+void usage(const char *argv0) {
+  std::printf(
+      "Usage: %s [options]\n"
+      "  --name <name>         Friendly name announced to Cores\n"
+      "                        (default: \"Kalinka Renderer on <hostname>\")\n"
+      "  --server <host:port>  Connect to a fixed Core instead of mDNS\n"
+      "                        discovery; may be repeated\n"
+      "  --daemon              Detach and run in the background\n"
+      "  --log-file <path>     Log to a file (default when daemonized:\n"
+      "                        $KALINKA_PREFIX/var/log/kalinka/renderer.log)\n"
+      "  --help                Show this help\n",
+      argv0);
+}
+
+bool parseArgs(int argc, char **argv, Options &opts) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    auto value = [&]() -> const char * {
+      return i + 1 < argc ? argv[++i] : nullptr;
+    };
+    if (arg == "--daemon") {
+      opts.daemon = true;
+    } else if (arg == "--name") {
+      const char *v = value();
+      if (!v) return false;
+      opts.friendlyName = v;
+    } else if (arg == "--log-file") {
+      const char *v = value();
+      if (!v) return false;
+      opts.logFile = v;
+    } else if (arg == "--server") {
+      const char *v = value();
+      if (!v) return false;
+      const std::string hostPort = v;
+      const auto colon = hostPort.rfind(':');
+      if (colon == std::string::npos || colon == 0 ||
+          colon + 1 == hostPort.size()) {
+        std::fprintf(stderr, "--server expects host:port, got '%s'\n", v);
+        return false;
+      }
+      const int port = std::atoi(hostPort.c_str() + colon + 1);
+      if (port <= 0 || port > 65535) {
+        std::fprintf(stderr, "Invalid port in '%s'\n", v);
+        return false;
+      }
+      const std::string host = hostPort.substr(0, colon);
+      opts.staticServers.push_back(
+          CoreEndpoint{hostPort, host, static_cast<uint16_t>(port), hostPort});
+    } else if (arg == "--help" || arg == "-h") {
+      usage(argv[0]);
+      std::exit(0);
+    } else {
+      std::fprintf(stderr, "Unknown option '%s'\n", arg.c_str());
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string defaultFriendlyName() {
+  char host[256] = "unknown";
+  gethostname(host, sizeof(host) - 1);
+  return std::string("Kalinka Renderer on ") + host;
+}
+
+void setupLogging(const Options &opts) {
+  std::string logFile = opts.logFile;
+  if (logFile.empty() && opts.daemon) {
+    const char *prefix = std::getenv("KALINKA_PREFIX");
+    logFile = (std::filesystem::path(prefix && *prefix ? prefix : "/") /
+               "var/log/kalinka/renderer.log")
+                  .string();
+  }
+  if (!logFile.empty()) {
+    try {
+      std::filesystem::create_directories(
+          std::filesystem::path(logFile).parent_path());
+      spdlog::set_default_logger(
+          spdlog::basic_logger_mt("renderer", logFile));
+    } catch (const spdlog::spdlog_ex &e) {
+      // Daemonized stderr goes to /dev/null anyway; nothing better to do.
+      std::fprintf(stderr, "Could not open log file %s: %s\n", logFile.c_str(),
+                   e.what());
+    }
+  }
+  spdlog::set_level(spdlog::level::info);
+  spdlog::flush_on(spdlog::level::info);
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+  Options opts;
+  if (!parseArgs(argc, argv, opts)) {
+    usage(argv[0]);
+    return 2;
+  }
+
+  // Detach before any threads or sockets exist.
+  if (opts.daemon && !daemonize()) {
+    return 1;
+  }
+  setupLogging(opts);
+
+  const Identity identity = Identity::load();
+  const std::string friendlyName =
+      opts.friendlyName.empty() ? defaultFriendlyName() : opts.friendlyName;
+  spdlog::info("kalinka-renderer {} starting: '{}' (renderer_id={}, pid={})",
+               KALINKA_RENDERER_VERSION, friendlyName, identity.rendererId,
+               getpid());
+
+  asio::io_context ioc;
+  ConnectionManager manager(ioc, identity, friendlyName);
+
+  // Discovery callbacks run on the discovery thread; ConnectionManager posts
+  // them onto the io_context.
+  std::unique_ptr<MdnsDiscovery> discovery;
+  if (opts.staticServers.empty()) {
+    discovery = std::make_unique<MdnsDiscovery>(
+        [&manager](CoreEndpoint ep) { manager.add(std::move(ep)); },
+        [&manager](std::string key) { manager.remove(std::move(key)); });
+    if (!discovery->start()) {
+      spdlog::error("Discovery unavailable and no --server given; exiting");
+      return 1;
+    }
+  } else {
+    for (const auto &ep : opts.staticServers) {
+      manager.add(ep);
+    }
+  }
+
+  asio::signal_set signals(ioc, SIGINT, SIGTERM);
+  signals.async_wait(
+      [&](const boost::system::error_code &ec, int signal) {
+        if (ec) return;
+        spdlog::info("Received signal {}, shutting down", signal);
+        if (discovery) {
+          discovery->stop();  // joins the discovery thread
+        }
+        manager.stop();  // Goodbye + close on every session
+      });
+
+  // Runs until the signal handler has fired and every session has closed
+  // (each stop() carries a 2s hard deadline, so this cannot hang).
+  ioc.run();
+
+  spdlog::info("kalinka-renderer terminated");
+  return 0;
+}

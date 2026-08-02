@@ -72,6 +72,7 @@ from .queue_ws_handler import (
 from .device_ws_handler import (
     handle_websocket_connection as handle_device_websocket_connection,
 )
+from .renderer_ws_handler import handle_renderer_connection
 
 
 @asynccontextmanager
@@ -1337,6 +1338,11 @@ async def create_app(
         await handle_device_websocket_connection(
             websocket, player_context.ext_device_eventbus, device
         )
+
+    @app.websocket("/renderer/ws")
+    async def renderer_websocket_endpoint(websocket: WebSocket):
+        """WebSocket endpoint for native renderers (binary protobuf)."""
+        await handle_renderer_connection(websocket, config)
 
     # Browser player (optional kalinka-web package). Mounted last so every API
     # route above wins; check_dir=False resolves per request, so installing the

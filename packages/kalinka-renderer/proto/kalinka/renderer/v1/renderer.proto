@@ -1,0 +1,81 @@
+// Kalinka renderer protocol — MVP subset.
+//
+// One Envelope per binary WebSocket message on ws://<core>/renderer/ws.
+// This file currently carries only the registration handshake
+// (Hello -> Welcome) and Goodbye. Field numbers follow the full design in
+// docs/native-renderer-design.md §4 so later additions extend, not renumber.
+
+syntax = "proto3";
+
+package kalinka.renderer.v1;
+
+option optimize_for = LITE_RUNTIME;
+
+message Envelope {
+  // Monotonic from 1, per connection, per direction. Resets on reconnect.
+  uint64 message_id = 1;
+
+  oneof payload {
+    // renderer -> core: 1000-1999
+    Hello hello = 1000;
+    // core -> renderer: 2000-2999
+    Welcome welcome = 2000;
+    // either direction
+    Goodbye goodbye = 3000;
+  }
+}
+
+message ProtocolVersionRange {
+  uint32 min = 1;  // lowest version the sender can speak
+  uint32 max = 2;  // highest version the sender can speak
+}
+
+enum RendererKind {
+  RENDERER_KIND_UNSPECIFIED = 0;
+  RENDERER_KIND_NATIVE = 1;
+  RENDERER_KIND_WEB = 2;
+}
+
+message Platform {
+  string os = 1;             // "linux"
+  string os_version = 2;     // kernel release
+  string arch = 3;           // "aarch64", "x86_64"
+  string hostname = 4;
+  string audio_backend = 5;  // "alsa"
+}
+
+// First message on every new connection; registers the renderer with the Core.
+message Hello {
+  ProtocolVersionRange protocol_versions = 1;
+  string renderer_id = 2;       // stable across reboots/upgrades
+  string instance_id = 3;       // fresh per process
+  string friendly_name = 4;
+  string software_version = 5;
+  RendererKind kind = 6;
+  Platform platform = 7;
+  // 8-10 held for capabilities / supported_controls / state (full design).
+}
+
+// Core's response to a valid Hello.
+message Welcome {
+  uint32 protocol_version = 1;  // the version the Core selected
+  string server_id = 2;         // stable Core identity (empty until implemented)
+  // 3 held for server_instance_id (full design).
+  string server_name = 4;       // config.server.service_name
+  string server_version = 5;
+  string api_version = 6;       // REST_API_VERSION
+  int64 server_time_unix_ms = 7;
+}
+
+message Goodbye {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_SHUTDOWN = 1;
+    REASON_VERSION_UNSUPPORTED = 2;
+    REASON_MALFORMED = 3;
+    REASON_REPLACED = 4;
+    REASON_REJECTED = 5;
+  }
+  Reason reason = 1;
+  string detail = 2;
+}
