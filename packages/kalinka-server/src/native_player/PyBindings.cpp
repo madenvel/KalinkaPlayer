@@ -130,7 +130,8 @@ PYBIND11_MODULE(native_player, m) {
 
   py::class_<AudioPlayer>(m, "AudioPlayer")
       .def(py::init<const Config &>(), py::arg("config"))
-      .def("append", &AudioPlayer::append, py::arg("url"), py::arg("format"))
+      .def("append", &AudioPlayer::append, py::arg("stream_id"),
+           py::arg("url"), py::arg("format"))
       .def("remove", &AudioPlayer::remove, py::arg("stream_id"))
       .def("clear_all", &AudioPlayer::clearAll)
       .def("stop", &AudioPlayer::stop)

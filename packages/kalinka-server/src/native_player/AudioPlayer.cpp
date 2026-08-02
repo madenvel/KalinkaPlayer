@@ -212,15 +212,18 @@ void AudioPlayer::configureVolume(const std::string &mode,
 
 AudioPlayer::~AudioPlayer() { stop(); }
 
-StreamId AudioPlayer::append(const std::string &url, const AudioFormat format) {
+void AudioPlayer::append(StreamId id, const std::string &url,
+                         const AudioFormat format) {
   cleanUpFinishedStreams();
-  StreamId id = nextStreamId++;
+  if (std::any_of(streamNodesList.begin(), streamNodesList.end(),
+                  [id](const StreamNodes &s) { return s.id == id; })) {
+    spdlog::warn("Stream id={} already queued; appending anyway", id);
+  }
   spdlog::debug("Appending stream id={} url={}", id, url);
   StreamNodes newStream(id, url, config, format);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   streamNodesList.emplace_back(std::move(newStream));
-  return id;
 }
 
 void AudioPlayer::remove(StreamId id) {

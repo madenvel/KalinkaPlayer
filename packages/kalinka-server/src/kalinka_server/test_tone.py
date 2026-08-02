@@ -88,7 +88,7 @@ def _play_blocking(config: dict, channel: str) -> None:
     try:
         url = f"tone://{channel}?freq={TONE_FREQUENCY_HZ}&duration_ms={TONE_DURATION_MS}"
         # The format argument is ignored for tone:// (no decoder is attached).
-        player.append(url, AudioFormat.FLAC)
+        player.append(0, url, AudioFormat.FLAC)
 
         deadline = time.monotonic() + TONE_DURATION_MS / 1000 + _COMPLETION_GRACE_S
         while time.monotonic() < deadline:
