@@ -74,6 +74,8 @@ from .device_ws_handler import (
 )
 from .renderer_ws_handler import RendererSession, handle_renderer_connection
 from .renderer_registry import RendererRegistry
+from .renderer_sessions import SessionPool
+from .server_identity import get_server_id
 
 
 @asynccontextmanager
@@ -117,6 +119,16 @@ async def lifespan(app: FastAPI):
         art = getattr(app.state, "catalog_art", None)
         if art is not None:
             await art.close()
+        # Finalize sessions and fire their close callbacks. uvicorn has already
+        # closed the renderer sockets by now, so the renderer itself only
+        # learns the session is gone from the STALE reconciliation at its next
+        # Hello.
+        renderer_sessions = getattr(app.state, "renderer_sessions", None)
+        if renderer_sessions is not None:
+            await renderer_sessions.shutdown()
+        renderer_registry = getattr(app.state, "renderer_registry", None)
+        if renderer_registry is not None:
+            await renderer_registry.shutdown()
         if sd is not None:
             await sd.unregister_service()
 
@@ -1345,19 +1357,31 @@ async def create_app(
         await old_session.replace()
 
     renderer_registry = RendererRegistry(
-        replace_session=_replace_renderer_session
+        replace_session=_replace_renderer_session,
+        on_removed=lambda renderer_id: renderer_sessions.handle_renderer_removed(
+            renderer_id
+        ),
     )
+    renderer_sessions = SessionPool(renderer_registry, get_server_id())
     app.state.renderer_registry = renderer_registry
+    app.state.renderer_sessions = renderer_sessions
 
     @app.websocket("/renderer/ws")
     async def renderer_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for native renderers (binary protobuf)."""
-        await handle_renderer_connection(websocket, config, renderer_registry)
+        await handle_renderer_connection(
+            websocket, config, renderer_registry, renderer_sessions
+        )
 
     @app.get("/renderer/list")
     async def renderer_list():
         """Known renderers and their connection status."""
         return {"renderers": renderer_registry.list()}
+
+    @app.get("/renderer/sessions")
+    async def renderer_session_list():
+        """Playback sessions this Core holds."""
+        return {"server_id": get_server_id(), "sessions": renderer_sessions.list()}
 
     # Browser player (optional kalinka-web package). Mounted last so every API
     # route above wins; check_dir=False resolves per request, so installing the

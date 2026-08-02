@@ -5,9 +5,10 @@
 namespace asio = boost::asio;
 
 ConnectionManager::ConnectionManager(asio::io_context &ioc, Identity identity,
-                                     std::string friendlyName)
+                                     std::string friendlyName,
+                                     SessionManager &sessions)
     : ioc_(ioc), identity_(std::move(identity)),
-      friendlyName_(std::move(friendlyName)) {}
+      friendlyName_(std::move(friendlyName)), sessionManager_(sessions) {}
 
 void ConnectionManager::add(CoreEndpoint endpoint) {
   asio::post(ioc_, [this, endpoint = std::move(endpoint)]() mutable {
@@ -17,8 +18,8 @@ void ConnectionManager::add(CoreEndpoint endpoint) {
       return;
     }
     auto key = endpoint.key;
-    auto session = std::make_shared<Session>(ioc_, std::move(endpoint),
-                                             identity_, friendlyName_);
+    auto session = std::make_shared<Session>(
+        ioc_, std::move(endpoint), identity_, friendlyName_, sessionManager_);
     sessions_.emplace(std::move(key), session);
     session->start();
   });

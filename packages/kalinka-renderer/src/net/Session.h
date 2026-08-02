@@ -13,6 +13,7 @@
 
 #include "../Identity.h"
 #include "../discovery/Discovery.h"
+#include "../session/SessionManager.h"
 
 // One WebSocket connection to one Core: connect, Hello, expect Welcome, then
 // read-loop; reconnects with doubling backoff (1s..30s). Single-threaded
@@ -21,7 +22,8 @@
 class Session : public std::enable_shared_from_this<Session> {
 public:
   Session(boost::asio::io_context &ioc, CoreEndpoint endpoint,
-          const Identity &identity, std::string friendlyName);
+          const Identity &identity, std::string friendlyName,
+          SessionManager &sessions);
 
   void start();
 
@@ -39,6 +41,10 @@ private:
   void enqueueMessage(std::string data);
   void drainInbox();
   void handleMessage(const std::string &data);
+  void handleSessionOpen(const std::string &sessionId);
+  void handleSessionClose(const std::string &sessionId);
+  void sendSerialized(std::string data);
+  void writeNext();
   void fail(const char *stage, const boost::beast::error_code &ec);
   void scheduleRetry();
 
@@ -46,21 +52,27 @@ private:
   CoreEndpoint endpoint_;
   const Identity &identity_;
   std::string friendlyName_;
+  SessionManager &sessions_;
 
   boost::asio::ip::tcp::resolver resolver_;
   std::optional<WsStream> ws_;  // recreated per connection attempt
   boost::beast::flat_buffer readBuffer_;
-  std::string writeBuffer_;
 
   // Bounded inbox between the read loop and message processing.
   std::deque<std::string> inbox_;
   bool drainScheduled_ = false;
+
+  // Beast allows one write at a time; messages queue behind the one in flight.
+  std::deque<std::string> writeQueue_;
+  bool writing_ = false;
+  bool closeAfterWrite_ = false;
 
   boost::asio::steady_timer retryTimer_;
   boost::asio::steady_timer closeTimer_;
   std::chrono::seconds retryDelay_{1};
 
   uint64_t nextMessageId_ = 1;
+  std::string serverId_;  // from Welcome; owner id for sessions this Core opens
   bool welcomed_ = false;
   bool stopping_ = false;
   bool gaveUp_ = false;  // e.g. protocol version rejected — no point retrying

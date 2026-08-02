@@ -29,16 +29,20 @@ boost::beast::websocket::stream_base::timeout wsTimeouts() {
 }  // namespace
 
 Session::Session(asio::io_context &ioc, CoreEndpoint endpoint,
-                 const Identity &identity, std::string friendlyName)
+                 const Identity &identity, std::string friendlyName,
+                 SessionManager &sessions)
     : ioc_(ioc), endpoint_(std::move(endpoint)), identity_(identity),
-      friendlyName_(std::move(friendlyName)), resolver_(ioc),
-      retryTimer_(ioc), closeTimer_(ioc) {}
+      friendlyName_(std::move(friendlyName)), sessions_(sessions),
+      resolver_(ioc), retryTimer_(ioc), closeTimer_(ioc) {}
 
 void Session::start() { connect(); }
 
 void Session::connect() {
   welcomed_ = false;
+  serverId_.clear();
   inbox_.clear();  // discard messages from a previous connection
+  writeQueue_.clear();
+  writing_ = false;
   ws_.emplace(ioc_);
   auto self = shared_from_this();
   resolver_.async_resolve(
@@ -77,6 +81,11 @@ void Session::sendHello() {
   hello->set_friendly_name(friendlyName_);
   hello->set_software_version(KALINKA_RENDERER_VERSION);
   hello->set_kind(pb::RENDERER_KIND_NATIVE);
+  if (const auto &active = sessions_.active(); active) {
+    // Reported to every Core; only its owner acts on it.
+    hello->set_active_session_id(active->sessionId);
+    hello->set_session_owner_server_id(active->ownerServerId);
+  }
 
   utsname u{};
   if (uname(&u) == 0) {
@@ -88,13 +97,42 @@ void Session::sendHello() {
     platform->set_audio_backend("alsa");
   }
 
-  writeBuffer_ = env.SerializeAsString();
+  sendSerialized(env.SerializeAsString());
+  readLoop();
+}
+
+void Session::sendSerialized(std::string data) {
+  writeQueue_.push_back(std::move(data));
+  if (!writing_) {
+    writeNext();
+  }
+}
+
+void Session::writeNext() {
+  if (writeQueue_.empty()) {
+    writing_ = false;
+    if (closeAfterWrite_) {
+      auto self = shared_from_this();
+      ws_->async_close(websocket::close_code::going_away,
+                       [self](beast::error_code) {
+                         beast::error_code ec;
+                         self->ws_->next_layer().close(ec);
+                         self->closeTimer_.cancel();
+                       });
+    }
+    return;
+  }
+  writing_ = true;
   auto self = shared_from_this();
-  ws_->async_write(asio::buffer(writeBuffer_),
+  ws_->async_write(asio::buffer(writeQueue_.front()),
                    [self](beast::error_code ec, std::size_t) {
-                     if (self->stopping_) return;
-                     if (ec) return self->fail("send hello", ec);
-                     self->readLoop();
+                     self->writeQueue_.pop_front();
+                     if (ec) {
+                       self->writing_ = false;
+                       if (!self->stopping_) self->fail("write", ec);
+                       return;
+                     }
+                     self->writeNext();
                    });
 }
 
@@ -146,6 +184,7 @@ void Session::handleMessage(const std::string &data) {
   case pb::Envelope::kWelcome: {
     const pb::Welcome &w = env.welcome();
     welcomed_ = true;
+    serverId_ = w.server_id();
     retryDelay_ = std::chrono::seconds(1);
     spdlog::info(
         "[{}] Registered: server '{}' version {} (api {}, protocol v{})",
@@ -153,6 +192,12 @@ void Session::handleMessage(const std::string &data) {
         w.protocol_version());
     break;
   }
+  case pb::Envelope::kSessionOpen:
+    handleSessionOpen(env.session_open().session_id());
+    break;
+  case pb::Envelope::kSessionClose:
+    handleSessionClose(env.session_close().session_id());
+    break;
   case pb::Envelope::kGoodbye: {
     const pb::Goodbye &g = env.goodbye();
     if (g.reason() == pb::Goodbye::REASON_VERSION_UNSUPPORTED) {
@@ -181,6 +226,40 @@ void Session::handleMessage(const std::string &data) {
                   static_cast<int>(env.payload_case()));
     break;
   }
+}
+
+void Session::handleSessionOpen(const std::string &sessionId) {
+  pb::Envelope env;
+  env.set_message_id(nextMessageId_++);
+  pb::SessionOpenResult *result = env.mutable_session_open_result();
+  result->set_session_id(sessionId);
+
+  if (!welcomed_) {
+    result->set_accepted(false);
+    result->set_error(pb::SessionOpenResult::ERROR_INTERNAL);
+    result->set_detail("session opened before the handshake completed");
+  } else {
+    std::string busyOwner;
+    if (sessions_.open(sessionId, serverId_, busyOwner)) {
+      result->set_accepted(true);
+    } else {
+      result->set_accepted(false);
+      result->set_error(pb::SessionOpenResult::ERROR_BUSY);
+      result->set_detail("another playback session is running");
+      result->set_owner_server_id(busyOwner);
+    }
+  }
+  sendSerialized(env.SerializeAsString());
+}
+
+void Session::handleSessionClose(const std::string &sessionId) {
+  sessions_.close(sessionId);
+  pb::Envelope env;
+  env.set_message_id(nextMessageId_++);
+  pb::SessionClosed *closed = env.mutable_session_closed();
+  closed->set_session_id(sessionId);
+  closed->set_reason(pb::SessionClosed::REASON_ACK);
+  sendSerialized(env.SerializeAsString());
 }
 
 void Session::fail(const char *stage, const beast::error_code &ec) {
@@ -222,16 +301,8 @@ void Session::stop() {
     pb::Envelope env;
     env.set_message_id(nextMessageId_++);
     env.mutable_goodbye()->set_reason(pb::Goodbye::REASON_SHUTDOWN);
-    writeBuffer_ = env.SerializeAsString();
-    ws_->async_write(
-        asio::buffer(writeBuffer_), [self](beast::error_code, std::size_t) {
-          self->ws_->async_close(websocket::close_code::going_away,
-                                 [self](beast::error_code) {
-                                   beast::error_code ec;
-                                   self->ws_->next_layer().close(ec);
-                                   self->closeTimer_.cancel();
-                                 });
-        });
+    closeAfterWrite_ = true;
+    sendSerialized(env.SerializeAsString());
     closeTimer_.expires_after(kCloseDeadline);
     closeTimer_.async_wait([self](const boost::system::error_code &ec) {
       if (!ec) {

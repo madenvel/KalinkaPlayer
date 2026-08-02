@@ -20,6 +20,7 @@
 #include "Identity.h"
 #include "discovery/MdnsDiscovery.h"
 #include "net/ConnectionManager.h"
+#include "session/SessionManager.h"
 
 namespace asio = boost::asio;
 
@@ -144,7 +145,8 @@ int main(int argc, char **argv) {
                getpid());
 
   asio::io_context ioc;
-  ConnectionManager manager(ioc, identity, friendlyName);
+  SessionManager sessions;
+  ConnectionManager manager(ioc, identity, friendlyName, sessions);
 
   // Discovery callbacks run on the discovery thread; ConnectionManager posts
   // them onto the io_context.

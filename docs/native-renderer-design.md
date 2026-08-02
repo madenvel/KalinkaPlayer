@@ -346,16 +346,20 @@ message Envelope {
     CommandResult          command_result           = 1009;
     CapabilitiesChanged    capabilities_changed     = 1010;
     OwnershipChanged       ownership_changed        = 1011;
+    SessionOpenResult      session_open_result      = 1012;   // implemented
+    SessionClosed          session_closed           = 1014;   // implemented
 
     // ---- core -> renderer -------------------------------------------------
     Welcome                welcome                  = 2000;
     Command                command                  = 2001;
+    SessionOpen            session_open             = 2003;   // implemented
+    SessionClose           session_close            = 2004;   // implemented
 
     // ---- either direction -------------------------------------------------
     Goodbye                goodbye                  = 3000;
   }
 
-  // 1012-1099 / 2002-2099 held for future renderer/core messages.
+  // 1015-1099 / 2005-2099 held for future renderer/core messages.
   // 1013 was considered for an application-level Pong and is NOT used;
   // 2002 likewise for Ping. Do not reuse without a version bump.
   reserved 1013, 2002;
@@ -940,6 +944,49 @@ liveness, uvicorn's `websockets` sends server→client pings, and half-open TCP 
 detected by that mechanism. A browser renderer additionally *cannot* initiate
 ping frames from JS, so an application-level heartbeat would be asymmetric for
 no gain. Envelope fields 1013/2002 are reserved in case this is revisited.
+
+### 7.1 Playback sessions (implemented)
+
+Ahead of the lease policy above, the exclusivity primitive itself is in place: a
+**playback session** is one Core's claim on the renderer's audio graph. The
+Core mints the `session_id`; both sides hold it **in memory only**, so a crash
+on either side ends the session and nothing false survives on disk.
+
+Four identities, four lifetimes:
+
+| ID | Minted by | Lifetime |
+|---|---|---|
+| `renderer_id` | renderer | persistent (`…/var/lib/kalinka-renderer/renderer_id`) |
+| `instance_id` | renderer | per process |
+| `server_id` | Core | persistent (`…/var/lib/kalinka/server_id`) |
+| `session_id` | Core | per session, RAM-only on both sides |
+
+`server_id` must persist because the renderer connects to *every* capable Core.
+It reports its active session to all of them, tagged with the owning
+`server_id`, and a Core acts only on sessions it owns — so a Core that crashed
+and came back on a different port still recognises its own orphan, and other
+Cores leave it alone.
+
+**Reconciliation** runs on every `Hello` (`SessionPool.reconcile`):
+
+| Renderer reports | Core holds | Outcome |
+|---|---|---|
+| our session `S` | `S` | resume — session rebinds to the new socket, playback never stops |
+| our session `S` | nothing | `SessionClose{STALE}`; the renderer drops the orphan |
+| another Core's session | — | ignored |
+| nothing | session `T` | `T` closed locally, reason `RENDERER_RESTARTED` |
+
+A dropped link only **suspends** a session; the renderer keeps playing and the
+Core waits for it to return. The registry's offline reap (60 s) closes the
+session with `RENDERER_LOST`. No orphan timer runs on the renderer: its graph
+holds at most the current plus one prefetched source, so orphaned playback
+self-terminates within about two tracks.
+
+**Reopening after a close is always the owner's decision, never the pool's** —
+`SessionPool` exposes `open()`, `get()` and per-session `close()` /
+`on_closed()`, and applies no policy of its own. On Core shutdown sessions are
+finalized and their callbacks fire, but uvicorn has already closed the renderer
+sockets by then, so the renderer itself learns via `STALE` at its next `Hello`.
 
 ---
 

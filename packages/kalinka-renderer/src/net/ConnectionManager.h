@@ -16,7 +16,7 @@
 class ConnectionManager {
 public:
   ConnectionManager(boost::asio::io_context &ioc, Identity identity,
-                    std::string friendlyName);
+                    std::string friendlyName, SessionManager &sessions);
 
   void add(CoreEndpoint endpoint);
   void remove(std::string key);
@@ -26,6 +26,7 @@ private:
   boost::asio::io_context &ioc_;
   Identity identity_;
   std::string friendlyName_;
+  SessionManager &sessionManager_;
   std::map<std::string, std::shared_ptr<Session>> sessions_;
   bool stopped_ = false;
 };
