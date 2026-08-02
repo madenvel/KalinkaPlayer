@@ -27,7 +27,7 @@ class FakePlayer:
         self._states = list(FakePlayer.next_states)
         FakePlayer.instances.append(self)
 
-    def append(self, url, fmt):
+    def append(self, stream_id, url, fmt):
         self.appended.append((url, fmt))
 
     def get_state(self):

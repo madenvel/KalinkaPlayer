@@ -82,8 +82,8 @@ config = py_dict_to_config(
 player = AudioPlayer(config)
 monitor = player.monitor()
 
-for track in tracks:
-    player.append("file://" + track, AudioFormat.FLAC)
+for stream_id, track in enumerate(tracks):
+    player.append(stream_id, "file://" + track, AudioFormat.FLAC)
 
 states = []
 finished = threading.Event()

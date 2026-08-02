@@ -24,11 +24,12 @@ public:
   AudioPlayer(const Config &config);
   ~AudioPlayer();
 
-  // Append a stream to the playback queue. Returns a StreamId that can be used
-  // to remove the stream later. Playback starts automatically if no non-finished
-  // stream is currently active (e.g. after stop() or clearAll()).
-  StreamId append(const std::string &url,
-                  const AudioFormat format = AudioFormat::FormatFlac);
+  // Append a stream under a caller-assigned id (the play queue owns id
+  // allocation; ids must be unique among live streams). Playback starts
+  // automatically if no non-finished stream is currently active (e.g. after
+  // stop() or clearAll()).
+  void append(StreamId id, const std::string &url,
+              const AudioFormat format = AudioFormat::FormatFlac);
 
   // Remove a stream from the playback queue by StreamId.
   void remove(StreamId id);
@@ -83,7 +84,6 @@ private:
   std::shared_ptr<AlsaAudioEmitter> audioEmitter;
   std::shared_ptr<AudioStreamSwitcher> streamSwitcher;
   std::list<StreamNodes> streamNodesList;
-  StreamId nextStreamId = 0;
 
   // Guards the volume fields below. The volume API is called off the playback
   // serial executor (so it stays responsive) and may be reconfigured at

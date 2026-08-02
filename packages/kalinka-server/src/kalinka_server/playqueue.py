@@ -240,6 +240,8 @@ class PlayQueueImpl(PlayQueueController):
         self._state_monitor_raw = self._track_player.monitor()
         self.state_monitor = AsyncStateMonitor(self._state_monitor_raw)
         self.prepared_tracks: OrderedDict = OrderedDict()
+        # The queue owns stream-id allocation; the native player only tags.
+        self._next_stream_id = 0
         # StreamId of the stream currently being played (popped from prepared_tracks on SOURCE_CHANGED)
         self.current_stream_id: Optional[int] = None
         self._retry_attempted: bool = False
@@ -532,6 +534,11 @@ class PlayQueueImpl(PlayQueueController):
         if playable is not None:
             self._apply_prefetch(*playable)
 
+    def _new_stream_id(self) -> int:
+        sid = self._next_stream_id
+        self._next_stream_id += 1
+        return sid
+
     def _clear_prepared_streams(self) -> None:
         """Remove every prefetched native stream and empty the prepared map."""
         for _, (_, stream_id) in list(self.prepared_tracks.items()):
@@ -547,8 +554,9 @@ class PlayQueueImpl(PlayQueueController):
 
         # Append new stream — auto-starts. prepared_tracks is non-empty so the
         # FINISHED handler (triggered by the removals above) will not auto-play.
-        stream_id = self._track_player.append(
-            track_info.url, mime_to_format(track_info.format)
+        stream_id = self._new_stream_id()
+        self._track_player.append(
+            stream_id, track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
 
@@ -565,8 +573,9 @@ class PlayQueueImpl(PlayQueueController):
         if self._track_player.get_state().state == AudioGraphNodeState.STOPPED:
             self._apply_play(index, track_info)
             return
-        stream_id = self._track_player.append(
-            track_info.url, mime_to_format(track_info.format)
+        stream_id = self._new_stream_id()
+        self._track_player.append(
+            stream_id, track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
 
@@ -1080,8 +1089,9 @@ class PlayQueueImpl(PlayQueueController):
         self._clear_prepared_streams()
 
         self._retry_pending = True
-        stream_id = self._track_player.append(
-            track_info.url, mime_to_format(track_info.format)
+        stream_id = self._new_stream_id()
+        self._track_player.append(
+            stream_id, track_info.url, mime_to_format(track_info.format)
         )
         self.prepared_tracks[index] = (track_info, stream_id)
 

@@ -34,13 +34,13 @@ protected:
 TEST_F(AudioPlayerTest, constructor_destructor) {}
 
 TEST_F(AudioPlayerTest, play) {
-  audioPlayer.append(url1);
+  audioPlayer.append(4, url1);
   std::this_thread::sleep_for(std::chrono::seconds(4));
 }
 
 TEST_F(AudioPlayerTest, playNext) {
-  audioPlayer.append(url1);
-  audioPlayer.append(url2);
+  audioPlayer.append(5, url1);
+  audioPlayer.append(6, url2);
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   }
@@ -54,13 +54,13 @@ TEST_F(AudioPlayerTest, monitor) {
 
 TEST_F(AudioPlayerTest, play_one_after_another) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3);
+  audioPlayer.append(7, url3);
   std::this_thread::sleep_for(std::chrono::seconds(1));
   audioPlayer.clearAll();
-  audioPlayer.append(url2);
+  audioPlayer.append(8, url2);
   std::this_thread::sleep_for(std::chrono::seconds(1));
   audioPlayer.clearAll();
-  audioPlayer.append(url1);
+  audioPlayer.append(9, url1);
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
@@ -86,12 +86,12 @@ TEST_F(AudioPlayerTest, play_one_after_another) {
 
 TEST_F(AudioPlayerTest, test_play_next_then_play) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url1);
+  audioPlayer.append(10, url1);
   std::this_thread::sleep_for(std::chrono::seconds(1));
-  audioPlayer.append(url3);
+  audioPlayer.append(11, url3);
   std::this_thread::sleep_for(std::chrono::seconds(1));
   audioPlayer.clearAll();
-  audioPlayer.append(url2);
+  audioPlayer.append(12, url2);
 
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -115,11 +115,11 @@ TEST_F(AudioPlayerTest, test_play_next_then_play) {
 
 TEST_F(AudioPlayerTest, test_play_pause_stop_play) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url1);
+  audioPlayer.append(13, url1);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.stop();
   std::this_thread::sleep_for(std::chrono::seconds(2));
-  audioPlayer.append(url2);
+  audioPlayer.append(14, url2);
 
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -143,7 +143,7 @@ TEST_F(AudioPlayerTest, test_play_pause_stop_play) {
 
 TEST_F(AudioPlayerTest, seek_forward) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3);
+  audioPlayer.append(15, url3);
   std::this_thread::sleep_for(std::chrono::seconds(4));
   audioPlayer.seek(6000);
 
@@ -171,7 +171,7 @@ TEST_F(AudioPlayerTest, seek_forward) {
 
 TEST_F(AudioPlayerTest, seek_backward) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3);
+  audioPlayer.append(16, url3);
   std::this_thread::sleep_for(std::chrono::seconds(4));
   audioPlayer.seek(0);
 
@@ -199,7 +199,7 @@ TEST_F(AudioPlayerTest, seek_backward) {
 
 TEST_F(AudioPlayerTest, seek_one_after_another) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3);
+  audioPlayer.append(17, url3);
 
   std::this_thread::sleep_for(std::chrono::seconds(4));
   EXPECT_EQ(audioPlayer.seek(5000), 5000);
@@ -229,7 +229,7 @@ TEST_F(AudioPlayerTest, seek_one_after_another) {
 
 TEST_F(AudioPlayerTest, seek_to_end_finishes) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3);
+  audioPlayer.append(18, url3);
 
   StreamState streamingState(AudioGraphNodeState::STOPPED);
   while (streamingState.state != AudioGraphNodeState::STREAMING) {
@@ -268,7 +268,7 @@ TEST_F(AudioPlayerTest, seek_to_end_finishes) {
     monitor->waitState();
   }
 
-  audioPlayer.append(url1);
+  audioPlayer.append(19, url1);
 
   bool streamedAgain = false;
   auto restartDeadline =
@@ -288,13 +288,13 @@ TEST_F(AudioPlayerTest, seek_to_end_finishes) {
 
 TEST_F(AudioPlayerTest, test_play_pause_next) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url1);
+  audioPlayer.append(20, url1);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.pause();
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.clearAll();
   audioPlayer.resume();
-  audioPlayer.append(url2);
+  audioPlayer.append(21, url2);
 
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -321,14 +321,17 @@ TEST_F(AudioPlayerTest, test_play_pause_next) {
 
 TEST_F(AudioPlayerTest, test_remove_stream) {
   auto monitor = audioPlayer.monitor();
-  auto id1 = audioPlayer.append(url1);
+  const StreamId id1 = 1;
+  audioPlayer.append(id1, url1);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.remove(id1);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   EXPECT_EQ(audioPlayer.getState().state, AudioGraphNodeState::FINISHED);
 
-  auto id1b = audioPlayer.append(url1);
-  auto id2 = audioPlayer.append(url2);
+  const StreamId id1b = 2;
+  audioPlayer.append(id1b, url1);
+  const StreamId id2 = 3;
+  audioPlayer.append(id2, url2);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.remove(id2);
 
@@ -356,13 +359,13 @@ TEST_F(AudioPlayerTest, test_remove_stream) {
 
 TEST_F(AudioPlayerTest, play_different_formats) {
   auto monitor = audioPlayer.monitor();
-  audioPlayer.append(url3, AudioFormat::FormatFlac);
+  audioPlayer.append(22, url3, AudioFormat::FormatFlac);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.clearAll();
-  audioPlayer.append(url5, AudioFormat::FormatMpeg);
+  audioPlayer.append(23, url5, AudioFormat::FormatMpeg);
   std::this_thread::sleep_for(std::chrono::seconds(2));
   audioPlayer.clearAll();
-  audioPlayer.append(url4, AudioFormat::FormatMpeg);
+  audioPlayer.append(24, url4, AudioFormat::FormatMpeg);
   for (int i = 0;
        i < 7 && audioPlayer.getState().state != AudioGraphNodeState::FINISHED;
        ++i) {
@@ -392,12 +395,12 @@ TEST_F(AudioPlayerTest, test_protocol_detection) {
 
   // Test with a local file URL (file://)
   std::string fileUrl = "file://files/tone440.mp3";
-  audioPlayer.append(fileUrl, AudioFormat::FormatMpeg);
+  audioPlayer.append(25, fileUrl, AudioFormat::FormatMpeg);
   std::this_thread::sleep_for(std::chrono::seconds(2));
 
   // Switch to an HTTP URL
   audioPlayer.clearAll();
-  audioPlayer.append(url1);
+  audioPlayer.append(26, url1);
 
   while (audioPlayer.getState().state != AudioGraphNodeState::FINISHED) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
