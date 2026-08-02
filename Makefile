@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native
+.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native renderer-build renderer-clean proto
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -109,6 +109,29 @@ dev-run:
 dev-rebuild-native:
 	@cd packages/kalinka-server/src/native_player && $(abspath $(PY)) setup.py build_ext --inplace
 	@echo "Native extension rebuilt. Restart the server to load it."
+## -----------------------------------------------------------------------------
+
+## --- Native renderer (packages/kalinka-renderer) ------------------------------
+## C++ protobuf sources are generated at build time by CMake; the Python
+## bindings for the server are committed (make proto regenerates them).
+RENDERER_DIR := packages/kalinka-renderer
+RENDERER_BUILD := $(RENDERER_DIR)/build
+
+renderer-build:
+	@cmake -S $(RENDERER_DIR) -B $(RENDERER_BUILD)
+	@cmake --build $(RENDERER_BUILD) -j
+
+renderer-clean:
+	@rm -rf $(RENDERER_BUILD)
+
+## Regenerate the committed Python protobuf bindings (needs grpcio-tools in
+## the venv: pip install grpcio-tools).
+proto:
+	@$(PY) -m grpc_tools.protoc \
+		-I $(RENDERER_DIR)/proto/kalinka/renderer/v1 \
+		--python_out=packages/kalinka-server/src/kalinka_server/renderer_proto \
+		$(RENDERER_DIR)/proto/kalinka/renderer/v1/renderer.proto
+	@echo "Regenerated kalinka_server/renderer_proto/renderer_pb2.py"
 ## -----------------------------------------------------------------------------
 
 ## Clean build artifacts

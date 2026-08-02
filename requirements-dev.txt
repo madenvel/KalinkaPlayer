@@ -17,3 +17,6 @@ build>=0.8.0
 setuptools-scm[toml]>=6.2
 wheel>=0.37.0
 hatchling>=1.18.0
+
+# Renderer protocol codegen (make proto)
+grpcio-tools>=1.60
