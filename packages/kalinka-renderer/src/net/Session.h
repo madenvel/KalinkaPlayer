@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -13,11 +14,10 @@
 #include "../Identity.h"
 #include "../discovery/Discovery.h"
 
-// One WebSocket connection to one Core: connect, send Hello, expect Welcome,
-// then sit in the read loop. Reconnects with doubling backoff (1s..30s) on
-// any failure. All handlers run on the single-threaded io_context, so no
-// locking; every completion handler holds shared_from_this so a handler can
-// never outlive the session.
+// One WebSocket connection to one Core: connect, Hello, expect Welcome, then
+// read-loop; reconnects with doubling backoff (1s..30s). Single-threaded
+// io_context; handlers hold shared_from_this. Inbound messages go through a
+// bounded inbox drained off the read path, so processing never stalls reads.
 class Session : public std::enable_shared_from_this<Session> {
 public:
   Session(boost::asio::io_context &ioc, CoreEndpoint endpoint,
@@ -36,6 +36,8 @@ private:
   void connect();
   void sendHello();
   void readLoop();
+  void enqueueMessage(std::string data);
+  void drainInbox();
   void handleMessage(const std::string &data);
   void fail(const char *stage, const boost::beast::error_code &ec);
   void scheduleRetry();
@@ -49,6 +51,10 @@ private:
   std::optional<WsStream> ws_;  // recreated per connection attempt
   boost::beast::flat_buffer readBuffer_;
   std::string writeBuffer_;
+
+  // Bounded inbox between the read loop and message processing.
+  std::deque<std::string> inbox_;
+  bool drainScheduled_ = false;
 
   boost::asio::steady_timer retryTimer_;
   boost::asio::steady_timer closeTimer_;

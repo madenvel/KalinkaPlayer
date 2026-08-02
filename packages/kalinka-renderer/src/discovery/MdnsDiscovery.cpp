@@ -6,8 +6,10 @@
 
 #include <cstring>
 #include <map>
+#include <set>
 #include <vector>
 
+#include "../Protocol.h"
 #include "mdns.h"
 
 namespace {
@@ -17,7 +19,7 @@ constexpr auto kMaxQueryInterval = std::chrono::seconds(60);
 constexpr size_t kBufferSize = 8192;
 
 // Records of one received mDNS message, keyed by owner name, so a
-// PTR + SRV + A response resolves in a single pass.
+// PTR + SRV + TXT + A response resolves in a single pass.
 struct Packet {
   // instance name -> ttl (0 = goodbye)
   std::map<std::string, uint32_t> ptrInstances;
@@ -25,6 +27,9 @@ struct Packet {
   std::map<std::string, std::pair<std::string, uint16_t>> srv;
   // host name -> IPv4 address string
   std::map<std::string, std::string> addresses;
+  // instances whose TXT record appeared, and their renderer_proto value
+  std::set<std::string> txtSeen;
+  std::map<std::string, int> rendererProto;
 };
 
 std::string extractName(const void *data, size_t size, size_t offset) {
@@ -64,6 +69,25 @@ int recordCallback(int /*sock*/, const struct sockaddr * /*from*/,
         data, size, record_offset, record_length, namebuf, sizeof(namebuf));
     packet->srv[owner] = {std::string(srv.name.str, srv.name.length),
                           srv.port};
+    break;
+  }
+  case MDNS_RECORDTYPE_TXT: {
+    const std::string owner = extractName(data, size, name_offset);
+    if (!owner.ends_with(std::string(".") + kServiceType)) {
+      break;
+    }
+    packet->txtSeen.insert(owner);
+    mdns_record_txt_t txt[16];
+    const size_t count = mdns_record_parse_txt(
+        data, size, record_offset, record_length, txt, std::size(txt));
+    for (size_t i = 0; i < count; ++i) {
+      if (std::string(txt[i].key.str, txt[i].key.length) ==
+          kRendererProtoTxtKey) {
+        packet->rendererProto[owner] =
+            std::atoi(std::string(txt[i].value.str, txt[i].value.length)
+                          .c_str());
+      }
+    }
     break;
   }
   case MDNS_RECORDTYPE_A: {
@@ -174,14 +198,42 @@ void MdnsDiscovery::drainSocket() {
     for (const auto &[instance, ttl] : packet.ptrInstances) {
       if (ttl == 0) {
         // Goodbye packet.
-        if (known_.erase(instance)) {
+        const auto it = known_.find(instance);
+        if (it != known_.end()) {
+          const bool wasCapable = it->second;
+          known_.erase(it);
           spdlog::info("[Discovery] Service '{}' disappeared",
                        displayName(instance));
-          onRemove_(instance);
+          if (wasCapable) {
+            onRemove_(instance);
+          }
         }
         continue;
       }
-      if (known_.contains(instance)) {
+      if (!packet.txtSeen.contains(instance)) {
+        continue;  // capability not judgeable from this message
+      }
+      const auto proto = packet.rendererProto.find(instance);
+      const bool capable =
+          proto != packet.rendererProto.end() &&
+          proto->second == static_cast<int>(kRendererProtocolVersion);
+      const auto it = known_.find(instance);
+      if (it != known_.end() && it->second == capable) {
+        continue;  // no change
+      }
+      if (!capable) {
+        const bool wasCapable = it != known_.end() && it->second;
+        known_[instance] = false;
+        if (wasCapable) {
+          spdlog::warn("[Discovery] '{}' lost renderer support; disconnecting",
+                       displayName(instance));
+          onRemove_(instance);
+        } else {
+          spdlog::info(
+              "[Discovery] '{}' has no renderer support (renderer_proto "
+              "missing or != {}); will connect if it appears",
+              displayName(instance), kRendererProtocolVersion);
+        }
         continue;
       }
       const auto srv = packet.srv.find(instance);
@@ -192,7 +244,7 @@ void MdnsDiscovery::drainSocket() {
       if (addr == packet.addresses.end()) {
         continue;
       }
-      known_.insert(instance);
+      known_[instance] = true;
       CoreEndpoint endpoint{instance, addr->second, srv->second.second,
                             displayName(instance)};
       spdlog::info("[Discovery] Found '{}' at {}:{}", endpoint.name,
