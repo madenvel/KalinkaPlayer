@@ -36,7 +36,7 @@ from kalinka_plugin_sdk.events import PlayQueueEventType
 from kalinka_plugin_sdk import paths
 
 from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
-from .alsa_volume_device import VOLUME_TYPE_OPTIONS_PATH, volume_type_options
+from .renderer_output_device import VOLUME_STYLE_OPTIONS_PATH, volume_style_options
 from .config_model import KalinkaConfig
 from .config_overrides import save_overrides
 from .config_schema_processor import (
@@ -136,9 +136,7 @@ async def lifespan(app: FastAPI):
         # Shutdown internal modules first
         await internal_modules.shutdown()
 
-        # Then shutdown plugins — including the built-in local-ALSA device, whose
-        # volume monitor is stopped here (before the playqueue tears down the
-        # native player it references).
+        # Then shutdown plugins, including the built-in renderer volume device.
         await shutdown()
 
         app.state.player_context.playqueue_eventbus.close()
@@ -277,6 +275,7 @@ async def create_app(
         app.state.overrides,
         renderer_registry,
         renderer_sessions,
+        renderer_configs,
         app.state.overrides_file,
     )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
@@ -378,10 +377,10 @@ async def create_app(
         ALSA_DEVICE_PATH,
         make_alsa_resolver(lambda: config.output.alsa.device),
     )
-    # Static labelled/described choices for the local-alsa volume_type dropdown,
-    # served the same way as the ALSA device list.
+    # Static labelled/described choices for the renderer device's volume_style
+    # dropdown, served the same way as the ALSA device list.
     app.state.options_registry.register(
-        VOLUME_TYPE_OPTIONS_PATH, volume_type_options
+        VOLUME_STYLE_OPTIONS_PATH, volume_style_options
     )
     _initial_ok_in = {
         name: m.plugin_context.config
@@ -425,9 +424,9 @@ async def create_app(
         else None
     )
     # `device` is the active output-device control — the first enabled device.
-    # That's the built-in local-ALSA volume control unless an external plugin
-    # device (e.g. MusicCast) is enabled; it's None only when even local-alsa is
-    # disabled (in which case the player stays fixed / bit-perfect).
+    # That's the built-in renderer volume control unless an external plugin
+    # device (e.g. MusicCast) is enabled; it's None only when even the renderer
+    # device is disabled (in which case clients get no volume control).
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):

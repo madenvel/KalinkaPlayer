@@ -339,6 +339,20 @@ class SessionPool:
         self.server_id = server_id
         self._timeout_s = timeout_s
         self._sessions: dict[str, PlaybackSession] = {}
+        self._open_hooks: list[Callable] = []
+
+    def add_open_hook(
+        self, hook: Callable[[PlaybackSession], Any]
+    ) -> None:
+        """Awaited inside open() once the session is ACTIVE, before open()
+        returns — so a hook's work (e.g. a volume push) cannot race whatever
+        playback commands the caller sends next. A failing hook is logged,
+        never fails the open."""
+        self._open_hooks.append(hook)
+
+    def remove_open_hook(self, hook: Callable) -> None:
+        if hook in self._open_hooks:
+            self._open_hooks.remove(hook)
 
     def get(self, renderer_id: str) -> Optional[PlaybackSession]:
         return self._sessions.get(renderer_id)
@@ -390,6 +404,13 @@ class SessionPool:
 
         session.state = SessionState.ACTIVE
         logger.info("Opened session %s on renderer %s", session.session_id, renderer_id)
+        for hook in list(self._open_hooks):
+            try:
+                result = hook(session)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("Session open hook failed")
         return session
 
     def _abort_open(self, session: PlaybackSession, notify: bool = True) -> None:

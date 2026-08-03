@@ -41,6 +41,13 @@ class SimRenderer:
         self.queued: list[str] = []
         self.position_ms = 0
         self.commands: list[pb.Command] = []
+        self.volume = 40
+        self.volume_supported = True
+        self.config_updates: list[dict] = []
+        # A RendererConfigService to answer config updates through; without it
+        # updates are recorded but never acknowledged (the caller times out).
+        self.configs = None
+        self._message_id = 0
 
     def connect(self) -> None:
         self.registry.register(
@@ -113,8 +120,29 @@ class SimRenderer:
                 self.position_ms = command.seek.position_ms
                 self._emit_state(pb.PLAYBACK_STATE_PREPARING, self.current)
                 self._emit_state(pb.PLAYBACK_STATE_PLAYING, self.current)
+        elif op == "set_volume":
+            self.volume = min(command.set_volume.percent, 100)
+            changed = pb.VolumeChanged()
+            self._fill_volume(changed.volume)
+            self._send("volume_changed", changed)
         elif op == "request_snapshot":
             self._send("state_snapshot", self._snapshot())
+
+    def next_message_id(self) -> int:
+        self._message_id += 1
+        return self._message_id
+
+    async def send_config_update(self, message_id: int, changes: dict) -> None:
+        self.config_updates.append(dict(changes))
+        if self.configs is None:
+            return
+        result = pb.ConfigResult()
+        for path, value in changes.items():
+            outcome = result.outcomes.add()
+            outcome.path = path
+            outcome.applied = True
+            outcome.value = str(value)
+        self.configs.handle_reply(self.RENDERER_ID, message_id, result)
 
     async def replace(self) -> None:
         pass
@@ -212,8 +240,18 @@ class SimRenderer:
         snapshot.position_ms = self.position_ms
         snapshot.position_valid = self.current is not None
         snapshot.captured_at_unix_ms = _NOW_UNIX_MS
-        snapshot.volume.supported = False
+        self._fill_volume(snapshot.volume)
         return snapshot
+
+    def _fill_volume(self, out: pb.VolumeState) -> None:
+        out.supported = self.volume_supported
+        out.current = self.volume
+        out.max = 100
+        out.backend = (
+            pb.VOLUME_BACKEND_HARDWARE
+            if self.volume_supported
+            else pb.VOLUME_BACKEND_NONE
+        )
 
     def _send(self, payload: str, message) -> None:
         if self.session_id is None:
