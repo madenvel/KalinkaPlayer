@@ -35,18 +35,33 @@ add_library(kalinka_renderer_proto STATIC
 target_include_directories(kalinka_renderer_proto SYSTEM PUBLIC ${PROTO_GEN_DIR})
 target_link_libraries(kalinka_renderer_proto PUBLIC protobuf::libprotobuf-lite)
 
+# --- kalinka_renderer_core: the session and config planes --------------------
+# Everything below the network layer, so unit tests can link it without
+# sockets, discovery or the daemon plumbing.
+add_library(kalinka_renderer_core STATIC
+  src/config/ConfigService.cpp
+  src/session/Session.cpp
+  src/session/SessionManager.cpp
+)
+target_include_directories(kalinka_renderer_core PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(kalinka_renderer_core PUBLIC
+  kalinka_renderer_proto
+  Boost::headers
+  spdlog::spdlog
+  Threads::Threads
+)
+
 # --- kalinka-renderer executable ---------------------------------------------
 add_executable(kalinka-renderer
   src/main.cpp
   src/Daemon.cpp
   src/Identity.cpp
   src/discovery/MdnsDiscovery.cpp
-  src/config/ConfigService.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
   src/player/StubPlayer.cpp
-  src/session/Session.cpp
-  src/session/SessionManager.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE
   KALINKA_RENDERER_VERSION="${PROJECT_VERSION}"
@@ -55,8 +70,22 @@ target_include_directories(kalinka-renderer SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mdns
 )
 target_link_libraries(kalinka-renderer PRIVATE
-  kalinka_renderer_proto
-  Boost::headers
-  spdlog::spdlog
-  Threads::Threads
+  kalinka_renderer_core
 )
+
+# --- unit tests (optional: built only when GoogleTest is installed) ----------
+find_package(GTest CONFIG)
+if(GTest_FOUND)
+  enable_testing()
+  add_executable(kalinka-renderer-tests
+    tests/test_config_service.cpp
+    tests/test_session.cpp
+    tests/test_session_manager.cpp
+  )
+  target_link_libraries(kalinka-renderer-tests PRIVATE
+    kalinka_renderer_core
+    GTest::gtest_main
+  )
+  include(GoogleTest)
+  gtest_discover_tests(kalinka-renderer-tests)
+endif()

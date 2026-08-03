@@ -1,0 +1,135 @@
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <string>
+
+#include "config/ConfigService.h"
+#include "fakes.h"
+
+namespace pb = kalinka::renderer::v1;
+
+class ConfigServiceTest : public ::testing::Test {
+protected:
+  pb::ConfigSnapshot snapshot() {
+    pb::ConfigSnapshot out;
+    service.fillSnapshot(out);
+    return out;
+  }
+
+  pb::ConfigResult apply(const std::string &path, const std::string &value) {
+    pb::ConfigUpdate update;
+    pb::ConfigUpdate::Setting *setting = update.add_settings();
+    setting->set_path(path);
+    setting->set_value(value);
+    pb::ConfigResult out;
+    service.apply(update, out);
+    return out;
+  }
+
+  std::shared_ptr<FakePlayer> player = std::make_shared<FakePlayer>();
+  ConfigService service{player};
+};
+
+TEST_F(ConfigServiceTest, SnapshotCarriesThePlayerSectionAndAVersion) {
+  pb::ConfigSnapshot snap = snapshot();
+
+  ASSERT_EQ(snap.sections_size(), 1);
+  EXPECT_EQ(snap.sections(0).path(), "output");
+  EXPECT_EQ(snap.sections(0).fields_size(), 3);
+  EXPECT_FALSE(snap.config_version().empty());
+}
+
+TEST_F(ConfigServiceTest, VersionCoversShapeAndOptionsButNeverValues) {
+  const std::string before = snapshot().config_version();
+
+  player->values["output.buffer_ms"] = "250";
+  EXPECT_EQ(snapshot().config_version(), before);
+
+  player->driverOptions.push_back("pipewire");
+  EXPECT_NE(snapshot().config_version(), before);
+}
+
+TEST_F(ConfigServiceTest, AValidWriteReachesThePlayer) {
+  player->driverOptions = {"alsa", "pipewire"};
+
+  pb::ConfigResult result = apply("output.driver", "pipewire");
+
+  ASSERT_EQ(result.outcomes_size(), 1);
+  EXPECT_TRUE(result.outcomes(0).applied());
+  EXPECT_EQ(result.outcomes(0).value(), "pipewire");
+  EXPECT_EQ(result.effect(), pb::APPLY_COST_RESTART_REQUIRED);
+  EXPECT_EQ(player->values.at("output.driver"), "pipewire");
+}
+
+TEST_F(ConfigServiceTest, TheOutcomeCarriesWhatIsInEffectNotWhatWasAsked) {
+  player->driverOptions = {"alsa", "pipewire"};
+  player->normalizedSuffix = ":0";  // the player elaborates what it was given
+
+  pb::ConfigResult result = apply("output.driver", "pipewire");
+
+  EXPECT_TRUE(result.outcomes(0).applied());
+  EXPECT_EQ(result.outcomes(0).value(), "pipewire:0");
+}
+
+TEST_F(ConfigServiceTest, UnknownPathIsRefusedWithoutTouchingThePlayer) {
+  pb::ConfigResult result = apply("output.nonsense", "x");
+
+  EXPECT_FALSE(result.outcomes(0).applied());
+  EXPECT_EQ(result.outcomes(0).error(), "no such setting");
+  EXPECT_TRUE(player->calls.empty());
+}
+
+TEST_F(ConfigServiceTest, ReadOnlyFieldIsRefusedWithoutTouchingThePlayer) {
+  player->driverReadOnly = true;
+
+  pb::ConfigResult result = apply("output.driver", "alsa");
+
+  EXPECT_FALSE(result.outcomes(0).applied());
+  EXPECT_EQ(result.outcomes(0).error(), "read-only setting");
+  EXPECT_TRUE(player->calls.empty());
+}
+
+TEST_F(ConfigServiceTest, ValuesMustParseAsTheFieldType) {
+  EXPECT_EQ(apply("output.buffer_ms", "fast").outcomes(0).error(),
+            "not a number");
+  EXPECT_EQ(apply("output.exclusive", "yes").outcomes(0).error(),
+            "expected 'true' or 'false'");
+  EXPECT_EQ(apply("output.driver", "wasapi").outcomes(0).error(),
+            "not one of the offered options");
+  player->driverOptions.clear();
+  EXPECT_EQ(apply("output.driver", "alsa").outcomes(0).error(),
+            "no options available");
+  EXPECT_TRUE(player->calls.empty());
+}
+
+TEST_F(ConfigServiceTest, PlayerRefusalIsReportedPerPath) {
+  player->refuseApply = true;
+
+  pb::ConfigResult result = apply("output.buffer_ms", "250");
+
+  EXPECT_FALSE(result.outcomes(0).applied());
+  EXPECT_EQ(result.outcomes(0).error(), "player said no");
+  EXPECT_EQ(result.effect(), pb::APPLY_COST_UNSPECIFIED);  // nothing happened
+}
+
+TEST_F(ConfigServiceTest, EffectIsTheWorstAmongTheSettingsActuallyApplied) {
+  pb::ConfigUpdate update;
+  pb::ConfigUpdate::Setting *buffer = update.add_settings();
+  buffer->set_path("output.buffer_ms");
+  buffer->set_value("250");
+  pb::ConfigUpdate::Setting *exclusive = update.add_settings();
+  exclusive->set_path("output.exclusive");
+  exclusive->set_value("true");
+  pb::ConfigUpdate::Setting *driver = update.add_settings();
+  driver->set_path("output.driver");
+  driver->set_value("wasapi");  // refused: its RESTART_REQUIRED must not count
+
+  pb::ConfigResult result;
+  service.apply(update, result);
+
+  ASSERT_EQ(result.outcomes_size(), 3);
+  EXPECT_TRUE(result.outcomes(0).applied());
+  EXPECT_TRUE(result.outcomes(1).applied());
+  EXPECT_FALSE(result.outcomes(2).applied());
+  EXPECT_EQ(result.effect(), pb::APPLY_COST_INTERRUPTS_PLAYBACK);
+}
