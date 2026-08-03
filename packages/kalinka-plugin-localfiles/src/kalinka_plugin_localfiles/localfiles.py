@@ -34,6 +34,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
+from .media_http import MediaHttpServer
 from .utils.name_utils import expand_music_folders, path_within_roots
 from .input_module_db import LocalFilesInputModuleDb
 
@@ -81,10 +82,14 @@ class LocalFilesInputModule(InputModule):
         db_manager: LocalFilesInputModuleDb,
         search_request_queue: Optional[multiprocessing.Queue] = None,
         search_response_queue: Optional[multiprocessing.Queue] = None,
+        media_server: Optional[MediaHttpServer] = None,
     ):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.config = config
         self.db_manager = db_manager
+        # MediaHttpServer minting the track URLs renderers fetch. None (tests
+        # only) falls back to file:// links, which resolve in-process only.
+        self._media_server = media_server
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         # Access boundary: only files under a configured music folder may be
         # served / played. Captured once here, so it is fixed for the lifetime
@@ -600,7 +605,7 @@ class LocalFilesInputModule(InputModule):
                 # the play queue surfaces the track as unavailable rather than
                 # handing the player a dead/forbidden path. This guards the
                 # window between a folder-config change and the next index scan.
-                def create_link_retriever(track_path, track_format):
+                def create_link_retriever(track_db_id, track_path, track_format):
                     async def link_retriever():
                         if not path_within_roots(track_path, self._music_folders):
                             raise PermissionError(
@@ -615,7 +620,11 @@ class LocalFilesInputModule(InputModule):
                             raise PermissionError(
                                 f"Track file is not readable: {track_path}"
                             )
-                        return TrackUrl(url=f"file://{track_path}", format=track_format)
+                        if self._media_server is not None:
+                            url = self._media_server.url_for(track_db_id)
+                        else:
+                            url = f"file://{track_path}"
+                        return TrackUrl(url=url, format=track_format)
 
                     return link_retriever
 
@@ -623,7 +632,7 @@ class LocalFilesInputModule(InputModule):
                     TrackInfo(
                         id=track_id(track["id"]),
                         link_retriever=create_link_retriever(
-                            track["file_path"], track["format"]
+                            track["id"], track["file_path"], track["format"]
                         ),
                         metadata=track_metadata,
                     )
