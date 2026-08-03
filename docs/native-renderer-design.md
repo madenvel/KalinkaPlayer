@@ -1091,7 +1091,7 @@ leaves the reopen decision to the owner, as with every other close. The refused
 command is kept on `session.rejection` for whoever handles `on_closed`.
 
 **The gate is checked per command, not per connection**
-(`CoreConnection::handleCommand`): the envelope's `session_id` must name the
+(`ProtocolSession::handleCommand`): the envelope's `session_id` must name the
 session this connection is attached to — and a connection is only ever
 attached while its Core owns the session, so the owner check is implied. This
 is what stops a second Core from reaching the audio graph, and it has to be
@@ -1117,14 +1117,22 @@ session stops it — the graph is torn down however the session ends.
 The renderer's session plane is two classes and two interfaces. `Session` ties
 one Core's connection to the player: commands in through `SessionEventSink`
 (implemented by `Session`), state out through `SessionTransport` (implemented
-by `CoreConnection`, held weakly — a dropped connection simply stops being a
+by `ProtocolSession`, held weakly — a dropped connection simply stops being a
 route). `SessionManager` holds the *single, possibly-empty* slot: `open()`
 either hands out the session — idempotent for its owner — or refuses because
 another one is running, the only rejection there is. A connection keeps the
 session it carries and gates commands on it; the session keeps its connections
 and decides how it ends, reporting back through `onSessionClosed` /
-`onConnectionClosed`. The connection layer stays plumbing: `CoreConnection`
-parses and frames, `Session` decides.
+`onConnectionClosed`.
+
+The connection layer itself is split along the line §3's layout drew:
+`WsTransport` moves bytes — sockets, framing, bounded queues, reconnect
+backoff — and `ProtocolSession` decides what they mean — handshake, the
+command gate, session adopt/detach, config routing, when a link is not worth
+retrying. The two hold each other weakly through callbacks; `CoreConnection`
+is nothing but the pair, assembled, and `ConnectionManager` owns one per
+discovered Core. `ProtocolSession` has no asio in it, which is what makes the
+protocol unit-testable with a vector standing in for the wire.
 
 ### 7.3 Renderer configuration (implemented)
 
@@ -1180,10 +1188,12 @@ transient plugin state changes". Renderer settings are `GET`/`PUT
 /renderer/{renderer_id}/config`, rendered from the same `FieldSpec`-shaped
 payload the app already knows how to draw.
 
-Where it lives: `Player::fillConfig`/`applyConfig` (everything backend-specific
-belongs to the sink), assembled and validated by `ConfigService`, answered on
-any connection by `CoreConnection`, and on the Core side
-`renderer_config.RendererConfigService`.
+Where it lives: `ConfigContributor` is the seam — `fillConfig`/`applyConfig`,
+one section per contributor. `Player` is the first contributor (everything
+backend-specific belongs to the sink); anything renderer-level joins by
+registering another one. `ConfigService` assembles and validates, writes are
+routed to the contributor that declared the field, `ProtocolSession` answers
+on any connection, and on the Core side `renderer_config.RendererConfigService`.
 
 **Room left for testing a change without a restart**: `CONFIG_FIELD_TYPE_TRIGGER`
 is a field with no value that runs once when written. A "test this output"
@@ -1281,26 +1291,35 @@ exactly as today.
 
 ## 10. Testing strategy
 
-### 10.1 C++ unit tests
+### 10.1 C++ unit tests (implemented)
 
-gtest/gmock + CTest, ASAN on as in the existing test Makefile. The two seams
-that make this cheap are `IPlayer` and `ITransport`.
+gtest + CTest, in `tests/`, linking `kalinka_renderer_core` — the session,
+config and protocol planes with no live sockets. GoogleTest is found via
+`find_package`, and the test target simply does not exist where it is not
+installed, so the Pi build is untouched. The seams that make this cheap are
+the ones the design already has: `Player`, `ConfigContributor`,
+`SessionTransport`, and `ProtocolSession::Wire`.
 
-- `ProtocolSession_test` — handshake, version negotiation, malformed `Hello`,
-  `Goodbye` paths, command→`CommandResult` correlation, snapshot-on-request.
-  Uses `FakeTransport` + `FakePlayer`: **no sockets, no ALSA.**
-- `StateTranslator_test` — every `AudioGraphNodeState` and `StreamError`
-  combination → expected messages. This is where the "don't change existing
-  semantics" contract is pinned down, including the `FINISHED`-with/without-
-  `source_token` distinction.
-- `CommandQueue_test` — bounded behaviour, reject-on-full, close-and-drain,
-  multi-producer.
-- `Arbiter_test` — lease acquire/reject/release, grace period on disconnect,
-  forced takeover.
-- `Backoff_test` — sequence, jitter bounds, reset conditions.
-- `Identity_test` — first-boot creation, reuse, corrupt-file recovery.
-- `OutputDevices_test` — ALSA hint filtering, fed synthetic hints (the same
-  pure-function approach `alsa_options.py` already uses).
+- `test_session` — snapshot-on-attach, command dispatch, newest-route-first
+  state with fallback, the release rules (immediate when stopped, grace when
+  playing, owner returning in time), close notification fan-out, idempotency.
+- `test_session_manager` — open/idempotent-reopen/busy, owner-only close,
+  slot reuse, `ownedBy`, the slot clearing when a session ends on its own.
+- `test_config_service` — version over shape+options but never values, every
+  refusal reason, in-effect values in outcomes, worst-`ApplyCost` effect,
+  writes routed to the contributor that declared the field.
+- `test_protocol_session` — Hello (claim broadcast included), open/busy/
+  before-welcome, the command gate and both rejection details, close ack,
+  detach on link loss, reconnect restore, config `in_reply_to` correlation,
+  fatal-`Goodbye` give-up. The wire is a vector: **no sockets, no ALSA.**
+- `test_ws_transport` — against an in-process Beast loopback server:
+  messages both ways, down+reconnect on drop, give-up staying down, the
+  final frame flushing on stop.
+
+Still to come with the real player: a `StateTranslator`-equivalent pinning
+every `AudioGraphNodeState`/`StreamError` mapping, and device-enumerator
+tests fed synthetic ALSA hints (the pure-function approach `alsa_options.py`
+already uses).
 
 ### 10.2 C++/Python Protobuf compatibility
 
