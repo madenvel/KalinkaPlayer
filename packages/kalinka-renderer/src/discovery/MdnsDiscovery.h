@@ -9,13 +9,20 @@
 
 #include "Discovery.h"
 
-// Self-contained DNS-SD browser for _kalinkaplayer._tcp (vendored mdns.h, no
-// avahi/Bonjour daemon). Socket on 5353 hears announcements/goodbyes and
-// answers to the periodic PTR queries (doubling 1s -> 60s). Servers without a
-// matching "renderer_proto" TXT value are never connected; a TXT change (e.g.
-// a server upgrade re-announcing) flips them in or out, so no request
-// bombardment of servers that would only reject us. Callbacks run on the
-// discovery thread and must not block.
+/**
+ * @brief Self-contained DNS-SD browser for _kalinkaplayer._tcp.
+ *
+ * Vendored mdns.h, so no avahi or Bonjour daemon is required. A socket on 5353
+ * hears announcements and goodbyes, and answers to the periodic PTR queries
+ * (doubling 1s -> 60s).
+ *
+ * Servers without a matching "renderer_proto" TXT value are never reported; a
+ * TXT change — a server upgrade re-announcing, say — flips them in or out, so
+ * servers that would only reject us are never bombarded with connections.
+ *
+ * @note Callbacks run on the discovery thread and must not block. The renderer
+ *       posts them onto its io_context.
+ */
 class MdnsDiscovery {
 public:
   using AddFn = std::function<void(CoreEndpoint)>;
@@ -27,10 +34,13 @@ public:
   MdnsDiscovery(const MdnsDiscovery &) = delete;
   MdnsDiscovery &operator=(const MdnsDiscovery &) = delete;
 
-  // Opens the multicast socket and starts the browse thread.
+  /**
+   * @brief Open the multicast socket and start the browse thread.
+   * @return false when the socket could not be opened, leaving nothing running.
+   */
   bool start();
 
-  // Stops and joins the browse thread. Idempotent.
+  /// Stop and join the browse thread. Idempotent.
   void stop();
 
 private:

@@ -19,6 +19,40 @@ constexpr auto kCloseDeadline = std::chrono::seconds(2);
 constexpr size_t kInboxLimit = 256;
 constexpr size_t kWriteQueueLimit = 256;
 
+int64_t nowUnixMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+pb::ControlKind kindOf(const pb::Command &command) {
+  switch (command.op_case()) {
+  case pb::Command::kSetSource:
+    return pb::CONTROL_KIND_SET_SOURCE;
+  case pb::Command::kEnqueueSource:
+    return pb::CONTROL_KIND_ENQUEUE_SOURCE;
+  case pb::Command::kRemoveSource:
+    return pb::CONTROL_KIND_REMOVE_SOURCE;
+  case pb::Command::kClearQueue:
+    return pb::CONTROL_KIND_CLEAR_QUEUE;
+  case pb::Command::kPause:
+    return pb::CONTROL_KIND_PAUSE;
+  case pb::Command::kResume:
+    return pb::CONTROL_KIND_RESUME;
+  case pb::Command::kStop:
+    return pb::CONTROL_KIND_STOP;
+  case pb::Command::kSetVolume:
+    return pb::CONTROL_KIND_SET_VOLUME;
+  case pb::Command::kRequestSnapshot:
+    return pb::CONTROL_KIND_REQUEST_SNAPSHOT;
+  case pb::Command::kSeek:
+    return pb::CONTROL_KIND_SEEK;
+  case pb::Command::OP_NOT_SET:
+    return pb::CONTROL_KIND_UNSPECIFIED;
+  }
+  return pb::CONTROL_KIND_UNSPECIFIED;
+}
+
 // Liveness: Beast answers server pings, pings when idle, drops a silent peer.
 boost::beast::websocket::stream_base::timeout wsTimeouts() {
   boost::beast::websocket::stream_base::timeout t{};
@@ -32,16 +66,15 @@ boost::beast::websocket::stream_base::timeout wsTimeouts() {
 CoreConnection::CoreConnection(asio::io_context &ioc, CoreEndpoint endpoint,
                                const Identity &identity,
                                std::string friendlyName,
-                               std::shared_ptr<SessionManager> sessionManager)
+                               RendererServices services)
     : ioc_(ioc), endpoint_(std::move(endpoint)), identity_(identity),
-      friendlyName_(std::move(friendlyName)),
-      sessionManager_(std::move(sessionManager)), resolver_(ioc),
-      retryTimer_(ioc), closeTimer_(ioc) {}
+      friendlyName_(std::move(friendlyName)), services_(std::move(services)),
+      resolver_(ioc), retryTimer_(ioc), closeTimer_(ioc) {}
 
 void CoreConnection::start() { connect(); }
 
 void CoreConnection::connect() {
-  notifyCoreGone();
+  detachSession();
   welcomed_ = false;
   failing_ = false;
   serverId_.clear();
@@ -86,10 +119,10 @@ void CoreConnection::sendHello() {
   hello->set_friendly_name(friendlyName_);
   hello->set_software_version(KALINKA_RENDERER_VERSION);
   hello->set_kind(pb::RENDERER_KIND_NATIVE);
-  if (const auto &active = sessionManager_->active(); active) {
+  if (const auto session = services_.sessions->current()) {
     // Reported to every Core; only its owner acts on it.
-    hello->set_active_session_id(active->sessionId);
-    hello->set_session_owner_server_id(active->ownerServerId);
+    hello->set_active_session_id(session->sessionId());
+    hello->set_session_owner_server_id(session->ownerServerId());
   }
 
   utsname u{};
@@ -215,8 +248,7 @@ void CoreConnection::handleMessage(const std::string &data) {
     }
     welcomed_ = true;
     serverId_ = w.server_id();
-    announcedConnected_ = true;
-    sessionManager_->coreConnected(serverId_);
+    adoptSession();
     retryDelay_ = std::chrono::seconds(1);
     spdlog::info(
         "[{}] Registered: server '{}' version {} (api {}, protocol v{})",
@@ -229,6 +261,15 @@ void CoreConnection::handleMessage(const std::string &data) {
     break;
   case pb::Envelope::kSessionClose:
     handleSessionClose(env.session_close().session_id());
+    break;
+  case pb::Envelope::kCommand:
+    handleCommand(env);
+    break;
+  case pb::Envelope::kConfigRequest:
+    handleConfigRequest(env);
+    break;
+  case pb::Envelope::kConfigUpdate:
+    handleConfigUpdate(env);
     break;
   case pb::Envelope::kGoodbye: {
     const pb::Goodbye &g = env.goodbye();
@@ -265,6 +306,7 @@ void CoreConnection::handleSessionOpen(const std::string &sessionId) {
   env.set_message_id(nextMessageId_++);
   pb::SessionOpenResult *result = env.mutable_session_open_result();
   result->set_session_id(sessionId);
+  bool accepted = false;
 
   if (!welcomed_) {
     result->set_accepted(false);
@@ -272,8 +314,11 @@ void CoreConnection::handleSessionOpen(const std::string &sessionId) {
     result->set_detail("session opened before the handshake completed");
   } else {
     std::string busyOwner;
-    if (sessionManager_->open(sessionId, serverId_, busyOwner)) {
+    if (auto session = services_.sessions->open(sessionId, serverId_,
+                                                busyOwner)) {
       result->set_accepted(true);
+      session_ = std::move(session);
+      accepted = true;
     } else {
       result->set_accepted(false);
       result->set_error(pb::SessionOpenResult::ERROR_BUSY);
@@ -282,10 +327,72 @@ void CoreConnection::handleSessionOpen(const std::string &sessionId) {
     }
   }
   sendSerialized(env.SerializeAsString());
+  if (accepted) {
+    // Attaching answers with the snapshot, after the result above: the Core
+    // starts with the renderer's state rather than having to ask.
+    session_->attach(weak_from_this());
+  }
 }
 
+void CoreConnection::handleCommand(const pb::Envelope &in) {
+  // The gate: a command must name the session this connection is attached to.
+  // session_ is only ever set while this Core owns it, so the owner check is
+  // implied. Past the gate nothing is refused — what a command did is reported
+  // as state.
+  if (session_ && in.session_id() == session_->sessionId()) {
+    session_->onCommand(in.command());
+    return;
+  }
+  spdlog::warn("[{}] Rejecting command from server {}: session '{}' is not "
+               "the one being run",
+               endpoint_.name, serverId_, in.session_id());
+  pb::Envelope out;
+  pb::CommandRejected *rejection = out.mutable_command_rejected();
+  rejection->set_session_id(in.session_id());
+  rejection->set_command(kindOf(in.command()));
+  rejection->set_at_unix_ms(nowUnixMs());
+  rejection->set_detail(services_.sessions->current()
+                            ? "another session is running"
+                            : "no session is open on this renderer");
+  // The envelope's session_id stays empty: a refused command belongs to no
+  // session of ours, and the one it named is inside the rejection.
+  out.set_message_id(nextMessageId_++);
+  sendSerialized(out.SerializeAsString());
+}
+
+void CoreConnection::handleConfigRequest(const pb::Envelope &in) {
+  pb::Envelope out;
+  services_.config->fillSnapshot(*out.mutable_config_snapshot());
+  sendReply(out, in.message_id());
+}
+
+void CoreConnection::handleConfigUpdate(const pb::Envelope &in) {
+  pb::Envelope out;
+  services_.config->apply(in.config_update(), *out.mutable_config_result());
+  sendReply(out, in.message_id());
+}
+
+void CoreConnection::sendReply(pb::Envelope &out, uint64_t inReplyTo) {
+  out.set_message_id(nextMessageId_++);
+  out.set_in_reply_to(inReplyTo);
+  sendSerialized(out.SerializeAsString());
+}
+
+bool CoreConnection::sendSessionMessage(pb::Envelope &env) {
+  if (stopping_ || gaveUp_ || !welcomed_ || !ws_ || !ws_->is_open()) {
+    return false;
+  }
+  env.set_message_id(nextMessageId_++);
+  sendSerialized(env.SerializeAsString());
+  return true;
+}
+
+void CoreConnection::onSessionClosed() { session_.reset(); }
+
 void CoreConnection::handleSessionClose(const std::string &sessionId) {
-  sessionManager_->close(sessionId, serverId_);
+  // Closing notifies every attached connection through onSessionClosed(),
+  // which is what clears session_ here.
+  services_.sessions->close(sessionId, serverId_);
   pb::Envelope env;
   env.set_message_id(nextMessageId_++);
   pb::SessionClosed *closed = env.mutable_session_closed();
@@ -301,19 +408,30 @@ void CoreConnection::fail(const char *stage, const beast::error_code &ec) {
     return;
   }
   failing_ = true;
-  notifyCoreGone();
+  detachSession();
   spdlog::warn("[{}] {} failed: {}", endpoint_.name, stage, ec.message());
   beast::error_code ignored;
   ws_->next_layer().close(ignored);
   scheduleRetry();
 }
 
-void CoreConnection::notifyCoreGone() {
-  if (!announcedConnected_) {
+void CoreConnection::adoptSession() {
+  // The reconnect half of session restore: a handshake that turns out to carry
+  // the session's owner becomes a route to it again.
+  if (auto session = services_.sessions->ownedBy(serverId_)) {
+    session_ = std::move(session);
+    session_->attach(weak_from_this());
+  }
+}
+
+void CoreConnection::detachSession() {
+  if (!session_) {
     return;
   }
-  announcedConnected_ = false;
-  sessionManager_->coreDisconnected(serverId_);
+  // Moved out first: losing its last route may close the session, which calls
+  // straight back into onSessionClosed().
+  auto session = std::move(session_);
+  session->onConnectionClosed(this);
 }
 
 void CoreConnection::scheduleRetry() {
@@ -338,7 +456,7 @@ void CoreConnection::stop() {
   stopping_ = true;
   retryTimer_.cancel();
   resolver_.cancel();
-  notifyCoreGone();
+  detachSession();
 
   if (!ws_ || !ws_->next_layer().is_open()) {
     return;

@@ -73,8 +73,9 @@ from .device_ws_handler import (
     handle_websocket_connection as handle_device_websocket_connection,
 )
 from .renderer_ws_handler import RendererSession, handle_renderer_connection
+from .renderer_config import RendererConfigService
 from .renderer_registry import RendererRegistry
-from .renderer_sessions import SessionPool
+from .renderer_sessions import RendererUnavailable, SessionPool
 from .server_identity import get_server_id
 
 
@@ -1359,14 +1360,16 @@ async def create_app(
     renderer_registry = RendererRegistry(replace_session=_replace_renderer_session)
     renderer_sessions = SessionPool(renderer_registry, get_server_id())
     renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
+    renderer_configs = RendererConfigService(renderer_registry)
     app.state.renderer_registry = renderer_registry
     app.state.renderer_sessions = renderer_sessions
+    app.state.renderer_configs = renderer_configs
 
     @app.websocket("/renderer/ws")
     async def renderer_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for native renderers (binary protobuf)."""
         await handle_renderer_connection(
-            websocket, config, renderer_registry, renderer_sessions
+            websocket, config, renderer_registry, renderer_sessions, renderer_configs
         )
 
     @app.get("/renderer/list")
@@ -1378,6 +1381,38 @@ async def create_app(
     async def renderer_session_list():
         """Playback sessions this Core holds."""
         return {"server_id": get_server_id(), "sessions": renderer_sessions.list()}
+
+    # Renderer settings are the renderer's own, so they are not part of
+    # /server/config: they need no session, several Cores may edit them, and a
+    # renderer coming or going must not churn the server's schema_version.
+    @app.get("/renderer/{renderer_id}/config")
+    async def renderer_config_get(renderer_id: str):
+        """Settings schema and values, fetched from the renderer on demand."""
+        return await _renderer_config_call(renderer_configs.get(renderer_id))
+
+    @app.put("/renderer/{renderer_id}/config")
+    async def renderer_config_put(renderer_id: str, payload: Dict[str, Any]):
+        """Apply settings; the reply says what ended up in effect.
+
+        Body: `{"changes": {"<path>": "<value>", ...}}`, with the paths as they
+        came from the GET. Unlike /server/config there is no schema_version
+        precondition: writes name individual paths, so a settings page that went
+        stale cannot overwrite a field it did not touch.
+        """
+        changes = payload.get("changes", payload)
+        if not isinstance(changes, dict) or not changes:
+            raise HTTPException(status_code=400, detail="No changes given")
+        return await _renderer_config_call(
+            renderer_configs.update(renderer_id, changes)
+        )
+
+    async def _renderer_config_call(awaitable):
+        try:
+            return await awaitable
+        except RendererUnavailable as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="renderer did not answer")
 
     # Browser player (optional kalinka-web package). Mounted last so every API
     # route above wins; check_dir=False resolves per request, so installing the

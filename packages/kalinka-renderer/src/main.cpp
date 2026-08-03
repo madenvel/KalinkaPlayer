@@ -18,8 +18,11 @@
 
 #include "Daemon.h"
 #include "Identity.h"
+#include "RendererServices.h"
+#include "config/ConfigService.h"
 #include "discovery/MdnsDiscovery.h"
 #include "net/ConnectionManager.h"
+#include "player/StubPlayer.h"
 #include "session/SessionManager.h"
 
 namespace asio = boost::asio;
@@ -156,12 +159,13 @@ int main(int argc, char **argv) {
                getpid());
 
   asio::io_context ioc;
-  // shared_ptr, not a stack object: every CoreConnection observes the same
-  // session state, and its grace timer must stay valid for as long as any
-  // handler can run.
-  auto sessionManager = std::make_shared<SessionManager>(
-      ioc, std::chrono::seconds(opts.sessionGraceSeconds));
-  ConnectionManager manager(ioc, identity, friendlyName, sessionManager);
+  auto player = std::make_shared<StubPlayer>();
+  RendererServices services{
+      std::make_shared<SessionManager>(
+          ioc, std::chrono::seconds(opts.sessionGraceSeconds), player),
+      std::make_shared<ConfigService>(player),
+  };
+  ConnectionManager manager(ioc, identity, friendlyName, services);
 
   // Discovery callbacks run on the discovery thread; ConnectionManager posts
   // them onto the io_context.

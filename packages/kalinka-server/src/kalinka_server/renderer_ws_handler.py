@@ -13,8 +13,10 @@ from google.protobuf.message import DecodeError
 
 from .config_model import KalinkaConfig
 from .renderer_proto import renderer_pb2 as pb
+from .renderer_config import RendererConfigService
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import CloseReason, SessionPool
+from .renderer_state import STATE_PAYLOADS
 from .server_identity import get_server_id
 from .version import get_rest_api_version, get_version
 
@@ -44,10 +46,15 @@ class RendererSession:
         self._out_id = 0
         self._send_lock = asyncio.Lock()
 
-    def _envelope(self) -> pb.Envelope:
+    def next_message_id(self) -> int:
         self._out_id += 1
+        return self._out_id
+
+    def _envelope(self, message_id: int | None = None) -> pb.Envelope:
         env = pb.Envelope()
-        env.message_id = self._out_id
+        env.message_id = (
+            message_id if message_id is not None else self.next_message_id()
+        )
         return env
 
     async def _send(self, env: pb.Envelope) -> None:
@@ -68,6 +75,29 @@ class RendererSession:
     async def send_session_open(self, session_id: str) -> None:
         env = self._envelope()
         env.session_open.session_id = session_id
+        await self._send(env)
+
+    async def send_command(self, session_id: str, command: pb.Command) -> None:
+        env = self._envelope()
+        env.session_id = session_id
+        env.command.CopyFrom(command)
+        await self._send(env)
+
+    # Both take the id the caller reserved with next_message_id(), which the
+    # renderer echoes in in_reply_to.
+    async def send_config_request(self, message_id: int) -> None:
+        env = self._envelope(message_id)
+        env.config_request.SetInParent()
+        await self._send(env)
+
+    async def send_config_update(
+        self, message_id: int, changes: dict[str, str]
+    ) -> None:
+        env = self._envelope(message_id)
+        for path, value in changes.items():
+            setting = env.config_update.settings.add()
+            setting.path = path
+            setting.value = str(value)
         await self._send(env)
 
     async def send_session_close(self, session_id: str, reason) -> None:
@@ -101,6 +131,7 @@ async def handle_renderer_connection(
     config: KalinkaConfig,
     registry: RendererRegistry,
     sessions: SessionPool,
+    configs: RendererConfigService,
 ):
     await websocket.accept()
     session = RendererSession(websocket)
@@ -203,6 +234,21 @@ async def handle_renderer_connection(
                     == pb.SessionClosed.REASON_RENDERER_ERROR,
                     detail=closed.detail,
                 )
+            elif payload in ("config_snapshot", "config_result"):
+                configs.handle_reply(
+                    registered_id or "", env.in_reply_to, getattr(env, payload)
+                )
+            elif payload == "command_rejected":
+                sessions.handle_rejection(
+                    registered_id or "", rejection=env.command_rejected
+                )
+            elif payload in STATE_PAYLOADS:
+                sessions.handle_state(
+                    registered_id or "",
+                    session_id=env.session_id,
+                    payload=payload,
+                    message=getattr(env, payload),
+                )
             elif payload == "goodbye":
                 clean_goodbye = True
                 logger.info(
@@ -234,6 +280,7 @@ async def handle_renderer_connection(
         if registered_id is not None:
             registry.disconnect(registered_id, session, clean=clean_goodbye)
             sessions.suspend(registered_id, session)
+            configs.handle_disconnect(registered_id)
         else:
             logger.info("Renderer connection closed before registration")
         try:

@@ -2,16 +2,29 @@
 
 #include <string>
 
-// Stable renderer identity plus per-process instance id.
-//
-// renderer_id persists at <KALINKA_PREFIX>/var/lib/kalinka-renderer/renderer_id
-// (KALINKA_PREFIX defaults to "/", same convention as the server's paths.py).
-// If the state directory is not writable a warning is logged and an ephemeral
-// id is used for this run.
+/**
+ * @brief Stable renderer identity plus a per-process instance id.
+ *
+ * A Core tells one renderer from another by rendererId, and one run from the
+ * next by instanceId — which is how it knows a renderer restarted rather than
+ * merely reconnected.
+ */
 struct Identity {
-  std::string rendererId;
-  std::string instanceId;
+  std::string rendererId;  ///< Persistent, shared with every Core.
+  std::string instanceId;  ///< Fresh each start.
 
+  /**
+   * @brief Read rendererId from
+   *        <KALINKA_PREFIX>/var/lib/kalinka-renderer/renderer_id, minting and
+   *        storing one on first run.
+   *
+   * KALINKA_PREFIX defaults to "/", the same convention as the server's
+   * paths.py.
+   *
+   * @note If the state directory is not writable, a warning is logged and an
+   *       ephemeral id is used for this run — so every Core will see this
+   *       renderer as a new one at each restart.
+   */
   static Identity load();
 };
 

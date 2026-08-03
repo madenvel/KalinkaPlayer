@@ -41,8 +41,11 @@ add_executable(kalinka-renderer
   src/Daemon.cpp
   src/Identity.cpp
   src/discovery/MdnsDiscovery.cpp
+  src/config/ConfigService.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
+  src/player/StubPlayer.cpp
+  src/session/Session.cpp
   src/session/SessionManager.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE

@@ -1,9 +1,10 @@
 // Kalinka renderer protocol — MVP subset.
 //
 // One Envelope per binary WebSocket message on ws://<core>/renderer/ws.
-// This file currently carries the registration handshake (Hello -> Welcome),
-// playback-session lifecycle and Goodbye. Field numbers follow the full design
-// in docs/native-renderer-design.md §4 so later additions extend, not renumber.
+// This file carries the registration handshake (Hello -> Welcome), the
+// playback-session lifecycle, playback commands, state reporting, renderer
+// configuration and Goodbye. Field numbers follow the full design in
+// docs/native-renderer-design.md §4 so later additions extend, not renumber.
 
 syntax = "proto3";
 
@@ -15,22 +16,47 @@ message Envelope {
   // Monotonic from 1, per connection, per direction. Resets on reconnect.
   uint64 message_id = 1;
 
+  // The playback session this message belongs to. Set on commands and on every
+  // state message; empty on the handshake, on the session-lifecycle messages
+  // and on CommandRejected, which carry their own session_id.
+  string session_id = 2;
+
+  // message_id of the request this answers. Set on the config replies, which
+  // are the only request/response traffic in the protocol.
+  uint64 in_reply_to = 3;
+
   oneof payload {
     // renderer -> core: 1000-1999
     Hello hello = 1000;
+    StateSnapshot state_snapshot = 1001;
+    PlaybackStateChanged playback_state_changed = 1002;
+    SourceChanged source_changed = 1003;
+    AudioFormatChanged audio_format_changed = 1004;
+    VolumeChanged volume_changed = 1005;
+    PlaybackError playback_error = 1008;
+    CommandRejected command_rejected = 1009;
     SessionOpenResult session_open_result = 1012;
     SessionClosed session_closed = 1014;
+    ConfigSnapshot config_snapshot = 1015;
+    ConfigResult config_result = 1016;
     // core -> renderer: 2000-2999
     Welcome welcome = 2000;
+    Command command = 2001;
     SessionOpen session_open = 2003;
     SessionClose session_close = 2004;
+    ConfigRequest config_request = 2005;
+    ConfigUpdate config_update = 2006;
     // either direction
     Goodbye goodbye = 3000;
   }
 
+  // 1010 / 1011 stay held for capabilities_changed / ownership_changed.
+  // 1006 / 1007 were output_devices_changed / selected_device_changed: the
+  // device list is configuration, not state, and lives in ConfigSnapshot now.
+  // They stay held in case hot-plug ever needs to be pushed.
   // 1013 / 2002 were considered for an application-level Pong / Ping and must
   // not be reused (design §4).
-  reserved 1013, 2002;
+  reserved 1006, 1007, 1013, 2002;
 }
 
 message ProtocolVersionRange {
@@ -44,12 +70,107 @@ enum RendererKind {
   RENDERER_KIND_WEB = 2;
 }
 
+// Ordinals are protocol constants and never mirror the native enums — native
+// AudioGraphNodeState::ERROR is -1, which proto3 cannot express anyway.
+enum PlaybackState {
+  PLAYBACK_STATE_UNSPECIFIED = 0;
+  PLAYBACK_STATE_STOPPED = 1;    // AudioGraphNodeState::STOPPED
+  PLAYBACK_STATE_PREPARING = 2;  // AudioGraphNodeState::PREPARING
+  PLAYBACK_STATE_PLAYING = 3;    // AudioGraphNodeState::STREAMING
+  PLAYBACK_STATE_PAUSED = 4;     // AudioGraphNodeState::PAUSED
+  PLAYBACK_STATE_FINISHED = 5;   // AudioGraphNodeState::FINISHED, end of source
+  PLAYBACK_STATE_ERROR = 6;      // AudioGraphNodeState::ERROR
+  // SOURCE_CHANGED is deliberately absent: it is a transition, reported as
+  // SourceChanged.
+}
+
+enum ErrorSource {
+  ERROR_SOURCE_UNSPECIFIED = 0;
+  ERROR_SOURCE_NONE = 1;
+  ERROR_SOURCE_HTTP_STREAM = 2;
+  ERROR_SOURCE_AUDIO_OUTPUT = 3;
+  ERROR_SOURCE_DECODER = 4;
+  ERROR_SOURCE_RENDERER_INTERNAL = 5;  // no native analogue
+}
+
+enum StreamKind {  // native StreamType
+  STREAM_KIND_UNSPECIFIED = 0;
+  STREAM_KIND_BYTES = 1;
+  STREAM_KIND_FRAMES = 2;
+}
+
+enum VolumeBackend {  // native VolumeBackend
+  VOLUME_BACKEND_UNSPECIFIED = 0;
+  VOLUME_BACKEND_NONE = 1;
+  VOLUME_BACKEND_HARDWARE = 2;
+  VOLUME_BACKEND_SOFTWARE = 3;
+}
+
 message Platform {
   string os = 1;             // "linux"
   string os_version = 2;     // kernel release
   string arch = 3;           // "aarch64", "x86_64"
   string hostname = 4;
   string audio_backend = 5;  // "alsa"
+}
+
+// ============================================================================
+// Value types. Mirror the native StreamInfo / StreamAudioFormat / StreamError /
+// VolumeState so the Core's existing accessors keep working unchanged.
+// ============================================================================
+
+message AudioFormat {
+  uint32 sample_rate_hz = 1;
+  uint32 channels = 2;
+  uint32 bits_per_sample = 3;
+  string sample_format = 4;  // sampleFormatToString(), e.g. "S24_LE"
+  StreamKind stream_kind = 5;
+  uint64 stream_size_units = 6;  // bytes or frames, per stream_kind
+}
+
+message Source {
+  string uri = 1;           // http(s)://, file://
+  string mime_type = 2;     // "audio/flac", "audio/mpeg"
+  string source_token = 3;  // Core-assigned, opaque to the renderer, echoed back
+}
+
+message VolumeState {
+  bool supported = 1;
+  uint32 current = 2;  // 0..max
+  uint32 max = 3;      // 100 for the ALSA backend
+  VolumeBackend backend = 4;
+}
+
+message ErrorInfo {
+  ErrorSource source = 1;
+  string message = 2;
+  optional string source_token = 3;  // the source that faulted, when known
+}
+
+// Everything the Core needs to render its UI without further round trips. One
+// definition, used on session open, after a reconnect and for RequestSnapshot.
+message StateSnapshot {
+  PlaybackState playback_state = 1;
+  optional Source current_source = 2;
+  optional AudioFormat format = 3;
+
+  // Advanced to send time by the renderer. The native StreamState.timestamp is
+  // a steady_clock value local to the renderer process and is not on the wire.
+  uint64 position_ms = 4;
+  bool position_valid = 5;
+  int64 captured_at_unix_ms = 6;
+
+  VolumeState volume = 7;
+  // The device it is playing out of. Which devices exist is configuration
+  // (ConfigSnapshot), not state; what is in use right now is state.
+  optional string selected_device_id = 9;
+  optional ErrorInfo error = 10;
+
+  // Prefetched sources not yet playing, in switch order.
+  repeated string queued_source_tokens = 11;
+
+  reserved 8;   // output_devices; the list is configuration
+  reserved 12;  // ownership; superseded by playback sessions (design §7.1)
 }
 
 // First message on every new connection; registers the renderer with the Core.
@@ -125,6 +246,225 @@ message SessionClosed {
   string session_id = 1;
   Reason reason = 2;
   string detail = 3;
+}
+
+// ============================================================================
+// Core -> renderer commands.
+//
+// Commands are not acknowledged. A command either belongs to the session the
+// renderer is running, in which case what it did shows up in the state that
+// follows — including failure, as PLAYBACK_STATE_ERROR — or it does not, in
+// which case the renderer answers once with CommandRejected and does nothing.
+// ============================================================================
+
+// Names a command without carrying it; used by CommandRejected.
+enum ControlKind {
+  CONTROL_KIND_UNSPECIFIED = 0;
+  CONTROL_KIND_SET_SOURCE = 1;
+  CONTROL_KIND_ENQUEUE_SOURCE = 2;
+  CONTROL_KIND_REMOVE_SOURCE = 3;
+  CONTROL_KIND_CLEAR_QUEUE = 4;
+  CONTROL_KIND_RESUME = 5;
+  CONTROL_KIND_PAUSE = 6;
+  CONTROL_KIND_STOP = 7;
+  CONTROL_KIND_SET_VOLUME = 8;
+  CONTROL_KIND_REQUEST_SNAPSHOT = 9;
+  // 10 / 11 held for refresh_devices / select_output_device, now configuration;
+  // 12 for release_control, part of the superseded ownership lease.
+  CONTROL_KIND_SEEK = 13;
+}
+
+message Command {
+  oneof op {
+    SetSource set_source = 10;
+    EnqueueSource enqueue_source = 11;
+    RemoveSource remove_source = 12;
+    ClearQueue clear_queue = 13;
+    Resume resume = 14;
+    Pause pause = 15;
+    Stop stop = 16;
+    SetVolume set_volume = 17;
+    RequestSnapshot request_snapshot = 18;
+    Seek seek = 22;
+  }
+
+  // 1 held for command_id, which had no use once commands stopped being
+  // acknowledged; 2 for force_takeover and 21 for release_control, both part of
+  // the ownership-lease policy (design §7) that playback sessions supersede;
+  // 19 / 20 for refresh_output_devices / select_output_device, which are
+  // configuration and answer synchronously (§7.3), not playback commands.
+  reserved 1, 2, 19, 20, 21;
+}
+
+// Play this source now, replacing the queue. AudioPlayer::append() plus removal
+// of the previously-current and prefetched streams — the Core's _apply_play().
+// Playback starts on arrival: there is no separate start command.
+message SetSource { Source source = 1; }
+
+// Queue this source behind the current one for a gapless switch: append()
+// without removing anything — the Core's _apply_prefetch().
+message EnqueueSource { Source source = 1; }
+
+// AudioPlayer::remove(StreamId); the StreamId never leaves the renderer.
+message RemoveSource { string source_token = 1; }
+
+// AudioPlayer::clearAll(): drop every source, keep the device open.
+message ClearQueue {}
+
+// AudioPlayer::pause() / resume(). Resume is the inverse of Pause and nothing
+// more — the player has no "start", so a renderer holding no source has nothing
+// to resume; playing something is SetSource.
+message Pause {}
+message Resume {}
+
+// AudioPlayer::stop() — the device is closed.
+message Stop {}
+
+message SetVolume { uint32 percent = 1; }
+message RequestSnapshot {}
+message Seek { uint64 position_ms = 1; }
+
+// ============================================================================
+// Renderer -> core rejections and state.
+// ============================================================================
+
+// The one thing a command can be answered with, and only when the renderer
+// refuses it outright: the session it named is not the one being run — never
+// opened, already closed, or another Core's. Nothing was attempted.
+message CommandRejected {
+  string session_id = 1;  // the session the command was addressed to
+  ControlKind command = 2;
+  int64 at_unix_ms = 3;
+  string detail = 4;
+}
+
+message PlaybackStateChanged {
+  PlaybackState state = 1;
+  uint64 position_ms = 2;  // advanced to send time
+  bool position_valid = 3;
+  // The source this state refers to. Absent when the graph holds no current
+  // source, which is how "the track ended" differs from "the graph was torn
+  // down" — the distinction the Core infers today from current_stream_id.
+  optional string source_token = 4;
+  int64 at_unix_ms = 5;
+  optional ErrorInfo error = 6;  // set when state == PLAYBACK_STATE_ERROR
+}
+
+// Emitted on AudioGraphNodeState::SOURCE_CHANGED — the gapless crossover.
+message SourceChanged {
+  string source_token = 1;
+  optional string previous_source_token = 2;
+  int64 at_unix_ms = 3;
+}
+
+message AudioFormatChanged {
+  string source_token = 1;
+  AudioFormat format = 2;
+}
+
+message VolumeChanged {
+  VolumeState volume = 1;
+  bool external = 2;  // true when the hardware-mixer monitor reported it
+}
+
+message PlaybackError { ErrorInfo error = 1; }
+
+// ============================================================================
+// Renderer configuration.
+//
+// The one request/response plane, and the only traffic that does not need a
+// playback session: settings belong to the renderer, not to whoever is playing
+// through it, and a Core must be able to show them without claiming the audio
+// graph. Every connected Core may read and write; last write wins, and nobody
+// is notified — a Core showing a stale page reloads it when the user opens it,
+// and writes name individual paths, so a stale page cannot clobber a field it
+// did not touch.
+//
+// The renderer owns the values. It serves several Cores, so Core-side storage
+// would mean whichever connected last wins, and the renderer would have no
+// settings at all until one did.
+//
+// Values are text on the wire, as they are in the native Config; the field's
+// `type` says how to read it.
+// ============================================================================
+
+message ConfigRequest {}
+
+message ConfigUpdate {
+  message Setting {
+    string path = 1;   // as declared in ConfigField.path
+    string value = 2;
+  }
+  repeated Setting settings = 1;
+}
+
+enum ConfigFieldType {
+  CONFIG_FIELD_TYPE_UNSPECIFIED = 0;
+  CONFIG_FIELD_TYPE_STRING = 1;
+  CONFIG_FIELD_TYPE_INT = 2;
+  CONFIG_FIELD_TYPE_BOOL = 3;
+  CONFIG_FIELD_TYPE_ENUM = 4;     // choose from `options`
+  CONFIG_FIELD_TYPE_TRIGGER = 5;  // no value; writing anything runs it once
+}
+
+// What it costs to apply a field, so the UI can warn before the user commits.
+enum ApplyCost {
+  APPLY_COST_UNSPECIFIED = 0;
+  APPLY_COST_INSTANT = 1;               // nothing audible happens
+  APPLY_COST_INTERRUPTS_PLAYBACK = 2;   // the sink or graph is rebuilt
+  APPLY_COST_RESTART_REQUIRED = 3;      // takes effect when the renderer restarts
+}
+
+// One choice for an ENUM field. The device list is this: `value` is whatever
+// the renderer opens (an ALSA PCM name, a WASAPI endpoint id), opaque to the
+// Core, and `label` is what the user picks from.
+message ConfigOption {
+  string value = 1;
+  string label = 2;
+  string description = 3;
+}
+
+message ConfigField {
+  string path = 1;  // dotted and renderer-local, e.g. "output.alsa.device"
+  string title = 2;
+  string description = 3;
+  ConfigFieldType type = 4;
+  string value = 5;
+  string default_value = 6;
+  repeated ConfigOption options = 7;  // ENUM only
+  ApplyCost apply = 8;
+  bool read_only = 9;
+}
+
+message ConfigSection {
+  string path = 1;  // prefix shared by its fields, e.g. "output"
+  string title = 2;
+  string description = 3;
+  repeated ConfigField fields = 4;
+}
+
+// Schema and values together: the Core renders settings from one round trip,
+// and the options are as fresh as the moment it asked.
+message ConfigSnapshot {
+  // Changes whenever the shape or the options change — a device appearing, a
+  // driver switch revealing different fields. Not a write precondition; it
+  // tells a Core whether the page it is holding is still the right shape.
+  string config_version = 1;
+  repeated ConfigSection sections = 2;
+}
+
+message ConfigResult {
+  message Outcome {
+    string path = 1;
+    bool applied = 2;
+    string value = 3;  // what is in effect now, which may not be what was asked
+    string error = 4;  // set when applied is false
+  }
+  repeated Outcome outcomes = 1;
+  // The worst cost among the settings that were actually applied: what just
+  // happened, not what might.
+  ApplyCost effect = 2;
+  string config_version = 3;
 }
 
 message Goodbye {
