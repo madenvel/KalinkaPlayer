@@ -20,6 +20,8 @@ from .config_model import LocalFilesConfig
 from .db_schema import init_db
 from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
+from .media_http import MediaHttpServer
+from .utils.name_utils import expand_music_folders
 from .optional_packages import OPTIONAL_PACKAGES
 from . import librarian
 from . import embedder
@@ -112,6 +114,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         self._text_encode_response_queue = multiprocessing.Queue()
         self._log_listener = None
         self._inputmodule = None
+        self._media_server = None
 
         # Context captured at setup() so methods called by the server
         # later (get_state, required_packages, resolve_dynamic_field)
@@ -164,12 +167,19 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             )
             input_module_db.purge_all()
 
+        # Streams renderers fetch over HTTP; tracks are addressed by id.
+        self._media_server = MediaHttpServer(
+            input_module_db,
+            expand_music_folders(config.music_folders),
+        )
+
         # The LocalFilesInputModule will use its own specialized DB
         self._inputmodule = LocalFilesInputModule(
             config,
             input_module_db,
             self._search_request_queue,
             self._search_response_queue,
+            media_server=self._media_server,
         )
 
         # Forward subprocess log records into the main logging pipeline so the
@@ -195,6 +205,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         # Centralised schema init — runs once in the main process before
         # any subprocess starts, so there is no lock contention.
         await init_db(config.db_path)
+
+        await self._media_server.start()
 
         # Indexer + enricher run in one process, wired by an in-process queue.
         # It nudges the searcher (not the embedder directly) when enrichment
@@ -535,6 +547,10 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
     async def shutdown(self) -> None:
         logger.info("Shutting down localfiles input module")
+
+        if self._media_server is not None:
+            await self._media_server.stop()
+            self._media_server = None
 
         self._shutdown_process(self._librarian_proc)
         self._shutdown_process(self._searcher_proc)
