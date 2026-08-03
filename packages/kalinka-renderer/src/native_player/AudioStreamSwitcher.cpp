@@ -44,7 +44,7 @@ void AudioStreamSwitcher::disconnect(
   }
   std::unique_lock lock(mutex);
   if (inputNode == currentInputNode) {
-    currentInputNode->removeStateChangeCallback(stateCallbackId);
+    const int callbackId = stateCallbackId;
     currentInputNode = nullptr;
     stopSource.request_stop();
     stopSource = std::stop_source();
@@ -52,11 +52,14 @@ void AudioStreamSwitcher::disconnect(
       spdlog::debug("Removed current node, no more input nodes available, "
                     "setting state to FINISHED");
     }
-    // FINISHED is stamped with the stream that just ended, still bound here.
+    // Set before clearing the id, so FINISHED names the stream that ended.
     setState(inputNodes.empty()
                  ? StreamState(AudioGraphNodeState::FINISHED)
                  : about(AudioGraphNodeState::SOURCE_CHANGED, nextStreamId()));
     setStreamId(std::nullopt);
+    // Renderer delta: unhook outside the lock, because the callback takes it.
+    lock.unlock();
+    inputNode->removeStateChangeCallback(callbackId);
   } else {
     inputNodes.remove(inputNode);
     if (currentInputNode == nullptr && inputNodes.empty()) {

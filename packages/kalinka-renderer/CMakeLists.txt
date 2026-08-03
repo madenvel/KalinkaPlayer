@@ -130,6 +130,7 @@ if(GTest_FOUND)
     tests/test_session_manager.cpp
     tests/test_state_translator.cpp
     tests/test_stream_identity.cpp
+    tests/test_switcher_concurrency.cpp
     tests/test_ws_transport.cpp
   )
   target_link_libraries(kalinka-renderer-tests PRIVATE
@@ -138,5 +139,6 @@ if(GTest_FOUND)
     GTest::gtest_main
   )
   include(GoogleTest)
-  gtest_discover_tests(kalinka-renderer-tests)
+  # TIMEOUT: a deadlock regression hangs instead of failing.
+  gtest_discover_tests(kalinka-renderer-tests PROPERTIES TIMEOUT 60)
 endif()
