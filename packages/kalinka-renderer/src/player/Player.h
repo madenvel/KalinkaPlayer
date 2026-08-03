@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 
+#include "../config/ConfigContributor.h"
 #include "kalinka/renderer/v1/renderer.pb.h"
 
 /**
@@ -18,9 +19,13 @@
  *
  * Commands are applied in the order they arrive on the session, one at a time.
  *
+ * Also a ConfigContributor: the output driver, the device its enumerator
+ * finds, and whatever else the backend needs are settings only the player can
+ * declare, so it owns that section of the schema.
+ *
  * @note The graph is not wired up yet; StubPlayer is what runs today.
  */
-class Player {
+class Player : public ConfigContributor {
 public:
   /// Envelope with its state payload set; the session layer stamps and sends it.
   using StateSink = std::function<void(kalinka::renderer::v1::Envelope &)>;
@@ -124,34 +129,6 @@ public:
    *                   back in the next state message and can differ from this.
    */
   virtual void seek(uint64_t positionMs) = 0;
-
-  /**
-   * @brief The settings this player exposes.
-   *
-   * The output driver, the device its enumerator finds, and whatever else the
-   * backend needs — all of it backend-specific, which is why it lives here and
-   * not in the protocol. Unlike everything above, this answers on the spot:
-   * settings are read and written outside any playback session.
-   *
-   * @param out Filled with one section. Options are enumerated during the call,
-   *            so a device list is as fresh as the request that asked for it.
-   */
-  virtual void
-  fillConfig(kalinka::renderer::v1::ConfigSection &out) const = 0;
-
-  /**
-   * @brief Apply one setting, having been validated against the field.
-   *
-   * Applying may stop playback or need a restart — whichever the field
-   * declared as its ApplyCost.
-   *
-   * @param path  A field path from fillConfig().
-   * @param value The new value, as text.
-   * @param error Filled when the value cannot be applied.
-   * @return false when nothing changed and @p error says why.
-   */
-  virtual bool applyConfig(const std::string &path, const std::string &value,
-                           std::string &error) = 0;
 
   /**
    * @brief Everything the Core needs to catch up, in one message.

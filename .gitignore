@@ -68,10 +68,10 @@ kalinka-player-*
 *.cfg
 *.yaml
 *.yml
-config/
-configs/
-# ...and C++ source directories are not runtime configuration
-!packages/kalinka-renderer/src/config/
+# Root-anchored: source directories named config/ are not runtime
+# configuration, and files inside an ignored directory cannot be un-ignored.
+/config/
+/configs/
 # Note: Use *.example extensions for safe template configs
 # ...but GitHub metadata (issue templates, workflows) is safe to track
 !.github/**/*.yml

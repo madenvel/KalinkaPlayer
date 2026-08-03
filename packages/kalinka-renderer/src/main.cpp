@@ -163,7 +163,8 @@ int main(int argc, char **argv) {
   RendererServices services{
       std::make_shared<SessionManager>(
           ioc, std::chrono::seconds(opts.sessionGraceSeconds), player),
-      std::make_shared<ConfigService>(player),
+      std::make_shared<ConfigService>(
+          std::vector<std::shared_ptr<ConfigContributor>>{player}),
   };
   ConnectionManager manager(ioc, identity, friendlyName, services);
 

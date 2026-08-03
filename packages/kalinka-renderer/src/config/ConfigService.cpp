@@ -32,11 +32,17 @@ std::string versionOf(const pb::ConfigSnapshot &snapshot) {
   return hex;
 }
 
+// The section index says which contributor declared the field: sections are
+// filled one per contributor, in registration order.
 const pb::ConfigField *findField(const pb::ConfigSnapshot &snapshot,
-                                 const std::string &path) {
-  for (const pb::ConfigSection &section : snapshot.sections()) {
-    for (const pb::ConfigField &field : section.fields()) {
+                                 const std::string &path,
+                                 int *sectionIndex = nullptr) {
+  for (int i = 0; i < snapshot.sections_size(); ++i) {
+    for (const pb::ConfigField &field : snapshot.sections(i).fields()) {
       if (field.path() == path) {
+        if (sectionIndex != nullptr) {
+          *sectionIndex = i;
+        }
         return &field;
       }
     }
@@ -84,11 +90,14 @@ bool validate(const pb::ConfigField &field, const std::string &value,
 
 }  // namespace
 
-ConfigService::ConfigService(std::shared_ptr<Player> player)
-    : player_(std::move(player)) {}
+ConfigService::ConfigService(
+    std::vector<std::shared_ptr<ConfigContributor>> contributors)
+    : contributors_(std::move(contributors)) {}
 
 void ConfigService::fillSnapshot(pb::ConfigSnapshot &out) const {
-  player_->fillConfig(*out.add_sections());
+  for (const auto &contributor : contributors_) {
+    contributor->fillConfig(*out.add_sections());
+  }
   out.set_config_version(versionOf(out));
 }
 
@@ -101,7 +110,9 @@ void ConfigService::apply(const pb::ConfigUpdate &update,
     pb::ConfigResult::Outcome *outcome = out.add_outcomes();
     outcome->set_path(setting.path());
 
-    const pb::ConfigField *field = findField(before, setting.path());
+    int declaredBy = 0;
+    const pb::ConfigField *field = findField(before, setting.path(),
+                                             &declaredBy);
     if (field == nullptr) {
       outcome->set_error("no such setting");
       spdlog::warn("Refusing config write to unknown setting '{}'",
@@ -112,7 +123,8 @@ void ConfigService::apply(const pb::ConfigUpdate &update,
 
     std::string error;
     if (!validate(*field, setting.value(), error) ||
-        !player_->applyConfig(setting.path(), setting.value(), error)) {
+        !contributors_[declaredBy]->applyConfig(setting.path(),
+                                                setting.value(), error)) {
       outcome->set_error(error);
       spdlog::warn("Refusing config write {} = '{}': {}", setting.path(),
                    setting.value(), error);

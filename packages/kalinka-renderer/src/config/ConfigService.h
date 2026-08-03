@@ -2,14 +2,15 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
-#include "../player/Player.h"
+#include "ConfigContributor.h"
 
 /**
  * @brief The renderer's settings, as one schema the Core can render.
  *
- * Assembles the sections its contributors declare — today only the player,
- * which owns everything backend-specific — validates writes against the field
+ * Assembles the sections its contributors declare — one section per
+ * contributor, in registration order — validates writes against the field
  * they name, and hands the surviving ones to the contributor that declared
  * them.
  *
@@ -21,7 +22,8 @@
  */
 class ConfigService {
 public:
-  explicit ConfigService(std::shared_ptr<Player> player);
+  explicit ConfigService(
+      std::vector<std::shared_ptr<ConfigContributor>> contributors);
 
   /**
    * @brief Schema and current values together, so one round trip is a whole
@@ -50,5 +52,5 @@ public:
              kalinka::renderer::v1::ConfigResult &out);
 
 private:
-  std::shared_ptr<Player> player_;
+  std::vector<std::shared_ptr<ConfigContributor>> contributors_;
 };
