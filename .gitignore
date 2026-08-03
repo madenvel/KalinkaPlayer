@@ -70,6 +70,8 @@ kalinka-player-*
 *.yml
 config/
 configs/
+# ...and C++ source directories are not runtime configuration
+!packages/kalinka-renderer/src/config/
 # Note: Use *.example extensions for safe template configs
 # ...but GitHub metadata (issue templates, workflows) is safe to track
 !.github/**/*.yml
