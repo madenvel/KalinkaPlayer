@@ -27,8 +27,75 @@ protected:
   }
 
   std::shared_ptr<FakePlayer> player = std::make_shared<FakePlayer>();
-  ConfigService service{player};
+  ConfigService service{{player}};
 };
+
+/// A second, minimal contributor: one section, one writable string field.
+class FakeContributor : public ConfigContributor {
+public:
+  std::string value = "kalinka";
+  std::vector<std::string> calls;
+
+  void fillConfig(pb::ConfigSection &out) const override {
+    out.set_path("renderer");
+    pb::ConfigField *name = out.add_fields();
+    name->set_path("renderer.name");
+    name->set_type(pb::CONFIG_FIELD_TYPE_STRING);
+    name->set_value(value);
+    name->set_apply(pb::APPLY_COST_INSTANT);
+  }
+
+  bool applyConfig(const std::string &path, const std::string &newValue,
+                   std::string &) override {
+    calls.push_back(path + "=" + newValue);
+    value = newValue;
+    return true;
+  }
+};
+
+TEST_F(ConfigServiceTest, SectionsFollowContributorRegistrationOrder) {
+  auto other = std::make_shared<FakeContributor>();
+  ConfigService combined{{player, other}};
+
+  pb::ConfigSnapshot snap;
+  combined.fillSnapshot(snap);
+
+  ASSERT_EQ(snap.sections_size(), 2);
+  EXPECT_EQ(snap.sections(0).path(), "output");
+  EXPECT_EQ(snap.sections(1).path(), "renderer");
+}
+
+TEST_F(ConfigServiceTest, WritesReachTheContributorThatDeclaredTheField) {
+  auto other = std::make_shared<FakeContributor>();
+  ConfigService combined{{player, other}};
+
+  pb::ConfigUpdate update;
+  pb::ConfigUpdate::Setting *name = update.add_settings();
+  name->set_path("renderer.name");
+  name->set_value("kitchen");
+  pb::ConfigUpdate::Setting *buffer = update.add_settings();
+  buffer->set_path("output.buffer_ms");
+  buffer->set_value("250");
+  pb::ConfigResult result;
+  combined.apply(update, result);
+
+  EXPECT_TRUE(result.outcomes(0).applied());
+  EXPECT_TRUE(result.outcomes(1).applied());
+  EXPECT_EQ(other->calls, (std::vector<std::string>{"renderer.name=kitchen"}));
+  EXPECT_EQ(player->calls,
+            (std::vector<std::string>{"apply_config:output.buffer_ms=250"}));
+  EXPECT_EQ(other->value, "kitchen");
+}
+
+TEST_F(ConfigServiceTest, VersionCoversEveryContributor) {
+  auto other = std::make_shared<FakeContributor>();
+  ConfigService combined{{player, other}};
+
+  pb::ConfigSnapshot withBoth;
+  combined.fillSnapshot(withBoth);
+
+  EXPECT_NE(withBoth.config_version(), snapshot().config_version());
+}
 
 TEST_F(ConfigServiceTest, SnapshotCarriesThePlayerSectionAndAVersion) {
   pb::ConfigSnapshot snap = snapshot();
