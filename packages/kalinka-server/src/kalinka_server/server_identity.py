@@ -46,8 +46,19 @@ def get_server_id() -> str:
     tmp = path.with_suffix(".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(_server_id + "\n")
+        # Losing this file to an unclean shutdown mints a new identity, which
+        # orphans every session this Core opened — so fsync the data and the
+        # directory entry rather than trusting the page cache.
+        with open(tmp, "w") as handle:
+            handle.write(_server_id + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
         logger.info("Generated server id %s at %s", _server_id, path)
     except OSError as exc:
         logger.warning(

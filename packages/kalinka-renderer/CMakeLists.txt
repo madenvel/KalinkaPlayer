@@ -42,7 +42,7 @@ add_executable(kalinka-renderer
   src/Identity.cpp
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
-  src/net/Session.cpp
+  src/net/CoreConnection.cpp
   src/session/SessionManager.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE

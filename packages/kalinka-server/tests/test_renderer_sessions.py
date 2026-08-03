@@ -48,12 +48,9 @@ class FakeWs:
 
 
 def make_pool(open_timeout_s=5.0):
-    sessions: list = []
-    registry = RendererRegistry(
-        offline_timeout_s=30.0,
-        on_removed=lambda rid: pool.handle_renderer_removed(rid),
-    )
+    registry = RendererRegistry(offline_timeout_s=30.0)
     pool = SessionPool(registry, SERVER_ID, open_timeout_s=open_timeout_s)
+    registry.set_on_removed(pool.handle_renderer_removed)
     return registry, pool
 
 
@@ -134,6 +131,7 @@ async def test_open_times_out_and_releases_the_claim():
     with pytest.raises(asyncio.TimeoutError):
         await pool.open(RENDERER_ID)
     assert pool.get(RENDERER_ID) is None
+    await asyncio.sleep(0)  # the compensating close is fire-and-forget
     assert ws.closed and ws.closed[0][1] == CloseReason.CLOSED_BY_SERVER
 
 
@@ -255,7 +253,7 @@ async def test_goodbye_closes_the_session():
     registry.disconnect(RENDERER_ID, ws, clean=True)
     pool.suspend(RENDERER_ID, ws)
 
-    assert closed == [CloseReason.RENDERER_LOST]
+    assert closed == [CloseReason.RENDERER_SHUTDOWN]
 
 
 @pytest.mark.asyncio
@@ -313,6 +311,54 @@ async def test_drop_while_opening_fails_the_open():
 
     with pytest.raises(SessionOpenFailed):
         await task
+    assert pool.get(RENDERER_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_open_releases_the_renderer():
+    registry, pool = make_pool(open_timeout_s=30.0)
+    ws = FakeWs(pool)
+    ws.answer = False
+    register(registry, ws)
+
+    task = asyncio.create_task(pool.open(RENDERER_ID))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert pool.get(RENDERER_ID) is None
+    assert ws.closed and ws.closed[0][1] == CloseReason.CLOSED_BY_SERVER
+
+
+@pytest.mark.asyncio
+async def test_reconnect_while_opening_does_not_adopt_the_session():
+    """The renderer accepted but the reply was lost; it reconnects reporting
+    the session. Adopting it would let the pending open() close it again."""
+    registry, pool = make_pool(open_timeout_s=0.2)
+    ws1 = FakeWs(pool)
+    ws1.answer = False
+    register(registry, ws1)
+
+    task = asyncio.create_task(pool.open(RENDERER_ID))
+    await asyncio.sleep(0.02)
+    session = pool.get(RENDERER_ID)
+    session_id = session.session_id
+
+    ws2 = FakeWs(pool)
+    register(registry, ws2)
+    await pool.reconcile(
+        renderer_id=RENDERER_ID,
+        reported_session_id=session_id,
+        reported_owner_server_id=SERVER_ID,
+        ws_session=ws2,
+    )
+
+    with pytest.raises(SessionOpenFailed):
+        await task
+    # The renderer is told to drop it, on the connection that is actually live.
+    assert ws2.closed == [(session_id, CloseReason.STALE)]
     assert pool.get(RENDERER_ID) is None
 
 

@@ -1356,13 +1356,9 @@ async def create_app(
     async def _replace_renderer_session(old_session: RendererSession):
         await old_session.replace()
 
-    renderer_registry = RendererRegistry(
-        replace_session=_replace_renderer_session,
-        on_removed=lambda renderer_id: renderer_sessions.handle_renderer_removed(
-            renderer_id
-        ),
-    )
+    renderer_registry = RendererRegistry(replace_session=_replace_renderer_session)
     renderer_sessions = SessionPool(renderer_registry, get_server_id())
+    renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
     app.state.renderer_registry = renderer_registry
     app.state.renderer_sessions = renderer_sessions
 
