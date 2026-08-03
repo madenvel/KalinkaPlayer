@@ -40,6 +40,8 @@ from .config_overrides import (
 )
 from .module_timeout import TimeLimitedInputModule
 from .playqueue import PlayQueueImpl
+from .renderer_config import RendererConfigService
+from .renderer_output_device import RendererOutputPlugin
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import SessionPool
 from .text_embedder import SharedTextEmbedder
@@ -596,10 +598,77 @@ class PreparedModuleCollection:
             config=config,
         )
 
+    async def _maybe_setup_renderer_output_device(
+        self,
+        devices: dict[str, PreparedPlugin],
+        overrides: Mapping[str, Any],
+        renderer_registry: RendererRegistry,
+        renderer_sessions: SessionPool,
+        renderer_configs: RendererConfigService,
+    ) -> dict[str, PreparedPlugin]:
+        """Register the built-in renderer volume device as the default output.
+
+        Only when no entry-point output device is enabled — an external device
+        (e.g. MusicCast) takes precedence and renderer volume steps aside.
+        Registered first so it's the active device. Its own ``enabled`` flag
+        gates setup: disabled ⇒ no interface ⇒ no volume control surfaced to
+        clients. It's built-in (not entry-point) because only the server can
+        hand it the renderer services — injected via ``bind``.
+        """
+        if self.player_context is None:
+            return devices
+        if any(p.health_state == ModuleHealthState.READY for p in devices.values()):
+            return devices
+
+        config = self._build_module_config(
+            "kalinka-renderer", RendererOutputPlugin, overrides
+        )
+        context = self._make_plugin_context(
+            "kalinka-renderer", RendererOutputPlugin, config
+        )
+
+        if not getattr(config, "enabled", True):
+            prepared = PreparedPlugin(
+                plugin_class=RendererOutputPlugin,
+                plugin_instance=None,
+                health_state=ModuleHealthState.DISABLED,
+                plugin_context=context,
+                interface=None,
+            )
+            return {"kalinka-renderer": prepared, **devices}
+
+        plugin = RendererOutputPlugin()
+        plugin.bind(renderer_registry, renderer_sessions, renderer_configs)
+        try:
+            await plugin.setup(context)
+            prepared = PreparedPlugin(
+                plugin_class=RendererOutputPlugin,
+                plugin_instance=plugin,
+                health_state=ModuleHealthState.READY,
+                plugin_context=context,
+                interface=plugin.get_interface(),
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to set up renderer volume device: %s", e, exc_info=True
+            )
+            prepared = PreparedPlugin(
+                plugin_class=RendererOutputPlugin,
+                plugin_instance=None,
+                health_state=ModuleHealthState.ERROR,
+                plugin_context=context,
+                interface=None,
+                error_message=str(e),
+            )
+        return {"kalinka-renderer": prepared, **devices}
+
     async def scan_and_setup_plugins(
         self,
         player_context: PlayerContext,
         overrides: MutableMapping[str, Any],
+        renderer_registry: RendererRegistry,
+        renderer_sessions: SessionPool,
+        renderer_configs: RendererConfigService,
         overrides_file: str | None = None,
     ):
         """Scan for input modules from both entry points and legacy filesystem locations."""
@@ -623,6 +692,13 @@ class PreparedModuleCollection:
         self.prepared_input_modules = {**input_modules}
         self._update_enabled_input_modules()
 
+        devices = await self._maybe_setup_renderer_output_device(
+            devices,
+            overrides,
+            renderer_registry,
+            renderer_sessions,
+            renderer_configs,
+        )
         self.prepared_devices = {**devices}
         self._update_enabled_devices()
 
@@ -634,6 +710,7 @@ async def setup(
     overrides: MutableMapping[str, Any],
     renderer_registry: RendererRegistry,
     renderer_sessions: SessionPool,
+    renderer_configs: RendererConfigService,
     overrides_file: str | None = None,
 ) -> PlayerContext:
     """Setup the player components.
@@ -676,7 +753,14 @@ async def setup(
         )
 
     # Scan and setup plugins
-    await modules.scan_and_setup_plugins(player_context, overrides, overrides_file)
+    await modules.scan_and_setup_plugins(
+        player_context,
+        overrides,
+        renderer_registry,
+        renderer_sessions,
+        renderer_configs,
+        overrides_file,
+    )
 
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     logger.info("Output devices found: %s", list(modules.prepared_devices.keys()))
