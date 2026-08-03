@@ -22,7 +22,7 @@
 #include "config/ConfigService.h"
 #include "discovery/MdnsDiscovery.h"
 #include "net/ConnectionManager.h"
-#include "player/StubPlayer.h"
+#include "player/NativePlayer.h"
 #include "session/SessionManager.h"
 
 namespace asio = boost::asio;
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
                getpid());
 
   asio::io_context ioc;
-  auto player = std::make_shared<StubPlayer>();
+  auto player = std::make_shared<NativePlayer>(ioc);
   RendererServices services{
       std::make_shared<SessionManager>(
           ioc, std::chrono::seconds(opts.sessionGraceSeconds), player),

@@ -1106,13 +1106,59 @@ the Core never starts blind and stale state has no value. The Core merges
 snapshots and changes into one dict per session (`renderer_state.apply`),
 exposed as `session.snapshot` with `on_state()` listeners.
 
-Playback itself is still not implemented, and `StubPlayer` says so in the new
-grammar: anything that would make sound puts the renderer in
-`PLAYBACK_STATE_ERROR` with `ERROR_SOURCE_RENDERER_INTERNAL`, while `stop` and
-`clear_queue` are honest no-ops that return it to `STOPPED`. Swapping it for the
-real `Player` implementation is the whole of the next step — nothing above it
-changes. The `Session` owns the player for its lifetime, and closing the
-session stops it — the graph is torn down however the session ends.
+Playback is implemented by `NativePlayer` over a copy of the server's audio
+graph (`src/native_player/`, copied from
+`packages/kalinka-server/src/native_player`, which remains the source of
+truth for the server's Python extension; deltas in the copy are marked
+"Renderer delta"). The adapter adds the two things the graph deliberately
+lacks: **a token vocabulary** — the graph names streams by the caller's
+`StreamId`, the protocol by the Core's opaque `source_token`, and
+`NativePlayer` owns nothing but that dictionary — and **a thread boundary**,
+two pump threads posting monitor states onto the io_context.
+
+*Which* stream a state is about is not inferred; it is carried. `StreamState`
+gained an optional `streamId`, and `AudioGraphNode::setState` stamps it with
+whichever stream the node speaks for — unless the state already names one, so
+anything that merely forwards another node's state passes the original
+through untouched.
+
+For a node in one stream's chain — the HTTP or file source, the sine
+generator, the decoders — the stream is a fact of construction, so the id is
+a constructor argument (`StreamNodes` passes the id the caller assigned) and
+never changes afterwards. Only the two nodes that outlive any single stream
+track it as it moves, through a *protected* setter no caller outside the node
+can reach:
+
+- the **switcher** speaks for whichever input is currently active, and for
+  none while it sits between two, so its `FINISHED` names the stream that
+  ended; the exception is `SOURCE_CHANGED`, which names the stream *taking
+  over*, read from the head of the queue;
+- the **sink** takes that id from the `SOURCE_CHANGED` notification at the
+  moment it accepts the change — immediately when it drains, and inside the
+  `callOnOrAfterFrame` callback on the gapless path, so identity flips
+  exactly when the listener hears the switch — and drops it on `stop()`.
+
+`AudioGraphNode::setState` therefore treats identity as part of what changed,
+or a gapless handover's second `STREAMING` would be swallowed as a duplicate.
+
+This replaces the order-based inference the server's play queue still makes
+(`playqueue.py` pops `prepared_tracks` on every `SOURCE_CHANGED`). Order is
+sound only while nothing is in flight: the gapless path defers its
+`SOURCE_CHANGED` by a buffer's worth of frames, so a second handover
+scheduled in the meantime is attributed by arrival order rather than by
+fact. Carrying the id removes the race by construction, and lets a handover
+to an untracked or already-current stream — a retry, a replay — be dropped
+instead of silently advancing the queue. The change lives in the renderer's
+copy; upstreaming it to the server would let the play queue drop the same
+inference, including its `_retry_pending` special case. `StateTranslator` maps
+`StreamState`/`VolumeState` to the protocol as pure functions. When the
+graph cannot be built (no usable ALSA device), commands answer with
+`PLAYBACK_STATE_ERROR`/`ERROR_SOURCE_AUDIO_OUTPUT` — the renderer stays up
+and a device change retries. `StubPlayer` remains in the tree as the
+graph-free stand-in. Nothing above the `Player` seam changed when the real
+implementation landed, which was the point of the seam. The `Session` owns
+the player for its lifetime, and closing the session stops it — the graph
+is torn down however the session ends.
 
 The renderer's session plane is two classes and two interfaces. `Session` ties
 one Core's connection to the player: commands in through `SessionEventSink`
@@ -1315,11 +1361,18 @@ the ones the design already has: `Player`, `ConfigContributor`,
 - `test_ws_transport` — against an in-process Beast loopback server:
   messages both ways, down+reconnect on drop, give-up staying down, the
   final frame flushing on stop.
+- `test_state_translator` — every `AudioGraphNodeState`, `StreamErrorSource`
+  and `VolumeBackend` pinned to exactly one protocol value; token presence,
+  live-position rules, error payloads, format and volume field-for-field.
+- `test_stream_identity` — stream ids through the graph, driven by fake
+  streams into a real `AudioStreamSwitcher`: a bound node stamps its own
+  states, a handover names the stream taking over, a last `FINISHED` names
+  the stream that ended, and the same state for a different stream is still
+  a change. **No sockets, no ALSA.**
 
-Still to come with the real player: a `StateTranslator`-equivalent pinning
-every `AudioGraphNodeState`/`StreamError` mapping, and device-enumerator
-tests fed synthetic ALSA hints (the pure-function approach `alsa_options.py`
-already uses).
+Still to come: device-enumerator tests fed synthetic ALSA hints (the
+pure-function approach `alsa_options.py` already uses), and the noisy-PCM
+filter in `NativePlayer::fillConfig` brought to parity with it.
 
 ### 10.2 C++/Python Protobuf compatibility
 

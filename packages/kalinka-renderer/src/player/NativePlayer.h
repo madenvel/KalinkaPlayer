@@ -1,0 +1,108 @@
+#pragma once
+
+#include <boost/asio.hpp>
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "../native_player/AudioPlayer.h"
+#include "../native_player/StateMonitor.h"
+#include "Player.h"
+
+/**
+ * @brief The real Player: the native audio graph behind the protocol seam.
+ *
+ * Wraps AudioPlayer — the same graph the server's play queue drives — and
+ * adds the two things it deliberately does not have:
+ *
+ * - **Token vocabulary.** The graph names streams by StreamId, the protocol
+ *   by the Core's opaque source_token. Which stream a state is about comes
+ *   stamped on the state itself, never inferred from ordering.
+ * - **A thread boundary.** Graph states arrive on blocking monitors; two pump
+ *   threads post them onto the io_context, so everything protocol-facing
+ *   stays single-threaded.
+ *
+ * Configuration: output device (enumerated from ALSA), driver, and volume
+ * mode. Changing the device rebuilds the graph — APPLY_COST_INTERRUPTS_
+ * PLAYBACK — and anything that was playing is gone, as declared. Values are
+ * held in memory only; persistence is the config file's job once there is
+ * one.
+ *
+ * If the graph cannot be built (no ALSA), the renderer stays up: commands
+ * that need audio answer with PLAYBACK_STATE_ERROR, exactly like a track
+ * that failed, and the next device change retries.
+ *
+ * @note All Player methods on the io_context thread, per the contract.
+ */
+class NativePlayer : public Player {
+public:
+  explicit NativePlayer(boost::asio::io_context &ioc);
+  ~NativePlayer() override;
+
+  void setStateSink(StateSink sink) override;
+  void setSource(const kalinka::renderer::v1::Source &source) override;
+  void enqueueSource(const kalinka::renderer::v1::Source &source) override;
+  void removeSource(const std::string &sourceToken) override;
+  void clearQueue() override;
+  void pause() override;
+  void resume() override;
+  void stop() override;
+  void setVolume(uint32_t percent) override;
+  void seek(uint64_t positionMs) override;
+  void fillConfig(kalinka::renderer::v1::ConfigSection &out) const override;
+  bool applyConfig(const std::string &path, const std::string &value,
+                   std::string &error) override;
+  void fillSnapshot(kalinka::renderer::v1::StateSnapshot &out) const override;
+
+private:
+  struct TrackedSource {
+    kalinka::renderer::v1::Source source;
+    StreamId streamId;
+  };
+
+  bool ensurePlayer();
+  void rebuildPlayer();
+  void startPumps();
+  void stopPumps();
+  StreamId appendSource(const kalinka::renderer::v1::Source &source);
+  void onStreamState(const StreamState &state);
+  void emit(kalinka::renderer::v1::Envelope &env);
+  void emitVolume(const VolumeState &volume, bool external);
+  void reportUnavailable(const char *command);
+
+  /// The Source a stamped state is about, or nullptr when it names none.
+  const kalinka::renderer::v1::Source *
+  sourceFor(const std::optional<StreamId> &streamId) const;
+  std::optional<std::string>
+  tokenFor(const std::optional<StreamId> &streamId) const;
+  std::optional<std::string> currentToken() const;
+  /// Ids rise with append order, so becoming current retires earlier streams.
+  void forgetSourcesBefore(StreamId streamId);
+
+  boost::asio::io_context &ioc_;
+  StateSink sink_;
+  std::map<std::string, std::string> settings_{
+      {"output.driver", "alsa"},
+      {"output.device", "default"},
+      {"output.volume_mode", "auto"},
+  };
+
+  std::unique_ptr<AudioPlayer> player_;
+  // shared_ptr: each pump thread keeps its monitor alive; stop() is what
+  // unblocks the thread, from the io_context side.
+  std::shared_ptr<StateMonitor> stateMonitor_;
+  std::shared_ptr<VolumeMonitor> volumeMonitor_;
+  std::thread statePump_;
+  std::thread volumePump_;
+
+  StreamId nextStreamId_ = 1;
+  // Every stream the graph still knows about, in append (= switch) order.
+  std::vector<TrackedSource> sources_;
+  std::optional<StreamId> currentId_;
+  std::optional<StreamInfo> lastFormat_;
+};
