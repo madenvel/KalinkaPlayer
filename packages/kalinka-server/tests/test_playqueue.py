@@ -25,7 +25,17 @@ from kalinka_plugin_sdk import (
 )
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
-from native_player.native_player import AudioGraphNodeState, StreamErrorSource
+from kalinka_server.renderer_player import AudioGraphNodeState, StreamErrorSource
+from kalinka_server.renderer_registry import RendererRegistry
+from kalinka_server.renderer_sessions import SessionPool
+
+from tests.sim_renderer import (
+    BITS_PER_SAMPLE,
+    CHANNELS,
+    DURATION_MS,
+    SAMPLE_RATE,
+    SimRenderer,
+)
 
 
 def to_track_id(id: str):
@@ -84,8 +94,19 @@ def config():
 
 
 @pytest.fixture
-async def playqueue(config, event_emitter):
-    pq = PlayQueueImpl(config, event_emitter)
+def renderer():
+    """A simulated renderer behind a real registry and session pool."""
+    registry = RendererRegistry(offline_timeout_s=30.0)
+    pool = SessionPool(registry, "test-server-id")
+    registry.set_on_removed(pool.handle_renderer_removed)
+    sim = SimRenderer(registry, pool)
+    sim.connect()
+    return sim
+
+
+@pytest.fixture
+async def playqueue(config, event_emitter, renderer):
+    pq = PlayQueueImpl(config, event_emitter, renderer.registry, renderer.pool)
     await pq.__aenter__()
 
     yield pq
@@ -240,7 +261,7 @@ async def test_add_remove_track(event_emitter, playqueue):
     )
     await playqueue.add([track])
     await playqueue.remove([0])
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -278,7 +299,7 @@ async def test_play(event_emitter, playqueue):
     )
     await playqueue.add([track])
     await playqueue.play()
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -322,10 +343,10 @@ async def test_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -346,9 +367,9 @@ async def test_switch_track(event_emitter, playqueue):
     )
     await playqueue.add([track1, track2])
     await playqueue.play(0)
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     await playqueue.play(1)
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -394,10 +415,10 @@ async def test_switch_track(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -412,6 +433,14 @@ async def test_switch_track(event_emitter, playqueue):
                     index=1,
                     position=0,
                     current_track=track2.metadata,
+                    # The format outlives the track: it only changes when the
+                    # renderer reports a new one.
+                    audio_info=AudioInfo(
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
+                    ),
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -425,10 +454,10 @@ async def test_switch_track(event_emitter, playqueue):
                     position=0,
                     current_track=track2.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=14814,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -452,11 +481,11 @@ async def test_play_next(event_emitter, playqueue):
     )
     await playqueue.add([track1, track2, track3])
     await playqueue.play(0)
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     await playqueue.play_next(1)
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.2)
     await playqueue.play(2)
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -505,10 +534,10 @@ async def test_play_next(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -523,6 +552,12 @@ async def test_play_next(event_emitter, playqueue):
                     index=2,
                     position=0,
                     current_track=track3.metadata,
+                    audio_info=AudioInfo(
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
+                    ),
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -536,10 +571,10 @@ async def test_play_next(event_emitter, playqueue):
                     position=0,
                     current_track=track3.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=90632,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -555,16 +590,16 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.2)
     await playqueue.add([track])
     await playqueue.play()
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     await playqueue.pause(True)
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.2)
     await playqueue.stop()
-    await asyncio.sleep(2)
+    await asyncio.sleep(0.2)
     await playqueue.play()
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -609,10 +644,10 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -627,10 +662,10 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -670,10 +705,10 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -689,12 +724,12 @@ async def test_seek(event_emitter, playqueue):
     track = TrackInfo(
         id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
     )
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.2)
     await playqueue.add([track])
     await playqueue.play()
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     await playqueue.seek(3000)
-    await asyncio.sleep(4)
+    await asyncio.sleep(0.2)
     expected_calls = [
         call.dispatch(
             PlaybackStateChangedEvent(
@@ -739,10 +774,10 @@ async def test_seek(event_emitter, playqueue):
                     position=3000,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -757,10 +792,10 @@ async def test_seek(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -775,10 +810,10 @@ async def test_seek(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     audio_info=AudioInfo(
-                        sample_rate=32000,
-                        bits_per_sample=24,
-                        channels=2,
-                        duration_ms=13839,
+                        sample_rate=SAMPLE_RATE,
+                        bits_per_sample=BITS_PER_SAMPLE,
+                        channels=CHANNELS,
+                        duration_ms=DURATION_MS,
                     ),
                     mime_type="FLAC",
                     timestamp_ns=1,
@@ -1483,9 +1518,9 @@ async def test_play_next_out_of_range_index_is_noop(event_emitter, playqueue):
 #
 # These verify the *wiring* between PlayQueueImpl and its ResolutionSlot. They use
 # a never-resolving link_retriever so resolution stays in flight and nothing ever
-# commits to the native player — keeping the real AudioPlayer untouched. The slot
-# mechanics themselves are unit-tested in test_resolution_slot.py; end-to-end
-# playback (commit → native append) is covered by the streaming tests above.
+# commits to the player. The slot mechanics themselves are unit-tested in
+# test_resolution_slot.py; end-to-end playback (commit → renderer enqueue) is
+# covered by the streaming tests above.
 
 
 async def _never_resolves():

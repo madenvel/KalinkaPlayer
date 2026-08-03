@@ -166,6 +166,13 @@ class RendererRegistry:
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
 
+    def first_connected_id(self) -> Optional[str]:
+        """Earliest-registered renderer that is connected right now."""
+        for renderer_id, record in self._renderers.items():
+            if record.status is RendererStatus.CONNECTED and record.session is not None:
+                return renderer_id
+        return None
+
     def list(self) -> list[dict]:
         return [
             record.to_dict()

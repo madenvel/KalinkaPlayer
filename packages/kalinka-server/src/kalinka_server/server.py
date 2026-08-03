@@ -65,7 +65,7 @@ from .service_discovery import ServiceDiscovery
 from . import update_check
 from .version import get_rest_api_version, get_version
 from .state_keeper import save_state, restore_state
-from .test_tone import VALID_CHANNELS, play_test_tone
+from .test_tone import VALID_CHANNELS, native_config, play_test_tone
 from .queue_ws_handler import (
     handle_websocket_connection as handle_queue_websocket_connection,
 )
@@ -259,8 +259,25 @@ async def create_app(
     app.state.config = config
     app.state.overrides_file = overrides_file
     app.state.overrides = dict(overrides)
+    # Renderer services exist before the play queue: playback runs through a
+    # renderer session, so the queue needs the registry and the session pool.
+    async def _replace_renderer_session(old_session: RendererSession):
+        await old_session.replace()
+
+    renderer_registry = RendererRegistry(replace_session=_replace_renderer_session)
+    renderer_sessions = SessionPool(renderer_registry, get_server_id())
+    renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
+    renderer_configs = RendererConfigService(renderer_registry)
+    app.state.renderer_registry = renderer_registry
+    app.state.renderer_sessions = renderer_sessions
+    app.state.renderer_configs = renderer_configs
+
     player_context = await setup(
-        config, app.state.overrides, app.state.overrides_file
+        config,
+        app.state.overrides,
+        renderer_registry,
+        renderer_sessions,
+        app.state.overrides_file,
     )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
@@ -1135,7 +1152,7 @@ async def create_app(
         await player_context.playqueue.stop()
         try:
             await play_test_tone(
-                player_context.playqueue.config, channel=channel, device=device
+                native_config(config), channel=channel, device=device
             )
         except (RuntimeError, TimeoutError) as e:
             logger.error("Test tone failed: %s", e)
@@ -1343,27 +1360,9 @@ async def create_app(
     @app.websocket("/device/ws")
     async def device_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for device control and event streaming."""
-        if device is None:
-            await websocket.accept()
-            await websocket.send_json({"error": "No device configured"})
-            await websocket.close()
-            return
-
         await handle_device_websocket_connection(
             websocket, player_context.ext_device_eventbus, device
         )
-
-    # Renderer registration only; the playback path is untouched.
-    async def _replace_renderer_session(old_session: RendererSession):
-        await old_session.replace()
-
-    renderer_registry = RendererRegistry(replace_session=_replace_renderer_session)
-    renderer_sessions = SessionPool(renderer_registry, get_server_id())
-    renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
-    renderer_configs = RendererConfigService(renderer_registry)
-    app.state.renderer_registry = renderer_registry
-    app.state.renderer_sessions = renderer_sessions
-    app.state.renderer_configs = renderer_configs
 
     @app.websocket("/renderer/ws")
     async def renderer_websocket_endpoint(websocket: WebSocket):

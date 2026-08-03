@@ -20,9 +20,26 @@ from native_player.native_player import (
     AudioFormat,
     AudioGraphNodeState,
     AudioPlayer,
+    py_dict_to_config,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _flatten(d: dict, prefix: str = "") -> dict:
+    items = {}
+    for key, value in d.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            items.update(_flatten(value, path))
+        else:
+            items[path] = value
+    return items
+
+
+def native_config(server_config) -> dict:
+    """Flatten a KalinkaConfig into the dict the native player takes."""
+    return py_dict_to_config(_flatten(server_config.model_dump()))
 
 VALID_CHANNELS = ("left", "right", "both")
 
@@ -56,10 +73,10 @@ async def play_test_tone(
 ) -> None:
     """Play a test tone and return once it finished playing.
 
-    ``player_config`` is the flattened native-player config (the play
-    queue's ``config`` dict). ``device`` overrides the configured ALSA
-    output — the client passes its not-yet-applied selection so the tone
-    tests what the user actually picked.
+    ``player_config`` is the flattened native-player config (see
+    ``native_config``). ``device`` overrides the configured ALSA output —
+    the client passes its not-yet-applied selection so the tone tests
+    what the user actually picked.
 
     Raises ``ValueError`` for a bad channel, ``RuntimeError`` when the
     player reports an error (e.g. the device cannot be opened), and
