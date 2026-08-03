@@ -10,6 +10,11 @@ find_package(Protobuf REQUIRED)
 find_package(Boost CONFIG REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Threads REQUIRED)
+find_package(ALSA REQUIRED)
+find_package(CURL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FLACPP REQUIRED IMPORTED_TARGET flac++)
+pkg_check_modules(CURLPP REQUIRED IMPORTED_TARGET curlpp)
 
 # mDNS/DNS-SD: vendored public-domain single header (third_party/mdns).
 
@@ -34,6 +39,37 @@ add_library(kalinka_renderer_proto STATIC
 )
 target_include_directories(kalinka_renderer_proto SYSTEM PUBLIC ${PROTO_GEN_DIR})
 target_link_libraries(kalinka_renderer_proto PUBLIC protobuf::libprotobuf-lite)
+
+# --- kalinka_native_player: the audio graph, copied from the server ----------
+# Source of truth stays in packages/kalinka-server/src/native_player, which the
+# server builds as a Python extension. Deltas here are marked "Renderer delta".
+add_library(kalinka_native_player STATIC
+  src/native_player/AlsaAudioEmitter.cpp
+  src/native_player/AlsaDeviceEnumeration.cpp
+  src/native_player/AlsaVolumeControl.cpp
+  src/native_player/AudioGraphHttpStream.cpp
+  src/native_player/AudioGraphNode.cpp
+  src/native_player/AudioPlayer.cpp
+  src/native_player/AudioSampleFormat.cpp
+  src/native_player/AudioStreamSwitcher.cpp
+  src/native_player/Buffer.cpp
+  src/native_player/Config.cpp
+  src/native_player/FlacStreamDecoder.cpp
+  src/native_player/Log.cpp
+  src/native_player/Mp3StreamDecoder.cpp
+  src/native_player/PerfMon.cpp
+  src/native_player/StateMonitor.cpp
+  src/native_player/StreamState.cpp
+)
+target_link_libraries(kalinka_native_player PUBLIC
+  ALSA::ALSA
+  CURL::libcurl
+  PkgConfig::CURLPP
+  PkgConfig::FLACPP
+  Boost::headers
+  spdlog::spdlog
+  Threads::Threads
+)
 
 # --- kalinka_renderer_core: everything that decides --------------------------
 # The session, config and protocol planes — no live sockets, discovery or
@@ -66,6 +102,8 @@ add_executable(kalinka-renderer
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
   src/net/WsTransport.cpp
+  src/player/NativePlayer.cpp
+  src/player/StateTranslator.cpp
   src/player/StubPlayer.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE
@@ -76,6 +114,7 @@ target_include_directories(kalinka-renderer SYSTEM PRIVATE
 )
 target_link_libraries(kalinka-renderer PRIVATE
   kalinka_renderer_core
+  kalinka_native_player
 )
 
 # --- unit tests (optional: built only when GoogleTest is installed) ----------
@@ -84,14 +123,18 @@ if(GTest_FOUND)
   enable_testing()
   add_executable(kalinka-renderer-tests
     src/net/WsTransport.cpp
+    src/player/StateTranslator.cpp
     tests/test_config_service.cpp
     tests/test_protocol_session.cpp
     tests/test_session.cpp
     tests/test_session_manager.cpp
+    tests/test_state_translator.cpp
+    tests/test_stream_identity.cpp
     tests/test_ws_transport.cpp
   )
   target_link_libraries(kalinka-renderer-tests PRIVATE
     kalinka_renderer_core
+    kalinka_native_player
     GTest::gtest_main
   )
   include(GoogleTest)
