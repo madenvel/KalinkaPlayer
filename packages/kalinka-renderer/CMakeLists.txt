@@ -35,13 +35,17 @@ add_library(kalinka_renderer_proto STATIC
 target_include_directories(kalinka_renderer_proto SYSTEM PUBLIC ${PROTO_GEN_DIR})
 target_link_libraries(kalinka_renderer_proto PUBLIC protobuf::libprotobuf-lite)
 
-# --- kalinka_renderer_core: the session and config planes --------------------
-# Everything below the network layer, so unit tests can link it without
-# sockets, discovery or the daemon plumbing.
+# --- kalinka_renderer_core: everything that decides --------------------------
+# The session, config and protocol planes — no live sockets, discovery or
+# daemon plumbing, so unit tests link exactly what they exercise.
 add_library(kalinka_renderer_core STATIC
   src/config/ConfigService.cpp
+  src/net/ProtocolSession.cpp
   src/session/Session.cpp
   src/session/SessionManager.cpp
+)
+target_compile_definitions(kalinka_renderer_core PRIVATE
+  KALINKA_RENDERER_VERSION="${PROJECT_VERSION}"
 )
 target_include_directories(kalinka_renderer_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -61,6 +65,7 @@ add_executable(kalinka-renderer
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
+  src/net/WsTransport.cpp
   src/player/StubPlayer.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE
@@ -78,9 +83,12 @@ find_package(GTest CONFIG)
 if(GTest_FOUND)
   enable_testing()
   add_executable(kalinka-renderer-tests
+    src/net/WsTransport.cpp
     tests/test_config_service.cpp
+    tests/test_protocol_session.cpp
     tests/test_session.cpp
     tests/test_session_manager.cpp
+    tests/test_ws_transport.cpp
   )
   target_link_libraries(kalinka-renderer-tests PRIVATE
     kalinka_renderer_core
