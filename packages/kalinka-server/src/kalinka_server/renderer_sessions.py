@@ -13,6 +13,15 @@ sides then disagree about is settled by reconcile() at the next Hello:
     nothing                 session T          T closed, RENDERER_RESTARTED
 
 Reopening after a close is the owner's decision, never the pool's.
+
+An open session is also the handle for driving the renderer: it carries the
+playback commands (the AudioPlayer surface, one method per command) and the
+state the renderer reports back. Settings are not here — they belong to the
+renderer rather than to whoever is playing through it (renderer_config). Commands are not acknowledged — what one did
+shows up in the state that follows, failure included. The single exception is a
+command the renderer refuses outright because it names a session it is not
+running; that comes back as a rejection and closes the session, which was
+provably not there.
 """
 
 from __future__ import annotations
@@ -26,11 +35,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Optional
 
+from . import renderer_state
+from .renderer_proto import renderer_pb2 as pb
 from .renderer_registry import RendererRegistry, RendererStatus
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-DEFAULT_OPEN_TIMEOUT_S = 5.0
+# Network timeout, nothing more: the renderer is on the LAN, and neither a
+# session-open round trip nor a socket write is waiting on anything it does.
+DEFAULT_TIMEOUT_S = 3.0
 
 
 class SessionState(str, Enum):
@@ -48,6 +61,7 @@ class CloseReason(str, Enum):
     RENDERER_SHUTDOWN = "renderer_shutdown"  # renderer said goodbye
     RENDERER_LOST = "renderer_lost"  # renderer went silent and was reaped
     RENDERER_ERROR = "renderer_error"
+    REJECTED_BY_RENDERER = "rejected_by_renderer"  # it is not running this session
     OPEN_FAILED = "open_failed"
 
 
@@ -61,7 +75,7 @@ _WIRE_CLOSE_REASONS = {
 
 
 class RendererUnavailable(Exception):
-    """The renderer is not connected, so no session can be opened."""
+    """The renderer is not connected, so nothing can be asked of it."""
 
 
 class RendererBusy(Exception):
@@ -74,6 +88,14 @@ class SessionOpenFailed(Exception):
     """The renderer refused the session for a reason other than busy."""
 
 
+class SessionNotActive(Exception):
+    """The session is closed, or its renderer is offline right now.
+
+    A suspended session raises this too, and starts working again by itself
+    once the renderer reconnects and the session is resumed.
+    """
+
+
 @dataclass
 class _OpenOutcome:
     accepted: bool
@@ -82,18 +104,29 @@ class _OpenOutcome:
     owner_server_id: str
 
 
-# asyncio keeps only a weak reference to a running task, so an async close
-# callback would be collectable mid-flight without this.
+# asyncio keeps only a weak reference to a running task, so a fire-and-forget
+# coroutine would be collectable mid-flight without this.
 _callback_tasks: set[asyncio.Task] = set()
+
+
+def _detach(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _callback_tasks.add(task)
+    task.add_done_callback(_callback_tasks.discard)
+    return task
+
+
+def _fill_source(source, uri: str, mime_type: str, source_token: str) -> None:
+    source.uri = uri
+    source.mime_type = mime_type
+    source.source_token = source_token
 
 
 def _invoke(callback, session: "PlaybackSession", reason: CloseReason) -> None:
     try:
         result = callback(session, reason)
         if inspect.isawaitable(result):
-            task = asyncio.create_task(result)
-            _callback_tasks.add(task)
-            task.add_done_callback(_callback_tasks.discard)
+            _detach(result)
     except Exception:
         logger.exception("Session close callback failed")
 
@@ -105,16 +138,23 @@ class PlaybackSession:
         session_id: str,
         renderer_id: str,
         ws_session: Any,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
     ):
         self.session_id = session_id
         self.renderer_id = renderer_id
         self.state = SessionState.OPENING
         self.opened_at = time.time()
         self.close_reason: Optional[CloseReason] = None
+        # What the renderer last reported, snapshots and changes merged.
+        self.snapshot: dict = renderer_state.empty_state()
+        # The refused command that ended the session, if that is how it ended.
+        self.rejection: Optional[dict] = None
         self._pool = pool
         self._ws = ws_session
         self._open_future: Optional[asyncio.Future] = None
         self._callbacks: list[Callable] = []
+        self._state_callbacks: list[Callable] = []
+        self._timeout_s = timeout_s
 
     @property
     def connected(self) -> bool:
@@ -125,6 +165,86 @@ class PlaybackSession:
             _invoke(callback, self, self.close_reason or CloseReason.CLOSED_BY_SERVER)
             return
         self._callbacks.append(callback)
+
+    def on_state(self, callback: Callable[["PlaybackSession", str, dict], Any]) -> None:
+        """Called as callback(session, message_name, snapshot) on every change."""
+        self._state_callbacks.append(callback)
+
+    async def set_source(
+        self, uri: str, *, mime_type: str = "", source_token: str = ""
+    ) -> None:
+        """Replace what is playing — append() plus removal of the old stream."""
+        command = pb.Command()
+        _fill_source(command.set_source.source, uri, mime_type, source_token)
+        await self._send(command)
+
+    async def enqueue_source(
+        self, uri: str, *, mime_type: str = "", source_token: str = ""
+    ) -> None:
+        """Prefetch for a gapless switch — append() alongside the current source."""
+        command = pb.Command()
+        _fill_source(command.enqueue_source.source, uri, mime_type, source_token)
+        await self._send(command)
+
+    async def remove_source(self, source_token: str) -> None:
+        command = pb.Command()
+        command.remove_source.source_token = source_token
+        await self._send(command)
+
+    async def clear_queue(self) -> None:
+        command = pb.Command()
+        command.clear_queue.SetInParent()
+        await self._send(command)
+
+    async def pause(self) -> None:
+        command = pb.Command()
+        command.pause.SetInParent()
+        await self._send(command)
+
+    async def resume(self) -> None:
+        """The inverse of pause(); starting playback is set_source()."""
+        command = pb.Command()
+        command.resume.SetInParent()
+        await self._send(command)
+
+    async def stop(self) -> None:
+        command = pb.Command()
+        command.stop.SetInParent()
+        await self._send(command)
+
+    async def set_volume(self, percent: int) -> None:
+        command = pb.Command()
+        command.set_volume.percent = percent
+        await self._send(command)
+
+    async def seek(self, position_ms: int) -> None:
+        command = pb.Command()
+        command.seek.position_ms = position_ms
+        await self._send(command)
+
+    async def request_snapshot(self) -> None:
+        """Ask for full state; it arrives as a state message, not a return value."""
+        command = pb.Command()
+        command.request_snapshot.SetInParent()
+        await self._send(command)
+
+    async def _send(self, command: pb.Command) -> None:
+        ws = self._ws
+        if self.state is not SessionState.ACTIVE or ws is None:
+            raise SessionNotActive(
+                f"session {self.session_id} is {self.state.value}"
+            )
+        try:
+            await asyncio.wait_for(
+                ws.send_command(self.session_id, command), self._timeout_s
+            )
+        except asyncio.TimeoutError:
+            raise
+        except Exception as exc:
+            # A socket that died between the state check and the write.
+            raise SessionNotActive(
+                f"could not reach renderer {self.renderer_id}: {exc}"
+            ) from exc
 
     async def close(self, reason: CloseReason = CloseReason.CLOSED_BY_SERVER) -> None:
         """Idempotent, and never waits on the renderer's acknowledgement."""
@@ -142,11 +262,35 @@ class PlaybackSession:
             "state": self.state.value,
             "opened_at": self.opened_at,
             "connected": self.connected,
+            "snapshot": self.snapshot,
+            "rejection": self.rejection,
         }
 
     def _rebind(self, ws_session: Any) -> None:
         self._ws = ws_session
         self.state = SessionState.ACTIVE
+        # It kept playing while we were away, so what we hold may be stale.
+        _detach(self._refresh_state())
+
+    async def _refresh_state(self) -> None:
+        try:
+            await self.request_snapshot()
+        except Exception as exc:
+            logger.debug(
+                "Could not refresh state of session %s after resume: %s",
+                self.session_id,
+                exc,
+            )
+
+    def _apply_state(self, payload: str, message: Any) -> None:
+        self.snapshot = renderer_state.apply(self.snapshot, payload, message)
+        for callback in list(self._state_callbacks):
+            try:
+                result = callback(self, payload, self.snapshot)
+                if inspect.isawaitable(result):
+                    _detach(result)
+            except Exception:
+                logger.exception("Session state callback failed")
 
     def _suspend(self) -> None:
         self._ws = None
@@ -189,11 +333,11 @@ class SessionPool:
         self,
         registry: RendererRegistry,
         server_id: str,
-        open_timeout_s: float = DEFAULT_OPEN_TIMEOUT_S,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
     ):
         self._registry = registry
         self.server_id = server_id
-        self._open_timeout_s = open_timeout_s
+        self._timeout_s = timeout_s
         self._sessions: dict[str, PlaybackSession] = {}
 
     def get(self, renderer_id: str) -> Optional[PlaybackSession]:
@@ -217,14 +361,16 @@ class SessionPool:
             )
 
         ws = record.session
-        session = PlaybackSession(self, str(uuid.uuid4()), renderer_id, ws)
+        session = PlaybackSession(
+            self, str(uuid.uuid4()), renderer_id, ws, self._timeout_s
+        )
         self._sessions[renderer_id] = session
         session._open_future = asyncio.get_running_loop().create_future()
 
         try:
             await ws.send_session_open(session.session_id)
             outcome = await asyncio.wait_for(
-                session._open_future, self._open_timeout_s
+                session._open_future, self._timeout_s
             )
         except BaseException:
             # BaseException, not Exception: a cancelled caller (client gone,
@@ -257,11 +403,9 @@ class SessionPool:
         ws = session._ws
         session._finish(CloseReason.OPEN_FAILED)
         if notify and ws is not None:
-            task = asyncio.create_task(
+            _detach(
                 _send_close(ws, session.session_id, CloseReason.CLOSED_BY_SERVER)
             )
-            _callback_tasks.add(task)
-            task.add_done_callback(_callback_tasks.discard)
 
     async def reconcile(
         self,
@@ -339,6 +483,57 @@ class SessionPool:
         session._open_future.set_result(
             _OpenOutcome(accepted, busy, detail, owner_server_id)
         )
+
+    def handle_rejection(self, renderer_id: str, *, rejection: Any) -> None:
+        """A command named a session the renderer is not running.
+
+        Only reachable when our view and the renderer's have diverged without a
+        reconnect to settle it, so the session goes — the renderer has just said
+        it does not have one. Reopening is the owner's call, as always.
+        """
+        session = self._session_for(
+            renderer_id, rejection.session_id, "command rejection"
+        )
+        if session is None:
+            return
+        command = renderer_state.enum_name(
+            pb.ControlKind, rejection.command, "CONTROL_KIND_"
+        )
+        session.rejection = {
+            "session_id": rejection.session_id,
+            "command": command,
+            "at_unix_ms": rejection.at_unix_ms,
+            "detail": rejection.detail,
+        }
+        logger.warning(
+            "Renderer %s refused %s on session %s (%s); closing it",
+            renderer_id,
+            command,
+            session.session_id,
+            rejection.detail,
+        )
+        session._finish(CloseReason.REJECTED_BY_RENDERER)
+
+    def handle_state(
+        self, renderer_id: str, *, session_id: str, payload: str, message: Any
+    ) -> None:
+        session = self._session_for(renderer_id, session_id, payload)
+        if session is not None:
+            session._apply_state(payload, message)
+
+    def _session_for(
+        self, renderer_id: str, session_id: str, what: str
+    ) -> Optional[PlaybackSession]:
+        session = self._sessions.get(renderer_id)
+        if session is None or session.session_id != session_id:
+            logger.debug(
+                "Ignoring %s from %s for session %s, which is not ours",
+                what,
+                renderer_id,
+                session_id or "<none>",
+            )
+            return None
+        return session
 
     def handle_closed(
         self,

@@ -1,0 +1,152 @@
+"""Renderer state messages -> plain dicts, and how they merge.
+
+The renderer reports state the way the native player does: a full snapshot when
+a session opens or is asked for one, then discrete changes. Both land in one
+dict per session, so a caller never has to reassemble the two shapes. Enum
+values become their lowercase names ("stopped", "http_stream") — the ordinals
+are protocol constants and are not meaningful outside the wire.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from .renderer_proto import renderer_pb2 as pb
+
+# Payload names of everything that carries state; the ws handler routes these.
+STATE_PAYLOADS = frozenset(
+    {
+        "state_snapshot",
+        "playback_state_changed",
+        "source_changed",
+        "audio_format_changed",
+        "volume_changed",
+        "playback_error",
+    }
+)
+
+
+def empty_state() -> dict:
+    return {
+        "playback_state": "unspecified",
+        "source_token": None,
+        "current_source": None,
+        "format": None,
+        "position_ms": 0,
+        "position_valid": False,
+        "volume": None,
+        "selected_device_id": None,
+        "error": None,
+        "queued_source_tokens": [],
+        "updated_at_unix_ms": 0,
+    }
+
+
+def enum_name(enum_type, value: int, prefix: str) -> str:
+    return enum_type.Name(value).removeprefix(prefix).lower()
+
+
+def source_to_dict(source) -> dict:
+    return {
+        "uri": source.uri,
+        "mime_type": source.mime_type,
+        "source_token": source.source_token,
+    }
+
+
+def audio_format_to_dict(fmt) -> dict:
+    return {
+        "sample_rate_hz": fmt.sample_rate_hz,
+        "channels": fmt.channels,
+        "bits_per_sample": fmt.bits_per_sample,
+        "sample_format": fmt.sample_format,
+        "stream_kind": enum_name(pb.StreamKind, fmt.stream_kind, "STREAM_KIND_"),
+        "stream_size_units": fmt.stream_size_units,
+    }
+
+
+def volume_to_dict(volume) -> dict:
+    return {
+        "supported": volume.supported,
+        "current": volume.current,
+        "max": volume.max,
+        "backend": enum_name(pb.VolumeBackend, volume.backend, "VOLUME_BACKEND_"),
+    }
+
+
+def error_to_dict(error) -> dict:
+    return {
+        "source": enum_name(pb.ErrorSource, error.source, "ERROR_SOURCE_"),
+        "message": error.message,
+        "source_token": error.source_token if error.HasField("source_token") else None,
+    }
+
+
+def snapshot_to_dict(snapshot) -> dict:
+    source = (
+        source_to_dict(snapshot.current_source)
+        if snapshot.HasField("current_source")
+        else None
+    )
+    return {
+        "playback_state": enum_name(
+            pb.PlaybackState, snapshot.playback_state, "PLAYBACK_STATE_"
+        ),
+        "source_token": source["source_token"] if source else None,
+        "current_source": source,
+        "format": (
+            audio_format_to_dict(snapshot.format)
+            if snapshot.HasField("format")
+            else None
+        ),
+        "position_ms": snapshot.position_ms,
+        "position_valid": snapshot.position_valid,
+        "volume": volume_to_dict(snapshot.volume),
+        "selected_device_id": (
+            snapshot.selected_device_id
+            if snapshot.HasField("selected_device_id")
+            else None
+        ),
+        "error": error_to_dict(snapshot.error) if snapshot.HasField("error") else None,
+        "queued_source_tokens": list(snapshot.queued_source_tokens),
+        "updated_at_unix_ms": snapshot.captured_at_unix_ms,
+    }
+
+
+def apply(state: dict, payload: str, message) -> dict:
+    """Merge one state message into `state`, returning the updated dict."""
+    if payload == "state_snapshot":
+        return snapshot_to_dict(message)
+
+    if payload == "playback_state_changed":
+        state["playback_state"] = enum_name(
+            pb.PlaybackState, message.state, "PLAYBACK_STATE_"
+        )
+        state["position_ms"] = message.position_ms
+        state["position_valid"] = message.position_valid
+        _set_source_token(
+            state,
+            message.source_token if message.HasField("source_token") else None,
+        )
+        state["error"] = (
+            error_to_dict(message.error) if message.HasField("error") else None
+        )
+        state["updated_at_unix_ms"] = message.at_unix_ms
+    elif payload == "source_changed":
+        _set_source_token(state, message.source_token)
+        state["updated_at_unix_ms"] = message.at_unix_ms
+    elif payload == "audio_format_changed":
+        state["format"] = audio_format_to_dict(message.format)
+    elif payload == "volume_changed":
+        state["volume"] = volume_to_dict(message.volume)
+    elif payload == "playback_error":
+        state["error"] = error_to_dict(message.error)
+    return state
+
+
+def _set_source_token(state: dict, token: Optional[str]) -> None:
+    """Events carry only the token; the full descriptor came in a snapshot."""
+    state["source_token"] = token
+    current: Any = state.get("current_source")
+    if current is not None and current.get("source_token") != token:
+        state["current_source"] = None

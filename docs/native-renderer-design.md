@@ -748,6 +748,46 @@ message OwnershipChanged { OwnershipInfo ownership = 1; }
 - `reserved 1013, 2002` records the two numbers considered and rejected for an
   application-level heartbeat, so they can never be silently reused.
 
+### 4.2 Where the shipped schema differs from this draft
+
+The file that is actually compiled is
+`packages/kalinka-renderer/proto/kalinka/renderer/v1/renderer.proto`. It carries
+the handshake, the session lifecycle, every command, and the state messages
+above. Field numbers are as drafted here; the deltas are:
+
+- **`Envelope.session_id` (field 2) is new.** Commands and every state message
+  belong to a playback session, and stamping the envelope keeps that out of a
+  dozen individual messages. `SessionOpen`/`SessionClose` still carry their own
+  id and leave the envelope field empty.
+- **`Play` is `Resume`.** `AudioPlayer` has no start — `append()` starts and
+  `resume()` unpauses — so the command is named for what it does, and
+  `ControlKind` follows (`CONTROL_KIND_RESUME = 5`).
+- **Commands are not acknowledged**, so `CommandResult`, `CommandStatus` and
+  `RejectReason` are not defined. What a command did is reported as state,
+  failure included (`PLAYBACK_STATE_ERROR`) — the acknowledgement layer sketched
+  in §5.1 bought nothing, since accepting a command says nothing about the audio
+  and the only genuine "no" is a command that names the wrong session. That one
+  answer is `CommandRejected` on field 1009 (where `CommandResult` sat), and
+  `ControlKind` — drafted above and unused until now — is how it names the
+  command it refused. `Command.command_id` went with the results it existed to
+  match; field 1 is reserved.
+- **Output devices are configuration, not commands or state** (§7.3).
+  `SelectOutputDevice`, `RefreshOutputDevices`, `OutputDevicesChanged`,
+  `SelectedDeviceChanged` and `OutputDevice`/`AlsaDevice` are gone, along with
+  `StateSnapshot.output_devices`; a device id is an opaque string chosen from
+  `ConfigOption`s, so no backend-specific message shape reaches the wire.
+  `StateSnapshot.selected_device_id` stays — which device is in use *is* state.
+  New: `ConfigRequest`/`ConfigUpdate` (2005/2006) answered by
+  `ConfigSnapshot`/`ConfigResult` (1015/1016), with `Envelope.in_reply_to`
+  (field 3) correlating them.
+- **Ownership is gone**, superseded by playback sessions (§7.1):
+  `OwnershipInfo`, `OwnershipChanged`, `Command.force_takeover` and
+  `ReleaseControl` are not defined. Their numbers are reserved
+  (`Envelope` 1011, `Command` 2 and 21, `StateSnapshot` 12, `ControlKind` 12).
+- **Capabilities are not defined yet**: `Hello` fields 8-10 and `Envelope` 1010
+  stay held, so a renderer advertises nothing and the Core assumes nothing.
+- `OutputDevice.backend` defines only `alsa`; 101-103 stay held.
+
 ---
 
 ## 5. Mapping: `AudioPlayer` API/events → protocol
@@ -760,7 +800,7 @@ message OwnershipChanged { OwnershipInfo ownership = 1; }
 | `clearAll()` | `Command.clear_queue` | Core→R | Device stays open. |
 | `stop()` | `Command.stop` | Core→R | Device closed. |
 | `pause()` | `Command.pause` | Core→R | |
-| `resume()` | `Command.play` | Core→R | Named `Play` because that is the Core-facing verb; maps to `resume()`. On a stopped renderer holding a current source it re-appends. |
+| `resume()` | `Command.resume` | Core→R | The inverse of `Pause`, nothing more. This row read `Command.play` in the draft, on the theory that a stopped renderer holding a source could re-append it — but after `stop()` the renderer holds nothing and the queue lives in the Core, so "play" named a command the player does not have. Starting playback is `SetSource`. |
 | `seek(ms)` | `Command.seek` | Core→R | Defined but capability-gated off (`Capabilities.seek = false`). See open question 6. |
 | `getState()` | `Command.request_snapshot` → `StateSnapshot` | Core→R→Core | |
 | `monitor()` / `StateMonitor::waitState()` | `PlaybackStateChanged`, `SourceChanged`, `AudioFormatChanged`, `PlaybackError` | R→Core | One native `StreamState` fans out into up to three messages. |
@@ -777,8 +817,8 @@ message OwnershipChanged { OwnershipInfo ownership = 1; }
 | `getVolume()` | `VolumeState` in `StateSnapshot` | R→Core | |
 | `setVolume(percent)` | `Command.set_volume` | Core→R | |
 | `volumeMonitor()` / `wait()` | `VolumeChanged{external=true}` | R→Core | Preserves the "hardware knob moved" semantic `local-alsa` relies on. |
-| `listAlsaPcmDevices()` | `StateSnapshot.output_devices`, `OutputDevicesChanged` | R→Core | Filtering (today in `alsa_options.py`) moves into the renderer, so the Core sees a clean list. |
-| `output.alsa.device` config | `OutputDevice.alsa.pcm_name`, `selected_device_id` | R→Core | Selection is renderer-local; `SelectOutputDevice` is the proposed extension. |
+| `listAlsaPcmDevices()` | `ConfigField{type=ENUM}.options` in `ConfigSnapshot` | Core→R→Core | Filtering (today in `alsa_options.py`) moves into the renderer. Synchronous, session-free, and not a playback command — see §7.3. |
+| `output.alsa.device` config | `ConfigUpdate{path="output.device"}`, `StateSnapshot.selected_device_id` | both | The setting is renderer-owned configuration; the state stream only reports which device is in use. |
 | — (new) | `Hello` / `Welcome` / `Goodbye` | both | No native analogue. |
 | — (new) | `CommandResult` | R→Core | Acceptance only; state arrival is a separate later event. |
 | — (new) | `OwnershipChanged` | R→Core | Arbitration. |
@@ -788,6 +828,10 @@ No existing callback semantic is altered. The two structural changes — splitti
 `FINISHED` — both *encode* distinctions the Core currently reconstructs by hand.
 
 ### 5.1 Snapshot vs event vs ack vs observation
+
+> The acknowledgement half of this section was dropped before it shipped: an ack
+> that only meant "queued" left the Core watching state regardless. See §4.2 and
+> §7.2 for what commands actually answer with.
 
 - **Full snapshot** — `StateSnapshot`, sent inside `Hello`, on reconnect, and in
   response to `RequestSnapshot`. One definition, no drift.
@@ -986,16 +1030,16 @@ not enough: it only fires when the *owning* `server_id` reconnects, so a Core
 that was reinstalled — or whose `server_id` file was lost, or that runs with an
 unwritable state directory and mints an ephemeral id each start — would leave
 the renderer claimed by an owner that can never return, refusing every future
-session. `SessionManager` therefore watches its owner's connections and, when
-the last one drops:
+session. A `Session` therefore watches the connections attached to it and,
+when the last one drops:
 
-- releases the session immediately if nothing is playing;
-- otherwise releases it after a grace period (`--session-grace`, default 60 s)
+- closes immediately if nothing is playing;
+- otherwise closes after a grace period (`--session-grace`, default 60 s)
   unless the owner reconnects first.
 
 Playback is not implemented yet, so the state is hard-wired to `Stopped` and
-only the first rule can currently fire; `SessionManager::setPlaybackState` is
-the hook the player will drive.
+only the first rule can currently fire; `Session::setPlaybackState` is the
+hook the player will drive.
 
 Only the owning Core may close a session (`SessionClose` carries no authority
 from anyone else), which keeps this release path from becoming a way for one
@@ -1006,6 +1050,147 @@ Core to end another's playback.
 `on_closed()`, and applies no policy of its own. On Core shutdown sessions are
 finalized and their callbacks fire, but uvicorn has already closed the renderer
 sockets by then, so the renderer itself learns via `STALE` at its next `Hello`.
+
+### 7.2 Commands and state on an open session (implemented)
+
+An open session is the handle for driving the renderer. `PlaybackSession` has
+one method per `AudioPlayer` entry point — `set_source`, `enqueue_source`,
+`remove_source`, `clear_queue`, `pause`, `resume`, `stop`, `set_volume`, `seek`,
+`request_snapshot`.
+
+**Commands are not acknowledged.** Awaiting one means it went out on the socket,
+nothing more; what it did comes back as state, and so does failure — a source
+that will not decode ends up as `PlaybackStateChanged{ERROR}`, exactly as it
+would if the same track failed halfway through. This replaces the
+`CommandResult` layer of §5.1, which acknowledged everything and told the Core
+nothing it could act on: "accepted" is not "playing", so the Core had to watch
+the state anyway.
+
+Which leaves three ways for a command not to happen, and each is reported where
+it actually belongs:
+
+- **The session is closed, or its renderer is offline** → `SessionNotActive`,
+  raised before anything goes on the wire. A suspended session starts working
+  again by itself once the renderer reconnects and the session resumes; the
+  object stays valid throughout.
+- **The write does not complete** → `asyncio.TimeoutError` after
+  `DEFAULT_TIMEOUT_S` (3 s). This is a network timeout and nothing else — the
+  renderer is on the LAN, and no application-level wait is left to bound. The
+  same 3 s bounds the one round trip that remains, `SessionOpen`.
+- **The renderer refuses it** → `CommandRejected` on the wire, which happens
+  above the `Player` interface, at the connection's gate, and only for one
+  reason: the command named a session the renderer is not running (never
+  opened, already closed, or another Core's). It carries the session id it was
+  asked for, which command it was (`ControlKind`) and when. Nothing was
+  attempted.
+
+A rejection is the Core's view and the renderer's having diverged with no
+reconnect to settle it, so the Core closes the session with
+`REJECTED_BY_RENDERER` — the renderer has just said it does not have one — and
+leaves the reopen decision to the owner, as with every other close. The refused
+command is kept on `session.rejection` for whoever handles `on_closed`.
+
+**The gate is checked per command, not per connection**
+(`CoreConnection::handleCommand`): the envelope's `session_id` must name the
+session this connection is attached to — and a connection is only ever
+attached while its Core owns the session, so the owner check is implied. This
+is what stops a second Core from reaching the audio graph, and it has to be
+per command because a Core stays connected the whole time it does not own the
+session.
+
+**State flows back over whichever connection the owner currently has.** The
+`Session` holds its attached connections weakly, newest preferred; if none can
+carry a message it is dropped rather than queued, because a fresh snapshot
+goes out whenever a connection attaches — on open and on every reconnect — so
+the Core never starts blind and stale state has no value. The Core merges
+snapshots and changes into one dict per session (`renderer_state.apply`),
+exposed as `session.snapshot` with `on_state()` listeners.
+
+Playback itself is still not implemented, and `StubPlayer` says so in the new
+grammar: anything that would make sound puts the renderer in
+`PLAYBACK_STATE_ERROR` with `ERROR_SOURCE_RENDERER_INTERNAL`, while `stop` and
+`clear_queue` are honest no-ops that return it to `STOPPED`. Swapping it for the
+real `Player` implementation is the whole of the next step — nothing above it
+changes. The `Session` owns the player for its lifetime, and closing the
+session stops it — the graph is torn down however the session ends.
+
+The renderer's session plane is two classes and two interfaces. `Session` ties
+one Core's connection to the player: commands in through `SessionEventSink`
+(implemented by `Session`), state out through `SessionTransport` (implemented
+by `CoreConnection`, held weakly — a dropped connection simply stops being a
+route). `SessionManager` holds the *single, possibly-empty* slot: `open()`
+either hands out the session — idempotent for its owner — or refuses because
+another one is running, the only rejection there is. A connection keeps the
+session it carries and gates commands on it; the session keeps its connections
+and decides how it ends, reporting back through `onSessionClosed` /
+`onConnectionClosed`. The connection layer stays plumbing: `CoreConnection`
+parses and frames, `Session` decides.
+
+### 7.3 Renderer configuration (implemented)
+
+Output device selection was originally drafted as a command (`SelectOutputDevice`)
+with the list arriving as state (`OutputDevicesChanged`). That was wrong twice
+over: settings are not playback, and a list is not state. Configuration is its
+own plane now, with three properties the command plane does not have.
+
+**It needs no session.** A Core shows a renderer's settings without claiming its
+audio graph — otherwise opening a settings page would steal playback from
+another Core. Every connected Core may read and write.
+
+**It is request/response.** A device list is data that exists nowhere else, so
+the answer is the point — unlike a command acknowledgement, which only ever said
+"received". `Envelope.in_reply_to` correlates the reply, and the same 3 s
+network timeout bounds it. This is the only request/response traffic in the
+protocol.
+
+**The renderer owns the values.** It serves several Cores, so Core-side storage
+would mean whichever connected last wins, and the renderer would have no
+settings at all until one did.
+
+`ConfigSnapshot` carries schema *and* values in one round trip: sections of
+fields, each with type, current value, `ApplyCost` and — for `ENUM` — the
+options, computed during the call. The device list is exactly this: an `ENUM`
+field whose options come from the renderer's enumerator, `value` being whatever
+it opens (an ALSA PCM name, later a WASAPI endpoint id) and opaque to the Core.
+A driver field alongside it makes the two-level driver/device choice one flat
+schema, and driver-specific fields (ALSA mixer control, volume mode) are just
+more fields when the real player declares them.
+
+`ConfigUpdate` names individual paths; `ConfigResult` reports each one with the
+value that ended up in effect, plus the worst `ApplyCost` among those applied,
+so the caller learns whether it just interrupted playback or needs to restart
+the renderer. Writes are validated against the field they name (`ConfigService`)
+before reaching the player: unknown path, read-only, wrong type, or a value that
+is not one of the offered options are all refused with nothing attempted.
+
+**Nobody is notified of a change.** Two Cores can edit the same renderer, and
+the loser of a race sees a stale page — which costs nothing here, because the
+Core does not depend on these values, it only displays them. Writes name
+individual paths, so a stale page cannot clobber a field it did not touch, and
+the reply carries the applied values, so the writer is never stale about its own
+change. A Core reloads a renderer's page when the user opens it.
+
+**Not part of `/server/config`.** The Core's `schema_version` is a hash over the
+whole presentation schema, and `PUT /server/config` 409s on a stale one, so
+injecting renderer fields there would mean a renderer connecting — or a USB DAC
+being plugged in — invalidating every in-flight settings edit in the app. The
+codebase already draws this line for module live state, which is served
+separately by `GET /server/modules` "so schema_version stays stable across
+transient plugin state changes". Renderer settings are `GET`/`PUT
+/renderer/{renderer_id}/config`, rendered from the same `FieldSpec`-shaped
+payload the app already knows how to draw.
+
+Where it lives: `Player::fillConfig`/`applyConfig` (everything backend-specific
+belongs to the sink), assembled and validated by `ConfigService`, answered on
+any connection by `CoreConnection`, and on the Core side
+`renderer_config.RendererConfigService`.
+
+**Room left for testing a change without a restart**: `CONFIG_FIELD_TYPE_TRIGGER`
+is a field with no value that runs once when written. A "test this output"
+button is that field, and its Core-side handler needs nothing new from the
+protocol — open a short-lived session, `set_source` a test tone, close it. A
+second Core holding the renderer gets a clean `RendererBusy` rather than a
+stolen output, which is exactly what the session layer is for.
 
 ---
 

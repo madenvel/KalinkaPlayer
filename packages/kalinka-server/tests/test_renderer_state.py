@@ -1,0 +1,134 @@
+from kalinka_server import renderer_state
+from kalinka_server.renderer_proto import renderer_pb2 as pb
+
+
+def full_snapshot():
+    snapshot = pb.StateSnapshot()
+    snapshot.playback_state = pb.PLAYBACK_STATE_PLAYING
+    snapshot.current_source.uri = "http://core/stream/1"
+    snapshot.current_source.mime_type = "audio/flac"
+    snapshot.current_source.source_token = "track-1"
+    snapshot.format.sample_rate_hz = 44100
+    snapshot.format.channels = 2
+    snapshot.format.bits_per_sample = 24
+    snapshot.format.sample_format = "S24_LE"
+    snapshot.format.stream_kind = pb.STREAM_KIND_FRAMES
+    snapshot.format.stream_size_units = 9_000_000
+    snapshot.position_ms = 1000
+    snapshot.position_valid = True
+    snapshot.captured_at_unix_ms = 1700000000000
+    snapshot.volume.supported = True
+    snapshot.volume.current = 55
+    snapshot.volume.max = 100
+    snapshot.volume.backend = pb.VOLUME_BACKEND_SOFTWARE
+    snapshot.selected_device_id = "hw:CARD=sofhdadsp,DEV=0"
+    snapshot.queued_source_tokens.append("track-2")
+    return snapshot
+
+
+def test_snapshot_replaces_the_whole_state():
+    state = renderer_state.apply(
+        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+    )
+
+    assert state["playback_state"] == "playing"
+    assert state["current_source"]["uri"] == "http://core/stream/1"
+    assert state["source_token"] == "track-1"
+    assert state["format"]["sample_format"] == "S24_LE"
+    assert state["format"]["stream_kind"] == "frames"
+    assert state["volume"]["backend"] == "software"
+    assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"
+    assert state["queued_source_tokens"] == ["track-2"]
+    assert state["updated_at_unix_ms"] == 1700000000000
+
+
+def test_absent_optionals_read_as_none():
+    state = renderer_state.apply(
+        renderer_state.empty_state(), "state_snapshot", pb.StateSnapshot()
+    )
+
+    assert state["current_source"] is None
+    assert state["source_token"] is None
+    assert state["format"] is None
+    assert state["selected_device_id"] is None
+    assert state["error"] is None
+    assert state["playback_state"] == "unspecified"
+
+
+def test_a_new_source_drops_the_descriptor_of_the_old_one():
+    state = renderer_state.apply(
+        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+    )
+
+    changed = pb.SourceChanged()
+    changed.source_token = "track-2"
+    changed.previous_source_token = "track-1"
+    changed.at_unix_ms = 1700000005000
+    state = renderer_state.apply(state, "source_changed", changed)
+
+    # The event carries a token; the descriptor for it has not been reported.
+    assert state["source_token"] == "track-2"
+    assert state["current_source"] is None
+    assert state["playback_state"] == "playing"  # untouched by this message
+
+
+def test_changes_patch_only_their_own_fields():
+    state = renderer_state.apply(
+        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+    )
+
+    volume = pb.VolumeChanged()
+    volume.volume.supported = True
+    volume.volume.current = 70
+    volume.volume.max = 100
+    volume.volume.backend = pb.VOLUME_BACKEND_HARDWARE
+    volume.external = True
+    state = renderer_state.apply(state, "volume_changed", volume)
+
+    fmt = pb.AudioFormatChanged()
+    fmt.source_token = "track-1"
+    fmt.format.sample_rate_hz = 96000
+    state = renderer_state.apply(state, "audio_format_changed", fmt)
+
+    assert state["volume"] == {
+        "supported": True,
+        "current": 70,
+        "max": 100,
+        "backend": "hardware",
+    }
+    assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"  # untouched
+    assert state["format"]["sample_rate_hz"] == 96000
+    assert state["current_source"]["source_token"] == "track-1"  # still held
+
+
+def test_errors_arrive_both_ways():
+    state = renderer_state.empty_state()
+
+    failure = pb.PlaybackError()
+    failure.error.source = pb.ERROR_SOURCE_HTTP_STREAM
+    failure.error.message = "404 from the stream URL"
+    failure.error.source_token = "track-1"
+    state = renderer_state.apply(state, "playback_error", failure)
+
+    assert state["error"] == {
+        "source": "http_stream",
+        "message": "404 from the stream URL",
+        "source_token": "track-1",
+    }
+
+    changed = pb.PlaybackStateChanged()
+    changed.state = pb.PLAYBACK_STATE_ERROR
+    changed.error.source = pb.ERROR_SOURCE_DECODER
+    changed.error.message = "flac decoder gave up"
+    state = renderer_state.apply(state, "playback_state_changed", changed)
+
+    assert state["playback_state"] == "error"
+    assert state["error"]["source"] == "decoder"
+    assert state["error"]["source_token"] is None
+
+    # A state change without an error clears the one that was there.
+    recovered = pb.PlaybackStateChanged()
+    recovered.state = pb.PLAYBACK_STATE_STOPPED
+    state = renderer_state.apply(state, "playback_state_changed", recovered)
+
+    assert state["error"] is None

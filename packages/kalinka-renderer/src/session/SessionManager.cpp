@@ -2,113 +2,63 @@
 
 #include <spdlog/spdlog.h>
 
-namespace asio = boost::asio;
+SessionManager::SessionManager(boost::asio::io_context &ioc,
+                               std::chrono::seconds ownerGrace,
+                               std::shared_ptr<Player> player)
+    : ioc_(ioc), ownerGrace_(ownerGrace), player_(std::move(player)) {}
 
-SessionManager::SessionManager(asio::io_context &ioc,
-                                               std::chrono::seconds ownerGrace)
-    : ioc_(ioc), ownerGrace_(ownerGrace), graceTimer_(ioc) {}
-
-void SessionManager::coreConnected(const std::string &serverId) {
-  if (serverId.empty()) {
-    return;
-  }
-  ++connectedCores_[serverId];
-  if (active_ && serverId == active_->ownerServerId) {
-    graceTimer_.cancel();
-  }
-}
-
-void SessionManager::coreDisconnected(const std::string &serverId) {
-  if (serverId.empty()) {
-    return;
-  }
-  auto it = connectedCores_.find(serverId);
-  if (it == connectedCores_.end()) {
-    return;
-  }
-  if (--it->second <= 0) {
-    connectedCores_.erase(it);
-  }
-  if (active_ && serverId == active_->ownerServerId && !ownerConnected()) {
-    ownerLost();
-  }
-}
-
-bool SessionManager::open(const std::string &sessionId,
-                                  const std::string &ownerServerId,
-                                  std::string &busyOwner) {
-  if (active_) {
-    // Same id from the same owner is a retried open; from anyone else it is a
-    // replay of an id we broadcast in Hello, and must not hand over the graph.
-    if (active_->sessionId == sessionId &&
-        active_->ownerServerId == ownerServerId) {
-      return true;
+std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
+                                              const std::string &ownerServerId,
+                                              std::string &busyOwner) {
+  if (current_) {
+    if (current_->sessionId() == sessionId &&
+        current_->ownerServerId() == ownerServerId) {
+      return current_;
     }
-    busyOwner = active_->ownerServerId;
-    spdlog::info("Refusing session {}: session {} is already running (owner {})",
-                 sessionId, active_->sessionId, busyOwner);
-    return false;
+    busyOwner = current_->ownerServerId();
+    spdlog::info("Refusing session {}: session {} is already running "
+                 "(owner {})",
+                 sessionId, current_->sessionId(), busyOwner);
+    return nullptr;
   }
-  active_ = Active{sessionId, ownerServerId};
-  graceTimer_.cancel();
+  current_ = Session::create(
+      ioc_, sessionId, ownerServerId, ownerGrace_, player_,
+      [weak = weak_from_this(), sessionId]() {
+        if (auto self = weak.lock()) {
+          self->forget(sessionId);
+        }
+      });
   spdlog::info("Session {} opened by server {}", sessionId, ownerServerId);
-  return true;
+  return current_;
 }
 
 bool SessionManager::close(const std::string &sessionId,
-                                   const std::string &requesterServerId) {
-  if (!active_ || active_->sessionId != sessionId) {
+                           const std::string &requesterServerId) {
+  // A local copy: closing clears current_ from under us via forget().
+  auto session = current_;
+  if (!session || session->sessionId() != sessionId) {
     spdlog::debug("Ignoring close of unknown session {}", sessionId);
     return false;
   }
-  if (active_->ownerServerId != requesterServerId) {
+  if (session->ownerServerId() != requesterServerId) {
     spdlog::warn("Server {} tried to close session {} owned by {}; ignoring",
-                 requesterServerId, sessionId, active_->ownerServerId);
+                 requesterServerId, sessionId, session->ownerServerId());
     return false;
   }
-  release("closed by its owner");
+  session->close("closed by its owner");
   return true;
 }
 
-void SessionManager::setPlaybackState(PlaybackState state) {
-  playbackState_ = state;
-  if (state == PlaybackState::Stopped && active_ && !ownerConnected()) {
-    release("playback stopped while the owner was away");
+std::shared_ptr<Session>
+SessionManager::ownedBy(const std::string &serverId) const {
+  if (current_ && !serverId.empty() && current_->ownerServerId() == serverId) {
+    return current_;
   }
+  return nullptr;
 }
 
-bool SessionManager::ownerConnected() const {
-  return active_ && connectedCores_.contains(active_->ownerServerId);
-}
-
-void SessionManager::ownerLost() {
-  if (playbackState_ == PlaybackState::Stopped) {
-    release("owner disconnected and nothing is playing");
-    return;
+void SessionManager::forget(const std::string &sessionId) {
+  if (current_ && current_->sessionId() == sessionId) {
+    current_.reset();
   }
-  spdlog::info(
-      "Session {} owner {} disconnected; releasing in {}s unless it returns",
-      active_->sessionId, active_->ownerServerId, ownerGrace_.count());
-  graceTimer_.expires_after(ownerGrace_);
-  graceTimer_.async_wait(
-      [weak = weak_from_this()](const boost::system::error_code &ec) {
-        if (ec) {
-          return;  // cancelled: the owner came back, or we shut down
-        }
-        if (auto self = weak.lock(); self && !self->ownerConnected()) {
-          self->release("owner did not return");
-        }
-      });
-}
-
-void SessionManager::release(const char *reason) {
-  if (!active_) {
-    return;
-  }
-  spdlog::info("Releasing session {} (owner {}): {}", active_->sessionId,
-               active_->ownerServerId, reason);
-  // Tearing down the audio graph belongs here once playback is wired up.
-  active_.reset();
-  playbackState_ = PlaybackState::Stopped;
-  graceTimer_.cancel();
 }
