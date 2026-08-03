@@ -4,44 +4,45 @@
 
 namespace asio = boost::asio;
 
-ConnectionManager::ConnectionManager(asio::io_context &ioc, Identity identity,
-                                     std::string friendlyName,
-                                     SessionManager &sessions)
+ConnectionManager::ConnectionManager(
+    asio::io_context &ioc, Identity identity, std::string friendlyName,
+    std::shared_ptr<SessionManager> sessionManager)
     : ioc_(ioc), identity_(std::move(identity)),
-      friendlyName_(std::move(friendlyName)), sessionManager_(sessions) {}
+      friendlyName_(std::move(friendlyName)),
+      sessionManager_(std::move(sessionManager)) {}
 
 void ConnectionManager::add(CoreEndpoint endpoint) {
   asio::post(ioc_, [this, endpoint = std::move(endpoint)]() mutable {
-    if (stopped_ || sessions_.contains(endpoint.key)) {
+    if (stopped_ || connections_.contains(endpoint.key)) {
       // Duplicate records for one instance (multiple interfaces) are expected;
-      // one session per Core.
+      // one connection per Core.
       return;
     }
     auto key = endpoint.key;
-    auto session = std::make_shared<Session>(
+    auto connection = std::make_shared<CoreConnection>(
         ioc_, std::move(endpoint), identity_, friendlyName_, sessionManager_);
-    sessions_.emplace(std::move(key), session);
-    session->start();
+    connections_.emplace(std::move(key), connection);
+    connection->start();
   });
 }
 
 void ConnectionManager::remove(std::string key) {
   asio::post(ioc_, [this, key = std::move(key)]() {
-    auto it = sessions_.find(key);
-    if (it == sessions_.end()) {
+    auto it = connections_.find(key);
+    if (it == connections_.end()) {
       return;
     }
     it->second->stop();
-    sessions_.erase(it);
+    connections_.erase(it);
   });
 }
 
 void ConnectionManager::stop() {
   asio::post(ioc_, [this]() {
     stopped_ = true;
-    for (auto &[key, session] : sessions_) {
-      session->stop();
+    for (auto &[key, connection] : connections_) {
+      connection->stop();
     }
-    sessions_.clear();
+    connections_.clear();
   });
 }

@@ -45,7 +45,8 @@ class CloseReason(str, Enum):
     STALE = "stale"
     SHUTDOWN = "shutdown"
     RENDERER_RESTARTED = "renderer_restarted"
-    RENDERER_LOST = "renderer_lost"
+    RENDERER_SHUTDOWN = "renderer_shutdown"  # renderer said goodbye
+    RENDERER_LOST = "renderer_lost"  # renderer went silent and was reaped
     RENDERER_ERROR = "renderer_error"
     OPEN_FAILED = "open_failed"
 
@@ -81,14 +82,20 @@ class _OpenOutcome:
     owner_server_id: str
 
 
+# asyncio keeps only a weak reference to a running task, so an async close
+# callback would be collectable mid-flight without this.
+_callback_tasks: set[asyncio.Task] = set()
+
+
 def _invoke(callback, session: "PlaybackSession", reason: CloseReason) -> None:
     try:
         result = callback(session, reason)
+        if inspect.isawaitable(result):
+            task = asyncio.create_task(result)
+            _callback_tasks.add(task)
+            task.add_done_callback(_callback_tasks.discard)
     except Exception:
         logger.exception("Session close callback failed")
-        return
-    if inspect.isawaitable(result):
-        asyncio.create_task(result)
 
 
 class PlaybackSession:
@@ -153,8 +160,15 @@ class PlaybackSession:
         self._ws = None
         self._pool._forget(self)
         if self._open_future is not None and not self._open_future.done():
-            self._open_future.set_exception(
-                SessionOpenFailed(f"session closed while opening ({reason.value})")
+            # A result, not an exception: an exception on a future that open()
+            # never gets to await would surface as an asyncio ERROR traceback.
+            self._open_future.set_result(
+                _OpenOutcome(
+                    accepted=False,
+                    busy=False,
+                    detail=f"session closed while opening ({reason.value})",
+                    owner_server_id="",
+                )
             )
         callbacks, self._callbacks = self._callbacks, []
         for callback in callbacks:
@@ -212,15 +226,11 @@ class SessionPool:
             outcome = await asyncio.wait_for(
                 session._open_future, self._open_timeout_s
             )
-        except asyncio.TimeoutError:
-            session._finish(CloseReason.OPEN_FAILED)
-            # It may have accepted and lost the reply; don't leave it claimed.
-            await _send_close(ws, session.session_id, CloseReason.CLOSED_BY_SERVER)
-            raise
-        except SessionOpenFailed:
-            raise
-        except Exception:
-            session._finish(CloseReason.OPEN_FAILED)
+        except BaseException:
+            # BaseException, not Exception: a cancelled caller (client gone,
+            # outer timeout, shutdown) would otherwise leave the session stuck
+            # in OPENING and the renderer busy forever.
+            self._abort_open(session)
             raise
 
         if not outcome.accepted:
@@ -236,6 +246,23 @@ class SessionPool:
         logger.info("Opened session %s on renderer %s", session.session_id, renderer_id)
         return session
 
+    def _abort_open(self, session: PlaybackSession, notify: bool = True) -> None:
+        """Give up on a session still being opened, releasing the renderer.
+
+        The renderer may have accepted and lost the reply, so it is told to drop
+        the session — on whichever connection the session is bound to now, which
+        is not necessarily the one open() sent on. Fire-and-forget, because the
+        caller may be unwinding a cancellation.
+        """
+        ws = session._ws
+        session._finish(CloseReason.OPEN_FAILED)
+        if notify and ws is not None:
+            task = asyncio.create_task(
+                _send_close(ws, session.session_id, CloseReason.CLOSED_BY_SERVER)
+            )
+            _callback_tasks.add(task)
+            task.add_done_callback(_callback_tasks.discard)
+
     async def reconcile(
         self,
         *,
@@ -247,6 +274,20 @@ class SessionPool:
         """Settle renderer-reported session state against the pool, at Hello."""
         session = self._sessions.get(renderer_id)
         ours = bool(reported_session_id) and reported_owner_server_id == self.server_id
+
+        if session is not None and session.state is SessionState.OPENING:
+            # open() is still waiting for a reply on the connection that just
+            # died. Adopting the session here would let that pending open()
+            # time out and close it again, so start clean instead; anything the
+            # renderer accepted is dropped by the stale branch below.
+            logger.info(
+                "Renderer %s reconnected while session %s was still opening; "
+                "abandoning it",
+                renderer_id,
+                session.session_id,
+            )
+            self._abort_open(session, notify=False)
+            session = None
 
         if ours and session is not None and session.session_id == reported_session_id:
             session._rebind(ws_session)
@@ -331,7 +372,7 @@ class SessionPool:
             renderer_id,
         )
 
-    def handle_renderer_removed(self, renderer_id: str) -> None:
+    def handle_renderer_removed(self, renderer_id: str, clean: bool = False) -> None:
         session = self._sessions.get(renderer_id)
         if session is not None:
             logger.info(
@@ -339,7 +380,9 @@ class SessionPool:
                 renderer_id,
                 session.session_id,
             )
-            session._finish(CloseReason.RENDERER_LOST)
+            session._finish(
+                CloseReason.RENDERER_SHUTDOWN if clean else CloseReason.RENDERER_LOST
+            )
 
     async def shutdown(self) -> None:
         for session in list(self._sessions.values()):

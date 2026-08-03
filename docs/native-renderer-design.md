@@ -973,14 +973,33 @@ Cores leave it alone.
 |---|---|---|
 | our session `S` | `S` | resume — session rebinds to the new socket, playback never stops |
 | our session `S` | nothing | `SessionClose{STALE}`; the renderer drops the orphan |
+| our session `S` | `S`, still opening | abandoned; `open()` fails and the renderer is told to drop `S` |
 | another Core's session | — | ignored |
 | nothing | session `T` | `T` closed locally, reason `RENDERER_RESTARTED` |
 
 A dropped link only **suspends** a session; the renderer keeps playing and the
 Core waits for it to return. The registry's offline reap (60 s) closes the
-session with `RENDERER_LOST`. No orphan timer runs on the renderer: its graph
-holds at most the current plus one prefetched source, so orphaned playback
-self-terminates within about two tracks.
+session with `RENDERER_LOST`.
+
+**The renderer releases sessions on its own**, because reconciliation alone is
+not enough: it only fires when the *owning* `server_id` reconnects, so a Core
+that was reinstalled — or whose `server_id` file was lost, or that runs with an
+unwritable state directory and mints an ephemeral id each start — would leave
+the renderer claimed by an owner that can never return, refusing every future
+session. `SessionManager` therefore watches its owner's connections and, when
+the last one drops:
+
+- releases the session immediately if nothing is playing;
+- otherwise releases it after a grace period (`--session-grace`, default 60 s)
+  unless the owner reconnects first.
+
+Playback is not implemented yet, so the state is hard-wired to `Stopped` and
+only the first rule can currently fire; `SessionManager::setPlaybackState` is
+the hook the player will drive.
+
+Only the owning Core may close a session (`SessionClose` carries no authority
+from anyone else), which keeps this release path from becoming a way for one
+Core to end another's playback.
 
 **Reopening after a close is always the owner's decision, never the pool's** —
 `SessionPool` exposes `open()`, `get()` and per-session `close()` /

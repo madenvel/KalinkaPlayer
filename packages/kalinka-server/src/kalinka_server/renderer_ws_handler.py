@@ -135,6 +135,14 @@ async def handle_renderer_connection(
             payload = env.WhichOneof("payload")
             if payload == "hello":
                 hello = env.hello
+                if registered_id is not None:
+                    logger.warning(
+                        "Renderer %s sent a second Hello; closing", renderer_desc
+                    )
+                    await session.send_goodbye(
+                        pb.Goodbye.REASON_MALFORMED, "Hello already received"
+                    )
+                    return
                 renderer_desc = (
                     f"'{hello.friendly_name}' (id={hello.renderer_id})"
                 )

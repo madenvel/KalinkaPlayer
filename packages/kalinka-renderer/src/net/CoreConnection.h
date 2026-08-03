@@ -19,11 +19,11 @@
 // read-loop; reconnects with doubling backoff (1s..30s). Single-threaded
 // io_context; handlers hold shared_from_this. Inbound messages go through a
 // bounded inbox drained off the read path, so processing never stalls reads.
-class Session : public std::enable_shared_from_this<Session> {
+class CoreConnection : public std::enable_shared_from_this<CoreConnection> {
 public:
-  Session(boost::asio::io_context &ioc, CoreEndpoint endpoint,
-          const Identity &identity, std::string friendlyName,
-          SessionManager &sessions);
+  CoreConnection(boost::asio::io_context &ioc, CoreEndpoint endpoint,
+                 const Identity &identity, std::string friendlyName,
+                 std::shared_ptr<SessionManager> sessionManager);
 
   void start();
 
@@ -45,6 +45,7 @@ private:
   void handleSessionClose(const std::string &sessionId);
   void sendSerialized(std::string data);
   void writeNext();
+  void notifyCoreGone();
   void fail(const char *stage, const boost::beast::error_code &ec);
   void scheduleRetry();
 
@@ -52,7 +53,7 @@ private:
   CoreEndpoint endpoint_;
   const Identity &identity_;
   std::string friendlyName_;
-  SessionManager &sessions_;
+  std::shared_ptr<SessionManager> sessionManager_;
 
   boost::asio::ip::tcp::resolver resolver_;
   std::optional<WsStream> ws_;  // recreated per connection attempt
@@ -63,6 +64,8 @@ private:
   bool drainScheduled_ = false;
 
   // Beast allows one write at a time; messages queue behind the one in flight.
+  // Bounded like the inbox: a peer that stops reading must not grow it without
+  // limit.
   std::deque<std::string> writeQueue_;
   bool writing_ = false;
   bool closeAfterWrite_ = false;
@@ -74,6 +77,8 @@ private:
   uint64_t nextMessageId_ = 1;
   std::string serverId_;  // from Welcome; owner id for sessions this Core opens
   bool welcomed_ = false;
+  bool announcedConnected_ = false;  // told the session manager about serverId_
+  bool failing_ = false;  // read and write can both fail; retry once, not twice
   bool stopping_ = false;
   bool gaveUp_ = false;  // e.g. protocol version rejected — no point retrying
 };

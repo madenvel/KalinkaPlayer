@@ -31,6 +31,7 @@ struct Options {
   std::string friendlyName;
   std::string logFile;
   std::vector<CoreEndpoint> staticServers;  // skip discovery when non-empty
+  int sessionGraceSeconds = 60;
 };
 
 void usage(const char *argv0) {
@@ -43,6 +44,8 @@ void usage(const char *argv0) {
       "  --daemon              Detach and run in the background\n"
       "  --log-file <path>     Log to a file (default when daemonized:\n"
       "                        $KALINKA_PREFIX/var/log/kalinka/renderer.log)\n"
+      "  --session-grace <s>   Keep a playing session this long after its Core\n"
+      "                        disconnects before releasing it (default 60)\n"
       "  --help                Show this help\n",
       argv0);
 }
@@ -59,6 +62,14 @@ bool parseArgs(int argc, char **argv, Options &opts) {
       const char *v = value();
       if (!v) return false;
       opts.friendlyName = v;
+    } else if (arg == "--session-grace") {
+      const char *v = value();
+      if (!v) return false;
+      opts.sessionGraceSeconds = std::atoi(v);
+      if (opts.sessionGraceSeconds < 0) {
+        std::fprintf(stderr, "--session-grace must not be negative\n");
+        return false;
+      }
     } else if (arg == "--log-file") {
       const char *v = value();
       if (!v) return false;
@@ -145,8 +156,12 @@ int main(int argc, char **argv) {
                getpid());
 
   asio::io_context ioc;
-  SessionManager sessions;
-  ConnectionManager manager(ioc, identity, friendlyName, sessions);
+  // shared_ptr, not a stack object: every CoreConnection observes the same
+  // session state, and its grace timer must stay valid for as long as any
+  // handler can run.
+  auto sessionManager = std::make_shared<SessionManager>(
+      ioc, std::chrono::seconds(opts.sessionGraceSeconds));
+  ConnectionManager manager(ioc, identity, friendlyName, sessionManager);
 
   // Discovery callbacks run on the discovery thread; ConnectionManager posts
   // them onto the io_context.
