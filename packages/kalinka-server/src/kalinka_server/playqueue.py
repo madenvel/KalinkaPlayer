@@ -7,7 +7,6 @@ from typing import Callable, Optional
 
 from kalinka_serialized.serial_executor import interrupt
 
-from .alsa_volume_device import AlsaVolumeControlDevice
 from .config_model import KalinkaConfig
 
 from kalinka_serialized import (
@@ -41,40 +40,19 @@ from kalinka_plugin_sdk.inputmodule import TrackInfo
 
 from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 
-from native_player.native_player import (
-    AudioFormat,
+from .renderer_player import (
     AudioGraphNodeState,
-    AudioPlayer,
-    py_dict_to_config,
+    RendererPlayer,
     StreamErrorSource,
     StreamInfo,
     StreamState,
     StreamType,
 )
+from .renderer_registry import RendererRegistry
+from .renderer_sessions import SessionPool
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
-
-# enum State {
-#   IDLE = 0,
-#   READY,
-#   BUFFERING,
-#   PLAYING,
-#   PAUSED,
-#   FINISHED,
-#   STOPPED,
-#   ERROR
-# };
-
-# enum class AudioGraphNodeState {
-#   ERROR = -1,
-#   STOPPED,
-#   PREPARING,
-#   STREAMING,
-#   PAUSED,
-#   FINISHED,
-#   SOURCE_CHANGED
-# };
 
 PREFETCH_TIME_MS = 5000
 
@@ -123,25 +101,6 @@ def to_audio_info(stream_info: StreamInfo):
     )
 
 
-def mime_to_format(mime: str) -> AudioFormat:
-    """Convert MIME type to AudioFormat enum value used by the native player"""
-    logger.debug(f"Detected mime type: {mime}")
-
-    # Handle standard MIME types
-    if mime:
-        mime_lower = mime.lower()
-        if mime_lower == "audio/flac" or mime_lower == "application/x-flac":
-            return AudioFormat.FLAC
-        elif mime_lower == "audio/mpeg" or mime_lower == "audio/mp3":
-            return AudioFormat.MPEG
-        # Fall back to substring check for non-standard MIME types
-        elif "flac" in mime_lower:
-            return AudioFormat.FLAC
-
-    # Default to MPEG for all other formats
-    return AudioFormat.MPEG
-
-
 def to_state_name(state: AudioGraphNodeState) -> Optional[PlayerStateEnum]:
     if state == AudioGraphNodeState.ERROR:
         return PlayerStateEnum.ERROR
@@ -156,77 +115,22 @@ def to_state_name(state: AudioGraphNodeState) -> Optional[PlayerStateEnum]:
     return None
 
 
-def flatten_dict(d, parent_key="", sep="."):
-    items = {}
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.update(flatten_dict(v, new_key, sep=sep))
-        else:
-            items[new_key] = v
-    return items
-
-
-class AsyncStateMonitor:
-    """Asyncio-friendly wrapper around C++ StateMonitor.
-
-    Provides async iterator protocol for consuming state changes without blocking
-    the event loop.
-    """
-
-    def __init__(self, state_monitor):
-        """Initialize with a C++ StateMonitor instance."""
-        self._monitor = state_monitor
-
-    async def wait_state(self):
-        """Await for the next state change.
-
-        Runs the blocking C++ waitState() call in a thread pool executor
-        to avoid blocking the event loop.
-        """
-        loop = asyncio.get_running_loop()
-        state = await loop.run_in_executor(None, self._monitor.wait_state)
-        return state
-
-    def has_data(self) -> bool:
-        """Check if there are queued state changes."""
-        return self._monitor.has_data()
-
-    def stop(self):
-        """Stop monitoring state changes."""
-        self._monitor.stop()
-
-    def is_running(self) -> bool:
-        """Check if the monitor is still running."""
-        return self._monitor.is_running()
-
-    def __aiter__(self):
-        """Support async iteration protocol."""
-        return self
-
-    async def __anext__(self):
-        """Get the next state change in async iteration.
-
-        Returns:
-            StreamState: The next state change
-
-        Raises:
-            StopAsyncIteration: When monitor stops
-        """
-        if not self._monitor.is_running():
-            raise StopAsyncIteration
-        return await self.wait_state()
-
-
 # State restore can involve many I/O calls; keep it outside the serial executor
 # so startup restore does not block the command lane.
 @with_serial_executor
 class PlayQueueImpl(PlayQueueController):
-    def __init__(self, config: KalinkaConfig, event_emitter: EventEmitter):
+    def __init__(
+        self,
+        config: KalinkaConfig,
+        event_emitter: EventEmitter,
+        renderer_registry: RendererRegistry,
+        renderer_sessions: SessionPool,
+    ):
         super().__init__()
         self.event_emitter = event_emitter
-        self.config = py_dict_to_config(flatten_dict(config.model_dump()))
-        self._track_player = AudioPlayer(self.config)
+        self._track_player = RendererPlayer(
+            config, renderer_registry, renderer_sessions
+        )
         self.current_track_id = 0
         self.current_format = None
         self.track_list: list[TrackInfo] = []
@@ -237,10 +141,9 @@ class PlayQueueImpl(PlayQueueController):
         self.repeat_all = False
 
         self._prefetch_task = None
-        self._state_monitor_raw = self._track_player.monitor()
-        self.state_monitor = AsyncStateMonitor(self._state_monitor_raw)
+        self.state_monitor = self._track_player.monitor()
         self.prepared_tracks: OrderedDict = OrderedDict()
-        # The queue owns stream-id allocation; the native player only tags.
+        # The queue owns stream-id allocation; the player only tags.
         self._next_stream_id = 0
         # StreamId of the stream currently being played (popped from prepared_tracks on SOURCE_CHANGED)
         self.current_stream_id: Optional[int] = None
@@ -268,33 +171,15 @@ class PlayQueueImpl(PlayQueueController):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Stop the play queue and cleanup resources."""
         self._resolution.supersede()
-        self._terminate()
+        self._cancel_prefetch_timer()
+        await self._track_player.shutdown()
+        self.state_monitor.stop()
         if self._state_update_task:
             self._state_update_task.cancel()
             try:
                 await self._state_update_task
             except asyncio.CancelledError:
                 pass
-
-    def _terminate(self):
-        self._track_player.stop()
-        self._state_monitor_raw.stop()
-
-    def create_volume_control_device(
-        self, event_emitter, state_path: Optional[str], mode: str
-    ) -> AlsaVolumeControlDevice:
-        """Build the built-in local-ALSA volume device against this queue's
-        native player, configuring it for ``mode`` (auto/hardware/software).
-
-        The factory keeps ``track_player`` private: only the queue decides which
-        native player the device drives — shared today, possibly a dedicated one
-        later. Kept off the serial executor so volume stays responsive,
-        independent of the playback command lane.
-        """
-        self._track_player.configure_volume(mode, "")
-        return AlsaVolumeControlDevice(
-            self._track_player, event_emitter, state_path=state_path
-        )
 
     async def _state_update_listener_async(self):
         """Listen for state changes using async iterator."""
@@ -375,7 +260,7 @@ class PlayQueueImpl(PlayQueueController):
                 )
         elif new_state.state == AudioGraphNodeState.STOPPED:
             # The prefetch may have completed and appended a stream just as the
-            # native player ran out of time and stopped.  If a stream is already
+            # player ran out of time and stopped.  If a stream is already
             # queued and the player is still stopped (i.e. play_next hasn't
             # restarted it yet), kick the player back into motion.
             if (
@@ -540,7 +425,7 @@ class PlayQueueImpl(PlayQueueController):
         return sid
 
     def _clear_prepared_streams(self) -> None:
-        """Remove every prefetched native stream and empty the prepared map."""
+        """Remove every prefetched stream and empty the prepared map."""
         for _, (_, stream_id) in list(self.prepared_tracks.items()):
             self._track_player.remove(stream_id)
         self.prepared_tracks.clear()
@@ -555,9 +440,7 @@ class PlayQueueImpl(PlayQueueController):
         # Append new stream — auto-starts. prepared_tracks is non-empty so the
         # FINISHED handler (triggered by the removals above) will not auto-play.
         stream_id = self._new_stream_id()
-        self._track_player.append(
-            stream_id, track_info.url, mime_to_format(track_info.format)
-        )
+        self._track_player.append(stream_id, track_info.url, track_info.format)
         self.prepared_tracks[index] = (track_info, stream_id)
 
         if self.current_stream_id is not None:
@@ -574,9 +457,7 @@ class PlayQueueImpl(PlayQueueController):
             self._apply_play(index, track_info)
             return
         stream_id = self._new_stream_id()
-        self._track_player.append(
-            stream_id, track_info.url, mime_to_format(track_info.format)
-        )
+        self._track_player.append(stream_id, track_info.url, track_info.format)
         self.prepared_tracks[index] = (track_info, stream_id)
 
     @serialised
@@ -686,11 +567,11 @@ class PlayQueueImpl(PlayQueueController):
 
         tracks.sort(reverse=True)
         for track in tracks:
-            # Remove native stream for the current track
+            # Remove the current track's stream
             if track == self.current_track_id and self.current_stream_id is not None:
                 self._track_player.remove(self.current_stream_id)
                 self.current_stream_id = None
-            # Remove native stream for prefetched tracks
+            # Remove prefetched tracks' streams
             if track in self.prepared_tracks:
                 _, stream_id = self.prepared_tracks[track]
                 self._track_player.remove(stream_id)
@@ -1090,9 +971,7 @@ class PlayQueueImpl(PlayQueueController):
 
         self._retry_pending = True
         stream_id = self._new_stream_id()
-        self._track_player.append(
-            stream_id, track_info.url, mime_to_format(track_info.format)
-        )
+        self._track_player.append(stream_id, track_info.url, track_info.format)
         self.prepared_tracks[index] = (track_info, stream_id)
 
         if position_ms > 0:

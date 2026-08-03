@@ -1,0 +1,226 @@
+"""A renderer on the far end of a fake wire.
+
+Plays the part the kalinka-renderer binary plays in production: registers with
+the registry, accepts one session at a time, and answers playback commands with
+the same protobuf state messages the real NativePlayer emits — delivered
+through the real SessionPool, so tests exercise the whole server-side path
+(pool routing, snapshot merging, RendererPlayer translation, play queue).
+
+The simulated graph mirrors the native one's observable behaviour: enqueueing
+onto an idle player starts it (SourceChanged -> preparing -> format ->
+playing), removing the current source hands over to the next queued one or
+finishes, clearing finishes. Playback never advances on its own — a test moves
+it with finish_current().
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from kalinka_server.renderer_proto import renderer_pb2 as pb
+from kalinka_server.renderer_registry import RendererRegistry
+from kalinka_server.renderer_sessions import SessionPool
+
+SAMPLE_RATE = 44100
+CHANNELS = 2
+BITS_PER_SAMPLE = 16
+# Long enough that the play queue's prefetch timer never fires mid-test.
+DURATION_MS = 300000
+
+_NOW_UNIX_MS = 1700000000000
+
+
+class SimRenderer:
+    RENDERER_ID = "sim-renderer"
+
+    def __init__(self, registry: RendererRegistry, pool: SessionPool):
+        self.registry = registry
+        self.pool = pool
+        self.session_id: Optional[str] = None
+        self.current: Optional[str] = None  # source token
+        self.queued: list[str] = []
+        self.position_ms = 0
+        self.commands: list[pb.Command] = []
+
+    def connect(self) -> None:
+        self.registry.register(
+            renderer_id=self.RENDERER_ID,
+            instance_id="sim-instance",
+            friendly_name="Sim Renderer",
+            software_version="0.0.0",
+            kind="native",
+            platform={},
+            session=self,
+        )
+
+    # ------------------------------------------------------------------
+    # The ws-session surface the pool drives
+
+    async def send_session_open(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.pool.handle_open_result(
+            self.RENDERER_ID,
+            session_id=session_id,
+            accepted=True,
+            busy=False,
+            detail="",
+            owner_server_id="",
+        )
+        self._send("state_snapshot", self._snapshot())
+
+    async def send_session_close(self, session_id: str, reason) -> None:
+        if session_id == self.session_id:
+            self.session_id = None
+            self.current = None
+            self.queued.clear()
+            self.position_ms = 0
+
+    async def send_command(self, session_id: str, command: pb.Command) -> None:
+        copied = pb.Command()
+        copied.CopyFrom(command)
+        self.commands.append(copied)
+        op = command.WhichOneof("op")
+        if op == "enqueue_source":
+            self._enqueue(command.enqueue_source.source.source_token)
+        elif op == "set_source":
+            displaced = list(self.queued)
+            if self.current is not None:
+                displaced.append(self.current)
+            self._enqueue(command.set_source.source.source_token)
+            for token in displaced:
+                self._remove(token)
+        elif op == "remove_source":
+            self._remove(command.remove_source.source_token)
+        elif op == "clear_queue":
+            self.queued.clear()
+            had_current, self.current = self.current is not None, None
+            if had_current:
+                self._emit_state(pb.PLAYBACK_STATE_FINISHED, None)
+        elif op == "pause":
+            if self.current is not None:
+                self._emit_state(pb.PLAYBACK_STATE_PAUSED, self.current)
+        elif op == "resume":
+            if self.current is not None:
+                self._emit_state(pb.PLAYBACK_STATE_PLAYING, self.current)
+        elif op == "stop":
+            self.queued.clear()
+            had_current, self.current = self.current is not None, None
+            if had_current:
+                self._emit_state(pb.PLAYBACK_STATE_STOPPED, None)
+        elif op == "seek":
+            if self.current is not None:
+                # The native pipeline re-buffers on seek.
+                self.position_ms = command.seek.position_ms
+                self._emit_state(pb.PLAYBACK_STATE_PREPARING, self.current)
+                self._emit_state(pb.PLAYBACK_STATE_PLAYING, self.current)
+        elif op == "request_snapshot":
+            self._send("state_snapshot", self._snapshot())
+
+    async def replace(self) -> None:
+        pass
+
+    # ------------------------------------------------------------------
+    # Test controls
+
+    def finish_current(self) -> None:
+        """The current track runs to its end."""
+        ended, self.current = self.current, None
+        if ended is None:
+            return
+        if self.queued:
+            self._start(self.queued.pop(0))
+        else:
+            self._emit_state(pb.PLAYBACK_STATE_FINISHED, ended)
+
+    def fail_current(self, message: str = "http error") -> None:
+        """The current track's stream breaks mid-play."""
+        failed, self.current = self.current, None
+        state = pb.PlaybackStateChanged()
+        state.state = pb.PLAYBACK_STATE_ERROR
+        state.position_ms = self.position_ms
+        state.position_valid = False
+        if failed is not None:
+            state.source_token = failed
+        state.error.source = pb.ERROR_SOURCE_HTTP_STREAM
+        state.error.message = message
+        state.at_unix_ms = _NOW_UNIX_MS
+        self._send("playback_state_changed", state)
+
+    # ------------------------------------------------------------------
+    # The simulated graph
+
+    def _enqueue(self, token: str) -> None:
+        if self.current is None:
+            self._start(token)
+        else:
+            self.queued.append(token)
+
+    def _remove(self, token: str) -> None:
+        if token == self.current:
+            self.current = None
+            if self.queued:
+                self._start(self.queued.pop(0))
+            else:
+                self._emit_state(pb.PLAYBACK_STATE_FINISHED, token)
+        elif token in self.queued:
+            self.queued.remove(token)
+
+    def _start(self, token: str) -> None:
+        previous, self.current = self.current, token
+        self.position_ms = 0
+        changed = pb.SourceChanged()
+        changed.source_token = token
+        if previous is not None:
+            changed.previous_source_token = previous
+        changed.at_unix_ms = _NOW_UNIX_MS
+        self._send("source_changed", changed)
+        self._emit_state(pb.PLAYBACK_STATE_PREPARING, token)
+        fmt = pb.AudioFormatChanged()
+        fmt.source_token = token
+        self._fill_format(fmt.format)
+        self._send("audio_format_changed", fmt)
+        self._emit_state(pb.PLAYBACK_STATE_PLAYING, token)
+
+    def _fill_format(self, out: pb.AudioFormat) -> None:
+        out.sample_rate_hz = SAMPLE_RATE
+        out.channels = CHANNELS
+        out.bits_per_sample = BITS_PER_SAMPLE
+        out.sample_format = "S16_LE"
+        out.stream_kind = pb.STREAM_KIND_FRAMES
+        out.stream_size_units = DURATION_MS * SAMPLE_RATE // 1000
+
+    def _emit_state(self, state_value, token: Optional[str]) -> None:
+        state = pb.PlaybackStateChanged()
+        state.state = state_value
+        state.position_ms = self.position_ms
+        state.position_valid = state_value in (
+            pb.PLAYBACK_STATE_PLAYING,
+            pb.PLAYBACK_STATE_PAUSED,
+        )
+        if token is not None:
+            state.source_token = token
+        state.at_unix_ms = _NOW_UNIX_MS
+        self._send("playback_state_changed", state)
+
+    def _snapshot(self) -> pb.StateSnapshot:
+        snapshot = pb.StateSnapshot()
+        snapshot.playback_state = (
+            pb.PLAYBACK_STATE_PLAYING
+            if self.current is not None
+            else pb.PLAYBACK_STATE_STOPPED
+        )
+        snapshot.position_ms = self.position_ms
+        snapshot.position_valid = self.current is not None
+        snapshot.captured_at_unix_ms = _NOW_UNIX_MS
+        snapshot.volume.supported = False
+        return snapshot
+
+    def _send(self, payload: str, message) -> None:
+        if self.session_id is None:
+            return
+        self.pool.handle_state(
+            self.RENDERER_ID,
+            session_id=self.session_id,
+            payload=payload,
+            message=message,
+        )
