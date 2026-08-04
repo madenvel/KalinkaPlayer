@@ -1,9 +1,12 @@
 #include "MdnsDiscovery.h"
 
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <spdlog/fmt/ranges.h>
 #include <spdlog/spdlog.h>
 #include <sys/select.h>
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -21,12 +24,15 @@ constexpr size_t kBufferSize = 8192;
 // Records of one received mDNS message, keyed by owner name, so a
 // PTR + SRV + TXT + A response resolves in a single pass.
 struct Packet {
+  // Source IP of the datagram: the server's address on the interface it
+  // answered from, i.e. the network we actually share with it.
+  std::string sourceIp;
   // instance name -> ttl (0 = goodbye)
   std::map<std::string, uint32_t> ptrInstances;
   // instance name -> (target host, port)
   std::map<std::string, std::pair<std::string, uint16_t>> srv;
-  // host name -> IPv4 address string
-  std::map<std::string, std::string> addresses;
+  // host name -> all announced IPv4 addresses (one per server interface)
+  std::map<std::string, std::vector<std::string>> addresses;
   // instances whose TXT record appeared, and their renderer_proto value
   std::set<std::string> txtSeen;
   std::map<std::string, int> rendererProto;
@@ -39,7 +45,7 @@ std::string extractName(const void *data, size_t size, size_t offset) {
   return std::string(s.str, s.length);
 }
 
-int recordCallback(int /*sock*/, const struct sockaddr * /*from*/,
+int recordCallback(int /*sock*/, const struct sockaddr *from,
                    size_t /*addrlen*/, mdns_entry_type_t entry,
                    uint16_t /*query_id*/, uint16_t rtype, uint16_t /*rclass*/,
                    uint32_t ttl, const void *data, size_t size,
@@ -50,6 +56,13 @@ int recordCallback(int /*sock*/, const struct sockaddr * /*from*/,
     return 0;
   }
   auto *packet = static_cast<Packet *>(user_data);
+  if (packet->sourceIp.empty() && from && from->sa_family == AF_INET) {
+    char ip[INET_ADDRSTRLEN];
+    const auto *sin = reinterpret_cast<const sockaddr_in *>(from);
+    if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) {
+      packet->sourceIp = ip;
+    }
+  }
   char namebuf[256];
 
   switch (rtype) {
@@ -96,8 +109,10 @@ int recordCallback(int /*sock*/, const struct sockaddr * /*from*/,
     mdns_record_parse_a(data, size, record_offset, record_length, &addr);
     char ip[INET_ADDRSTRLEN];
     if (inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip))) {
-      // First address wins; the Core announces one record per interface.
-      packet->addresses.emplace(owner, ip);
+      auto &list = packet->addresses[owner];
+      if (std::find(list.begin(), list.end(), ip) == list.end()) {
+        list.emplace_back(ip);
+      }
     }
     break;
   }
@@ -105,6 +120,50 @@ int recordCallback(int /*sock*/, const struct sockaddr * /*from*/,
     break;
   }
   return 0;
+}
+
+// Pick the reachable address when the Core announces one A record per
+// interface (it may sit on networks we cannot route to, e.g. an internal
+// bridge). Preference order:
+//   1. the datagram's source address — the Core's IP on the network the
+//      answer actually travelled over;
+//   2. an address on the same subnet as one of our own interfaces;
+//   3. the first announced address (nothing better to go on).
+std::string pickAddress(const std::vector<std::string> &candidates,
+                        const std::string &sourceIp) {
+  if (std::find(candidates.begin(), candidates.end(), sourceIp) !=
+      candidates.end()) {
+    return sourceIp;
+  }
+
+  ifaddrs *ifaddr = nullptr;
+  if (getifaddrs(&ifaddr) == 0) {
+    for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+      if (!ifa->ifa_addr || !ifa->ifa_netmask ||
+          ifa->ifa_addr->sa_family != AF_INET) {
+        continue;
+      }
+      const auto local =
+          reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr)->sin_addr.s_addr;
+      const auto mask = reinterpret_cast<const sockaddr_in *>(ifa->ifa_netmask)
+                            ->sin_addr.s_addr;
+      for (const auto &candidate : candidates) {
+        in_addr addr{};
+        if (inet_pton(AF_INET, candidate.c_str(), &addr) == 1 &&
+            (addr.s_addr & mask) == (local & mask)) {
+          freeifaddrs(ifaddr);
+          return candidate;
+        }
+      }
+    }
+    freeifaddrs(ifaddr);
+  }
+
+  spdlog::warn(
+      "[Discovery] None of the announced addresses ({}) is on a local "
+      "subnet; trying {}",
+      fmt::join(candidates, ", "), candidates.front());
+  return candidates.front();
 }
 
 // "My Kalinka Service._kalinkaplayer._tcp.local." -> "My Kalinka Service"
@@ -241,12 +300,13 @@ void MdnsDiscovery::drainSocket() {
         continue;  // no SRV in this message; a later response will carry it
       }
       const auto addr = packet.addresses.find(srv->second.first);
-      if (addr == packet.addresses.end()) {
+      if (addr == packet.addresses.end() || addr->second.empty()) {
         continue;
       }
       known_[instance] = true;
-      CoreEndpoint endpoint{instance, addr->second, srv->second.second,
-                            displayName(instance)};
+      CoreEndpoint endpoint{instance,
+                            pickAddress(addr->second, packet.sourceIp),
+                            srv->second.second, displayName(instance)};
       spdlog::info("[Discovery] Found '{}' at {}:{}", endpoint.name,
                    endpoint.host, endpoint.port);
       onAdd_(std::move(endpoint));
