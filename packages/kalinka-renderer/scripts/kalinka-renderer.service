@@ -1,0 +1,30 @@
+[Unit]
+Description=Kalinka Renderer
+Documentation=https://github.com/madenvel/KalinkaPlayer
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kalusr
+Group=kalusr
+SupplementaryGroups=audio
+# /var/lib/kalinka-renderer — where the renderer persists its stable id.
+StateDirectory=kalinka-renderer
+StateDirectoryMode=0750
+
+# Foreground; logs go to the journal.
+ExecStart=/usr/bin/kalinka-renderer
+
+Restart=on-failure
+RestartSec=5
+
+# The renderer touches only its state dir and the sound devices; it streams
+# audio over HTTP rather than reading user files.
+ProtectSystem=full
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

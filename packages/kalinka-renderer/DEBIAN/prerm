@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -e
+
+# On upgrade the new version's postinst restarts the unit; only a real
+# removal stops it.
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    systemctl disable --now kalinka-renderer.service 2>/dev/null || true
+fi
+
+exit 0

@@ -43,12 +43,12 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             container: debian:trixie
-            make_target: build-all-deb
+            make_target: build-all-deb renderer-deb
           # amd64 builds only the arch-specific server deb, for Ubuntu.
           - arch: amd64
             runner: ubuntu-24.04
             container: ubuntu:24.04
-            make_target: kalinka-server-deb
+            make_target: kalinka-server-deb renderer-deb
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.container }}
@@ -60,10 +60,11 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential make git ca-certificates unzip dpkg-dev \
+            build-essential make git ca-certificates unzip dpkg-dev cmake \
             python3 python3-dev python3-pip python3-venv \
             libboost-dev libcurlpp-dev libcurl4-openssl-dev libflac++-dev \
-            libasound2-dev libspdlog-dev libfmt-dev
+            libasound2-dev libspdlog-dev libfmt-dev \
+            protobuf-compiler libprotobuf-dev
           # build/setuptools-scm/pybind11 for wheel builds; pydantic is needed
           # by the localfiles plugin's build-time optional_packages export.
           # --ignore-installed: these deps pull a newer `packaging` than the
@@ -103,9 +104,81 @@ jobs:
           path: out/*.deb
           if-no-files-found: error
 
+  # Renderer RPM for Fedora, built inside the fedora:45 container so the
+  # binary links fc45 sonames and the .fc45 dist tag is correct.
+  rpm:
+    name: Renderer RPM (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: fedora:45
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y make git rpm-build cmake gcc-c++ \
+            protobuf-devel protobuf-compiler boost-devel spdlog-devel \
+            alsa-lib-devel libcurl-devel curlpp-devel flac-devel \
+            pkgconf-pkg-config systemd-rpm-macros
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build RPM
+        run: make renderer-rpm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms-${{ matrix.arch }}
+          path: packages/kalinka-renderer/*.rpm
+          if-no-files-found: error
+
+  # Best-effort: the flatpak is an extra distribution channel, never a
+  # release blocker (continue-on-error).
+  flatpak:
+    name: Renderer flatpak (${{ matrix.arch }})
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: kalinka-renderer-${{ matrix.arch }}.flatpak
+          manifest-path: packages/kalinka-renderer/flatpak/io.github.madenvel.KalinkaRenderer.yml
+          arch: ${{ matrix.arch }}
+          upload-artifact: true
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, rpm, flatpak]
     runs-on: ubuntu-24.04
     steps:
       # Full history + tags: the notes step lists commits since the previous
@@ -122,11 +195,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Gather debs and checksums
+      - name: Gather packages and checksums
         run: |
           mkdir -p release
-          find artifacts -name '*.deb' -exec cp -n {} release/ \;
-          (cd release && sha256sum *.deb > SHA256SUMS)
+          find artifacts \( -name '*.deb' -o -name '*.rpm' -o -name '*.flatpak' \) -exec cp -n {} release/ \;
+          (cd release && sha256sum ./* > SHA256SUMS)
           echo "Release assets:"
           ls -l release/
           cat release/SHA256SUMS
