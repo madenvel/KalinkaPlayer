@@ -9,7 +9,7 @@ This module provides automatic device management features such as:
 
 import asyncio
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk.api import PlayQueueController
@@ -29,6 +29,7 @@ from kalinka_plugin_sdk.ext_device_events import (
 )
 
 from .config_model import DeviceAutomationConfig
+from .output_device_router import OutputDeviceRouter
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -46,7 +47,7 @@ class DeviceAutomation:
         ext_device_eventbus: EventBus[
             ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent
         ],
-        resolve_device: Callable[[], Optional[ExternalOutputDevice]] = lambda: None,
+        router: Optional[OutputDeviceRouter] = None,
     ):
         """
         Initialize the device automation module.
@@ -56,18 +57,26 @@ class DeviceAutomation:
             playqueue: The playqueue controller to control playback
             playqueue_eventbus: Event bus for playback events
             ext_device_eventbus: Event bus for device events
-            resolve_device: Returns the device to control, or None when there
-                is none. Called per action, so power follows the active
-                renderer's delegation.
+            router: Resolves which module owns the active renderer's output.
+                Consulted per action, so power follows renderer selection and
+                delegation.
         """
         self.config = config
         self.playqueue = playqueue
         self.playqueue_eventbus = playqueue_eventbus
         self.ext_device_eventbus = ext_device_eventbus
-        self._resolve_device = resolve_device
+        self._router = router
 
         self._last_state: Optional[PlayerStateEnum] = None
-        self._auto_off_task: Optional[asyncio.Task] = None
+        # Pending power-offs, keyed by module. Keyed rather than single because
+        # switching renderers leaves the previous device idle while another one
+        # starts playing: the old device must still power down, and the new
+        # one's playback must not cancel that.
+        self._auto_off_tasks: dict[str, asyncio.Task] = {}
+        # Module we powered on for the current playback, so it is the one
+        # powered off later even if the active renderer has changed since.
+        self._in_use: Optional[str] = None
+        self._in_use_device: Optional[ExternalOutputDevice] = None
         self._subscription = None
         self._stream_task: Optional[asyncio.Task] = None
         self._device_stream_task: Optional[asyncio.Task] = None
@@ -80,7 +89,10 @@ class DeviceAutomation:
         """Whoever owns the active renderer's output right now. Resolved per
         use, never cached: delegation and renderer selection both change it,
         and so do the capabilities that go with it."""
-        return self._resolve_device()
+        return self._router.current() if self._router else None
+
+    def _device_name(self) -> str:
+        return self._router.current_name() if self._router else ""
 
     @staticmethod
     def _can(device: ExternalOutputDevice, function: SupportedFunction) -> bool:
@@ -172,7 +184,7 @@ class DeviceAutomation:
         logger.debug(f"Playback state changed: {self._last_state} -> {new_state}")
 
         if new_state in (PlayerStateEnum.BUFFERING, PlayerStateEnum.PLAYING):
-            self._cancel_auto_off_timer()
+            self._cancel_auto_off_timer(self._device_name())
             # Only fire _on_active on the *transition* into the active group.
             # Without this guard, BUFFERING → PLAYING (~600 ms apart on a fresh
             # track) triggers power_on twice in quick succession; the first
@@ -186,17 +198,30 @@ class DeviceAutomation:
                 await self._on_active()
 
         elif new_state in (PlayerStateEnum.PAUSED, PlayerStateEnum.STOPPED):
-            self._start_auto_off_timer()
+            name = self._in_use if self._in_use is not None else self._device_name()
+            device = (
+                self._in_use_device if self._in_use is not None else self.device
+            )
+            self._start_auto_off_timer(name, device)
 
         self._last_state = new_state
 
     async def _on_active(self):
         """Handle transition to an active state (buffering or playing)."""
         self._device_externally_off = False
+        name = self._device_name()
+        # Playback moved to a device we were not using — the previous one is
+        # now idle, so let it power down on its own timer rather than leaving
+        # it on forever because something else started playing.
+        previous, previous_device = self._in_use, self._in_use_device
+        self._in_use, self._in_use_device = name, self.device
+        if previous is not None and previous != name:
+            self._start_auto_off_timer(previous, previous_device)
+
         if not self.config.auto_power_on:
             return
 
-        device = self.device
+        device = self._in_use_device
         if device is None or not self._can(device, SupportedFunction.POWER_ON):
             logger.debug("Device power on not available")
             return
@@ -214,9 +239,11 @@ class DeviceAutomation:
         except Exception as e:
             logger.error(f"Failed to auto power on device: {e}", exc_info=True)
 
-    def _start_auto_off_timer(self):
-        """Start the auto-off grace period timer."""
-        if not self.config.auto_power_off:
+    def _start_auto_off_timer(
+        self, name: str, device: Optional[ExternalOutputDevice]
+    ):
+        """Start the auto-off grace period for one device."""
+        if not self.config.auto_power_off or device is None:
             return
 
         timeout = self.config.auto_off_timeout_seconds
@@ -224,58 +251,63 @@ class DeviceAutomation:
             logger.debug("Auto-off timeout disabled")
             return
 
-        if self._device_externally_off:
+        # Only for the device currently in charge: one playback has moved away
+        # from is idle regardless of why the current one went quiet.
+        if self._device_externally_off and name == self._device_name():
             logger.debug("Skipping auto-off timer: device already externally powered off")
             return
 
         # Don't restart the timer if it's already running (e.g. paused → stopped)
-        if self._auto_off_task and not self._auto_off_task.done():
-            logger.debug("Auto-off timer already running")
+        running = self._auto_off_tasks.get(name)
+        if running and not running.done():
+            logger.debug("Auto-off timer already running for %s", name)
             return
 
-        logger.debug(f"Starting auto-off timer ({timeout}s)")
-        self._auto_off_task = asyncio.create_task(self._auto_off_timeout())
+        logger.debug("Starting auto-off timer for %s (%ss)", name, timeout)
+        self._auto_off_tasks[name] = asyncio.create_task(
+            self._auto_off_timeout(name, device)
+        )
 
-    async def _auto_off_timeout(self):
-        """Wait for the grace period then stop playback and power off."""
+    async def _auto_off_timeout(self, name: str, device: ExternalOutputDevice):
+        """Wait for the grace period then stop playback and power off.
+
+        Whether the queue is this device's business is decided here, not when
+        the timer started: playback may have moved to another renderer since,
+        and this device is then simply idle — it powers down without touching
+        a queue that is now somebody else's.
+        """
         try:
             await asyncio.sleep(self.config.auto_off_timeout_seconds)
 
-            current_state = await self.playqueue.get_playback_state()
-            if current_state.state not in (
-                PlayerStateEnum.PAUSED,
-                PlayerStateEnum.STOPPED,
-            ):
-                logger.debug(
-                    f"Auto-off timer fired but state is {current_state.state}, skipping"
-                )
-                return
+            if name == self._in_use:
+                current_state = await self.playqueue.get_playback_state()
+                if current_state.state not in (
+                    PlayerStateEnum.PAUSED,
+                    PlayerStateEnum.STOPPED,
+                ):
+                    logger.debug(
+                        f"Auto-off timer fired but state is {current_state.state}, skipping"
+                    )
+                    return
+
+                # Stop playback first for energy saving (no-op if stopped)
+                if current_state.state == PlayerStateEnum.PAUSED:
+                    try:
+                        await self.playqueue.stop()
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to stop playback on auto-off: {e}", exc_info=True
+                        )
 
             logger.info(
-                f"Auto-off timeout reached ({self.config.auto_off_timeout_seconds}s), "
-                "stopping playback and powering off device"
+                "Auto-off timeout reached (%ss), powering off %s",
+                self.config.auto_off_timeout_seconds,
+                name,
             )
-
-            # Stop playback first for energy saving (no-op if already stopped)
-            if current_state.state == PlayerStateEnum.PAUSED:
-                try:
-                    await self.playqueue.stop()
-                except Exception as e:
-                    logger.error(
-                        f"Failed to stop playback on auto-off: {e}", exc_info=True
-                    )
-
-            # Power off the device
-            device = self.device
-            if (
-                self.config.auto_power_off
-                and device is not None
-                and self._can(device, SupportedFunction.POWER_OFF)
-            ):
+            if self._can(device, SupportedFunction.POWER_OFF):
                 try:
                     if self._can(device, SupportedFunction.IS_POWER_ON):
-                        is_on = await device.is_power_on()
-                        if not is_on:
+                        if not await device.is_power_on():
                             logger.debug("Device is already powered off")
                             return
 
@@ -290,13 +322,19 @@ class DeviceAutomation:
             raise
         except Exception as e:
             logger.error(f"Error in auto-off timeout handler: {e}", exc_info=True)
+        finally:
+            # Only the bookkeeping: a cancelled timer means playback resumed on
+            # this device, so it stays the one in use.
+            self._auto_off_tasks.pop(name, None)
 
-    def _cancel_auto_off_timer(self):
-        """Cancel the auto-off timer if it's running."""
-        if self._auto_off_task and not self._auto_off_task.done():
-            logger.debug("Cancelling auto-off timer")
-            self._auto_off_task.cancel()
-            self._auto_off_task = None
+    def _cancel_auto_off_timer(self, name: Optional[str] = None):
+        """Cancel pending power-offs — one device's, or every one."""
+        names = [name] if name is not None else list(self._auto_off_tasks)
+        for key in names:
+            task = self._auto_off_tasks.pop(key, None)
+            if task is not None and not task.done():
+                logger.debug("Cancelling auto-off timer for %s", key)
+                task.cancel()
 
     async def shutdown(self):
         """Shutdown the device automation module."""

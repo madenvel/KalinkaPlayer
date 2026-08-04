@@ -93,13 +93,32 @@ def config():
     )
 
 
+def _pending(automation) -> bool:
+    return any(not t.done() for t in automation._auto_off_tasks.values())
+
+
+class FakeRouter:
+    """Stands in for OutputDeviceRouter: which module owns the output, and
+    the device behind it. Both mutable, to model a renderer switch."""
+
+    def __init__(self, device=None, name="kalinka-renderer"):
+        self.device = device
+        self.name = name
+
+    def current(self):
+        return self.device
+
+    def current_name(self):
+        return self.name
+
+
 async def make_automation(config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, device=None):
     automation = DeviceAutomation(
         config=config,
         playqueue=mock_playqueue,
         playqueue_eventbus=playqueue_eventbus,
         ext_device_eventbus=ext_device_eventbus,
-        resolve_device=lambda: device,
+        router=FakeRouter(device),
     )
     await automation.start()
     # Give the listeners time to subscribe before we dispatch events
@@ -186,14 +205,14 @@ async def test_power_follows_the_currently_resolved_device(
     other = MagicMock()
     other.supported_functions.return_value = {SupportedFunction.POWER_ON}
     other.power_on = AsyncMock()
-    current = mock_device
+    router = FakeRouter(mock_device, name="musiccast")
 
     automation = DeviceAutomation(
         config=config,
         playqueue=mock_playqueue,
         playqueue_eventbus=playqueue_eventbus,
         ext_device_eventbus=ext_device_eventbus,
-        resolve_device=lambda: current,
+        router=router,
     )
     await automation.start()
     await asyncio.sleep(0.05)
@@ -204,7 +223,7 @@ async def test_power_follows_the_currently_resolved_device(
         await asyncio.sleep(0.1)
         mock_device.power_on.assert_called_once()
 
-        current = other
+        router.device, router.name = other, "kalinka-renderer"
         mock_playqueue.get_playback_state.return_value = PlaybackState(
             state=PlayerStateEnum.STOPPED
         )
@@ -220,6 +239,60 @@ async def test_power_follows_the_currently_resolved_device(
         other.power_on.assert_called_once()
         # The device that is no longer in charge is left alone.
         mock_device.power_on.assert_called_once()
+    finally:
+        await automation.shutdown()
+
+
+async def test_switching_renderers_still_powers_down_the_one_left_behind(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    """Playback moving to another renderer must not cancel the previous
+    device's power-off: the amp it was using is now idle."""
+    renderer = MagicMock()
+    renderer.supported_functions.return_value = {SupportedFunction.POWER_ON}
+    renderer.power_on = AsyncMock()
+    router = FakeRouter(mock_device, name="musiccast")
+
+    automation = DeviceAutomation(
+        config=config,
+        playqueue=mock_playqueue,
+        playqueue_eventbus=playqueue_eventbus,
+        ext_device_eventbus=ext_device_eventbus,
+        router=router,
+    )
+    await automation.start()
+    await asyncio.sleep(0.05)
+    try:
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PLAYING))
+        )
+        await asyncio.sleep(0.1)
+        mock_device.power_on.assert_called_once()
+        mock_device.is_power_on.return_value = True  # it is on now
+
+        # Selecting another renderer stops playback here...
+        mock_playqueue.get_playback_state.return_value = PlaybackState(
+            state=PlayerStateEnum.STOPPED
+        )
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
+        )
+        await asyncio.sleep(0.05)
+
+        # ...and resumes on the new one well inside the grace period.
+        router.device, router.name = renderer, "kalinka-renderer"
+        mock_playqueue.get_playback_state.return_value = PlaybackState(
+            state=PlayerStateEnum.PLAYING
+        )
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PLAYING))
+        )
+        await asyncio.sleep(0.1)
+
+        # The amp left behind powers down anyway, and playback is untouched.
+        await asyncio.sleep(1.2)
+        mock_device.power_off.assert_called_once()
+        mock_playqueue.stop.assert_not_called()
     finally:
         await automation.shutdown()
 
@@ -294,7 +367,7 @@ async def test_auto_off_timer_not_restarted_on_second_pause(
         )
         await asyncio.sleep(0.2)
 
-        timer_task_after_first = automation._auto_off_task
+        timer_task_after_first = automation._auto_off_tasks.get('kalinka-renderer')
 
         playqueue_eventbus.dispatch(
             PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PAUSED))
@@ -302,7 +375,7 @@ async def test_auto_off_timer_not_restarted_on_second_pause(
         await asyncio.sleep(0.1)
 
         # The same task object should still be running (not replaced)
-        assert automation._auto_off_task is timer_task_after_first
+        assert automation._auto_off_tasks.get('kalinka-renderer') is timer_task_after_first
 
         # Let the timer fire
         await asyncio.sleep(1.0)
@@ -364,7 +437,7 @@ async def test_power_off_event_does_not_start_auto_off_timer(
         await asyncio.sleep(0.1)
 
         # Timer must not have been created — device is already off
-        assert automation._auto_off_task is None or automation._auto_off_task.done()
+        assert not _pending(automation)
         mock_device.power_off.assert_not_called()
     finally:
         await automation.shutdown()
@@ -382,12 +455,12 @@ async def test_power_off_event_cancels_running_auto_off_timer(
             PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
         )
         await asyncio.sleep(0.05)
-        assert automation._auto_off_task is not None and not automation._auto_off_task.done()
+        assert _pending(automation)
 
         # Now the device powers off externally — timer should be cancelled immediately
         ext_device_eventbus.dispatch(DevicePowerStateChangedEvent(power_on=False))
         await asyncio.sleep(0.05)
-        assert automation._auto_off_task is None or automation._auto_off_task.done()
+        assert not _pending(automation)
 
         # Wait past the original timeout — still no power_off call
         await asyncio.sleep(1.2)
@@ -419,7 +492,7 @@ async def test_auto_off_resumes_after_device_powers_back_on(
             PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
         )
         await asyncio.sleep(0.05)
-        assert automation._auto_off_task is not None and not automation._auto_off_task.done()
+        assert _pending(automation)
 
         # And the device gets powered off after the timeout
         await asyncio.sleep(1.2)
