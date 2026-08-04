@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
         await internal_modules.initialize(
             app.state.config,
             app.state.player_context,
-            app.state.device_router.current,
+            app.state.device_router,
         )
 
         await restore_state(

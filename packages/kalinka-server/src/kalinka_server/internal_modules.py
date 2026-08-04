@@ -6,12 +6,11 @@ These are built-in features that provide core functionality.
 """
 
 import logging
-from typing import Callable, Optional
-
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
+from typing import Optional
 
 from .device_automation import DeviceAutomation
 from .config_model import KalinkaConfig
+from .output_device_router import OutputDeviceRouter
 from .player_setup import PlayerContext
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -27,7 +26,7 @@ class InternalModules:
         self,
         config: KalinkaConfig,
         player_context: PlayerContext,
-        resolve_device: Callable[[], Optional[ExternalOutputDevice]],
+        router: OutputDeviceRouter,
     ):
         """
         Initialize all internal modules.
@@ -35,13 +34,13 @@ class InternalModules:
         Args:
             config: Server configuration
             player_context: Player context with event buses and playqueue
-            resolve_device: Returns the device that owns the active renderer's
-                output, so automation powers the one actually in use.
+            router: Resolves which module owns the active renderer's output,
+                so automation powers the one actually in use.
         """
         logger.info("Initializing internal modules")
 
         # Initialize device automation
-        await self._setup_device_automation(config, player_context, resolve_device)
+        await self._setup_device_automation(config, player_context, router)
 
         logger.info("Internal modules initialization complete")
 
@@ -49,7 +48,7 @@ class InternalModules:
         self,
         config: KalinkaConfig,
         player_context: PlayerContext,
-        resolve_device: Callable[[], Optional[ExternalOutputDevice]],
+        router: OutputDeviceRouter,
     ):
         """Setup the device automation module."""
         self.device_automation = DeviceAutomation(
@@ -57,7 +56,7 @@ class InternalModules:
             playqueue=player_context.playqueue,
             playqueue_eventbus=player_context.playqueue_eventbus,
             ext_device_eventbus=player_context.ext_device_eventbus,
-            resolve_device=resolve_device,
+            router=router,
         )
         await self.device_automation.start()
         logger.info("Device automation initialized")
