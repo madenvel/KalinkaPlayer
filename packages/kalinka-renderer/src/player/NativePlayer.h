@@ -54,6 +54,8 @@ public:
   void resume() override;
   void stop() override;
   void setVolume(uint32_t percent) override;
+  void beginSessionVolume(const SessionVolume &volume) override;
+  void endSessionVolume() override;
   void seek(uint64_t positionMs) override;
   void fillConfig(kalinka::renderer::v1::ConfigSection &out) const override;
   bool applyConfig(const std::string &path, const std::string &value,
@@ -87,10 +89,15 @@ private:
 
   static const std::map<std::string, std::string> &defaultSettings();
   void persistOverrides() const;
+  /// What the graph should run: the session override, else the configured one.
+  const std::string &effectiveVolumeMode() const;
 
   boost::asio::io_context &ioc_;
   StateSink sink_;
   std::map<std::string, std::string> settings_ = defaultSettings();
+  // Never merged into settings_: that is the configured value, which the
+  // config plane reports and persistOverrides() writes.
+  std::optional<std::string> sessionVolumeMode_;
 
   std::unique_ptr<AudioPlayer> player_;
   // shared_ptr: each pump thread keeps its monitor alive; stop() is what

@@ -88,7 +88,7 @@ bool NativePlayer::ensurePlayer() {
     player_ = std::make_unique<AudioPlayer>(Config{
         {"output.alsa.device", settings_.at("output.device")},
     });
-    player_->configureVolume(settings_.at("output.volume_mode"), "");
+    player_->configureVolume(effectiveVolumeMode(), "");
     startPumps();
     return true;
   } catch (const std::exception &e) {
@@ -435,10 +435,47 @@ bool NativePlayer::applyConfig(const std::string &path,
   if (path == "output.device") {
     rebuildPlayer();
   } else if (path == "output.volume_mode" && player_) {
-    player_->configureVolume(value, "");
-    emitVolume(player_->getVolume(), false);
+    // A session override outranks the configured value until it ends.
+    if (!sessionVolumeMode_) {
+      player_->configureVolume(value, "");
+      emitVolume(player_->getVolume(), false);
+    }
   }
   return true;
+}
+
+const std::string &NativePlayer::effectiveVolumeMode() const {
+  return sessionVolumeMode_ ? *sessionVolumeMode_
+                            : settings_.at("output.volume_mode");
+}
+
+void NativePlayer::beginSessionVolume(const SessionVolume &volume) {
+  if (!volume.mode.empty()) {
+    const bool changed = volume.mode != effectiveVolumeMode();
+    sessionVolumeMode_ = volume.mode;
+    if (changed) {
+      spdlog::info("Session volume mode: '{}' (configured '{}' is kept)",
+                   volume.mode, settings_.at("output.volume_mode"));
+      if (player_) {
+        player_->configureVolume(volume.mode, "");
+      }
+    }
+  }
+  if (volume.percent) {
+    setVolume(*volume.percent);
+  }
+}
+
+void NativePlayer::endSessionVolume() {
+  if (!sessionVolumeMode_) {
+    return;
+  }
+  sessionVolumeMode_.reset();
+  spdlog::info("Session volume mode ended; back to '{}'",
+               settings_.at("output.volume_mode"));
+  if (player_) {
+    player_->configureVolume(settings_.at("output.volume_mode"), "");
+  }
 }
 
 void NativePlayer::fillSnapshot(pb::StateSnapshot &out) const {

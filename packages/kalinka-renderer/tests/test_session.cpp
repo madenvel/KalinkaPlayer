@@ -2,6 +2,7 @@
 
 #include <boost/asio.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 
@@ -217,4 +218,26 @@ TEST_F(SessionTest, UnknownConnectionClosingChangesNothing) {
   EXPECT_EQ(ended, 0);
   player->emitPlaybackState(pb::PLAYBACK_STATE_ERROR);
   EXPECT_EQ(transport->sent.size(), 2u);  // still routed
+}
+
+TEST_F(SessionTest, SessionVolumePolicyIsAppliedAtOpenAndUndoneAtClose) {
+  auto session = Session::create(ioc, "sid-1", "owner-1", 60s, player,
+                                 [this] { ++ended; },
+                                 SessionVolume{"fixed", 100});
+  EXPECT_EQ(player->calls.front(), "begin_session_volume:fixed:100");
+
+  session->close("done");
+  EXPECT_NE(std::find(player->calls.begin(), player->calls.end(),
+                      "end_session_volume"),
+            player->calls.end());
+}
+
+TEST_F(SessionTest, NoPolicyLeavesTheRenderersOwnVolumeAlone) {
+  auto session = makeSession();
+  EXPECT_EQ(std::find_if(player->calls.begin(), player->calls.end(),
+                         [](const std::string &call) {
+                           return call.starts_with("begin_session_volume");
+                         }),
+            player->calls.end());
+  session->close("done");
 }

@@ -78,7 +78,7 @@ public:
 
 private:
   void handleWelcome(const kalinka::renderer::v1::Welcome &welcome);
-  void handleSessionOpen(const std::string &sessionId);
+  void handleSessionOpen(const kalinka::renderer::v1::SessionOpen &open);
   void handleSessionClose(const std::string &sessionId);
   void handleCommand(const kalinka::renderer::v1::Envelope &env);
   void handleGoodbye(const kalinka::renderer::v1::Goodbye &goodbye);

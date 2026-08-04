@@ -96,7 +96,7 @@ void ProtocolSession::onMessage(const std::string &data) {
     handleWelcome(env.welcome());
     break;
   case pb::Envelope::kSessionOpen:
-    handleSessionOpen(env.session_open().session_id());
+    handleSessionOpen(env.session_open());
     break;
   case pb::Envelope::kSessionClose:
     handleSessionClose(env.session_close().session_id());
@@ -139,7 +139,8 @@ void ProtocolSession::handleWelcome(const pb::Welcome &welcome) {
                welcome.api_version(), welcome.protocol_version());
 }
 
-void ProtocolSession::handleSessionOpen(const std::string &sessionId) {
+void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {
+  const std::string &sessionId = open.session_id();
   pb::Envelope env;
   pb::SessionOpenResult *result = env.mutable_session_open_result();
   result->set_session_id(sessionId);
@@ -151,8 +152,12 @@ void ProtocolSession::handleSessionOpen(const std::string &sessionId) {
     result->set_detail("session opened before the handshake completed");
   } else {
     std::string busyOwner;
-    if (auto session = services_.sessions->open(sessionId, serverId_,
-                                                busyOwner)) {
+    SessionVolume volume{open.volume_mode(), std::nullopt};
+    if (open.has_volume_percent()) {
+      volume.percent = open.volume_percent();
+    }
+    if (auto session = services_.sessions->open(sessionId, serverId_, busyOwner,
+                                                volume)) {
       result->set_accepted(true);
       session_ = std::move(session);
       accepted = true;

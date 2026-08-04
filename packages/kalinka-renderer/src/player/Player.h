@@ -2,10 +2,21 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "../config/ConfigContributor.h"
 #include "kalinka/renderer/v1/renderer.pb.h"
+
+/// Session-scoped volume policy, as carried on SessionOpen.
+struct SessionVolume {
+  /// One of the output.volume_mode values; empty leaves the configured one.
+  std::string mode;
+  /// Level to set at session open; absent leaves the current one.
+  std::optional<uint32_t> percent;
+
+  bool empty() const { return mode.empty() && !percent.has_value(); }
+};
 
 /**
  * @brief The seam between the protocol and the audio graph.
@@ -119,6 +130,22 @@ public:
    * @param percent 0..100 on whatever volume backend the renderer runs.
    */
   virtual void setVolume(uint32_t percent) = 0;
+
+  /**
+   * @brief Apply a volume policy for the life of one session.
+   *
+   * Held in memory and undone by endSessionVolume(), never written to the
+   * renderer's configuration: a Core that fixes volume because an amp
+   * downstream owns it must not leave this renderer fixed for whoever uses it
+   * next, and a crash mid-session must come back with the renderer's own
+   * setting. The configured value is what the config plane keeps reporting.
+   *
+   * Default: ignore it. A player with no volume policy loses nothing.
+   */
+  virtual void beginSessionVolume(const SessionVolume &) {}
+
+  /// Restore the configured volume mode. Idempotent.
+  virtual void endSessionVolume() {}
 
   /**
    * @brief Jump within the current source.
