@@ -1031,15 +1031,10 @@ that was reinstalled — or whose `server_id` file was lost, or that runs with a
 unwritable state directory and mints an ephemeral id each start — would leave
 the renderer claimed by an owner that can never return, refusing every future
 session. A `Session` therefore watches the connections attached to it and,
-when the last one drops:
-
-- closes immediately if nothing is playing;
-- otherwise closes after a grace period (`--session-grace`, default 60 s)
-  unless the owner reconnects first.
-
-Playback is not implemented yet, so the state is hard-wired to `Stopped` and
-only the first rule can currently fire; `Session::setPlaybackState` is the
-hook the player will drive.
+when the last one drops, closes it after a grace period (`--session-grace`, default 60 s) unless the
+owner reconnects first. The grace period applies whatever the renderer was
+doing: an owner that drops mid-track gets the same window as one that drops
+while idle, and the renderer is free again once it expires.
 
 Only the owning Core may close a session (`SessionClose` carries no authority
 from anyone else), which keeps this release path from becoming a way for one

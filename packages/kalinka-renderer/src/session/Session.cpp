@@ -138,13 +138,6 @@ void Session::publishSnapshot() {
   publish(env);
 }
 
-void Session::setPlaybackState(PlaybackState state) {
-  playbackState_ = state;
-  if (state == PlaybackState::Stopped && !closed_ && !attached()) {
-    close("playback stopped while the owner was away");
-  }
-}
-
 bool Session::publish(pb::Envelope &env) {
   if (closed_) {
     return false;
@@ -171,10 +164,6 @@ bool Session::attached() const {
 }
 
 void Session::ownerLost() {
-  if (playbackState_ == PlaybackState::Stopped) {
-    close("owner disconnected and nothing is playing");
-    return;
-  }
   spdlog::info(
       "Session {} owner {} disconnected; closing in {}s unless it returns",
       sessionId_, ownerServerId_, ownerGrace_.count());
