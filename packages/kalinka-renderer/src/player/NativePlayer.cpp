@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 
+#include "../config/SettingsPersistence.h"
 #include "../native_player/AlsaDeviceEnumeration.h"
 #include "StateTranslator.h"
 
@@ -45,7 +46,33 @@ bool noisyPcm(const std::string &name) {
 
 }  // namespace
 
+const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
+  static const std::map<std::string, std::string> defaults{
+      {"output.driver", "alsa"},
+      {"output.device", "default"},
+      {"output.volume_mode", "auto"},
+  };
+  return defaults;
+}
+
+void NativePlayer::persistOverrides() const {
+  std::map<std::string, std::string> overrides;
+  for (const auto &[key, value] : settings_) {
+    if (defaultSettings().at(key) != value) {
+      overrides[key] = value;
+    }
+  }
+  saveSettingsOverrides(overrides);
+}
+
 NativePlayer::NativePlayer(asio::io_context &ioc) : ioc_(ioc) {
+  for (const auto &[key, value] : loadSettingsOverrides()) {
+    const auto setting = settings_.find(key);
+    if (setting != settings_.end()) {
+      setting->second = value;
+      spdlog::info("Config override {} = '{}'", key, value);
+    }
+  }
   ensurePlayer();
 }
 
@@ -403,6 +430,7 @@ bool NativePlayer::applyConfig(const std::string &path,
     return true;  // nothing to do, and nothing to interrupt
   }
   setting->second = value;
+  persistOverrides();
   spdlog::info("Config {} = '{}'", path, value);
   if (path == "output.device") {
     rebuildPlayer();

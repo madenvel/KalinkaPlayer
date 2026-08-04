@@ -108,6 +108,7 @@ add_executable(kalinka-renderer
   src/main.cpp
   src/Daemon.cpp
   src/Identity.cpp
+  src/config/SettingsPersistence.cpp
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp

@@ -14,7 +14,7 @@ from kalinka_plugin_sdk.events import (
     PlayQueueEvent,
     PlayQueueEventType,
 )
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
+from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import (
     ExtDeviceEvent,
     ExtDeviceEventType,
@@ -41,7 +41,10 @@ from .config_overrides import (
 from .module_timeout import TimeLimitedInputModule
 from .playqueue import PlayQueueImpl
 from .renderer_config import RendererConfigService
-from .renderer_output_device import RendererOutputPlugin
+from .renderer_output_device import (
+    RendererOutputPlugin,
+    install_fixed_volume_hook,
+)
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import SessionPool
 from .text_embedder import SharedTextEmbedder
@@ -618,6 +621,15 @@ class PreparedModuleCollection:
         if self.player_context is None:
             return devices
         if any(p.health_state == ModuleHealthState.READY for p in devices.values()):
+            # The active device owns the volume; if it can actually control it,
+            # the renderer must not apply its own on top.
+            if any(
+                p.interface is not None
+                and SupportedFunction.SET_VOLUME in p.interface.supported_functions()
+                for p in devices.values()
+                if p.health_state == ModuleHealthState.READY
+            ):
+                install_fixed_volume_hook(renderer_sessions, renderer_configs)
             return devices
 
         config = self._build_module_config(

@@ -29,9 +29,10 @@
  *
  * Configuration: output device (enumerated from ALSA), driver, and volume
  * mode. Changing the device rebuilds the graph — APPLY_COST_INTERRUPTS_
- * PLAYBACK — and anything that was playing is gone, as declared. Values are
- * held in memory only; persistence is the config file's job once there is
- * one.
+ * PLAYBACK — and anything that was playing is gone, as declared. Overrides
+ * that differ from the defaults are persisted to the state directory (see
+ * SettingsPersistence) and loaded on construction; an applied change updates
+ * memory and the file in one step.
  *
  * If the graph cannot be built (no ALSA), the renderer stays up: commands
  * that need audio answer with PLAYBACK_STATE_ERROR, exactly like a track
@@ -84,13 +85,12 @@ private:
   /// Ids rise with append order, so becoming current retires earlier streams.
   void forgetSourcesBefore(StreamId streamId);
 
+  static const std::map<std::string, std::string> &defaultSettings();
+  void persistOverrides() const;
+
   boost::asio::io_context &ioc_;
   StateSink sink_;
-  std::map<std::string, std::string> settings_{
-      {"output.driver", "alsa"},
-      {"output.device", "default"},
-      {"output.volume_mode", "auto"},
-  };
+  std::map<std::string, std::string> settings_ = defaultSettings();
 
   std::unique_ptr<AudioPlayer> player_;
   // shared_ptr: each pump thread keeps its monitor alive; stop() is what
