@@ -427,6 +427,11 @@ async def create_app(
     app.state.device_router = device_router
     # Every session opens with the volume policy its renderer's wiring implies.
     renderer_sessions.set_volume_policy(device_router.session_volume_policy)
+    # Marked only once the session is actually running, so a refused open does
+    # not cost a renderer its one safe-level seeding.
+    renderer_sessions.add_open_hook(
+        lambda session: renderer_registry.mark_volume_seeded(session.renderer_id)
+    )
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):

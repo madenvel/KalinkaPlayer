@@ -63,6 +63,10 @@ _STYLE_TO_WIRE = {
 # Dotted config path of the volume_style field on the built-in device.
 VOLUME_STYLE_OPTIONS_PATH = "devices.kalinka-renderer.volume_style"
 
+# Deliberately not full scale: a renderer whose mixer was left at maximum
+# would otherwise blast on the first track this server plays through it.
+DEFAULT_VOLUME = 30
+
 
 def wire_volume_mode(style: RendererVolumeStyle) -> str:
     """The renderer's ``output.volume_mode`` value for a style. Empty for
@@ -129,6 +133,21 @@ class RendererOutputConfig(ModuleConfig):
                 "is delegated to another device are unaffected."
             ),
             "widget": "enum_dropdown",
+            "importance": "simple",
+        },
+    )
+    default_volume: int = Field(
+        default=DEFAULT_VOLUME,
+        ge=0,
+        le=100,
+        title="Default volume",
+        json_schema_extra={
+            "help": (
+                "Level applied the first time this server plays through a "
+                "renderer, so a new one starts somewhere safe instead of "
+                "wherever its mixer was left. Also the level used when volume "
+                "control is \"Fixed\"."
+            ),
             "importance": "simple",
         },
     )

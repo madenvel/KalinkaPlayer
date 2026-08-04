@@ -39,6 +39,12 @@ class RendererPreferences:
         when the renderer controls its own."""
         return self._renderers.get(renderer_id, {}).get("volume_control")
 
+    def volume_seeded(self, renderer_id: str) -> bool:
+        """True once this server has played through the renderer and set its
+        level. Persisted, so a server restart does not re-force the default on
+        a renderer the user has since adjusted."""
+        return bool(self._renderers.get(renderer_id, {}).get("volume_seeded"))
+
     def to_dict(self) -> dict:
         return {
             "selected_renderer_id": self._selected_renderer_id,
@@ -50,6 +56,12 @@ class RendererPreferences:
         if renderer_id == self._selected_renderer_id:
             return
         self._selected_renderer_id = renderer_id
+        self._save()
+
+    def mark_volume_seeded(self, renderer_id: str) -> None:
+        if self.volume_seeded(renderer_id):
+            return
+        self._renderers.setdefault(renderer_id, {})["volume_seeded"] = True
         self._save()
 
     def set_volume_control(self, renderer_id: str, module: Optional[str]) -> None:

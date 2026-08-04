@@ -193,6 +193,12 @@ class RendererRegistry:
         None when the renderer controls its own."""
         return self._prefs.volume_control(renderer_id)
 
+    def volume_seeded(self, renderer_id: str) -> bool:
+        return self._prefs.volume_seeded(renderer_id)
+
+    def mark_volume_seeded(self, renderer_id: str) -> None:
+        self._prefs.mark_volume_seeded(renderer_id)
+
     def set_volume_control(self, renderer_id: str, module: Optional[str]) -> None:
         self._prefs.set_volume_control(renderer_id, module)
         logger.info(

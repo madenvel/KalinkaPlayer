@@ -144,11 +144,13 @@ class _Prepared:
     """A prepared renderer device carrying just the volume_style config the
     policy reads."""
 
-    def __init__(self, style: RendererVolumeStyle):
+    def __init__(self, style: RendererVolumeStyle, default_volume: int = 30):
         self.health_state = ModuleHealthState.READY
         self.interface = _Device(SupportedFunction.SET_VOLUME)
         self.plugin_context = SimpleNamespace(
-            config=SimpleNamespace(volume_style=style)
+            config=SimpleNamespace(
+                volume_style=style, default_volume=default_volume
+            )
         )
 
 
@@ -165,8 +167,9 @@ async def test_delegated_renderers_are_fixed_at_unity():
     await registry.shutdown()
 
 
-async def test_renderer_choice_sends_no_policy_at_all():
+async def test_renderer_choice_sends_no_mode_once_seeded():
     registry = _registry_with("rid-a")
+    registry.mark_volume_seeded("rid-a")
     router = OutputDeviceRouter(
         registry,
         lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
@@ -175,19 +178,65 @@ async def test_renderer_choice_sends_no_policy_at_all():
     await registry.shutdown()
 
 
+async def test_a_renderer_never_played_through_starts_at_the_default_level():
+    """Its mixer may have been left at full scale; the first track this server
+    plays must not depend on that."""
+    registry = _registry_with("rid-a")
+    router = OutputDeviceRouter(
+        registry,
+        lambda: {
+            "kalinka-renderer": _Prepared(
+                RendererVolumeStyle.renderer, default_volume=30
+            )
+        },
+    )
+    assert router.session_volume_policy("rid-a") == ("", 30)
+
+    registry.mark_volume_seeded("rid-a")
+    assert router.session_volume_policy("rid-a") == ("", None)
+    await registry.shutdown()
+
+
+async def test_fixed_style_carries_the_default_level_every_session():
+    registry = _registry_with("rid-a")
+    registry.mark_volume_seeded("rid-a")
+    router = OutputDeviceRouter(
+        registry,
+        lambda: {
+            "kalinka-renderer": _Prepared(
+                RendererVolumeStyle.fixed, default_volume=45
+            )
+        },
+    )
+    assert router.session_volume_policy("rid-a") == ("fixed", 45)
+    assert router.session_volume_policy("rid-a") == ("fixed", 45)
+    await registry.shutdown()
+
+
 async def test_volume_style_maps_onto_the_wire_value():
     registry = _registry_with("rid-a")
+    registry.mark_volume_seeded("rid-a")
     for style, wire in [
         (RendererVolumeStyle.automatic, "auto"),
         (RendererVolumeStyle.driver, "hardware"),
         (RendererVolumeStyle.software, "software"),
-        (RendererVolumeStyle.fixed, "fixed"),
     ]:
         router = OutputDeviceRouter(
             registry, lambda s=style: {"kalinka-renderer": _Prepared(s)}
         )
         assert router.session_volume_policy("rid-a") == (wire, None)
     await registry.shutdown()
+
+
+async def test_seeding_survives_a_server_restart(tmp_path):
+    path = str(tmp_path / "renderers.json")
+    registry = RendererRegistry(prefs=RendererPreferences(path))
+    registry.mark_volume_seeded("rid-a")
+
+    revived = RendererRegistry(prefs=RendererPreferences(path))
+    assert revived.volume_seeded("rid-a") is True
+    await registry.shutdown()
+    await revived.shutdown()
 
 
 def _bus() -> EventBus:
