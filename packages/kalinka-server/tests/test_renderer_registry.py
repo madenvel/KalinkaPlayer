@@ -122,6 +122,30 @@ async def test_live_session_replaced_and_stale_disconnect_ignored():
     assert record.session is new
 
 
+async def test_selection_wins_while_connected_and_survives_offline():
+    registry = RendererRegistry(offline_timeout_s=60)
+    a, b = object(), object()
+    _register(registry, a, renderer_id="rid-a")
+    _register(registry, b, renderer_id="rid-b")
+    assert registry.active_id() == "rid-a"  # automatic: first connected
+
+    registry.select("rid-b")
+    assert registry.active_id() == "rid-b"
+    entries = {e["renderer_id"]: e for e in registry.list()}
+    assert entries["rid-b"]["active"] and entries["rid-b"]["selected"]
+    assert not entries["rid-a"]["active"] and not entries["rid-a"]["selected"]
+
+    # Selected renderer offline: fall back, but the pin is not forgotten.
+    registry.disconnect("rid-b", b, clean=False)
+    assert registry.active_id() == "rid-a"
+    _register(registry, object(), renderer_id="rid-b")
+    assert registry.active_id() == "rid-b"
+
+    registry.select(None)
+    assert registry.active_id() == "rid-a"
+    await registry.shutdown()
+
+
 async def test_two_renderers_are_independent():
     registry = RendererRegistry(offline_timeout_s=0.05)
     a, b = object(), object()

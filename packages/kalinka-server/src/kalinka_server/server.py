@@ -72,6 +72,7 @@ from .device_ws_handler import (
 )
 from .renderer_ws_handler import RendererSession, handle_renderer_connection
 from .renderer_config import RendererConfigService
+from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import RendererUnavailable, SessionPool
 from .server_identity import get_server_id
@@ -260,7 +261,12 @@ async def create_app(
     async def _replace_renderer_session(old_session: RendererSession):
         await old_session.replace()
 
-    renderer_registry = RendererRegistry(replace_session=_replace_renderer_session)
+    renderer_prefs = RendererPreferences(
+        os.path.join(paths.state_dir(), "renderers.json")
+    )
+    renderer_registry = RendererRegistry(
+        replace_session=_replace_renderer_session, prefs=renderer_prefs
+    )
     renderer_sessions = SessionPool(renderer_registry, get_server_id())
     renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
     renderer_configs = RendererConfigService(renderer_registry)
@@ -1345,6 +1351,33 @@ async def create_app(
     async def renderer_session_list():
         """Playback sessions this Core holds."""
         return {"server_id": get_server_id(), "sessions": renderer_sessions.list()}
+
+    def _renderer_selection() -> Dict[str, Any]:
+        return {
+            "renderer_id": renderer_registry.active_id(),
+            "selected_renderer_id": renderer_registry.selected_id,
+        }
+
+    @app.get("/renderer/active")
+    async def renderer_active():
+        """The renderer playback runs on: `renderer_id` is the effective one,
+        `selected_renderer_id` the client's pin (null = automatic)."""
+        return _renderer_selection()
+
+    @app.put("/renderer/active")
+    async def renderer_select(payload: Dict[str, Any]):
+        """Pin playback to a renderer.
+
+        Body: `{"renderer_id": "<id>"}`, or null to return to automatic
+        (first connected). A session running on another renderer is closed —
+        playback stops there; the next play opens on the selected one.
+        """
+        renderer_id = payload.get("renderer_id")
+        if renderer_id is not None and renderer_registry.get(renderer_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown renderer")
+        renderer_registry.select(renderer_id)
+        await app.state.player_context.playqueue.apply_renderer_selection()
+        return _renderer_selection()
 
     # Renderer settings are the renderer's own, so they are not part of
     # /server/config: they need no session, several Cores may edit them, and a

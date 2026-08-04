@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional
 
+from .renderer_prefs import RendererPreferences
+
 logger = logging.getLogger(__name__.split(".")[-1])
 
 DEFAULT_OFFLINE_TIMEOUT_S = 60.0
@@ -63,12 +65,14 @@ class RendererRegistry:
         offline_timeout_s: float = DEFAULT_OFFLINE_TIMEOUT_S,
         replace_session: Optional[Callable[[Any], Awaitable[None]]] = None,
         on_removed: Optional[Callable[[str, bool], None]] = None,
+        prefs: Optional[RendererPreferences] = None,
     ):
         self.offline_timeout_s = offline_timeout_s
         self._replace_session = replace_session
         self._on_removed = on_removed
         self._renderers: dict[str, RendererRecord] = {}
         self._reap_tasks: dict[str, asyncio.Task] = {}
+        self._prefs = prefs if prefs is not None else RendererPreferences()
 
     def register(
         self,
@@ -173,9 +177,40 @@ class RendererRegistry:
                 return renderer_id
         return None
 
+    def select(self, renderer_id: Optional[str]) -> None:
+        """Pin playback to a renderer; None returns to automatic."""
+        self._prefs.set_selected(renderer_id)
+        logger.info(
+            "Renderer selection: %s", renderer_id if renderer_id else "automatic"
+        )
+
+    @property
+    def selected_id(self) -> Optional[str]:
+        return self._prefs.selected_renderer_id
+
+    def active_id(self) -> Optional[str]:
+        """The renderer playback opens sessions on: the selected one while it
+        is connected, otherwise the first connected. A selected renderer that
+        is offline is not forgotten — it wins again when it returns."""
+        selected_id = self._prefs.selected_renderer_id
+        selected = self._renderers.get(selected_id) if selected_id else None
+        if (
+            selected is not None
+            and selected.status is RendererStatus.CONNECTED
+            and selected.session is not None
+        ):
+            return selected.renderer_id
+        return self.first_connected_id()
+
     def list(self) -> list[dict]:
+        active = self.active_id()
+        selected = self._prefs.selected_renderer_id
         return [
             record.to_dict()
+            | {
+                "active": record.renderer_id == active,
+                "selected": record.renderer_id == selected,
+            }
             for record in sorted(
                 self._renderers.values(), key=lambda r: r.friendly_name
             )
