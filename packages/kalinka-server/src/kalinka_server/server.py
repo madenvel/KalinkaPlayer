@@ -52,7 +52,6 @@ from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
-from .output_device_router import OutputDeviceRouter
 from .multisearch import calculate_fuzzy_score
 from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
@@ -424,9 +423,8 @@ async def create_app(
     app.state.dynamic_paths = frozenset(app.state.dynamic_field_registry.keys())
     # Volume and power are answered by whichever module owns the *active*
     # renderer, so the target is resolved per request rather than bound here.
-    device_router = OutputDeviceRouter(
-        renderer_registry, lambda: modules.prepared_devices
-    )
+    device_router = player_context.device_router
+    assert device_router is not None  # setup() always builds one
     app.state.device_router = device_router
 
     @app.get("/queue/list")
@@ -1388,6 +1386,7 @@ async def create_app(
             raise HTTPException(status_code=404, detail="Unknown renderer")
         renderer_registry.select(renderer_id)
         await app.state.player_context.playqueue.apply_renderer_selection()
+        await device_router.resync()
         return _renderer_selection()
 
     @app.put("/renderer/{renderer_id}/volume-control")
@@ -1408,6 +1407,7 @@ async def create_app(
                 detail=f"'{module}' is not an enabled device module with volume control",
             )
         renderer_registry.set_volume_control(renderer_id, module)
+        await device_router.resync()
         return {"renderer_id": renderer_id, "volume_control": module}
 
     # Renderer settings are the renderer's own, so they are not part of

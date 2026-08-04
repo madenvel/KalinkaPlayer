@@ -6,6 +6,14 @@ downstream of that renderer's output. Delegation is per renderer, so the
 module clients talk to follows the active renderer instead of being fixed at
 startup: switching renderers switches whose volume the slider drives.
 
+Every device module shares one event bus, so the router also gates what
+reaches clients. A module that is enabled but does not own the active
+renderer stays live — a MusicCast amp reports its own volume changes whether
+or not Kalinka is playing — but its events are dropped instead of being
+broadcast as if they described the current output. When the owner changes,
+:meth:`OutputDeviceRouter.resync` re-authors the bus state from whoever is in
+charge now, so clients are not left showing the previous module's numbers.
+
 A module that is missing, not READY, or not an output device resolves to None,
 which every caller reads as "no control available".
 """
@@ -13,25 +21,57 @@ which every caller reads as "no control available".
 from __future__ import annotations
 
 import logging
-from typing import Callable, Mapping, Optional
+from typing import TYPE_CHECKING, Callable, Mapping, Optional
 
-from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
+from kalinka_plugin_sdk import ModuleHealthState
+from kalinka_plugin_sdk.datamodel import DeviceVolume
+from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
+from kalinka_plugin_sdk.ext_device_events import ExtDeviceEvent, ExtDeviceState
 
-from .player_setup import ModuleHealthState, PreparedPlugin
 from .renderer_output_device import RendererOutputPlugin
 from .renderer_registry import RendererRegistry
 
+if TYPE_CHECKING:  # avoids a cycle: player_setup builds the router
+    from kalinka_eventbus import EventBus
+
+    from .player_setup import PreparedPlugin
+
 logger = logging.getLogger(__name__.split(".")[-1])
+
+
+class RoutedDeviceEmitter:
+    """The emitter one device plugin is handed. Forwards to the shared bus
+    only while that plugin owns the active renderer's output."""
+
+    def __init__(self, plugin_id: str, bus: "EventBus", router: "OutputDeviceRouter"):
+        self._plugin_id = plugin_id
+        self._bus = bus
+        self._router = router
+
+    def _owns_output(self) -> bool:
+        return self._router.current_name() == self._plugin_id
+
+    def dispatch(self, event: ExtDeviceEvent) -> None:
+        if not self._owns_output():
+            return
+        self._bus.dispatch(event)
+
+    def set_initial_state(self, state: ExtDeviceState) -> None:
+        if not self._owns_output():
+            return
+        self._bus.set_initial_state(state)
 
 
 class OutputDeviceRouter:
     def __init__(
         self,
         registry: RendererRegistry,
-        devices: Callable[[], Mapping[str, PreparedPlugin]],
+        devices: Callable[[], Mapping[str, "PreparedPlugin"]],
+        bus: Optional["EventBus"] = None,
     ):
         self._registry = registry
         self._devices = devices
+        self._bus = bus
 
     def current_name(self) -> str:
         """Plugin id of the module in charge, delegated or not."""
@@ -45,3 +85,39 @@ class OutputDeviceRouter:
             return None
         interface = prepared.interface
         return interface if isinstance(interface, ExternalOutputDevice) else None
+
+    def emitter_for(self, plugin_id: str) -> Optional[RoutedDeviceEmitter]:
+        if self._bus is None:
+            return None
+        return RoutedDeviceEmitter(plugin_id, self._bus, self)
+
+    async def resync(self) -> None:
+        """Publish the current owner's state, so clients stop showing the
+        numbers of a module that no longer drives the output."""
+        if self._bus is None:
+            return
+        device = self.current()
+        if device is None:
+            state = ExtDeviceState(
+                power_on=False, volume=DeviceVolume(supported=False)
+            )
+        else:
+            functions = device.supported_functions()
+            try:
+                volume = (
+                    await device.get_volume()
+                    if SupportedFunction.GET_VOLUME in functions
+                    else DeviceVolume(supported=False)
+                )
+                power_on = (
+                    await device.is_power_on()
+                    if SupportedFunction.IS_POWER_ON in functions
+                    else True
+                )
+            except Exception as e:
+                logger.warning(
+                    "Could not read state from '%s': %s", self.current_name(), e
+                )
+                return
+            state = ExtDeviceState(power_on=power_on, volume=volume)
+        self._bus.set_initial_state(state)

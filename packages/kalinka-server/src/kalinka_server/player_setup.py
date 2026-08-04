@@ -39,6 +39,7 @@ from .config_overrides import (
     save_overrides,
 )
 from .module_timeout import TimeLimitedInputModule
+from .output_device_router import OutputDeviceRouter
 from .playqueue import PlayQueueImpl
 from .renderer_config import RendererConfigService
 from .renderer_output_device import RendererOutputPlugin
@@ -75,6 +76,9 @@ class PlayerContext:
     # every plugin (handed out via the plugin contexts). Lazy: loads on
     # first embed() call.
     embedder: SharedTextEmbedder | None = None
+    # Resolves which device module owns the active renderer's output. Set by
+    # setup() before the plugin scan, so device emitters can be routed.
+    device_router: "OutputDeviceRouter | None" = None
 
 
 @dataclass
@@ -565,9 +569,11 @@ class PreparedModuleCollection:
                     embedder=self.player_context.embedder,
                 )
             case PluginType.OUTPUT_DEVICE:
+                router = self.player_context.device_router
+                emitter = router.emitter_for(name) if router else None
                 return OutputDevicePluginContext(
                     listener=self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
-                    emitter=self.player_context.ext_device_eventbus,  # type: ignore[arg-type]
+                    emitter=emitter or self.player_context.ext_device_eventbus,  # type: ignore[arg-type]
                     logger=logging.getLogger(name),
                     plugin_id=name,
                     sdk_version=API_VERSION,
@@ -755,6 +761,12 @@ async def setup(
             legacy_dirs=[os.path.join(paths.state_dir(), "jamendo", "minilm")],
         ),
         )
+
+    # Built before the plugin scan: each device plugin is handed an emitter
+    # that only reaches clients while that plugin owns the active renderer.
+    player_context.device_router = OutputDeviceRouter(
+        renderer_registry, lambda: modules.prepared_devices, device_eventbus
+    )
 
     # Scan and setup plugins
     await modules.scan_and_setup_plugins(
