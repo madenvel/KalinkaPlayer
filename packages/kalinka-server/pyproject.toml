@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools-scm[toml]>=6.2", "wheel", "pybind11"]
+requires = ["setuptools>=61.0", "setuptools-scm[toml]>=6.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,7 +33,6 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
     "zeroconf>=0.47.0",
-    "pybind11>=2.10.0",
     "httpx[http2]>=0.24.0",
     "pillow>=9.0.0",
     "aiosqlite>=0.17.0",
@@ -85,11 +84,8 @@ zip-safe = false
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["kalinka_server*", "kalinka_eventbus*", "kalinka_queued*", "kalinka_serialized*", "native_player*"]
+include = ["kalinka_server*", "kalinka_eventbus*", "kalinka_queued*", "kalinka_serialized*"]
 exclude = ["tests*", "*.tests", "*.tests.*", "tests.*"]
-
-[tool.setuptools.exclude-package-data]
-native_player = ["build/*", "minimp3/*", "*.cpp", "*.h", "Makefile", "setup.py", "*.so"]
 
 [tool.setuptools_scm]
 write_to = "src/kalinka_server/_version.py"

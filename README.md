@@ -54,11 +54,12 @@ library to a bigger board.
 
 # Architecture
 
-KalinkaPlayer is a small **core server** (`packages/kalinka-server`) with a modular **plugin** system. The server owns the REST/WebSocket API, queue, playback state and config; plugins provide sources, enrichers and device integrations. The native audio engine is a C++ extension (`packages/kalinka-server/src/native_player`) that talks to ALSA directly.
+KalinkaPlayer is a small **core server** (`packages/kalinka-server`, pure Python) with a modular **plugin** system, plus a network **renderer** (`packages/kalinka-renderer`, C++) that plays the audio. The server owns the REST/WebSocket API, queue, playback state and config; plugins provide sources, enrichers and device integrations; the renderer runs on a speaker-attached box (or the same machine), discovers the server over mDNS and talks to ALSA directly.
 
 ```
 packages/
-├── kalinka-server            # Core server, REST/WS API, queue, native ALSA player (C++)
+├── kalinka-server            # Core server, REST/WS API, queue, config (pure Python)
+├── kalinka-renderer          # Network audio renderer: native ALSA player (C++)
 ├── kalinka-plugin-sdk        # Shared plugin interface & helpers (mandatory dependency)
 ├── kalinka-plugin-localfiles # Local library: indexer, enricher, embedder, searcher (most complete)
 ├── kalinka-plugin-musiccast  # Yamaha MusicCast volume/power control
@@ -84,18 +85,19 @@ The server exposes a REST API (FastAPI) plus WebSocket channels for live state. 
 # Installation
 
 ## Debian Package
-A deb package for arm64 (Raspbian) is provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section.
+Deb packages are provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section. The whole app bundle (server, plugins, SDK) is pure Python and arch-independent (`_all.deb`); only the renderer ships per-arch builds, from its own `kalinka-renderer-v*` releases.
 
 ### Building Debian packages
-The build produces **separate** `.deb` packages — one for the server and one per plugin — and collects them in the top-level `debs/` directory. Packages are built natively for the platform you build on (no cross-compilation).
+The build produces **separate** `.deb` packages — one for the server and one per plugin — and collects them in the top-level `debs/` directory. All of them are `Architecture: all` and install on any machine.
 
 #### Prerequisites
 Install the required system dependencies:
 ```bash
-sudo apt install python3 g++ libasound2-dev libflac-dev libflac++-dev \
-  libcurlpp-dev libspdlog-dev libfmt-dev python3-dev python3-venv python3-pip build-essential
+sudo apt install python3 python3-venv python3-pip make git dpkg-dev
 ```
-Python 3.11+ is required (production runs 3.13).
+Python 3.11+ is required (production runs 3.13). The server packages are pure
+Python; only the renderer needs a C++ toolchain (`make renderer-deb`, see
+`packages/kalinka-renderer/scripts/build_deb.sh` for its dependencies).
 
 #### Build process
 Clone the repository and build — there's no virtualenv to set up by hand, the build provisions its own:
@@ -106,7 +108,7 @@ make build-all-deb
 ```
 On first run `make build-all-deb` creates a `.venv` with the wheel-build toolchain (or reuses an already-active `$VIRTUAL_ENV`), builds the server and every plugin, and moves the artifacts into `debs/`. To build against a specific interpreter, pass it explicitly: `make build-all-deb PYTHON=/path/to/python3.13`.
 
-You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make build-native`; `make build-env` just provisions the venv without building anything. Run `make help` to list all targets.
+You can also build pieces individually: `make kalinka-server-deb`, `make kalinka-plugins-deb`, or `make renderer-deb`; `make build-env` just provisions the venv without building anything. Run `make help` to list all targets.
 
 The app bundle — the server and the first-party plugins — shares one version, derived from a single `kalinka-vX.Y.Z` git tag via setuptools-scm (one tag per release). The plugin SDK is versioned independently by its own SemVer; plugins pin it `>=1,<2`, so backwards-compatible minor/patch SDK bumps don't break them — only a major bump is breaking. See [RELEASING.md](RELEASING.md) for the full release and version-bump procedure.
 
@@ -140,11 +142,13 @@ The dev venv needs **Python 3.11+** (production runs 3.13). `make dev-setup` cre
 ```bash
 git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
-sudo apt install python3 python3-venv python3-dev g++ libasound2-dev \
-  libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev build-essential
+sudo apt install python3 python3-venv
 ```
    To use a specific interpreter, pass it explicitly: `make dev-setup PYTHON=/path/to/python3.13`.
-2. One-step setup. Creates a virtualenv at `.venv` with `python3` (or **reuses an already-active `$VIRTUAL_ENV`** — it never makes a second venv), installs the SDK, server and all bundled plugins editable, builds the native player, and seeds the fakeroot directory tree plus a default config:
+   To also build and run the renderer locally (audio playback), see
+   `make renderer-build` — that one needs the C++ toolchain
+   (`g++ cmake protobuf-compiler libprotobuf-dev libboost-dev libcurlpp-dev libflac++-dev libasound2-dev libspdlog-dev`).
+2. One-step setup. Creates a virtualenv at `.venv` with `python3` (or **reuses an already-active `$VIRTUAL_ENV`** — it never makes a second venv), installs the SDK, server and all bundled plugins editable, and seeds the fakeroot directory tree plus a default config:
 ```bash
 make dev-setup
 ```
@@ -159,10 +163,7 @@ make dev-run
    - music drop-off: `~/kalinka/srv/kalinka/music`
 
    Forward server flags with `ARGS` (e.g. `make dev-run ARGS=--debug`), and relocate the whole tree with `make dev-run KALINKA_PREFIX=/path/to/root`.
-4. **Restart to pick up changes.** Python edits go live on restart — either click **Restart** in the app (this works without systemd: `dev-run` watches the restart trigger in the fakeroot and relaunches) or Ctrl-C and re-run `make dev-run`. After editing C++ under `native_player`, rebuild the extension first, then restart:
-```bash
-make dev-rebuild-native
-```
+4. **Restart to pick up changes.** Python edits go live on restart — either click **Restart** in the app (this works without systemd: `dev-run` watches the restart trigger in the fakeroot and relaunches) or Ctrl-C and re-run `make dev-run`. After editing renderer C++, rebuild with `make renderer-build` and restart the renderer binary.
    Enabling an optional feature (AI search) in **Settings** and hitting **Restart** also just works: `dev-run` installs the requested optional packages into the venv before relaunching — the same flow `kalinka.service` runs at boot in production.
 5. In the Kalinka Music App, go to **Settings → Connection**; the service should appear under the name you configured. Pick it and tap **Connect**.
 
@@ -178,7 +179,7 @@ make dev-rebuild-native
 ```bash
 make test
 ```
-Runs the SDK and server Python test suites. Most packages also include their own `tests/` directory; the native player has its own C++ test set under `packages/kalinka-server/src/native_player`.
+Runs the SDK and server Python test suites. Most packages also include their own `tests/` directory; the renderer has its own C++ test set under `packages/kalinka-renderer/tests` (built when GoogleTest is installed).
 
 # Contributing
 

@@ -3,10 +3,10 @@
 # install-release.sh — install a published Kalinka backend release from GitHub.
 #
 # Downloads the .deb assets for a `kalinka-v*` GitHub release and installs them
-# with apt so system dependencies (libasound, libcurl, FLAC, …) are pulled in
-# automatically. It picks the server package matching THIS machine's
-# architecture (arm64 on a Raspberry Pi, amd64 on a PC) and installs all the
-# arch-independent plugin + SDK packages alongside it.
+# with apt so system dependencies are pulled in automatically. Every package
+# in the bundle — server, plugins, SDK — is pure Python and arch-independent
+# (_all), so the same artifacts install on any machine. (Audio output lives in
+# the separately-released kalinka-renderer; see install-renderer.sh.)
 #
 # The browser player (kalinka-web) is released separately from the app repo;
 # its latest arch-independent package is fetched and installed too, so the
@@ -46,18 +46,6 @@ if [ "$(id -u)" -ne 0 ]; then
   fi
 fi
 
-# --- detect target architecture ----------------------------------------------
-if have dpkg; then
-  ARCH="$(dpkg --print-architecture)"
-else
-  case "$(uname -m)" in
-    aarch64|arm64) ARCH=arm64 ;;
-    x86_64|amd64)  ARCH=amd64 ;;
-    *) die "unsupported architecture: $(uname -m) (need arm64 or amd64)" ;;
-  esac
-fi
-[ "$ARCH" = arm64 ] || [ "$ARCH" = amd64 ] || die "unsupported architecture: $ARCH"
-
 have python3 || die "python3 is required (it is also a runtime dependency of the server)"
 
 # --- fetch helpers (curl or wget) ---------------------------------------------
@@ -92,7 +80,7 @@ else
 fi
 
 # Parse the release JSON: print the tag on line 1, then one asset URL per line
-# for the server deb matching $ARCH plus every arch-independent (_all) deb.
+# for every arch-independent (_all) deb; the server must be among them.
 # The parser is written to a file (not piped via `python3 -`) so the JSON can be
 # fed on stdin without colliding with the program source.
 TMPDIR_DL=""
@@ -116,7 +104,6 @@ for r in (data if isinstance(data, list) else [data]):
 PY
 cat > "$PARSER" <<'PY'
 import sys, json
-arch = sys.argv[1]
 data = json.load(sys.stdin)
 rel = None
 if isinstance(data, list):
@@ -131,23 +118,25 @@ elif isinstance(data, dict) and data.get("assets") is not None:
 if not rel:
     sys.stderr.write("no matching kalinka-v* release found\n")
     sys.exit(1)
-server_suffix = ".%s.deb" % arch
-urls = [a["browser_download_url"] for a in rel.get("assets", [])
-        if a["name"].endswith("_all.deb") or a["name"].endswith(server_suffix)]
-if not any(u.endswith(server_suffix) for u in urls):
-    sys.stderr.write("release %s has no server package for arch '%s'\n"
-                     % (rel.get("tag_name"), arch))
+assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+urls = [u for n, u in assets.items() if n.endswith("_all.deb")]
+if not any(n.startswith("kalinka-server_") and n.endswith("_all.deb")
+           for n in assets):
+    sys.stderr.write(
+        "release %s has no arch-independent server package; it predates the "
+        "platform-agnostic server — install it with an older installer\n"
+        % rel.get("tag_name"))
     sys.exit(1)
 print(rel["tag_name"])
 for u in urls:
     print(u)
 PY
-parsed="$(printf '%s' "$json" | python3 "$PARSER" "$ARCH")" \
+parsed="$(printf '%s' "$json" | python3 "$PARSER")" \
   || die "failed to parse release metadata"
 
 TAG="$(printf '%s\n' "$parsed" | sed -n '1p')"
 mapfile -t URLS < <(printf '%s\n' "$parsed" | sed '1d')
-[ "${#URLS[@]}" -gt 0 ] || die "no installable .deb assets found for $TAG ($ARCH)"
+[ "${#URLS[@]}" -gt 0 ] || die "no installable .deb assets found for $TAG"
 
 # --- resolve the browser player (kalinka-web) from the app repo ----------------
 if [ "${KALINKA_WEB:-1}" != "0" ]; then
@@ -164,7 +153,7 @@ if [ "${KALINKA_WEB:-1}" != "0" ]; then
   fi
 fi
 
-echo ">> Release: $TAG   architecture: $ARCH   packages: ${#URLS[@]}"
+echo ">> Release: $TAG   packages: ${#URLS[@]}"
 
 # --- download into a temp dir -------------------------------------------------
 # 0755 (not mktemp's default 0700) so apt's sandbox user `_apt` can traverse in
@@ -211,4 +200,4 @@ if have dpkg-query; then
 fi
 
 echo
-echo ">> Done. $TAG installed for $ARCH."
+echo ">> Done. $TAG installed."

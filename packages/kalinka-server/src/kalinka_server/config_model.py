@@ -104,127 +104,6 @@ class ServerConfig(BaseModel):
     )
 
 
-class AlsaConfig(BaseModel):
-    # Options are enumerated live from ALSA — they ship in the values
-    # envelope under enum_options[path], so we leave enum_values empty
-    # in the schema. The widget kind enum_dropdown tells the client to
-    # render a dropdown; the presence of enum_options at request time
-    # is what makes the option list dynamic. See alsa_options.py.
-    #
-    # Values are stored as `hw:CARD=…,DEV=…` so the selection survives
-    # card-index shuffling on kernel upgrade — ALSA resolves the card id
-    # to the current index at open time.
-    device: str = Field(
-        default="default",
-        title="ALSA device",
-        json_schema_extra={
-            "help": (
-                "Where the sound comes out — the DAC or sound card "
-                "connected to your amplifier"
-            ),
-            "widget": "enum_dropdown",
-            **_SIMPLE,
-        },
-    )
-    latency_ms: int = Field(
-        default=160,
-        title="Output latency",
-        json_schema_extra={
-            "help": "How much audio is buffered ahead — increase if you hear dropouts",
-            "widget": "number_slider",
-            "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
-        },
-    )
-    period_ms: int = Field(
-        default=40,
-        title="Period size",
-        json_schema_extra={
-            "help": "How often audio is handed to the device — leave at default unless troubleshooting",
-            "widget": "number_slider",
-            "constraints": {"slider_min": 0, "slider_max": 500, "unit": "ms"},
-        },
-    )
-
-
-class OutputConfig(BaseModel):
-    alsa: AlsaConfig = Field(default_factory=AlsaConfig, title="ALSA output")
-
-
-class HttpInputConfig(BaseModel):
-    buffer_size: int = Field(
-        default=384000,
-        title="Buffer size",
-        json_schema_extra={
-            "help": "How much of a network stream is kept buffered in memory",
-            "constraints": {"unit": "bytes"},
-        },
-    )
-    chunk_size: int = Field(
-        default=768000,
-        title="Chunk size",
-        json_schema_extra={
-            "help": "How much data is fetched per network request",
-            "constraints": {"unit": "bytes"},
-        },
-    )
-
-
-class InputConfig(BaseModel):
-    http: HttpInputConfig = Field(default_factory=HttpInputConfig, title="HTTP input")
-
-
-class FlacDecoderConfig(BaseModel):
-    buffer_size: int = Field(
-        default=1536000,
-        title="FLAC buffer",
-        json_schema_extra={
-            "help": "Decoded-audio buffer for FLAC playback",
-            "constraints": {"unit": "bytes"},
-        },
-    )
-
-
-class MpegDecoderConfig(BaseModel):
-    buffer_size: int = Field(
-        default=176400,
-        title="MPEG buffer",
-        json_schema_extra={
-            "help": "Decoded-audio buffer for MP3 playback",
-            "constraints": {"unit": "bytes"},
-        },
-    )
-
-
-class DecoderConfig(BaseModel):
-    flac: FlacDecoderConfig = Field(
-        default_factory=FlacDecoderConfig, title="FLAC decoder"
-    )
-    mpeg: MpegDecoderConfig = Field(
-        default_factory=MpegDecoderConfig, title="MPEG decoder"
-    )
-
-
-class FixupsConfig(BaseModel):
-    alsa_sleep_after_format_setup_ms: int = Field(
-        default=0,
-        title="Sleep after format setup",
-        json_schema_extra={
-            "help": (
-                "Short pause after switching audio format — increase if you "
-                "hear glitches when a new track starts"
-            ),
-            "constraints": {"unit": "ms"},
-        },
-    )
-    alsa_reopen_device_with_new_format: bool = Field(
-        default=False,
-        title="Reopen device on format change",
-        json_schema_extra={
-            "help": "Fully reopen the audio device when the format changes — some DACs need this",
-        },
-    )
-
-
 class DeviceAutomationConfig(BaseModel):
     auto_power_on: bool = Field(
         default=True,
@@ -410,10 +289,6 @@ class KalinkaConfig(BaseModel):
     """Main Kalinka configuration."""
 
     server: ServerConfig = Field(default_factory=ServerConfig, title="Server")
-    output: OutputConfig = Field(default_factory=OutputConfig, title="Output")
-    input: InputConfig = Field(default_factory=InputConfig, title="Input")
-    decoder: DecoderConfig = Field(default_factory=DecoderConfig, title="Decoders")
-    fixups: FixupsConfig = Field(default_factory=FixupsConfig, title="Hardware fixups")
     search: SearchConfig = Field(default_factory=SearchConfig, title="Search")
     embedding: EmbeddingConfig = Field(
         default_factory=EmbeddingConfig, title="Text embedding"
@@ -430,7 +305,7 @@ class KalinkaConfig(BaseModel):
         BaseModels out of `base_config`.
         """
         from .config_schema_processor import _build_field_spec
-        from .presentation_schema import Banner, Importance, SectionSpec, Severity
+        from .presentation_schema import Importance, SectionSpec
 
         def leaf(path_suffix: str):
             parts = path_suffix.split(".")
@@ -467,46 +342,6 @@ class KalinkaConfig(BaseModel):
             ],
         )
 
-        audio_out = SectionSpec(
-            id=f"{prefix}.output",
-            title="Audio output",
-            fields=[
-                leaf("output.alsa.device"),
-                leaf("output.alsa.latency_ms"),
-                leaf("output.alsa.period_ms"),
-            ],
-        )
-
-        fixups = SectionSpec(
-            id=f"{prefix}.fixups",
-            title="Hardware fixups",
-            banners=[
-                Banner(
-                    text=(
-                        "These settings work around hardware-specific bugs. Leave at "
-                        "defaults unless you experience audio glitches on track changes."
-                    ),
-                    severity=Severity.WARNING,
-                )
-            ],
-            fields=[
-                leaf("fixups.alsa_sleep_after_format_setup_ms"),
-                leaf("fixups.alsa_reopen_device_with_new_format"),
-            ],
-        )
-
-        buffers = SectionSpec(
-            id=f"{prefix}.buffers",
-            title="Buffers & decoders",
-            importance=Importance.EXPERT,
-            fields=[
-                leaf("input.http.buffer_size"),
-                leaf("input.http.chunk_size"),
-                leaf("decoder.flac.buffer_size"),
-                leaf("decoder.mpeg.buffer_size"),
-            ],
-        )
-
         search_section = SectionSpec(
             id=f"{prefix}.search",
             title="Search",
@@ -538,9 +373,6 @@ class KalinkaConfig(BaseModel):
         return [
             srv,
             device_auto,
-            audio_out,
-            fixups,
-            buffers,
             search_section,
             embedding_section,
         ]

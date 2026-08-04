@@ -40,9 +40,10 @@ add_library(kalinka_renderer_proto STATIC
 target_include_directories(kalinka_renderer_proto SYSTEM PUBLIC ${PROTO_GEN_DIR})
 target_link_libraries(kalinka_renderer_proto PUBLIC protobuf::libprotobuf-lite)
 
-# --- kalinka_native_player: the audio graph, copied from the server ----------
-# Source of truth stays in packages/kalinka-server/src/native_player, which the
-# server builds as a Python extension. Deltas here are marked "Renderer delta".
+# --- kalinka_native_player: the audio graph ----------------------------------
+# The only copy: the server's src/native_player (which this started from) was
+# removed when playback moved to renderers. Deltas from the original Python-
+# extension build are marked "Renderer delta".
 add_library(kalinka_native_player STATIC
   src/native_player/AlsaAudioEmitter.cpp
   src/native_player/AlsaDeviceEnumeration.cpp

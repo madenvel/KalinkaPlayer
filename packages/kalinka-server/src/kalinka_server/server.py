@@ -35,7 +35,6 @@ from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 from kalinka_plugin_sdk import paths
 
-from .alsa_options import ALSA_DEVICE_PATH, make_alsa_resolver
 from .renderer_output_device import VOLUME_STYLE_OPTIONS_PATH, volume_style_options
 from .config_model import KalinkaConfig
 from .config_overrides import save_overrides
@@ -65,7 +64,6 @@ from .service_discovery import ServiceDiscovery
 from . import update_check
 from .version import get_rest_api_version, get_version
 from .state_keeper import save_state, restore_state
-from .test_tone import VALID_CHANNELS, native_config, play_test_tone
 from .queue_ws_handler import (
     handle_websocket_connection as handle_queue_websocket_connection,
 )
@@ -373,12 +371,8 @@ async def create_app(
     # network interfaces / COM ports tomorrow). Sits alongside the
     # dynamic-field registry but for *choices* rather than *values*.
     app.state.options_registry = OptionsRegistry()
-    app.state.options_registry.register(
-        ALSA_DEVICE_PATH,
-        make_alsa_resolver(lambda: config.output.alsa.device),
-    )
     # Static labelled/described choices for the renderer device's volume_style
-    # dropdown, served the same way as the ALSA device list.
+    # dropdown.
     app.state.options_registry.register(
         VOLUME_STYLE_OPTIONS_PATH, volume_style_options
     )
@@ -1124,40 +1118,12 @@ async def create_app(
 
     @app.post("/server/test_tone")
     async def server_test_tone(payload: Optional[Dict[str, Any]] = None):
-        """Play a short test tone through the ALSA output (speaker check).
+        """No-op, kept for older clients whose setup wizard calls it.
 
-        Body (all fields optional):
-          ``{"channel": "left"|"right"|"both", "device": "<alsa id>"}``
-
-        ``device`` overrides the configured output so the client can test a
-        selection that hasn't been applied yet (the setup wizard stages the
-        ALSA device until its final restart). Any current playback is
-        stopped first — hw: devices are exclusive, and a speaker test in
-        the middle of music would be meaningless anyway. Returns once the
-        tone finished playing (~2 seconds).
+        Audio output moved to renderers; the speaker test belongs on the
+        renderer's config page now.
         """
-        payload = payload or {}
-        channel = str(payload.get("channel", "both")).lower()
-        if channel not in VALID_CHANNELS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"channel must be one of {list(VALID_CHANNELS)}",
-            )
-        device = payload.get("device")
-        if device is not None and not isinstance(device, str):
-            raise HTTPException(status_code=400, detail="device must be a string")
-
-        # Release the audio device before the tone opens it.
-        await player_context.playqueue.stop()
-        try:
-            await play_test_tone(
-                native_config(config), channel=channel, device=device
-            )
-        except (RuntimeError, TimeoutError) as e:
-            logger.error("Test tone failed: %s", e)
-            raise HTTPException(
-                status_code=500, detail=f"Test tone failed: {e}"
-            ) from e
+        channel = str((payload or {}).get("channel", "both")).lower()
         return {"message": "Ok", "channel": channel}
 
     @app.get("/server/optional_packages")
