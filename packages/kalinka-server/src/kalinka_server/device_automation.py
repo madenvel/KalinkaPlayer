@@ -9,7 +9,7 @@ This module provides automatic device management features such as:
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk.api import PlayQueueController
@@ -46,7 +46,7 @@ class DeviceAutomation:
         ext_device_eventbus: EventBus[
             ExtDeviceState, ExtDeviceEventType, ExtDeviceEvent
         ],
-        device: Optional[ExternalOutputDevice] = None,
+        resolve_device: Callable[[], Optional[ExternalOutputDevice]] = lambda: None,
     ):
         """
         Initialize the device automation module.
@@ -56,13 +56,15 @@ class DeviceAutomation:
             playqueue: The playqueue controller to control playback
             playqueue_eventbus: Event bus for playback events
             ext_device_eventbus: Event bus for device events
-            device: Optional external output device to control
+            resolve_device: Returns the device to control, or None when there
+                is none. Called per action, so power follows the active
+                renderer's delegation.
         """
         self.config = config
         self.playqueue = playqueue
         self.playqueue_eventbus = playqueue_eventbus
         self.ext_device_eventbus = ext_device_eventbus
-        self.device = device
+        self._resolve_device = resolve_device
 
         self._last_state: Optional[PlayerStateEnum] = None
         self._auto_off_task: Optional[asyncio.Task] = None
@@ -73,21 +75,16 @@ class DeviceAutomation:
         # the device is known to be on again.
         self._device_externally_off: bool = False
 
-        # Check device capabilities
-        self._can_power_on = False
-        self._can_power_off = False
-        self._can_check_power = False
+    @property
+    def device(self) -> Optional[ExternalOutputDevice]:
+        """Whoever owns the active renderer's output right now. Resolved per
+        use, never cached: delegation and renderer selection both change it,
+        and so do the capabilities that go with it."""
+        return self._resolve_device()
 
-        if self.device:
-            supported = self.device.supported_functions()
-            self._can_power_on = SupportedFunction.POWER_ON in supported
-            self._can_power_off = SupportedFunction.POWER_OFF in supported
-            self._can_check_power = SupportedFunction.IS_POWER_ON in supported
-
-            logger.info(
-                f"Device automation capabilities: power_on={self._can_power_on}, "
-                f"power_off={self._can_power_off}, check_power={self._can_check_power}"
-            )
+    @staticmethod
+    def _can(device: ExternalOutputDevice, function: SupportedFunction) -> bool:
+        return function in device.supported_functions()
 
     async def start(self):
         """Start the device automation module."""
@@ -199,19 +196,20 @@ class DeviceAutomation:
         if not self.config.auto_power_on:
             return
 
-        if not self.device or not self._can_power_on:
+        device = self.device
+        if device is None or not self._can(device, SupportedFunction.POWER_ON):
             logger.debug("Device power on not available")
             return
 
         try:
-            if self._can_check_power:
-                is_on = await self.device.is_power_on()
+            if self._can(device, SupportedFunction.IS_POWER_ON):
+                is_on = await device.is_power_on()
                 if is_on:
                     logger.debug("Device is already powered on")
                     return
 
             logger.info("Auto power on: Turning on device")
-            await self.device.power_on()
+            await device.power_on()
 
         except Exception as e:
             logger.error(f"Failed to auto power on device: {e}", exc_info=True)
@@ -268,16 +266,21 @@ class DeviceAutomation:
                     )
 
             # Power off the device
-            if self.config.auto_power_off and self.device and self._can_power_off:
+            device = self.device
+            if (
+                self.config.auto_power_off
+                and device is not None
+                and self._can(device, SupportedFunction.POWER_OFF)
+            ):
                 try:
-                    if self._can_check_power:
-                        is_on = await self.device.is_power_on()
+                    if self._can(device, SupportedFunction.IS_POWER_ON):
+                        is_on = await device.is_power_on()
                         if not is_on:
                             logger.debug("Device is already powered off")
                             return
 
                     logger.info("Auto power off: Turning off device")
-                    await self.device.power_off()
+                    await device.power_off()
 
                 except Exception as e:
                     logger.error(f"Failed to auto power off device: {e}", exc_info=True)

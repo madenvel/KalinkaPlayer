@@ -93,7 +93,11 @@ async def lifespan(app: FastAPI):
         await sd.register_service()
 
         # Initialize internal modules (device automation, etc.)
-        await internal_modules.initialize(app.state.config, app.state.player_context)
+        await internal_modules.initialize(
+            app.state.config,
+            app.state.player_context,
+            app.state.device_router.current,
+        )
 
         await restore_state(
             app.state.player_context.playqueue,
@@ -423,6 +427,7 @@ async def create_app(
     device_router = OutputDeviceRouter(
         renderer_registry, lambda: modules.prepared_devices
     )
+    app.state.device_router = device_router
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):
