@@ -15,6 +15,15 @@ find_package(CURL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FLACPP REQUIRED IMPORTED_TARGET flac++)
 pkg_check_modules(CURLPP REQUIRED IMPORTED_TARGET curlpp)
+# Debian's curlpp.pc emits a relative "-Iinclude" (empty ${prefix}), which
+# CMake rejects on the imported target. The headers are in the default search
+# path there, so keeping only absolute entries loses nothing.
+get_target_property(_curlpp_incs PkgConfig::CURLPP INTERFACE_INCLUDE_DIRECTORIES)
+if(_curlpp_incs)
+  list(FILTER _curlpp_incs INCLUDE REGEX "^/")
+  set_target_properties(PkgConfig::CURLPP PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${_curlpp_incs}")
+endif()
 
 # mDNS/DNS-SD: vendored public-domain single header (third_party/mdns).
 
