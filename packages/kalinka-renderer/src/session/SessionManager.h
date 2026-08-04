@@ -46,7 +46,8 @@ public:
    */
   std::shared_ptr<Session> open(const std::string &sessionId,
                                 const std::string &ownerServerId,
-                                std::string &busyOwner);
+                                std::string &busyOwner,
+                                const SessionVolume &volume = {});
 
   /**
    * @brief End the session. Only its owner may do this.

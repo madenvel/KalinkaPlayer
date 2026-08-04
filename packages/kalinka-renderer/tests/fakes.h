@@ -47,6 +47,13 @@ public:
   void setVolume(uint32_t percent) override {
     calls.push_back("set_volume:" + std::to_string(percent));
   }
+  void beginSessionVolume(const SessionVolume &volume) override {
+    calls.push_back("begin_session_volume:" + volume.mode + ":" +
+                    (volume.percent ? std::to_string(*volume.percent) : "-"));
+  }
+  void endSessionVolume() override {
+    calls.push_back("end_session_volume");
+  }
   void seek(uint64_t positionMs) override {
     calls.push_back("seek:" + std::to_string(positionMs));
   }

@@ -57,7 +57,8 @@ public:
                                          std::string ownerServerId,
                                          std::chrono::seconds ownerGrace,
                                          std::shared_ptr<Player> player,
-                                         std::function<void()> onEnded);
+                                         std::function<void()> onEnded,
+                                         SessionVolume volume = {});
 
   const std::string &sessionId() const override { return sessionId_; }
   const std::string &ownerServerId() const { return ownerServerId_; }
@@ -112,4 +113,7 @@ private:
   std::vector<std::weak_ptr<SessionTransport>> transports_;
   PlaybackState playbackState_ = PlaybackState::Stopped;
   bool closed_ = false;
+  // Set when create() applied a volume policy, so close() only undoes one that
+  // exists — a session that never touched volume leaves the player untouched.
+  bool volumePolicy_ = false;
 };

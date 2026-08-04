@@ -9,7 +9,8 @@ SessionManager::SessionManager(boost::asio::io_context &ioc,
 
 std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
                                               const std::string &ownerServerId,
-                                              std::string &busyOwner) {
+                                              std::string &busyOwner,
+                                              const SessionVolume &volume) {
   if (current_) {
     if (current_->sessionId() == sessionId &&
         current_->ownerServerId() == ownerServerId) {
@@ -27,7 +28,8 @@ std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
         if (auto self = weak.lock()) {
           self->forget(sessionId);
         }
-      });
+      },
+      volume);
   spdlog::info("Session {} opened by server {}", sessionId, ownerServerId);
   return current_;
 }
