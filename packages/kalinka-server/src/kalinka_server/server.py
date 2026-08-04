@@ -289,7 +289,6 @@ async def create_app(
         app.state.overrides,
         renderer_registry,
         renderer_sessions,
-        renderer_configs,
         app.state.overrides_file,
     )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
@@ -426,6 +425,8 @@ async def create_app(
     device_router = player_context.device_router
     assert device_router is not None  # setup() always builds one
     app.state.device_router = device_router
+    # Every session opens with the volume policy its renderer's wiring implies.
+    renderer_sessions.set_volume_policy(device_router.session_volume_policy)
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):

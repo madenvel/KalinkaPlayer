@@ -6,11 +6,13 @@ device bridges that gap: it caches the last volume the renderer reported, so
 clients always have numbers to show, and a level set while idle is kept pending
 and pushed when the next session opens — pre-setting volume before play works.
 
-The ``volume_style`` setting decides who owns the renderer's volume mode
-(``output.volume_mode`` in the renderer's own config plane). "Renderer choice"
-leaves it alone; any other style is pushed to the renderer through the
-config plane when a session opens. The push runs inside ``SessionPool.open()``
-(see ``add_open_hook``), so it always lands before the first playback command.
+The ``volume_style`` setting decides the renderer's volume mode while this
+Core plays through it. "Renderer choice" leaves whatever the renderer is
+configured with; any other style rides SessionOpen as a session-scoped policy
+(see ``OutputDeviceRouter.session_volume_policy``), so it is in effect before
+the first playback command and undone when the session ends. It is never
+written to the renderer's configuration — a renderer this Core fixed must not
+stay fixed for whoever uses it next.
 """
 
 from __future__ import annotations
@@ -31,7 +33,6 @@ from kalinka_plugin_sdk.ext_device_events import (
 from kalinka_plugin_sdk.module_config import ModuleConfig
 from kalinka_plugin_sdk.plugin import OutputDevicePlugin, OutputDevicePluginContext
 
-from .renderer_config import RendererConfigService
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import (
     PlaybackSession,
@@ -40,9 +41,6 @@ from .renderer_sessions import (
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
-
-# The renderer's volume-mode config field (see NativePlayer::fillConfig).
-_VOLUME_MODE_PATH = "output.volume_mode"
 
 
 class RendererVolumeStyle(str, Enum):
@@ -64,6 +62,12 @@ _STYLE_TO_WIRE = {
 
 # Dotted config path of the volume_style field on the built-in device.
 VOLUME_STYLE_OPTIONS_PATH = "devices.kalinka-renderer.volume_style"
+
+
+def wire_volume_mode(style: RendererVolumeStyle) -> str:
+    """The renderer's ``output.volume_mode`` value for a style. Empty for
+    "renderer choice", which leaves the renderer's own setting alone."""
+    return _STYLE_TO_WIRE.get(style, "")
 
 
 def volume_style_options() -> list[dict]:
@@ -118,9 +122,11 @@ class RendererOutputConfig(ModuleConfig):
         title="Volume control",
         json_schema_extra={
             "help": (
-                "How the volume slider drives the renderer. \"Renderer "
-                "choice\" keeps whatever is configured on the renderer; any "
-                "other choice overrides it whenever playback starts."
+                "How the volume slider drives renderers this server plays "
+                "through. \"Renderer choice\" keeps whatever each renderer is "
+                "configured with; any other choice applies for the duration "
+                "of playback and is undone afterwards. Renderers whose volume "
+                "is delegated to another device are unaffected."
             ),
             "widget": "enum_dropdown",
             "importance": "simple",
@@ -133,15 +139,11 @@ class RendererVolumeDevice(ExternalOutputDevice):
         self,
         registry: RendererRegistry,
         pool: SessionPool,
-        configs: RendererConfigService,
         event_emitter,
-        style: RendererVolumeStyle,
     ):
         self._registry = registry
         self._pool = pool
-        self._configs = configs
         self._event_emitter = event_emitter
-        self._style = style
         self._session: Optional[PlaybackSession] = None
         # Last volume the renderer reported; shown while no session exists.
         self._volume = DeviceVolume(
@@ -204,19 +206,9 @@ class RendererVolumeDevice(ExternalOutputDevice):
         self._session = session
         session.on_state(self._on_session_state)
         session.on_closed(self._on_session_closed)
-        if self._style is not RendererVolumeStyle.renderer:
-            try:
-                await self._configs.update(
-                    session.renderer_id,
-                    {_VOLUME_MODE_PATH: _STYLE_TO_WIRE[self._style]},
-                )
-            except Exception as e:
-                logger.warning(
-                    "Could not push volume mode '%s' to renderer %s: %s",
-                    self._style.value,
-                    session.renderer_id,
-                    e,
-                )
+        # The volume mode rides SessionOpen itself (see
+        # OutputDeviceRouter.session_volume_policy), so it is already in
+        # effect here and nothing was written to the renderer's config.
         await self._apply_pending(session)
 
     async def _apply_pending(self, session: PlaybackSession) -> None:
@@ -286,32 +278,20 @@ class RendererOutputPlugin(OutputDevicePlugin):
         self._device: Optional[RendererVolumeDevice] = None
         self._registry: Optional[RendererRegistry] = None
         self._pool: Optional[SessionPool] = None
-        self._configs: Optional[RendererConfigService] = None
 
-    def bind(
-        self,
-        registry: RendererRegistry,
-        pool: SessionPool,
-        configs: RendererConfigService,
-    ) -> None:
+    def bind(self, registry: RendererRegistry, pool: SessionPool) -> None:
         self._registry = registry
         self._pool = pool
-        self._configs = configs
 
     async def setup(self, context: OutputDevicePluginContext) -> None:
-        if self._registry is None or self._pool is None or self._configs is None:
+        if self._registry is None or self._pool is None:
             raise RuntimeError(
                 "RendererOutputPlugin.bind() must be called before setup()"
             )
-        style = getattr(
-            context.config, "volume_style", RendererVolumeStyle.renderer
-        )
         self._device = RendererVolumeDevice(
             self._registry,
             self._pool,
-            self._configs,
             context.emitter,
-            style,
         )
         await self._device.start()
 

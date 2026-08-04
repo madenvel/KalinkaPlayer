@@ -44,6 +44,7 @@ class SimRenderer:
         self.volume = 40
         self.volume_supported = True
         self.config_updates: list[dict] = []
+        self.volume_policies: list[tuple[str, object]] = []
         # A RendererConfigService to answer config updates through; without it
         # updates are recorded but never acknowledged (the caller times out).
         self.configs = None
@@ -63,8 +64,11 @@ class SimRenderer:
     # ------------------------------------------------------------------
     # The ws-session surface the pool drives
 
-    async def send_session_open(self, session_id: str) -> None:
+    async def send_session_open(
+        self, session_id: str, volume_mode: str = "", volume_percent=None
+    ) -> None:
         self.session_id = session_id
+        self.volume_policies.append((volume_mode, volume_percent))
         self.pool.handle_open_result(
             self.RENDERER_ID,
             session_id=session_id,

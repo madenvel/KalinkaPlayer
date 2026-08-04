@@ -32,9 +32,11 @@ class FakeWs:
         self.answer = True
         self.stall = False
         self.fail_send = False
+        self.volume_policies = []
 
-    async def send_session_open(self, session_id):
+    async def send_session_open(self, session_id, volume_mode="", volume_percent=None):
         self.opened.append(session_id)
+        self.volume_policies.append((volume_mode, volume_percent))
         if self.answer:
             self.pool.handle_open_result(
                 RENDERER_ID,
@@ -113,6 +115,29 @@ def register(registry, ws, instance_id="inst-1"):
 
 
 @pytest.mark.asyncio
+async def test_the_volume_policy_rides_session_open():
+    registry, pool = make_pool()
+    ws = FakeWs(pool)
+    register(registry, ws)
+
+    assert ws.volume_policies == []
+    pool.set_volume_policy(lambda renderer_id: ("fixed", 100))
+    session = await pool.open(RENDERER_ID)
+
+    assert ws.volume_policies == [("fixed", 100)]
+    await session.close()
+
+
+async def test_no_policy_provider_leaves_the_renderers_own_volume_alone():
+    registry, pool = make_pool()
+    ws = FakeWs(pool)
+    register(registry, ws)
+
+    session = await pool.open(RENDERER_ID)
+    assert ws.volume_policies == [("", None)]
+    await session.close()
+
+
 async def test_open_and_close():
     registry, pool = make_pool()
     ws = FakeWs(pool)
