@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native renderer-build renderer-clean proto
+.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native renderer-build renderer-clean renderer-deb renderer-rpm proto
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -122,7 +122,15 @@ renderer-build:
 	@cmake --build $(RENDERER_BUILD) -j
 
 renderer-clean:
-	@rm -rf $(RENDERER_BUILD)
+	@rm -rf $(RENDERER_BUILD) $(RENDERER_DIR)/build-release $(RENDERER_DIR)/build-rpm
+
+## Platform-specific renderer packages: stripped Release binary + systemd
+## unit. Build on (a container of) the distro you target.
+renderer-deb:
+	@cd $(RENDERER_DIR) && ./scripts/build_deb.sh
+
+renderer-rpm:
+	@cd $(RENDERER_DIR) && ./scripts/build_rpm.sh
 
 ## Regenerate the committed Python protobuf bindings (needs grpcio-tools in
 ## the venv: pip install grpcio-tools).

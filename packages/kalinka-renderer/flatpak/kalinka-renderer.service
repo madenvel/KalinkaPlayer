@@ -1,0 +1,24 @@
+# systemd *user* unit for the flatpak build of the renderer. Flatpak cannot
+# install system services, so autostart works through the user manager:
+#
+#   install -D -m 644 kalinka-renderer.service \
+#     ~/.config/systemd/user/kalinka-renderer.service
+#   systemctl --user enable --now kalinka-renderer
+#   sudo loginctl enable-linger $USER   # start at boot, without a login
+#
+# The deb/rpm packages ship a proper system unit instead; prefer those where
+# they install.
+
+[Unit]
+Description=Kalinka Renderer (flatpak)
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/flatpak run io.github.madenvel.KalinkaRenderer
+ExecStop=/usr/bin/flatpak kill io.github.madenvel.KalinkaRenderer
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

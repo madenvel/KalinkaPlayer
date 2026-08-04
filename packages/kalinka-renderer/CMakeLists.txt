@@ -117,6 +117,9 @@ target_link_libraries(kalinka-renderer PRIVATE
   kalinka_native_player
 )
 
+include(GNUInstallDirs)
+install(TARGETS kalinka-renderer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 # --- unit tests (optional: built only when GoogleTest is installed) ----------
 find_package(GTest CONFIG)
 if(GTest_FOUND)

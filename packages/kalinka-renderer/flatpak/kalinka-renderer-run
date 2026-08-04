@@ -1,0 +1,5 @@
+#!/bin/sh
+# The renderer persists its id under $KALINKA_PREFIX/var/lib/kalinka-renderer;
+# point that at the flatpak app-data directory.
+export KALINKA_PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}"
+exec /app/bin/kalinka-renderer "$@"

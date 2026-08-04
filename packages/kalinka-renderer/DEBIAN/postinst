@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+USER="kalusr"
+UNIT_NAME="kalinka-renderer.service"
+
+case "$1" in
+  configure)
+    # Same system user as kalinka-server, created by whichever package lands
+    # first; neither removes it on purge.
+    if ! id -u "$USER" >/dev/null 2>&1; then
+      adduser --system --no-create-home --group --disabled-login "$USER"
+    fi
+    usermod -aG audio "$USER" || true
+
+    systemctl daemon-reload
+    systemctl enable "$UNIT_NAME"
+    systemctl restart "$UNIT_NAME"
+    ;;
+esac
+
+exit 0

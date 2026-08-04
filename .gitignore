@@ -36,6 +36,7 @@ _version.py
 
 # C/C++ build artifacts
 *.o
+*.d
 *.so
 *.a
 *.lib
@@ -43,6 +44,7 @@ _version.py
 *.dylib
 native_player/build/
 native_player/*.so
+packages/kalinka-renderer/kalinka-renderer
 
 # IDE and editor files
 .vscode/
@@ -104,3 +106,11 @@ models/
 
 # temporary files used for evaluation
 tmp/
+
+# Renderer package build artifacts
+build-release/
+build-rpm/
+redhat-linux-build/
+.flatpak-builder/
+*.rpm
+*.flatpak
