@@ -105,6 +105,30 @@ def volume_style_options() -> list[dict]:
     ]
 
 
+def install_fixed_volume_hook(
+    pool: SessionPool, configs: RendererConfigService
+) -> None:
+    """When another output device owns the volume (e.g. MusicCast), the
+    renderer must not apply its own on top: every session opens with
+    ``output.volume_mode = fixed`` so it plays bit-perfect at full scale and
+    volume is controlled downstream."""
+
+    async def _push_fixed(session: PlaybackSession) -> None:
+        try:
+            await configs.update(
+                session.renderer_id,
+                {_VOLUME_MODE_PATH: _STYLE_TO_WIRE[RendererVolumeStyle.fixed]},
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not push fixed volume mode to renderer %s: %s",
+                session.renderer_id,
+                e,
+            )
+
+    pool.add_open_hook(_push_fixed)
+
+
 class RendererOutputConfig(ModuleConfig):
     __module_icon__: ClassVar[str] = "speaker_outlined"
     name: str = Field(
