@@ -1,0 +1,201 @@
+name: Renderer release
+
+# Builds and publishes the kalinka-renderer packages for a
+# `kalinka-renderer-vX.Y.Z` tag. The renderer has its own release train:
+# it versions independently of the `kalinka-v*` app bundle and a renderer
+# tag rebuilds only the renderer, not the whole bundle. The release is
+# never marked "latest" — that slot stays pinned to `kalinka-v*` releases.
+#
+# Formats:
+#   * .deb  — arm64 on debian:trixie (Raspberry Pi OS / Debian 13),
+#             amd64 on ubuntu:24.04
+#   * .rpm  — Fedora 45, amd64 + arm64
+#   * .flatpak — freedesktop 24.08 bundle, x86_64 + aarch64 (best-effort,
+#             never blocks the release)
+
+on:
+  push:
+    tags:
+      - 'kalinka-renderer-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing kalinka-renderer-v* tag to build and publish'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  deb:
+    name: Deb (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            container: debian:trixie
+          - arch: amd64
+            runner: ubuntu-24.04
+            container: ubuntu:24.04
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.container }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential make git ca-certificates dpkg-dev cmake \
+            libboost-dev libcurlpp-dev libcurl4-openssl-dev libflac++-dev \
+            libasound2-dev libspdlog-dev libfmt-dev \
+            protobuf-compiler libprotobuf-dev
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build deb
+        run: RENDERER_VERSION="${TAG#kalinka-renderer-v}" make renderer-deb
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-debs-${{ matrix.arch }}
+          path: packages/kalinka-renderer/*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: RPM (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: fedora:45
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y make git rpm-build cmake gcc-c++ \
+            protobuf-devel protobuf-compiler boost-devel spdlog-devel \
+            alsa-lib-devel libcurl-devel curlpp-devel flac-devel \
+            pkgconf-pkg-config systemd-rpm-macros
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build RPM
+        run: RENDERER_VERSION="${TAG#kalinka-renderer-v}" make renderer-rpm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: renderer-rpms-${{ matrix.arch }}
+          path: packages/kalinka-renderer/*.rpm
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak (${{ matrix.arch }})
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: kalinka-renderer-${{ matrix.arch }}.flatpak
+          manifest-path: packages/kalinka-renderer/flatpak/io.github.madenvel.KalinkaRenderer.yml
+          arch: ${{ matrix.arch }}
+          upload-artifact: true
+
+  release:
+    name: Publish release
+    needs: [deb, rpm, flatpak]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather packages and checksums
+        run: |
+          mkdir -p release
+          find artifacts \( -name '*.deb' -o -name '*.rpm' -o -name '*.flatpak' \) -exec cp -n {} release/ \;
+          (cd release && sha256sum ./* > SHA256SUMS)
+          echo "Release assets:"
+          ls -l release/
+
+      - name: Create / update release and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${TAG#kalinka-renderer-v}"
+          echo "Publishing $TAG"
+
+          cat > notes.md <<EOF
+          Network audio renderer for the Kalinka Music Player: runs on a
+          speaker-attached box, discovers your Kalinka server over mDNS and
+          plays through the local ALSA device.
+
+          ## Install
+
+          **Debian 13 / Raspberry Pi OS (arm64) or Ubuntu 24.04 (amd64):**
+          download the matching \`.deb\` and \`sudo apt install ./kalinka-renderer-*.deb\`.
+
+          **Fedora 45:** download the matching \`.rpm\` and \`sudo dnf install ./kalinka-renderer-*.rpm\`.
+
+          The deb/rpm install a systemd service that starts immediately and on
+          every boot.
+
+          **Flatpak (any distro):** \`flatpak install ./kalinka-renderer-<arch>.flatpak\`,
+          then \`flatpak run io.github.madenvel.KalinkaRenderer\`. Flatpak cannot
+          register a system service — see \`packages/kalinka-renderer/flatpak/README.md\`
+          for the systemd user unit.
+
+          Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`.
+          EOF
+
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # No --latest: that slot stays pinned to kalinka-v* app releases.
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Kalinka Renderer $VERSION" \
+              --notes-file notes.md
+          fi
+          gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
