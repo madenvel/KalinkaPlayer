@@ -3,17 +3,22 @@
 How to cut a release and bump versions in this monorepo. Read this before
 tagging or changing any version — it is the source of truth for the process.
 
-## The model (two version lines)
+## The model (three version lines)
 
-There are two independent things to version, and they work differently:
+There are three independent things to version, and they work differently:
 
 | What | Packages | Versioned by | Needs a git tag? |
 |------|----------|--------------|------------------|
 | **App bundle** | `kalinka-server`, `kalinka-plugin-localfiles`, `kalinka-plugin-musiccast`, `kalinka-plugin-dummydevice` | A single `kalinka-vX.Y.Z` git tag (via setuptools_scm) | **Yes** |
+| **Renderer** | `kalinka-renderer` (deb/rpm/flatpak) | Its own `kalinka-renderer-vX.Y.Z` git tag | **Yes** (its own) |
 | **Plugin SDK** | `kalinka-plugin-sdk` | Its **own SemVer** — a constant in source | **No** |
 
 - The **app bundle** is lockstep: one tag versions the server and all
-  first-party plugins together. This is the only tag you create for a release.
+  first-party plugins together.
+- The **renderer** has its own release train: a `kalinka-renderer-v*` tag
+  builds only the renderer packages, and an app-bundle release never rebuilds
+  or re-ships the renderer. Devices upgrade the renderer only when its own
+  version moves — a server patch release doesn't restart renderers mid-playback.
 - The **SDK** is the plugin API contract, versioned by its **own SemVer**,
   independent of the app/`kalinka-v*` version. **Major** = a breaking API
   change; **minor** = a backwards-compatible addition; **patch** = a fix.
@@ -66,6 +71,30 @@ the app, not by `kalinka-v*`); the server serves its bundle from
 the app repo at install time, so the two release cadences are decoupled and a
 web-UI update ships to users on their next `install-release.sh` run without a
 server release. Nothing to do here when cutting a server release.
+
+---
+
+## Release the renderer
+
+1. Tag and push from the commit you want to ship:
+   ```bash
+   git tag kalinka-renderer-v0.1.0
+   git push origin kalinka-renderer-v0.1.0
+   ```
+   The `renderer-release.yml` workflow builds the debs (arm64 Debian 13,
+   amd64 Ubuntu 24.04), the Fedora 45 RPMs (both arches) and the flatpak
+   bundles, and publishes them to the tag's own release — never marked
+   "latest" (that slot belongs to `kalinka-v*`).
+
+2. The package version comes from the tag; the `VERSION` in
+   `packages/kalinka-renderer/CMakeLists.txt` is only the dev-build fallback.
+   Bump it to match the tag when convenient, not as a release step.
+
+Local builds (current distro/arch only, for testing the packaging):
+```bash
+make renderer-deb    # stripped Release build -> packages/kalinka-renderer/*.deb
+make renderer-rpm    # -> packages/kalinka-renderer/*.rpm
+```
 
 ---
 
@@ -157,7 +186,8 @@ make build-all-deb
 
 ## Rules of thumb
 
-- **One tag per release** (`kalinka-v*`). Never tag individual packages.
+- **One tag per app release** (`kalinka-v*`). Never tag individual packages —
+  the renderer is the one exception, with its own `kalinka-renderer-v*` train.
 - **Clean tree on the tagged commit**, or the version carries a dev/dirty suffix.
 - **SDK = one constant.** Minor/patch touches only `_version.py`; major also
   widens the four `>=1,<2` consumer pins.
