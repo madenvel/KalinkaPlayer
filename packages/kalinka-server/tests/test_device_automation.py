@@ -99,7 +99,7 @@ async def make_automation(config, mock_playqueue, playqueue_eventbus, ext_device
         playqueue=mock_playqueue,
         playqueue_eventbus=playqueue_eventbus,
         ext_device_eventbus=ext_device_eventbus,
-        device=device,
+        resolve_device=lambda: device,
     )
     await automation.start()
     # Give the listeners time to subscribe before we dispatch events
@@ -173,6 +173,52 @@ async def test_auto_power_on_on_playing(
             PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PLAYING))
         )
         await asyncio.sleep(0.1)
+        mock_device.power_on.assert_called_once()
+    finally:
+        await automation.shutdown()
+
+
+async def test_power_follows_the_currently_resolved_device(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    """The device is resolved per action: re-delegating a renderer's output
+    moves power control without restarting automation."""
+    other = MagicMock()
+    other.supported_functions.return_value = {SupportedFunction.POWER_ON}
+    other.power_on = AsyncMock()
+    current = mock_device
+
+    automation = DeviceAutomation(
+        config=config,
+        playqueue=mock_playqueue,
+        playqueue_eventbus=playqueue_eventbus,
+        ext_device_eventbus=ext_device_eventbus,
+        resolve_device=lambda: current,
+    )
+    await automation.start()
+    await asyncio.sleep(0.05)
+    try:
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PLAYING))
+        )
+        await asyncio.sleep(0.1)
+        mock_device.power_on.assert_called_once()
+
+        current = other
+        mock_playqueue.get_playback_state.return_value = PlaybackState(
+            state=PlayerStateEnum.STOPPED
+        )
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.STOPPED))
+        )
+        await asyncio.sleep(0.05)
+        playqueue_eventbus.dispatch(
+            PlaybackStateChangedEvent(state=PlaybackState(state=PlayerStateEnum.PLAYING))
+        )
+        await asyncio.sleep(0.1)
+
+        other.power_on.assert_called_once()
+        # The device that is no longer in charge is left alone.
         mock_device.power_on.assert_called_once()
     finally:
         await automation.shutdown()

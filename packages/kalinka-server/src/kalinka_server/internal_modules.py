@@ -6,13 +6,13 @@ These are built-in features that provide core functionality.
 """
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice
 
 from .device_automation import DeviceAutomation
 from .config_model import KalinkaConfig
-from .player_setup import PlayerContext, modules
+from .player_setup import PlayerContext
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -23,50 +23,41 @@ class InternalModules:
     def __init__(self):
         self.device_automation: Optional[DeviceAutomation] = None
 
-    async def initialize(self, config: KalinkaConfig, player_context: PlayerContext):
+    async def initialize(
+        self,
+        config: KalinkaConfig,
+        player_context: PlayerContext,
+        resolve_device: Callable[[], Optional[ExternalOutputDevice]],
+    ):
         """
         Initialize all internal modules.
 
         Args:
             config: Server configuration
             player_context: Player context with event buses and playqueue
+            resolve_device: Returns the device that owns the active renderer's
+                output, so automation powers the one actually in use.
         """
         logger.info("Initializing internal modules")
 
         # Initialize device automation
-        await self._setup_device_automation(config, player_context)
+        await self._setup_device_automation(config, player_context, resolve_device)
 
         logger.info("Internal modules initialization complete")
 
     async def _setup_device_automation(
-        self, config: KalinkaConfig, player_context: PlayerContext
+        self,
+        config: KalinkaConfig,
+        player_context: PlayerContext,
+        resolve_device: Callable[[], Optional[ExternalOutputDevice]],
     ):
         """Setup the device automation module."""
-        # Find the first available external output device
-        device = None
-        if modules.enabled_devices:
-            # Get the first enabled device
-            device_name = next(iter(modules.enabled_devices))
-            prepared_device = modules.prepared_devices[device_name]
-            # Only use it if it's actually an ExternalOutputDevice
-            if isinstance(prepared_device.interface, ExternalOutputDevice):
-                device = prepared_device.interface
-                logger.info(f"Device automation will use device: {device_name}")
-            else:
-                logger.warning(f"Device {device_name} is not an ExternalOutputDevice")
-
-        if device is None:
-            logger.info(
-                "No external devices found, device automation will run without device control"
-            )
-
-        # Initialize device automation
         self.device_automation = DeviceAutomation(
             config=config.device_automation,
             playqueue=player_context.playqueue,
             playqueue_eventbus=player_context.playqueue_eventbus,
             ext_device_eventbus=player_context.ext_device_eventbus,
-            device=device,
+            resolve_device=resolve_device,
         )
         await self.device_automation.start()
         logger.info("Device automation initialized")

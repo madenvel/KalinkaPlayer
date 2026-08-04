@@ -136,7 +136,6 @@ class PreparedModuleCollection:
     prepared_input_modules: dict[str, PreparedPlugin] = field(default_factory=dict)
     prepared_devices: dict[str, PreparedPlugin] = field(default_factory=dict)
     enabled_input_modules: set[str] = field(default_factory=set)
-    enabled_devices: set[str] = field(default_factory=set)
     player_context: PlayerContext | None = None
     # Set by ``scan_and_setup_plugins`` when a plugin's setup mutated
     # config fields that came from the overrides file. The caller
@@ -153,14 +152,6 @@ class PreparedModuleCollection:
         self.enabled_input_modules = {
             name
             for name, module in self.prepared_input_modules.items()
-            if module.health_state == ModuleHealthState.READY
-        }
-
-    def _update_enabled_devices(self):
-        """Update the set of enabled device names."""
-        self.enabled_devices = {
-            name
-            for name, module in self.prepared_devices.items()
             if module.health_state == ModuleHealthState.READY
         }
 
@@ -699,7 +690,6 @@ class PreparedModuleCollection:
             renderer_configs,
         )
         self.prepared_devices = {**devices}
-        self._update_enabled_devices()
 
 
 def volume_control_modules(devices: Mapping[str, PreparedPlugin]) -> list[str]:
