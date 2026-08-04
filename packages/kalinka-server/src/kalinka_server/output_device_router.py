@@ -67,6 +67,68 @@ class RoutedDeviceEmitter:
         self._bus.set_initial_state(state)
 
 
+class _FilteredStream:
+    """Passes through only what arrives while the owning check holds."""
+
+    def __init__(self, inner, owns: Callable[[], bool]):
+        self._inner = inner
+        self._stream = None
+        self._owns = owns
+
+    async def __aenter__(self):
+        self._stream = await self._inner.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return await self._inner.__aexit__(exc_type, exc, tb)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        while True:
+            item = await self._stream.__anext__()
+            if self._owns():
+                return item
+
+
+class RoutedPlaybackListener:
+    """The playback-event listener one device plugin is handed.
+
+    A module that does not own the active renderer's output hears nothing: an
+    amp wired to one renderer has no business reacting to a track playing on
+    another, which would otherwise have it adjusting its own volume for
+    somebody else's playback.
+    """
+
+    def __init__(self, plugin_id: str, bus, router: "OutputDeviceRouter"):
+        self._plugin_id = plugin_id
+        self._bus = bus
+        self._router = router
+
+    def _owns_output(self) -> bool:
+        return self._router.current_name() == self._plugin_id
+
+    def stream(self, event_types):
+        return _FilteredStream(self._bus.stream(event_types), self._owns_output)
+
+    def subscribe(self, event_types, callback=None, listener_id=None):
+        if callback is None:
+            return self._bus.subscribe(event_types, None, listener_id)
+
+        def _gated(item):
+            if self._owns_output():
+                callback(item)
+
+        return self._bus.subscribe(event_types, _gated, listener_id)
+
+    def unsubscribe(self, listener_id: str) -> None:
+        self._bus.unsubscribe(listener_id)
+
+    def get_snapshot(self):
+        return self._bus.get_snapshot()
+
+
 class OutputDeviceRouter:
     def __init__(
         self,
@@ -125,6 +187,9 @@ class OutputDeviceRouter:
         if self._bus is None:
             return None
         return RoutedDeviceEmitter(plugin_id, self._bus, self)
+
+    def listener_for(self, plugin_id: str, bus) -> RoutedPlaybackListener:
+        return RoutedPlaybackListener(plugin_id, bus, self)
 
     async def resync(self) -> None:
         """Publish the current owner's state, so clients stop showing the

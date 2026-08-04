@@ -570,8 +570,13 @@ class PreparedModuleCollection:
             case PluginType.OUTPUT_DEVICE:
                 router = self.player_context.device_router
                 emitter = router.emitter_for(name) if router else None
+                listener = (
+                    router.listener_for(name, self.player_context.playqueue_eventbus)
+                    if router
+                    else None
+                )
                 return OutputDevicePluginContext(
-                    listener=self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
+                    listener=listener or self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
                     emitter=emitter or self.player_context.ext_device_eventbus,  # type: ignore[arg-type]
                     logger=logging.getLogger(name),
                     plugin_id=name,

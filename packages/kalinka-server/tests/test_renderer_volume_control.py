@@ -1,5 +1,6 @@
 """Delegating a renderer's volume to another device module."""
 
+import asyncio
 from types import SimpleNamespace
 
 from kalinka_eventbus import EventBus
@@ -275,6 +276,52 @@ async def test_only_the_owning_modules_events_reach_clients():
     assert bus.get_snapshot().volume.current_volume == 22
     amp_emitter.dispatch(_volume_event(44))
     assert bus.get_snapshot().volume.current_volume == 44
+    await registry.shutdown()
+
+
+async def test_only_the_owning_module_hears_playback_events():
+    """A MusicCast wired to one renderer must not react to a track playing on
+    another — it would adjust its own volume for somebody else's playback."""
+    from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
+    from kalinka_plugin_sdk.events import (
+        PlayQueueEvent,
+        PlayQueueEventType,
+        PlayQueueState,
+        PlaybackStateChangedEvent,
+    )
+    from kalinka_plugin_sdk.datamodel import PlayerStateEnum
+
+    bus = EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](
+        initial_state=PlayQueueState(
+            playback_state=PlaybackState(),
+            track_list=[],
+            playback_mode=PlaybackMode(
+                shuffle=False, repeat_single=False, repeat_all=False
+            ),
+        )
+    )
+    registry = _registry_with("rid-a")
+    router = OutputDeviceRouter(registry, lambda: {})
+    heard: list = []
+    listener = router.listener_for("musiccast", bus)
+    listener.subscribe([PlayQueueEventType.PlaybackStateChanged], heard.append)
+
+    def play():
+        bus.dispatch(
+            PlaybackStateChangedEvent(
+                state=PlaybackState(state=PlayerStateEnum.PLAYING)
+            )
+        )
+
+    play()
+    await asyncio.sleep(0.05)
+    assert heard == []  # the renderer owns the output, not musiccast
+
+    registry.set_volume_control("rid-a", "musiccast")
+    play()
+    await asyncio.sleep(0.05)
+    assert len(heard) == 1
+    bus.close()
     await registry.shutdown()
 
 
