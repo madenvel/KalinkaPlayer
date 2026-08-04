@@ -41,10 +41,7 @@ from .config_overrides import (
 from .module_timeout import TimeLimitedInputModule
 from .playqueue import PlayQueueImpl
 from .renderer_config import RendererConfigService
-from .renderer_output_device import (
-    RendererOutputPlugin,
-    install_fixed_volume_hook,
-)
+from .renderer_output_device import RendererOutputPlugin
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import SessionPool
 from .text_embedder import SharedTextEmbedder
@@ -601,7 +598,7 @@ class PreparedModuleCollection:
             config=config,
         )
 
-    async def _maybe_setup_renderer_output_device(
+    async def _setup_renderer_output_device(
         self,
         devices: dict[str, PreparedPlugin],
         overrides: Mapping[str, Any],
@@ -609,27 +606,17 @@ class PreparedModuleCollection:
         renderer_sessions: SessionPool,
         renderer_configs: RendererConfigService,
     ) -> dict[str, PreparedPlugin]:
-        """Register the built-in renderer volume device as the default output.
+        """Register the built-in renderer volume device.
 
-        Only when no entry-point output device is enabled — an external device
-        (e.g. MusicCast) takes precedence and renderer volume steps aside.
-        Registered first so it's the active device. Its own ``enabled`` flag
-        gates setup: disabled ⇒ no interface ⇒ no volume control surfaced to
-        clients. It's built-in (not entry-point) because only the server can
-        hand it the renderer services — injected via ``bind``.
+        Always registered: it is what controls every renderer that has not been
+        delegated to another module, so an enabled MusicCast no longer displaces
+        it — the two coexist and :class:`OutputDeviceRouter` picks per renderer.
+        Its own ``enabled`` flag gates setup: disabled ⇒ no interface ⇒ no
+        volume control surfaced to clients. It's built-in (not entry-point)
+        because only the server can hand it the renderer services — injected
+        via ``bind``.
         """
         if self.player_context is None:
-            return devices
-        if any(p.health_state == ModuleHealthState.READY for p in devices.values()):
-            # The active device owns the volume; if it can actually control it,
-            # the renderer must not apply its own on top.
-            if any(
-                p.interface is not None
-                and SupportedFunction.SET_VOLUME in p.interface.supported_functions()
-                for p in devices.values()
-                if p.health_state == ModuleHealthState.READY
-            ):
-                install_fixed_volume_hook(renderer_sessions, renderer_configs)
             return devices
 
         config = self._build_module_config(
@@ -704,7 +691,7 @@ class PreparedModuleCollection:
         self.prepared_input_modules = {**input_modules}
         self._update_enabled_input_modules()
 
-        devices = await self._maybe_setup_renderer_output_device(
+        devices = await self._setup_renderer_output_device(
             devices,
             overrides,
             renderer_registry,

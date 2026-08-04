@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Literal, Optional, Union, Annotated
+from typing import Annotated, Callable, Literal, Optional, Union
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, TypeAdapter
@@ -41,7 +41,7 @@ command_adapter = TypeAdapter(DeviceCommand)
 async def handle_websocket_connection(
     websocket: WebSocket,
     device_eventbus: EventBus,
-    device: Optional[ExternalOutputDevice],
+    resolve_device: Callable[[], Optional[ExternalOutputDevice]],
 ):
     """Handle WebSocket connection for real-time device control and event streaming.
 
@@ -49,8 +49,11 @@ async def handle_websocket_connection(
     - Reading: Device events (power state changes, volume changes)
     - Writing: Device control commands (power_on, power_off, set_volume, is_power_on, get_volume)
 
-    With no device configured the stream stays up (clients still get the
-    initial state replay) and control commands are ignored.
+    The target is resolved per command, not per connection: which module owns
+    volume and power follows the active renderer, and a long-lived socket must
+    not keep addressing the module that happened to own it at connect time.
+    With none resolved the stream stays up (clients still get the initial state
+    replay) and control commands are ignored.
     """
     await websocket.accept()
 
@@ -76,6 +79,7 @@ async def handle_websocket_connection(
                     # Pydantic automatically deserializes to the correct command type
                     cmd = command_adapter.validate_python(data)
 
+                    device = resolve_device()
                     if device is None:
                         logger.warning(
                             "Ignoring %s: no output device configured", cmd.command

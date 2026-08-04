@@ -29,7 +29,7 @@ from kalinka_plugin_sdk.datamodel import (
     PlaybackState,
     PlayerStateEnum,
 )
-from kalinka_plugin_sdk.ext_device import DeviceVolume, ExternalOutputDevice
+from kalinka_plugin_sdk.ext_device import DeviceVolume
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
@@ -52,6 +52,7 @@ from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
+from .output_device_router import OutputDeviceRouter
 from .multisearch import calculate_fuzzy_score
 from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
@@ -417,22 +418,11 @@ async def create_app(
         dynamic_field_registry=app.state.dynamic_field_registry,
     ).schema_version
     app.state.dynamic_paths = frozenset(app.state.dynamic_field_registry.keys())
-    first_enabled_device_name = next(iter(modules.enabled_devices), None)
-    prepared_device = (
-        modules.prepared_devices[first_enabled_device_name]
-        if first_enabled_device_name
-        else None
+    # Volume and power are answered by whichever module owns the *active*
+    # renderer, so the target is resolved per request rather than bound here.
+    device_router = OutputDeviceRouter(
+        renderer_registry, lambda: modules.prepared_devices
     )
-    device: Optional[ExternalOutputDevice] = (
-        prepared_device.interface
-        if prepared_device
-        and isinstance(prepared_device.interface, ExternalOutputDevice)
-        else None
-    )
-    # `device` is the active output-device control — the first enabled device.
-    # That's the built-in renderer volume control unless an external plugin
-    # device (e.g. MusicCast) is enabled; it's None only when even the renderer
-    # device is disabled (in which case clients get no volume control).
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):
@@ -740,6 +730,7 @@ async def create_app(
 
     @app.get("/device/list")
     async def device_supported_functions():
+        device = device_router.current()
         if device is None:
             return {"message": "No device configured"}
 
@@ -747,6 +738,7 @@ async def create_app(
 
     @app.get("/device/get_volume")
     async def get_volume() -> DeviceVolume:
+        device = device_router.current()
         if device is None:
             return DeviceVolume(supported=False)
 
@@ -754,6 +746,7 @@ async def create_app(
 
     @app.put("/device/set_volume")
     async def set_volume(volume: int):
+        device = device_router.current()
         if device is None:
             return {"message": "No device configured"}
 
@@ -1338,7 +1331,7 @@ async def create_app(
     async def device_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for device control and event streaming."""
         await handle_device_websocket_connection(
-            websocket, player_context.ext_device_eventbus, device
+            websocket, player_context.ext_device_eventbus, device_router.current
         )
 
     @app.websocket("/renderer/ws")
