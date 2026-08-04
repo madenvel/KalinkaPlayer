@@ -182,7 +182,7 @@ class RendererVolumeDevice(ExternalOutputDevice):
             ExtDeviceState(power_on=True, volume=self._volume)
         )
         # A session may already be running (module reconfigured mid-play).
-        renderer_id = self._registry.first_connected_id()
+        renderer_id = self._registry.active_id()
         session = self._pool.get(renderer_id) if renderer_id else None
         if session is not None and session.state is SessionState.ACTIVE:
             await self._on_session_open(session)

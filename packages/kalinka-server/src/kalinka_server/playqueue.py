@@ -498,6 +498,10 @@ class PlayQueueImpl(PlayQueueController):
         self._track_player.stop()
 
     @serialised
+    async def apply_renderer_selection(self):
+        await self._track_player.apply_renderer_selection()
+
+    @serialised
     async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
         self._add(tracks, index)
 

@@ -7,8 +7,9 @@ fire-and-forget: they return at once and their effect comes back as state,
 delivered through the monitor in the same StreamState shape the native player
 produced.
 
-The session is opened on demand: the first append() claims the first connected
-renderer in the registry. It is released when playback stops — stop() closes it
+The session is opened on demand: the first append() claims the registry's
+active renderer (the client-selected one when connected, otherwise the first
+connected). It is released when playback stops — stop() closes it
 immediately, a finished or errored queue releases it after a short grace, and a
 paused one after a longer timeout. A session the renderer side ends
 (restart, another Core, renderer lost) surfaces as a STOPPED state with a
@@ -322,7 +323,7 @@ class RendererPlayer:
     async def _ensure_session(self) -> PlaybackSession:
         if self._session is not None and self._session.state is not SessionState.CLOSED:
             return self._session
-        renderer_id = self._registry.first_connected_id()
+        renderer_id = self._registry.active_id()
         if renderer_id is None:
             raise RendererUnavailable("no renderer is connected")
         session = await self._pool.open(renderer_id)
@@ -331,6 +332,14 @@ class RendererPlayer:
         self._session = session
         logger.info("Claimed renderer %s for playback", renderer_id)
         return session
+
+    async def apply_renderer_selection(self) -> None:
+        """Drop a session held on a renderer that is no longer the active one.
+        Playback stops there; the next play opens on the selected renderer."""
+        session = self._session
+        if session is None or session.renderer_id == self._registry.active_id():
+            return
+        await self._release(synthesize_stopped=True)
 
     async def _release(self, synthesize_stopped: bool) -> None:
         self._cancel_release()
