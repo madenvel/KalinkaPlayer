@@ -159,24 +159,39 @@ class RendererVolumeDevice(ExternalOutputDevice):
         registry: RendererRegistry,
         pool: SessionPool,
         event_emitter,
+        default_volume: int = DEFAULT_VOLUME,
     ):
         self._registry = registry
         self._pool = pool
         self._event_emitter = event_emitter
+        self._default_volume = default_volume
         self._session: Optional[PlaybackSession] = None
-        # Last volume the renderer reported; shown while no session exists.
-        self._volume = DeviceVolume(
-            max_volume=100, current_volume=100, volume_gain=0, supported=True
-        )
-        # A level set while idle, applied when the next session opens.
-        self._pending: Optional[int] = None
+        # Last volume each renderer reported, and levels set while one was
+        # idle. Both keyed by renderer: selecting another renderer must show
+        # and drive that one's volume, not the previous one's.
+        self._volumes: dict[str, DeviceVolume] = {}
+        self._pending: dict[str, int] = {}
         self._last_sent: Optional[DeviceVolume] = None
+
+    def _volume_for(self, renderer_id: Optional[str]) -> DeviceVolume:
+        """A renderer nothing is known about reads as the default level — what
+        it will be set to on first play, and a safer guess than full scale."""
+        if renderer_id is not None and renderer_id in self._volumes:
+            return self._volumes[renderer_id]
+        return DeviceVolume(
+            max_volume=100,
+            current_volume=self._default_volume,
+            volume_gain=0,
+            supported=True,
+        )
 
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> "RendererVolumeDevice":
         self._pool.add_open_hook(self._on_session_open)
         self._event_emitter.set_initial_state(
-            ExtDeviceState(power_on=True, volume=self._volume)
+            ExtDeviceState(
+                power_on=True, volume=self._volume_for(self._registry.active_id())
+            )
         )
         # A session may already be running (module reconfigured mid-play).
         renderer_id = self._registry.active_id()
@@ -190,20 +205,29 @@ class RendererVolumeDevice(ExternalOutputDevice):
 
     # --------------------------------------------------- ExternalOutputDevice API
     async def get_volume(self) -> DeviceVolume:
-        return self._volume.model_copy()
+        return self._volume_for(self._registry.active_id()).model_copy()
 
     async def set_volume(self, volume: int) -> None:
-        volume = max(0, min(int(volume), self._volume.max_volume))
+        renderer_id = self._registry.active_id()
+        current = self._volume_for(renderer_id)
+        volume = max(0, min(int(volume), current.max_volume))
         session = self._session
-        if session is not None and session.state is SessionState.ACTIVE:
+        if (
+            session is not None
+            and session.state is SessionState.ACTIVE
+            and session.renderer_id == renderer_id
+        ):
             try:
                 # The renderer echoes VolumeChanged; that drives cache + event.
                 await session.set_volume(volume)
                 return
             except Exception as e:
                 logger.warning("Could not set renderer volume: %s", e)
-        self._pending = volume
-        self._volume = self._volume.model_copy(update={"current_volume": volume})
+        if renderer_id is not None:
+            self._pending[renderer_id] = volume
+            self._volumes[renderer_id] = current.model_copy(
+                update={"current_volume": volume}
+            )
         self._dispatch()
 
     async def power_on(self) -> None:
@@ -216,7 +240,7 @@ class RendererVolumeDevice(ExternalOutputDevice):
         return None
 
     def supported_functions(self) -> list[SupportedFunction]:
-        if self._volume.supported:
+        if self._volume_for(self._registry.active_id()).supported:
             return [SupportedFunction.GET_VOLUME, SupportedFunction.SET_VOLUME]
         return []
 
@@ -231,7 +255,7 @@ class RendererVolumeDevice(ExternalOutputDevice):
         await self._apply_pending(session)
 
     async def _apply_pending(self, session: PlaybackSession) -> None:
-        pending, self._pending = self._pending, None
+        pending = self._pending.pop(session.renderer_id, None)
         if pending is None:
             return
         try:
@@ -249,7 +273,7 @@ class RendererVolumeDevice(ExternalOutputDevice):
         volume = snapshot.get("volume")
         if volume is None:
             return
-        self._volume = DeviceVolume(
+        self._volumes[session.renderer_id] = DeviceVolume(
             max_volume=volume["max"] or 100,
             current_volume=volume["current"],
             volume_gain=0,
@@ -258,7 +282,10 @@ class RendererVolumeDevice(ExternalOutputDevice):
         self._dispatch()
         # A resumed session never re-runs the open hook; settle a level set
         # while the renderer was away.
-        if self._pending is not None and session.state is SessionState.ACTIVE:
+        if (
+            session.renderer_id in self._pending
+            and session.state is SessionState.ACTIVE
+        ):
             await self._apply_pending(session)
 
     def _on_session_closed(self, session: PlaybackSession, reason) -> None:
@@ -266,9 +293,10 @@ class RendererVolumeDevice(ExternalOutputDevice):
             self._session = None
 
     def _dispatch(self) -> None:
-        """Put the cached volume on the device bus, skipping exact repeats
-        (a snapshot restating the level must not re-notify every client)."""
-        volume = self._volume
+        """Put the active renderer's cached volume on the device bus, skipping
+        exact repeats (a snapshot restating the level must not re-notify every
+        client)."""
+        volume = self._volume_for(self._registry.active_id())
         if volume == self._last_sent:
             return
         self._last_sent = volume
@@ -311,6 +339,7 @@ class RendererOutputPlugin(OutputDevicePlugin):
             self._registry,
             self._pool,
             context.emitter,
+            getattr(context.config, "default_volume", DEFAULT_VOLUME),
         )
         await self._device.start()
 
