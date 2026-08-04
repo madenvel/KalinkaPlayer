@@ -714,6 +714,21 @@ class PreparedModuleCollection:
         self.prepared_devices = {**devices}
         self._update_enabled_devices()
 
+
+def volume_control_modules(devices: Mapping[str, PreparedPlugin]) -> list[str]:
+    """Device modules a renderer's volume can be delegated to: enabled, live,
+    and able to set volume. The renderer controlling its own volume is the
+    absent mapping, so its own module is never a candidate."""
+    return [
+        name
+        for name, prepared in devices.items()
+        if name != RendererOutputPlugin.PLUGIN_ID
+        and prepared.health_state == ModuleHealthState.READY
+        and isinstance(prepared.interface, ExternalOutputDevice)
+        and SupportedFunction.SET_VOLUME in prepared.interface.supported_functions()
+    ]
+
+
 modules = PreparedModuleCollection()
 
 

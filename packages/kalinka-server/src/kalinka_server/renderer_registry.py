@@ -188,6 +188,17 @@ class RendererRegistry:
     def selected_id(self) -> Optional[str]:
         return self._prefs.selected_renderer_id
 
+    def volume_control(self, renderer_id: str) -> Optional[str]:
+        """Plugin id of the device module that owns this renderer's volume, or
+        None when the renderer controls its own."""
+        return self._prefs.volume_control(renderer_id)
+
+    def set_volume_control(self, renderer_id: str, module: Optional[str]) -> None:
+        self._prefs.set_volume_control(renderer_id, module)
+        logger.info(
+            "Renderer %s volume control: %s", renderer_id, module or "renderer itself"
+        )
+
     def active_id(self) -> Optional[str]:
         """The renderer playback opens sessions on: the selected one while it
         is connected, otherwise the first connected. A selected renderer that
@@ -210,6 +221,7 @@ class RendererRegistry:
             | {
                 "active": record.renderer_id == active,
                 "selected": record.renderer_id == selected,
+                "volume_control": self._prefs.volume_control(record.renderer_id),
             }
             for record in sorted(
                 self._renderers.values(), key=lambda r: r.friendly_name

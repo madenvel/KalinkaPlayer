@@ -58,7 +58,13 @@ from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
     write_pending_installs,
 )
-from .player_setup import modules, setup, shutdown, ModuleHealthState
+from .player_setup import (
+    modules,
+    setup,
+    shutdown,
+    ModuleHealthState,
+    volume_control_modules,
+)
 from .internal_modules import internal_modules
 from .service_discovery import ServiceDiscovery
 from . import update_check
@@ -1342,10 +1348,17 @@ async def create_app(
             websocket, config, renderer_registry, renderer_sessions, renderer_configs
         )
 
+    def _volume_control_modules() -> List[str]:
+        return volume_control_modules(modules.prepared_devices)
+
     @app.get("/renderer/list")
     async def renderer_list():
-        """Known renderers and their connection status."""
-        return {"renderers": renderer_registry.list()}
+        """Known renderers, their connection status, and which module controls
+        each one's volume, with the modules available to be picked."""
+        return {
+            "renderers": renderer_registry.list(),
+            "volume_control_modules": _volume_control_modules(),
+        }
 
     @app.get("/renderer/sessions")
     async def renderer_session_list():
@@ -1378,6 +1391,26 @@ async def create_app(
         renderer_registry.select(renderer_id)
         await app.state.player_context.playqueue.apply_renderer_selection()
         return _renderer_selection()
+
+    @app.put("/renderer/{renderer_id}/volume-control")
+    async def renderer_volume_control(renderer_id: str, payload: Dict[str, Any]):
+        """Delegate this renderer's volume to another device module.
+
+        Body: `{"module": "<plugin id>"}`, or null to hand control back to the
+        renderer itself — the default for every renderer. Delegation belongs to
+        a renderer whose output is wired into that device (an amp downstream),
+        which is why it is per renderer and not a module-wide setting.
+        """
+        if renderer_registry.get(renderer_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown renderer")
+        module = payload.get("module")
+        if module is not None and module not in _volume_control_modules():
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{module}' is not an enabled device module with volume control",
+            )
+        renderer_registry.set_volume_control(renderer_id, module)
+        return {"renderer_id": renderer_id, "volume_control": module}
 
     # Renderer settings are the renderer's own, so they are not part of
     # /server/config: they need no session, several Cores may edit them, and a
