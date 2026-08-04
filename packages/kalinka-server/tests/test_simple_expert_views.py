@@ -107,25 +107,23 @@ def test_simple_view_includes_simple_fields_and_excludes_expert():
 
     # Curated SIMPLE-tier essentials must surface:
     assert "base_config.server.service_name" in paths
-    assert "base_config.output.alsa.device" in paths
     assert "base_config.device_automation.auto_power_on" in paths
     assert "input_modules.localfiles.enabled" in paths
     assert "input_modules.localfiles.music_folders" in paths
     assert "input_modules.localfiles.scan_interval_minutes" in paths
 
     # Audit-defaulted EXPERT tuning must NOT leak in:
-    assert "base_config.output.alsa.latency_ms" not in paths
-    assert "base_config.output.alsa.period_ms" not in paths
+    assert "base_config.search.candidate_limit" not in paths
     assert "base_config.server.oobe_complete" not in paths
     assert "input_modules.localfiles.db_path" not in paths
     assert "input_modules.localfiles.searcher.weight_knn" not in paths
     assert "input_modules.localfiles.embedder.batch_size_clap" not in paths
 
 
-def test_kalinka_buffers_section_dropped_when_tagged_expert():
-    """KalinkaConfig.presentation_layout marks the 'Buffers & decoders'
-    section as Importance.EXPERT — section-level tag wins, all of its
-    fields are removed from the simple view."""
+def test_kalinka_expert_section_dropped_from_simple_view():
+    """KalinkaConfig.presentation_layout marks the 'Search' section as
+    Importance.EXPERT — section-level tag wins, all of its fields are
+    removed from the simple view."""
     schema = build_presentation(
         base_config=KalinkaConfig(),
         input_modules={},
@@ -135,8 +133,8 @@ def test_kalinka_buffers_section_dropped_when_tagged_expert():
         if p.id != "general":
             continue
         for s in p.sections:
-            assert s.id != "base_config.buffers", (
-                "buffers section should be pruned out of the simple view"
+            assert s.id != "base_config.search", (
+                "search section should be pruned out of the simple view"
             )
 
 
@@ -229,7 +227,7 @@ def test_expert_list_includes_both_simple_and_expert_fields():
     assert "input_modules.localfiles.music_folders" in paths
     # An audit-defaulted EXPERT field:
     assert "input_modules.localfiles.db_path" in paths
-    assert "base_config.output.alsa.latency_ms" in paths
+    assert "base_config.search.candidate_limit" in paths
     # The app-written first-run flag stays expert-only but settable:
     assert "base_config.server.oobe_complete" in paths
     # Nested expert leaves:

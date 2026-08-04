@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean build-native test help kalinka-server-deb kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run dev-rebuild-native renderer-build renderer-clean renderer-deb renderer-rpm proto
+.PHONY: clean test help kalinka-server-deb kalinka-server-rpm kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run renderer-build renderer-clean renderer-deb renderer-rpm proto
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -56,20 +56,11 @@ build-env:
 	@$(PIP) install --quiet -e packages/kalinka-plugin-sdk
 
 ## One-shot setup: create venv (unless one is active/exists), install sdk +
-## server + all plugins (editable), build the native extension, and seed the
-## fakeroot directory tree + config.
+## server + all plugins (editable), and seed the fakeroot directory tree +
+## config. The server is pure Python — audio output lives in the renderer
+## (make renderer-build).
 dev-setup: build-env
-	@command -v g++ >/dev/null 2>&1 || { \
-		echo "ERROR: g++ not found. The native player needs a C++ toolchain and"; \
-		echo "  the ALSA/FLAC/curlpp/spdlog/fmt dev headers. Install the system"; \
-		echo "  prerequisites listed in README.md (Running from source) first."; \
-		exit 1; }
-# The server's editable install compiles the native player in pip's isolated
-# PEP-517 build env (pybind11 etc. come from its [build-system] requires) and
-# places the .so in-place under src/native_player — no manual build step or
-# hand-installed pybind11. `make dev-rebuild-native` rebuilds it for fast C++
-# iteration (pybind11 is pulled in as a runtime dep, so that works too).
-	@echo "Installing kalinka-server (editable; builds the native player)..."
+	@echo "Installing kalinka-server (editable)..."
 	@$(PIP) install -e packages/kalinka-server
 	@echo "Installing plugins (editable)..."
 	@for dir in packages/kalinka-plugin-*; do \
@@ -103,12 +94,6 @@ dev-setup: build-env
 dev-run:
 	@KALINKA_PREFIX=$(KALINKA_PREFIX) VENV=$(abspath $(VENV)) scripts/dev_run.sh $(ARGS)
 
-## Rebuild the native C++ extension after editing native_player sources, then
-## restart the server (Ctrl-C the running dev-run and re-run it, or click
-## Restart in the app) to load it.
-dev-rebuild-native:
-	@cd packages/kalinka-server/src/native_player && $(abspath $(PY)) setup.py build_ext --inplace
-	@echo "Native extension rebuilt. Restart the server to load it."
 ## -----------------------------------------------------------------------------
 
 ## --- Native renderer (packages/kalinka-renderer) ------------------------------
@@ -148,12 +133,6 @@ clean:
 	@find . -name "*.pyc" -delete
 	@find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true
-	@cd packages/kalinka-server/src/native_player && make clean
-
-## Build native player module
-build-native:
-	@echo "Building native player module..."
-	@cd packages/kalinka-server/src/native_player && python setup.py build_ext --inplace
 
 ## Run tests
 test:
@@ -178,11 +157,12 @@ copy-debs:
 ## so the script's bare `python3` builds the wheel from the venv.
 kalinka-server-deb: build-env
 	@echo "Building kalinka-server deb package..."
-	@command -v g++ >/dev/null 2>&1 || { \
-		echo "ERROR: g++ not found — the server wheel compiles the native player."; \
-		echo "  Install the C++ toolchain + dev headers listed in README.md first."; \
-		exit 1; }
 	@cd packages/kalinka-server && PATH="$(VENV_BIN):$$PATH" ./scripts/build_deb.sh
+
+## Noarch RPM carrying the whole app bundle (server + SDK + plugin wheels).
+kalinka-server-rpm: build-env
+	@echo "Building kalinka-server rpm package..."
+	@cd packages/kalinka-server && PATH="$(VENV_BIN):$$PATH" ./scripts/build_rpm.sh
 
 ## Build all plugin deb packages (SDK, local files, musiccast, dummydevice, jamendo)
 kalinka-plugins-deb: build-env

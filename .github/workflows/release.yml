@@ -6,16 +6,10 @@ name: Release
 # - Triggered automatically when a `kalinka-v*` tag is pushed, or manually
 #   (workflow_dispatch) against an already-existing tag — handy for publishing a
 #   release that was cut by hand.
-# - Each architecture builds inside the container that matches its deployment
-#   target, so the compiled extension links the right library sonames and the
-#   Depends are correct for that distro:
-#     * arm64 -> debian:trixie  (Raspberry Pi OS / Debian 13; stock g++ 14
-#                                compiles the native extension's --std=c++23)
-#     * amd64 -> ubuntu:24.04   (stock g++ 13 also handles --std=c++23)
-#   Both run on free GitHub-hosted runners (no QEMU, no physical Pi).
-# - The arm64 job runs `make build-all-deb`, which also produces the
-#   arch-independent (_all) plugin + SDK debs; the amd64 job builds only the
-#   arch-specific server deb so the _all packages aren't duplicated.
+# - Every bundle package — server, plugins, SDK — is pure Python and
+#   Architecture: all, so one job builds the whole bundle and the same
+#   artifacts install on any distro and arch. (The platform-specific
+#   kalinka-renderer has its own release train: renderer-release.yml.)
 #
 # See RELEASING.md for the versioning model (one tag versions the whole bundle).
 
@@ -34,24 +28,10 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # arm64 builds the server deb AND the arch-independent _all packages.
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            container: debian:trixie
-            make_target: build-all-deb
-          # amd64 builds only the arch-specific server deb, for Ubuntu.
-          - arch: amd64
-            runner: ubuntu-24.04
-            container: ubuntu:24.04
-            make_target: kalinka-server-deb
-    runs-on: ${{ matrix.runner }}
+    name: Build (all)
+    runs-on: ubuntu-24.04
     container:
-      image: ${{ matrix.container }}
+      image: debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
       PIP_BREAK_SYSTEM_PACKAGES: "1"
@@ -60,15 +40,13 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential make git ca-certificates unzip dpkg-dev \
-            python3 python3-dev python3-pip python3-venv \
-            libboost-dev libcurlpp-dev libcurl4-openssl-dev libflac++-dev \
-            libasound2-dev libspdlog-dev libfmt-dev
-          # build/setuptools-scm/pybind11 for wheel builds; pydantic is needed
+            make git ca-certificates dpkg-dev \
+            python3 python3-pip python3-venv
+          # build/setuptools-scm for wheel builds; pydantic is needed
           # by the localfiles plugin's build-time optional_packages export.
           # --ignore-installed: these deps pull a newer `packaging` than the
           # dpkg-installed one, which pip cannot uninstall (no RECORD file).
-          pip install --upgrade --ignore-installed build setuptools-scm pybind11 pydantic
+          pip install --upgrade --ignore-installed build setuptools-scm pydantic
 
       - name: Checkout (tag)
         uses: actions/checkout@v4
@@ -80,32 +58,61 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Build .deb packages
-        run: make ${{ matrix.make_target }}
+        run: make build-all-deb
 
       - name: Collect artifacts
         run: |
           mkdir -p out
-          # build-all-deb collects into debs/; the server-only build leaves its
-          # deb in the package directory.
-          [ -d debs ] && find debs -name '*.deb' -exec cp -n {} out/ \; || true
-          find packages -maxdepth 2 -name '*.deb' -exec cp -n {} out/ \; || true
+          find debs -name '*.deb' -exec cp -n {} out/ \;
           echo "Built packages:"
           ls -l out/
           echo "--- server Depends (sanity) ---"
-          for d in out/kalinka-server-*.deb; do
+          for d in out/kalinka-server_*.deb; do
             [ -f "$d" ] && { echo "$d:"; dpkg-deb -f "$d" Depends; }
           done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: debs-${{ matrix.arch }}
+          name: debs-all
           path: out/*.deb
+          if-no-files-found: error
+
+  # Same bundle as one noarch RPM for Fedora (built in the fc45 container so
+  # the dist tag is right; contents are arch- and release-independent).
+  rpm:
+    name: Build (rpm)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:45
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf install -y make git rpm-build python3-pip systemd-rpm-macros
+          pip install --upgrade build setuptools-scm pydantic
+
+      - name: Checkout (tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0   # full history + tags so setuptools_scm sees the tag
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build RPM
+        run: cd packages/kalinka-server && ./scripts/build_rpm.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpms-all
+          path: packages/kalinka-server/*.rpm
           if-no-files-found: error
 
   release:
     name: Publish release
-    needs: build
+    needs: [build, rpm]
     runs-on: ubuntu-24.04
     steps:
       # Full history + tags: the notes step lists commits since the previous
@@ -122,11 +129,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Gather debs and checksums
+      - name: Gather packages and checksums
         run: |
           mkdir -p release
-          find artifacts -name '*.deb' -exec cp -n {} release/ \;
-          (cd release && sha256sum *.deb > SHA256SUMS)
+          find artifacts \( -name '*.deb' -o -name '*.rpm' \) -exec cp -n {} release/ \;
+          (cd release && sha256sum ./* > SHA256SUMS)
           echo "Release assets:"
           ls -l release/
           cat release/SHA256SUMS
@@ -149,9 +156,9 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-release.sh | sudo bash -s -- $VERSION
           \`\`\`
 
-          Detects your architecture, downloads the right packages from this release, and installs them with \`apt\` (drop the \`-s -- $VERSION\` to always get the latest release instead). It also pulls the browser player (\`kalinka-web\`) from the [app repo's latest release](https://github.com/madenvel/KalinkaAI/releases) — once installed, open \`http://<server-ip>:8000\` in any browser on your network to control playback.
+          Downloads this release's packages and installs them with \`apt\` (drop the \`-s -- $VERSION\` to always get the latest release instead). All bundle packages are arch-independent (\`_all.deb\`) — the same artifacts install on any machine. It also pulls the browser player (\`kalinka-web\`) from the [app repo's latest release](https://github.com/madenvel/KalinkaAI/releases) — once installed, open \`http://<server-ip>:8000\` in any browser on your network to control playback.
 
-          **Manual install:** download the server package for your OS — \`debian-13.arm64\` for Raspberry Pi OS (trixie) / Debian 13, \`ubuntu-24.04.amd64\` for Ubuntu 24.04 — plus all the \`_all.deb\` plugin/SDK packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. For the browser player, add \`kalinka-web_*_all.deb\` from the [app releases](https://github.com/madenvel/KalinkaAI/releases).
+          **Manual install:** download all the \`_all.deb\` packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. For the browser player, add \`kalinka-web_*_all.deb\` from the [app releases](https://github.com/madenvel/KalinkaAI/releases).
 
           **Network renderer:** \`kalinka-renderer\` versions and releases separately — get the newest deb/rpm/flatpak from the [latest \`kalinka-renderer-v*\` release](https://github.com/$GITHUB_REPOSITORY/releases?q=kalinka-renderer-v&expanded=true).
           EOF

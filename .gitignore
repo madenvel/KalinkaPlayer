@@ -114,3 +114,4 @@ redhat-linux-build/
 .flatpak-builder/
 *.rpm
 *.flatpak
+build-rpm-stage/
