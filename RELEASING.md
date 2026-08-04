@@ -84,7 +84,10 @@ server release. Nothing to do here when cutting a server release.
    The `renderer-release.yml` workflow builds the debs (arm64 Debian 13,
    amd64 Ubuntu 24.04), the Fedora 45 RPMs (both arches) and the flatpak
    bundles, and publishes them to the tag's own release — never marked
-   "latest" (that slot belongs to `kalinka-v*`).
+   "latest" (that slot belongs to `kalinka-v*`). Users install with
+   `scripts/install-renderer.sh` (served from `main`, like
+   `install-release.sh`), which picks deb vs rpm and the right arch for
+   the machine it runs on.
 
 2. The package version comes from the tag; the `VERSION` in
    `packages/kalinka-renderer/CMakeLists.txt` is only the dev-build fallback.

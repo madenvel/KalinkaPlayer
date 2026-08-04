@@ -175,7 +175,15 @@ jobs:
 
           ## Install
 
-          **Debian 13 / Raspberry Pi OS (arm64) or Ubuntu 24.04 (amd64):**
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-renderer.sh | sudo bash -s -- $VERSION
+          \`\`\`
+
+          Picks the right package for this machine — deb on Debian/Ubuntu, rpm
+          on Fedora — and installs it (drop the \`-s -- $VERSION\` to always get
+          the latest renderer release instead).
+
+          **Manual install — Debian 13 / Raspberry Pi OS (arm64) or Ubuntu 24.04 (amd64):**
           download the matching \`.deb\` and \`sudo apt install ./kalinka-renderer-*.deb\`.
 
           **Fedora 45:** download the matching \`.rpm\` and \`sudo dnf install ./kalinka-renderer-*.rpm\`.
