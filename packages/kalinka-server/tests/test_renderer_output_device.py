@@ -135,6 +135,30 @@ async def test_unsupported_volume_reported(renderer, bus):
         await device.shutdown()
 
 
+async def test_each_renderer_keeps_its_own_volume(renderer, bus):
+    """Selecting another renderer must show and drive that one's level, not
+    whatever the previous renderer was at."""
+    other = SimRenderer(renderer.registry, renderer.pool, renderer_id="sim-other")
+    other.connect()
+    device = await make_device(renderer, bus).start()
+    try:
+        renderer.registry.select(SimRenderer.RENDERER_ID)
+        await device.set_volume(25)
+        assert (await device.get_volume()).current_volume == 25
+
+        renderer.registry.select("sim-other")
+        # Nothing known about it yet: the default level, not the other's 25.
+        assert (await device.get_volume()).current_volume == 30
+        await device.set_volume(80)
+
+        renderer.registry.select(SimRenderer.RENDERER_ID)
+        assert (await device.get_volume()).current_volume == 25
+        renderer.registry.select("sim-other")
+        assert (await device.get_volume()).current_volume == 80
+    finally:
+        await device.shutdown()
+
+
 async def test_cache_survives_session_close(renderer, bus):
     device = await make_device(renderer, bus).start()
     try:

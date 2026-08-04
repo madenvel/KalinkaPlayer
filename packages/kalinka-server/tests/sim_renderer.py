@@ -33,7 +33,14 @@ _NOW_UNIX_MS = 1700000000000
 class SimRenderer:
     RENDERER_ID = "sim-renderer"
 
-    def __init__(self, registry: RendererRegistry, pool: SessionPool):
+    def __init__(
+        self,
+        registry: RendererRegistry,
+        pool: SessionPool,
+        renderer_id: Optional[str] = None,
+    ):
+        if renderer_id is not None:
+            self.RENDERER_ID = renderer_id
         self.registry = registry
         self.pool = pool
         self.session_id: Optional[str] = None
