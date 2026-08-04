@@ -1,5 +1,5 @@
-"""The renderer volume device: cached volume while idle, pending apply and
-volume-mode push at session open, renderer events onto the device bus."""
+"""The renderer volume device: cached volume while idle, pending apply at
+session open, renderer events onto the device bus."""
 
 from __future__ import annotations
 
@@ -17,11 +17,7 @@ from kalinka_plugin_sdk.ext_device_events import (
     VolumeChangedEvent,
 )
 
-from kalinka_server.renderer_config import RendererConfigService
-from kalinka_server.renderer_output_device import (
-    RendererVolumeDevice,
-    RendererVolumeStyle,
-)
+from kalinka_server.renderer_output_device import RendererVolumeDevice
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
 
@@ -62,16 +58,8 @@ class VolumeRecorder:
             self.events.append(item)
 
 
-def make_device(
-    renderer: SimRenderer,
-    bus: EventBus,
-    style: RendererVolumeStyle = RendererVolumeStyle.renderer,
-) -> RendererVolumeDevice:
-    configs = RendererConfigService(renderer.registry)
-    renderer.configs = configs
-    return RendererVolumeDevice(
-        renderer.registry, renderer.pool, configs, bus, style
-    )
+def make_device(renderer: SimRenderer, bus: EventBus) -> RendererVolumeDevice:
+    return RendererVolumeDevice(renderer.registry, renderer.pool, bus)
 
 
 async def test_idle_volume_cached_and_applied_on_open(renderer, bus):
@@ -107,17 +95,9 @@ async def test_set_volume_through_open_session(renderer, bus):
         await device.shutdown()
 
 
-async def test_style_pushed_at_session_open(renderer, bus):
-    device = await make_device(renderer, bus, RendererVolumeStyle.driver).start()
-    try:
-        session = await renderer.pool.open(SimRenderer.RENDERER_ID)
-        assert renderer.config_updates == [{"output.volume_mode": "hardware"}]
-        await session.close()
-    finally:
-        await device.shutdown()
-
-
-async def test_renderer_choice_leaves_mode_alone(renderer, bus):
+async def test_the_volume_mode_is_never_written_to_the_renderers_config(renderer, bus):
+    """It rides SessionOpen as a session-scoped policy instead — see
+    OutputDeviceRouter.session_volume_policy."""
     device = await make_device(renderer, bus).start()
     try:
         session = await renderer.pool.open(SimRenderer.RENDERER_ID)

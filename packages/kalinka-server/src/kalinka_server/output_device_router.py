@@ -28,7 +28,11 @@ from kalinka_plugin_sdk.datamodel import DeviceVolume
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEvent, ExtDeviceState
 
-from .renderer_output_device import RendererOutputPlugin
+from .renderer_output_device import (
+    RendererOutputPlugin,
+    RendererVolumeStyle,
+    wire_volume_mode,
+)
 from .renderer_registry import RendererRegistry
 
 if TYPE_CHECKING:  # avoids a cycle: player_setup builds the router
@@ -85,6 +89,24 @@ class OutputDeviceRouter:
             return None
         interface = prepared.interface
         return interface if isinstance(interface, ExternalOutputDevice) else None
+
+    def _renderer_volume_style(self) -> RendererVolumeStyle:
+        prepared = self._devices().get(RendererOutputPlugin.PLUGIN_ID)
+        context = getattr(prepared, "plugin_context", None)
+        config = getattr(context, "config", None)
+        return getattr(config, "volume_style", RendererVolumeStyle.renderer)
+
+    def session_volume_policy(self, renderer_id: str) -> tuple[str, Optional[int]]:
+        """What SessionOpen should carry for this renderer: (mode, percent).
+
+        A delegated renderer is fixed at full scale — the amp downstream owns
+        the level, and attenuating twice would cost headroom and, in software
+        mode, resolution. Otherwise the renderer device's ``volume_style``
+        decides, and "renderer choice" sends nothing at all.
+        """
+        if self._registry.volume_control(renderer_id):
+            return (wire_volume_mode(RendererVolumeStyle.fixed), 100)
+        return (wire_volume_mode(self._renderer_volume_style()), None)
 
     def emitter_for(self, plugin_id: str) -> Optional[RoutedDeviceEmitter]:
         if self._bus is None:

@@ -8,6 +8,8 @@ import asyncio
 import logging
 import time
 
+from typing import Optional
+
 from fastapi import WebSocket, WebSocketDisconnect
 from google.protobuf.message import DecodeError
 
@@ -72,9 +74,19 @@ class RendererSession:
         welcome.server_time_unix_ms = int(time.time() * 1000)
         await self._send(env)
 
-    async def send_session_open(self, session_id: str) -> None:
+    async def send_session_open(
+        self,
+        session_id: str,
+        volume_mode: str = "",
+        volume_percent: Optional[int] = None,
+    ) -> None:
         env = self._envelope()
         env.session_open.session_id = session_id
+        # Session-scoped: the renderer undoes both when the session ends and
+        # persists neither. Empty mode leaves its own setting alone.
+        env.session_open.volume_mode = volume_mode
+        if volume_percent is not None:
+            env.session_open.volume_percent = volume_percent
         await self._send(env)
 
     async def send_command(self, session_id: str, command: pb.Command) -> None:

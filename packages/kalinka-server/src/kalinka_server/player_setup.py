@@ -41,7 +41,6 @@ from .config_overrides import (
 from .module_timeout import TimeLimitedInputModule
 from .output_device_router import OutputDeviceRouter
 from .playqueue import PlayQueueImpl
-from .renderer_config import RendererConfigService
 from .renderer_output_device import RendererOutputPlugin
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import SessionPool
@@ -601,7 +600,6 @@ class PreparedModuleCollection:
         overrides: Mapping[str, Any],
         renderer_registry: RendererRegistry,
         renderer_sessions: SessionPool,
-        renderer_configs: RendererConfigService,
     ) -> dict[str, PreparedPlugin]:
         """Register the built-in renderer volume device.
 
@@ -634,7 +632,7 @@ class PreparedModuleCollection:
             return {"kalinka-renderer": prepared, **devices}
 
         plugin = RendererOutputPlugin()
-        plugin.bind(renderer_registry, renderer_sessions, renderer_configs)
+        plugin.bind(renderer_registry, renderer_sessions)
         try:
             await plugin.setup(context)
             prepared = PreparedPlugin(
@@ -664,7 +662,6 @@ class PreparedModuleCollection:
         overrides: MutableMapping[str, Any],
         renderer_registry: RendererRegistry,
         renderer_sessions: SessionPool,
-        renderer_configs: RendererConfigService,
         overrides_file: str | None = None,
     ):
         """Scan for input modules from both entry points and legacy filesystem locations."""
@@ -693,7 +690,6 @@ class PreparedModuleCollection:
             overrides,
             renderer_registry,
             renderer_sessions,
-            renderer_configs,
         )
         self.prepared_devices = {**devices}
 
@@ -720,7 +716,6 @@ async def setup(
     overrides: MutableMapping[str, Any],
     renderer_registry: RendererRegistry,
     renderer_sessions: SessionPool,
-    renderer_configs: RendererConfigService,
     overrides_file: str | None = None,
 ) -> PlayerContext:
     """Setup the player components.
@@ -774,7 +769,6 @@ async def setup(
         overrides,
         renderer_registry,
         renderer_sessions,
-        renderer_configs,
         overrides_file,
     )
 

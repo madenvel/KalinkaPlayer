@@ -340,6 +340,20 @@ class SessionPool:
         self._timeout_s = timeout_s
         self._sessions: dict[str, PlaybackSession] = {}
         self._open_hooks: list[Callable] = []
+        self._volume_policy: Callable[
+            [str], tuple[str, Optional[int]]
+        ] = lambda _renderer_id: ("", None)
+
+    def set_volume_policy(
+        self, provider: Callable[[str], tuple[str, Optional[int]]]
+    ) -> None:
+        """Install what decides the volume policy carried on SessionOpen.
+
+        Session-scoped by construction: the renderer undoes it when the session
+        ends, so a renderer fixed because an amp owns its volume is not left
+        fixed for whoever uses it next.
+        """
+        self._volume_policy = provider
 
     def add_open_hook(
         self, hook: Callable[[PlaybackSession], Any]
@@ -381,8 +395,11 @@ class SessionPool:
         self._sessions[renderer_id] = session
         session._open_future = asyncio.get_running_loop().create_future()
 
+        volume_mode, volume_percent = self._volume_policy(renderer_id)
         try:
-            await ws.send_session_open(session.session_id)
+            await ws.send_session_open(
+                session.session_id, volume_mode, volume_percent
+            )
             outcome = await asyncio.wait_for(
                 session._open_future, self._timeout_s
             )
