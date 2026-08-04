@@ -29,6 +29,7 @@ from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunctio
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEvent, ExtDeviceState
 
 from .renderer_output_device import (
+    DEFAULT_VOLUME,
     RendererOutputPlugin,
     RendererVolumeStyle,
     wire_volume_mode,
@@ -90,23 +91,35 @@ class OutputDeviceRouter:
         interface = prepared.interface
         return interface if isinstance(interface, ExternalOutputDevice) else None
 
-    def _renderer_volume_style(self) -> RendererVolumeStyle:
+    def _renderer_config(self):
         prepared = self._devices().get(RendererOutputPlugin.PLUGIN_ID)
         context = getattr(prepared, "plugin_context", None)
-        config = getattr(context, "config", None)
-        return getattr(config, "volume_style", RendererVolumeStyle.renderer)
+        return getattr(context, "config", None)
 
     def session_volume_policy(self, renderer_id: str) -> tuple[str, Optional[int]]:
         """What SessionOpen should carry for this renderer: (mode, percent).
 
         A delegated renderer is fixed at full scale — the amp downstream owns
         the level, and attenuating twice would cost headroom and, in software
-        mode, resolution. Otherwise the renderer device's ``volume_style``
-        decides, and "renderer choice" sends nothing at all.
+        mode, resolution.
+
+        Otherwise the renderer device's ``volume_style`` decides the mode, and
+        "renderer choice" sends none at all. A level is sent when the style is
+        "fixed" (that *is* the level), and once per renderer this server has
+        never played through, so a new one starts somewhere safe rather than
+        wherever its mixer happened to be left.
         """
         if self._registry.volume_control(renderer_id):
             return (wire_volume_mode(RendererVolumeStyle.fixed), 100)
-        return (wire_volume_mode(self._renderer_volume_style()), None)
+
+        config = self._renderer_config()
+        style = getattr(config, "volume_style", RendererVolumeStyle.renderer)
+        default_volume = getattr(config, "default_volume", DEFAULT_VOLUME)
+        if style is RendererVolumeStyle.fixed:
+            return (wire_volume_mode(style), default_volume)
+        if not self._registry.volume_seeded(renderer_id):
+            return (wire_volume_mode(style), default_volume)
+        return (wire_volume_mode(style), None)
 
     def emitter_for(self, plugin_id: str) -> Optional[RoutedDeviceEmitter]:
         if self._bus is None:
