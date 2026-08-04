@@ -114,23 +114,10 @@ TEST_F(SessionTest, StateFallsBackWhenTheNewestRouteCannotCarryIt) {
   EXPECT_TRUE(older->sent[1].has_playback_state_changed());
 }
 
-TEST_F(SessionTest, LastRouteGoneWhileStoppedClosesImmediately) {
-  auto session = makeSession();
-  auto transport = std::make_shared<FakeTransport>();
-  session->attach(transport);
-
-  session->onConnectionClosed(transport.get());
-
-  EXPECT_EQ(ended, 1);
-  EXPECT_EQ(player->calls, (std::vector<std::string>{"stop"}));
-  EXPECT_FALSE(player->sink);  // state may not outlive the session
-}
-
-TEST_F(SessionTest, LastRouteGoneWhilePlayingWaitsForTheGracePeriod) {
+TEST_F(SessionTest, LastRouteGoneWaitsForTheGracePeriod) {
   auto session = makeSession(0s);
   auto transport = std::make_shared<FakeTransport>();
   session->attach(transport);
-  session->setPlaybackState(Session::PlaybackState::Playing);
 
   session->onConnectionClosed(transport.get());
   EXPECT_EQ(ended, 0);  // grace armed, still running
@@ -138,13 +125,13 @@ TEST_F(SessionTest, LastRouteGoneWhilePlayingWaitsForTheGracePeriod) {
   ioc.run();  // fires the (zero-length) grace timer
   EXPECT_EQ(ended, 1);
   EXPECT_EQ(player->calls, (std::vector<std::string>{"stop"}));
+  EXPECT_FALSE(player->sink);  // state may not outlive the session
 }
 
 TEST_F(SessionTest, OwnerReturningInGraceKeepsTheSession) {
   auto session = makeSession(0s);
   auto transport = std::make_shared<FakeTransport>();
   session->attach(transport);
-  session->setPlaybackState(Session::PlaybackState::Playing);
 
   session->onConnectionClosed(transport.get());
   auto returned = std::make_shared<FakeTransport>();
@@ -154,18 +141,6 @@ TEST_F(SessionTest, OwnerReturningInGraceKeepsTheSession) {
   EXPECT_EQ(ended, 0);
   ASSERT_EQ(returned->sent.size(), 1u);  // greeted with a fresh snapshot
   EXPECT_TRUE(returned->sent[0].has_state_snapshot());
-}
-
-TEST_F(SessionTest, PlaybackStoppingWhileOwnerIsAwayCloses) {
-  auto session = makeSession();  // long grace: the timer must not be needed
-  auto transport = std::make_shared<FakeTransport>();
-  session->attach(transport);
-  session->setPlaybackState(Session::PlaybackState::Playing);
-  session->onConnectionClosed(transport.get());
-  EXPECT_EQ(ended, 0);
-
-  session->setPlaybackState(Session::PlaybackState::Stopped);
-  EXPECT_EQ(ended, 1);
 }
 
 TEST_F(SessionTest, CloseTellsEveryAttachedConnectionOnce) {
@@ -196,7 +171,7 @@ TEST_F(SessionTest, NothingGoesOutAfterClose) {
 }
 
 TEST_F(SessionTest, ReattachingTheSameConnectionDoesNotDoubleIt) {
-  auto session = makeSession();
+  auto session = makeSession(0s);
   auto transport = std::make_shared<FakeTransport>();
   session->attach(transport);
   session->attach(transport);  // a retried open
@@ -204,6 +179,7 @@ TEST_F(SessionTest, ReattachingTheSameConnectionDoesNotDoubleIt) {
   // If the route were doubled, one closed connection would leave a stale
   // second entry and the session would think its owner is still reachable.
   session->onConnectionClosed(transport.get());
+  ioc.run();
   EXPECT_EQ(ended, 1);
 }
 

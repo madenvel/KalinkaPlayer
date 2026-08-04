@@ -229,19 +229,18 @@ TEST_F(ProtocolSessionTest, TheLinkGoingDownDetachesFromTheSession) {
 
   protocol->onDown();
 
-  // Owner gone and nothing playing: the session closed itself.
-  EXPECT_EQ(services.sessions->current(), nullptr);
-  EXPECT_EQ(player->calls, (std::vector<std::string>{"stop"}));
+  // The link is gone but the session is not: the owner has its grace period.
+  ASSERT_NE(services.sessions->current(), nullptr);
+  EXPECT_TRUE(player->calls.empty());
 }
 
 TEST_F(ProtocolSessionTest, ReconnectingOwnerGetsTheSessionBack) {
   FakeWire wire;
   auto protocol = makeProtocol(wire);
   welcome(*protocol, "server-a");
-  auto session = openSession(*protocol, "sid-1");
-  session->setPlaybackState(Session::PlaybackState::Playing);
+  openSession(*protocol, "sid-1");
 
-  protocol->onDown();  // playing: the session survives on its grace period
+  protocol->onDown();  // the session survives on its grace period
   ASSERT_NE(services.sessions->current(), nullptr);
   wire.sent.clear();
 

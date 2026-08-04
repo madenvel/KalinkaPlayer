@@ -24,29 +24,22 @@
  *
  * The session also ends *without* the owner's involvement, so a Core that was
  * reinstalled — or that lost its server_id and now presents a new one — cannot
- * leave the renderer claimed forever:
- *   - owner gone while nothing is playing: closed immediately;
- *   - owner gone while playing:            closed after ownerGrace.
- * Closing stops the player: the audio graph belongs to whoever holds the
- * session, however the session ends.
+ * leave the renderer claimed forever: an owner that goes away has ownerGrace to
+ * come back, and the session is closed if it does not. Closing stops the
+ * player: the audio graph belongs to whoever holds the session, however the
+ * session ends.
  *
- * @note Playback is not implemented yet, so the state is hard-wired to Stopped
- *       and only the first rule can fire in practice. setPlaybackState() is the
- *       hook the player will call once the audio graph is wired up, at which
- *       point the grace timer starts doing real work.
  * @note Lives on the io_context thread; no locking.
  */
 class Session : public SessionEventSink,
                 public std::enable_shared_from_this<Session> {
 public:
-  enum class PlaybackState { Stopped, Playing };
-
   /**
    * @brief The only way to construct: installs the player's state sink, which
    *        needs a live shared_ptr to this.
    *
    * @param ioc        The io_context every handler runs on.
-   * @param ownerGrace How long a playing session survives its owner going away
+   * @param ownerGrace How long a session survives its owner going away
    *                   before being closed.
    * @param player     The audio seam; the session owns its lifecycle from here.
    * @param onEnded    Tells whoever tracks the running session that this one is
@@ -81,9 +74,6 @@ public:
    */
   void publishSnapshot();
 
-  /// The player reporting what it is doing, which decides the release rules.
-  void setPlaybackState(PlaybackState state);
-
 private:
   Session(boost::asio::io_context &ioc, std::string sessionId,
           std::string ownerServerId, std::chrono::seconds ownerGrace,
@@ -111,7 +101,6 @@ private:
   // Routes to the owner, newest last. Usually one; more only while the owner
   // flaps between interfaces and two connections briefly overlap.
   std::vector<std::weak_ptr<SessionTransport>> transports_;
-  PlaybackState playbackState_ = PlaybackState::Stopped;
   bool closed_ = false;
   // Set when create() applied a volume policy, so close() only undoes one that
   // exists — a session that never touched volume leaves the player untouched.

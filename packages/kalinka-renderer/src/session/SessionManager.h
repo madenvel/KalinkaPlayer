@@ -25,7 +25,7 @@ class SessionManager : public std::enable_shared_from_this<SessionManager> {
 public:
   /**
    * @param ioc        The io_context sessions run their grace timer on.
-   * @param ownerGrace How long a playing session survives its owner going away
+   * @param ownerGrace How long a session survives its owner going away
    *                   before being closed.
    * @param player     The audio seam every session is created over.
    */

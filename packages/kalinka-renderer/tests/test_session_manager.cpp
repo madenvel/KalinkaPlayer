@@ -13,8 +13,9 @@ using namespace std::chrono_literals;
 class SessionManagerTest : public ::testing::Test {
 protected:
   // shared_ptr because sessions report their end through weak_from_this().
-  std::shared_ptr<SessionManager> makeManager() {
-    return std::make_shared<SessionManager>(ioc, 60s, player);
+  std::shared_ptr<SessionManager>
+  makeManager(std::chrono::seconds grace = 60s) {
+    return std::make_shared<SessionManager>(ioc, grace, player);
   }
 
   boost::asio::io_context ioc;
@@ -93,14 +94,16 @@ TEST_F(SessionManagerTest, OwnedByFindsOnlyTheOwner) {
 }
 
 TEST_F(SessionManagerTest, ASessionEndingOnItsOwnClearsTheSlot) {
-  auto manager = makeManager();
+  auto manager = makeManager(0s);
   std::string busyOwner;
   auto session = manager->open("sid-1", "owner-1", busyOwner);
   auto transport = std::make_shared<FakeTransport>();
   session->attach(transport);
 
-  // Owner gone, nothing playing: the session closes itself.
+  // Owner gone and not back within the grace period: the session closes itself
+  // and the renderer is free for whoever asks next.
   session->onConnectionClosed(transport.get());
+  ioc.run();
 
   EXPECT_EQ(manager->current(), nullptr);
   EXPECT_EQ(transport->sessionClosed, 0);  // its route was already gone

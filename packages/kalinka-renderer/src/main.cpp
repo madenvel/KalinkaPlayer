@@ -47,7 +47,7 @@ void usage(const char *argv0) {
       "  --daemon              Detach and run in the background\n"
       "  --log-file <path>     Log to a file (default when daemonized:\n"
       "                        $KALINKA_PREFIX/var/log/kalinka/renderer.log)\n"
-      "  --session-grace <s>   Keep a playing session this long after its Core\n"
+      "  --session-grace <s>   Keep a session this long after its Core\n"
       "                        disconnects before releasing it (default 60)\n"
       "  --help                Show this help\n",
       argv0);
