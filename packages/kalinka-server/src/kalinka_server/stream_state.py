@@ -76,6 +76,12 @@ class StreamState:
     # Which appended stream this is about, None when the renderer named none.
     stream_id: Optional[int] = None
 
+    def position_at(self, now_ns: int) -> int:
+        """Where playback has reached: only a running stream advances."""
+        if self.state is not AudioGraphNodeState.STREAMING:
+            return self.position
+        return self.position + max(0, (now_ns - self.timestamp) // 1_000_000)
+
 
 _STATE_NAMES = {
     "stopped": AudioGraphNodeState.STOPPED,

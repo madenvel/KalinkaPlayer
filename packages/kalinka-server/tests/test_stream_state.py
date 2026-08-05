@@ -2,6 +2,7 @@
 
 from kalinka_server import renderer_state
 from kalinka_server.stream_state import (
+    StreamState,
     AudioGraphNodeState,
     StreamErrorSource,
     StreamType,
@@ -85,3 +86,32 @@ def test_a_byte_stream_is_not_reported_as_frames():
     assert state.state is AudioGraphNodeState.PAUSED
     assert state.stream_info is not None
     assert state.stream_info.stream_type is StreamType.BYTES
+
+
+def _at(state_name: AudioGraphNodeState, position: int, age_ms: int) -> int:
+    now = 10_000_000_000
+    state = StreamState(
+        state=state_name,
+        position=position,
+        timestamp=now - age_ms * 1_000_000,
+    )
+    return state.position_at(now)
+
+
+def test_a_running_stream_has_advanced_since_it_was_last_reported():
+    """A renderer names a position only when something changes."""
+    assert _at(AudioGraphNodeState.STREAMING, 4200, age_ms=800) == 5000
+
+
+def test_nothing_else_advances():
+    for state in (
+        AudioGraphNodeState.PAUSED,
+        AudioGraphNodeState.PREPARING,
+        AudioGraphNodeState.STOPPED,
+        AudioGraphNodeState.FINISHED,
+    ):
+        assert _at(state, 4200, age_ms=800) == 4200, state
+
+
+def test_a_timestamp_from_the_future_never_rewinds_playback():
+    assert _at(AudioGraphNodeState.STREAMING, 4200, age_ms=-500) == 4200
