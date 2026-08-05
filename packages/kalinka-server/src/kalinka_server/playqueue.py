@@ -153,8 +153,6 @@ class PlayQueueImpl(PlayQueueController):
         self.repeat_all = False
 
         self._prefetch_task = None
-        # Held only so a resume in flight is not collected mid-await.
-        self._resume_task: Optional[asyncio.Task] = None
         self.prepared_tracks: OrderedDict = OrderedDict()
         # The queue owns stream-id allocation; the player only tags.
         self._next_stream_id = 0
@@ -543,20 +541,12 @@ class PlayQueueImpl(PlayQueueController):
         player = RendererPlayer(
             self._config, self._registry, self._sessions, self.state_monitor
         )
-        player.on_interrupted(self._resume_after_restart)
+        player.on_interrupted(self._resume_interrupted)
         return player
 
-    def _resume_after_restart(self, position_ms: int) -> None:
-        """Put the current track back on a renderer that restarted under it.
-
-        The session is gone with the instance that held it, so this is a fresh
-        claim and a fresh stream — the same track from where it had reached,
-        which is the nearest thing to the reboot never having happened. Runs
-        off the closing callback, so it is a task rather than an await.
-        """
-        self._resume_task = asyncio.create_task(
-            self._retry_current_track_async(position_ms)
-        )
+    async def _resume_interrupted(self, position_ms: int) -> None:
+        """The same track on a fresh claim, from where it had reached."""
+        await self._retry_current_track_async(position_ms)
 
     @serialised
     async def switch_renderer(self, renderer_id: Optional[str]) -> None:
@@ -976,14 +966,7 @@ class PlayQueueImpl(PlayQueueController):
             )
 
     def _estimated_progress(self, stream_state: StreamState) -> int:
-        if stream_state.state != AudioGraphNodeState.STREAMING:
-            return stream_state.position
-
-        progress = stream_state.position + int(
-            (time.monotonic_ns() - stream_state.timestamp) / 1_000_000
-        )
-
-        return progress
+        return stream_state.position_at(time.monotonic_ns())
 
     async def _fetch_track_url(self, index):
         """Fetch the stream URL for a track, returning None if retrieval fails.

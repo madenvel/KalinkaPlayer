@@ -41,6 +41,7 @@ from .renderer_link import RendererLink
 from .renderer_proto import renderer_pb2 as pb
 from .renderer_registry import RendererRegistry
 from .renderer_state import StateChange
+from .tasks import detach
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -103,18 +104,6 @@ class _OpenOutcome:
     owner_server_id: str
 
 
-# asyncio keeps only a weak reference to a running task, so a fire-and-forget
-# coroutine would be collectable mid-flight without this.
-_callback_tasks: set[asyncio.Task] = set()
-
-
-def _detach(coro) -> asyncio.Task:
-    task = asyncio.create_task(coro)
-    _callback_tasks.add(task)
-    task.add_done_callback(_callback_tasks.discard)
-    return task
-
-
 def _fill_source(source, uri: str, mime_type: str, source_token: str) -> None:
     source.uri = uri
     source.mime_type = mime_type
@@ -128,7 +117,7 @@ def _fanout(callbacks, args: tuple, what: str) -> None:
         try:
             result = callback(*args)
             if inspect.isawaitable(result):
-                _detach(result)
+                detach(result)
         except Exception:
             logger.exception("Session %s callback failed", what)
 
@@ -283,7 +272,7 @@ class PlaybackSession:
         self._ws = ws_session
         self.state = SessionState.ACTIVE
         # It kept playing while we were away, so what we hold may be stale.
-        _detach(self._refresh_state())
+        detach(self._refresh_state())
 
     async def _refresh_state(self) -> None:
         try:
@@ -454,7 +443,7 @@ class SessionPool:
         ws = session._ws
         session._finish(CloseReason.OPEN_FAILED)
         if notify and ws is not None:
-            _detach(
+            detach(
                 _send_close(ws, session.session_id, CloseReason.CLOSED_BY_SERVER)
             )
 

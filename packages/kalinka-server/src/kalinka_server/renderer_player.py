@@ -7,6 +7,10 @@ fire-and-forget: they return at once and their effect comes back as state,
 delivered through the monitor in the same StreamState shape the native player
 produced.
 
+A renderer can also go away mid-track and come back able to play, which no
+in-process player did: that arrives as on_interrupted() rather than a stop,
+because only the queue can resolve the track again.
+
 The session is opened on demand: the first append() claims the registry's
 active renderer (the client-selected one when connected, otherwise the first
 connected). It is released when playback stops — stop() closes it
@@ -19,6 +23,7 @@ message; the next play opens a fresh one.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from dataclasses import replace
@@ -45,6 +50,7 @@ from .stream_state import (
     from_snapshot,
     to_stream_id,
 )
+from .tasks import detach
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -60,8 +66,10 @@ PAUSE_RELEASE_TIMEOUT_S = 600.0
 # second is the whole server going down.
 _QUIET_CLOSE_REASONS = {CloseReason.CLOSED_BY_SERVER, CloseReason.SHUTDOWN}
 
-# States a listener would call "playing": a stall reports PREPARING, and a
-# renderer that restarts during one was playing until it went.
+# The renderer is there to play again as soon as it is asked.
+_RESUMABLE_CLOSE_REASONS = {CloseReason.RENDERER_RESTARTED}
+
+# Playing as a listener would have it: a stall reports PREPARING.
 _PLAYING_STATES = (AudioGraphNodeState.PREPARING, AudioGraphNodeState.STREAMING)
 
 
@@ -99,13 +107,8 @@ class RendererPlayer:
         return self._last_state
 
     def on_interrupted(self, callback: Callable[[int], Any]) -> None:
-        """Called with a position when the renderer went away mid-playback and
-        came back as a fresh instance.
-
-        The session it was playing under is gone and cannot be resumed, but
-        what was playing and how far in is not: the caller can put the track
-        back on, from there, rather than leave the listener with a stop nobody
-        asked for."""
+        """Called with the position when playback was cut short but the
+        renderer can play again. An async callback runs on its own."""
         self._interrupted = callback
 
     def append(self, stream_id: int, url: str, mime_type: str) -> None:
@@ -267,15 +270,19 @@ class RendererPlayer:
         if reason in _QUIET_CLOSE_REASONS:
             return
         if (
-            reason is CloseReason.RENDERER_RESTARTED
+            reason in _RESUMABLE_CLOSE_REASONS
             and self._interrupted is not None
             and self._last_state.state in _PLAYING_STATES
         ):
-            position = self._position_now()
+            position = self._last_state.position_at(time.monotonic_ns())
             logger.info(
-                "Renderer restarted while playing; resuming at %d ms", position
+                "Renderer session ended (%s) while playing; resuming at %d ms",
+                reason.value,
+                position,
             )
-            self._interrupted(position)
+            result = self._interrupted(position)
+            if inspect.isawaitable(result):
+                detach(result)
             return
         logger.warning("Renderer session ended: %s", reason.value)
         self._publish(
@@ -338,24 +345,11 @@ class RendererPlayer:
             replace(
                 self._last_state,
                 state=AudioGraphNodeState.PREPARING,
-                # Frozen here: the renderer reports a position only when
-                # something changes, so leaving the last reported one would
-                # rewind the stall to wherever the track last changed state —
-                # and it is the only account of where playback got to if the
-                # renderer comes back a fresh instance.
-                position=self._position_now(),
+                # Frozen, or the stall rewinds to the last state change.
+                position=self._last_state.position_at(time.monotonic_ns()),
                 timestamp=time.monotonic_ns(),
             )
         )
-
-    def _position_now(self) -> int:
-        """Where playback has reached: what was last reported, plus the time
-        it has been running since. Only a running stream advances."""
-        state = self._last_state
-        if state.state is not AudioGraphNodeState.STREAMING:
-            return state.position
-        elapsed_ms = (time.monotonic_ns() - state.timestamp) // 1_000_000
-        return state.position + max(0, elapsed_ms)
 
     def _record(self, state: StreamState) -> None:
         """Take the state as current without telling the queue, which already

@@ -30,6 +30,7 @@ from .renderer_sessions import (
 )
 from .renderer_state import StateChange
 from .stream_state import AudioGraphNodeState, from_snapshot
+from .tasks import detach
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -47,15 +48,6 @@ _DONE_STATES = (
     AudioGraphNodeState.STOPPED,
     AudioGraphNodeState.ERROR,
 )
-
-# asyncio holds only a weak reference to a running task.
-_tasks: set[asyncio.Task] = set()
-
-
-def _detach(coro) -> None:
-    task = asyncio.create_task(coro)
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
 
 
 def tone_uri(channel: str) -> str:
@@ -133,7 +125,7 @@ class TonePlayer:
         state = from_snapshot(snapshot)
         if state is not None and state.state in _DONE_STATES:
             self._cancel_release()
-            _detach(self._close())
+            detach(self._close())
 
     def _on_closed(self, session: PlaybackSession, reason: CloseReason) -> None:
         if session is self._session:
