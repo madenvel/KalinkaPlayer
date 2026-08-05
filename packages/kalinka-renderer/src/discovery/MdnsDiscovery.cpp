@@ -19,6 +19,9 @@ namespace {
 
 constexpr const char *kServiceType = "_kalinkaplayer._tcp.local.";
 constexpr auto kMaxQueryInterval = std::chrono::seconds(60);
+// Floor between refresh queries, so an entry that is overdue for one cannot
+// turn the browse loop into a query flood.
+constexpr auto kMinQueryGap = std::chrono::seconds(10);
 constexpr size_t kBufferSize = 8192;
 
 // Records of one received mDNS message, keyed by owner name, so a
@@ -29,6 +32,10 @@ struct Packet {
   std::string sourceIp;
   // instance name -> ttl (0 = goodbye)
   std::map<std::string, uint32_t> ptrInstances;
+  // instance name -> shortest ttl among its own records. The PTR may promise
+  // hours while the SRV that locates the server expires in minutes; what we
+  // rely on is the shorter of them.
+  std::map<std::string, uint32_t> recordTtl;
   // instance name -> (target host, port)
   std::map<std::string, std::pair<std::string, uint16_t>> srv;
   // host name -> all announced IPv4 addresses (one per server interface)
@@ -37,6 +44,16 @@ struct Packet {
   std::set<std::string> txtSeen;
   std::map<std::string, int> rendererProto;
 };
+
+void noteTtl(Packet *packet, const std::string &instance, uint32_t ttl) {
+  if (ttl == 0) {
+    return;  // a goodbye says nothing about how long to keep anything
+  }
+  const auto [it, inserted] = packet->recordTtl.try_emplace(instance, ttl);
+  if (!inserted) {
+    it->second = std::min(it->second, ttl);
+  }
+}
 
 std::string extractName(const void *data, size_t size, size_t offset) {
   char buf[256];
@@ -73,7 +90,9 @@ int recordCallback(int /*sock*/, const struct sockaddr *from,
     }
     const mdns_string_t instance = mdns_record_parse_ptr(
         data, size, record_offset, record_length, namebuf, sizeof(namebuf));
-    packet->ptrInstances[std::string(instance.str, instance.length)] = ttl;
+    const std::string name(instance.str, instance.length);
+    packet->ptrInstances[name] = ttl;
+    noteTtl(packet, name, ttl);
     break;
   }
   case MDNS_RECORDTYPE_SRV: {
@@ -82,6 +101,7 @@ int recordCallback(int /*sock*/, const struct sockaddr *from,
         data, size, record_offset, record_length, namebuf, sizeof(namebuf));
     packet->srv[owner] = {std::string(srv.name.str, srv.name.length),
                           srv.port};
+    noteTtl(packet, owner, ttl);
     break;
   }
   case MDNS_RECORDTYPE_TXT: {
@@ -90,6 +110,7 @@ int recordCallback(int /*sock*/, const struct sockaddr *from,
       break;
     }
     packet->txtSeen.insert(owner);
+    noteTtl(packet, owner, ttl);
     mdns_record_txt_t txt[16];
     const size_t count = mdns_record_parse_txt(
         data, size, record_offset, record_length, txt, std::size(txt));
@@ -232,10 +253,12 @@ void MdnsDiscovery::run() {
         FD_ISSET(sock_, &readfds)) {
       drainSocket();
     }
+    expireStale();
   }
 }
 
 void MdnsDiscovery::sendQuery() {
+  lastQuery_ = std::chrono::steady_clock::now();
   std::vector<char> buffer(kBufferSize);
   if (mdns_query_send(sock_, MDNS_RECORDTYPE_PTR, kServiceType,
                       std::strlen(kServiceType), buffer.data(), buffer.size(),
@@ -254,21 +277,28 @@ void MdnsDiscovery::drainSocket() {
       break;  // would block — no more datagrams
     }
 
-    for (const auto &[instance, ttl] : packet.ptrInstances) {
-      if (ttl == 0) {
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto &[instance, ptrTtl] : packet.ptrInstances) {
+      if (ptrTtl == 0) {
         // Goodbye packet.
-        const auto it = known_.find(instance);
-        if (it != known_.end()) {
-          const bool wasCapable = it->second;
-          known_.erase(it);
+        const auto announced = cache_.announced(instance);
+        if (announced.has_value()) {
+          cache_.drop(instance);
           spdlog::info("[Discovery] Service '{}' disappeared",
                        displayName(instance));
-          if (wasCapable) {
+          if (*announced) {
             onRemove_(instance);
           }
         }
         continue;
       }
+      // Any answer proves the service is still there, whatever else this
+      // message does or does not settle.
+      const auto found = packet.recordTtl.find(instance);
+      const std::chrono::seconds ttl(
+          found == packet.recordTtl.end() ? ptrTtl : found->second);
+      cache_.touch(instance, ttl, now);
+
       if (!packet.txtSeen.contains(instance)) {
         continue;  // capability not judgeable from this message
       }
@@ -276,13 +306,13 @@ void MdnsDiscovery::drainSocket() {
       const bool capable =
           proto != packet.rendererProto.end() &&
           proto->second == static_cast<int>(kRendererProtocolVersion);
-      const auto it = known_.find(instance);
-      if (it != known_.end() && it->second == capable) {
-        continue;  // no change
+      const auto announced = cache_.announced(instance);
+      if (announced.has_value() && *announced == capable) {
+        continue;  // no change; the lifetime above is what this message added
       }
       if (!capable) {
-        const bool wasCapable = it != known_.end() && it->second;
-        known_[instance] = false;
+        const bool wasCapable = announced.value_or(false);
+        cache_.keep(instance, false, ttl, now);
         if (wasCapable) {
           spdlog::warn("[Discovery] '{}' lost renderer support; disconnecting",
                        displayName(instance));
@@ -303,7 +333,7 @@ void MdnsDiscovery::drainSocket() {
       if (addr == packet.addresses.end() || addr->second.empty()) {
         continue;
       }
-      known_[instance] = true;
+      cache_.keep(instance, true, ttl, now);
       CoreEndpoint endpoint{instance,
                             pickAddress(addr->second, packet.sourceIp),
                             srv->second.second, displayName(instance)};
@@ -311,5 +341,24 @@ void MdnsDiscovery::drainSocket() {
                    endpoint.host, endpoint.port);
       onAdd_(std::move(endpoint));
     }
+  }
+}
+
+void MdnsDiscovery::expireStale() {
+  const auto now = std::chrono::steady_clock::now();
+  for (const auto &gone : cache_.lapsed(now)) {
+    spdlog::info("[Discovery] '{}' stopped answering; forgetting it",
+                 displayName(gone.instance));
+    if (gone.announced) {
+      onRemove_(gone.instance);
+    }
+  }
+  // Ask again before anything we hold runs out, so a live Core is refreshed
+  // rather than expired. Never sooner than kMinQueryGap after the last query:
+  // an entry stays overdue for refreshing until an answer arrives, and without
+  // the floor that would be a query every time round the loop.
+  if (const auto refresh = cache_.nextRefresh()) {
+    nextQuery_ =
+        std::min(nextQuery_, std::max(*refresh, lastQuery_ + kMinQueryGap));
   }
 }

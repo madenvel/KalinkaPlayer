@@ -110,6 +110,7 @@ add_executable(kalinka-renderer
   src/Identity.cpp
   src/config/RendererName.cpp
   src/config/SettingsPersistence.cpp
+  src/discovery/DiscoveryCache.cpp
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
@@ -139,10 +140,12 @@ if(GTest_FOUND)
   add_executable(kalinka-renderer-tests
     src/config/RendererName.cpp
     src/config/SettingsPersistence.cpp
+    src/discovery/DiscoveryCache.cpp
     src/net/WsTransport.cpp
     src/player/StateTranslator.cpp
     tests/test_alsa_device_naming.cpp
     tests/test_config_service.cpp
+    tests/test_discovery_cache.cpp
     tests/test_protocol_session.cpp
     tests/test_renderer_name.cpp
     tests/test_session.cpp
