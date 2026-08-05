@@ -108,6 +108,7 @@ add_executable(kalinka-renderer
   src/main.cpp
   src/Daemon.cpp
   src/Identity.cpp
+  src/config/RendererName.cpp
   src/config/SettingsPersistence.cpp
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
@@ -136,11 +137,14 @@ find_package(GTest CONFIG)
 if(GTest_FOUND)
   enable_testing()
   add_executable(kalinka-renderer-tests
+    src/config/RendererName.cpp
+    src/config/SettingsPersistence.cpp
     src/net/WsTransport.cpp
     src/player/StateTranslator.cpp
     tests/test_alsa_device_naming.cpp
     tests/test_config_service.cpp
     tests/test_protocol_session.cpp
+    tests/test_renderer_name.cpp
     tests/test_session.cpp
     tests/test_session_manager.cpp
     tests/test_state_translator.cpp

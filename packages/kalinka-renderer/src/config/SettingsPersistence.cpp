@@ -56,3 +56,18 @@ void saveSettingsOverrides(
     spdlog::warn("Could not persist config overrides at {}", file.string());
   }
 }
+
+void updateSettingsOverrides(
+    const std::map<std::string, std::string> &settings,
+    const std::map<std::string, std::string> &defaults) {
+  std::map<std::string, std::string> overrides = loadSettingsOverrides();
+  for (const auto &[key, value] : settings) {
+    const auto fallback = defaults.find(key);
+    if (fallback != defaults.end() && fallback->second == value) {
+      overrides.erase(key);
+    } else {
+      overrides[key] = value;
+    }
+  }
+  saveSettingsOverrides(overrides);
+}
