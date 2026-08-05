@@ -46,6 +46,15 @@ native_player/build/
 native_player/*.so
 packages/kalinka-renderer/kalinka-renderer
 
+# CMake's own output. The real builds live in build*/ (already ignored); these
+# catch a stray in-source `cmake .`, which otherwise litters the source tree.
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*_include.cmake
+*_tests.cmake
+
 # IDE and editor files
 .vscode/
 .idea/
