@@ -79,6 +79,11 @@ from .device_ws_handler import (
 from .renderer_link import RendererLink
 from .renderer_ws_handler import handle_renderer_connection
 from .renderer_config import RendererConfigService
+from .renderer_core_settings import (
+    DEVICE_MODULE_PATH,
+    RENDERER_ITSELF,
+    CoreRendererSettings,
+)
 from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry, RendererUnavailable
 from .renderer_sessions import (
@@ -1400,6 +1405,23 @@ async def create_app(
     def _volume_control_modules() -> List[str]:
         return volume_control_modules(modules.prepared_devices)
 
+    def _device_module_label(name: str) -> str:
+        prepared = modules.prepared_devices.get(name)
+        config = getattr(getattr(prepared, "plugin_context", None), "config", None)
+        if config is None:
+            return name
+        field = config.__class__.model_fields.get("name")
+        return (field.title if field is not None else None) or config.name or name
+
+    # The Core's own settings for a renderer, answered with the renderer's.
+    core_renderer_settings = CoreRendererSettings(
+        renderer_prefs,
+        lambda: [
+            (name, _device_module_label(name)) for name in _volume_control_modules()
+        ],
+        device_router.resync,
+    )
+
     @app.get("/renderer/list")
     async def renderer_list():
         """Known renderers, their connection status, and which module controls
@@ -1469,18 +1491,13 @@ async def create_app(
         if renderer_registry.get(renderer_id) is None:
             raise HTTPException(status_code=404, detail="Unknown renderer")
         module = payload.get("module")
-        if module is not None and module not in _volume_control_modules():
-            raise HTTPException(
-                status_code=400,
-                detail=f"'{module}' is not an enabled device module with volume control",
+        outcome = (
+            await core_renderer_settings.apply(
+                renderer_id, {DEVICE_MODULE_PATH: module or RENDERER_ITSELF}
             )
-        renderer_prefs.set_volume_control(renderer_id, module)
-        logger.info(
-            "Renderer %s volume control: %s",
-            renderer_id,
-            module or "renderer itself",
-        )
-        await device_router.resync()
+        )[0]
+        if not outcome["applied"]:
+            raise HTTPException(status_code=400, detail=outcome["error"])
         return {"renderer_id": renderer_id, "volume_control": module}
 
     # Renderer settings are the renderer's own, so they are not part of
@@ -1488,8 +1505,13 @@ async def create_app(
     # renderer coming or going must not churn the server's schema_version.
     @app.get("/renderer/{renderer_id}/config")
     async def renderer_config_get(renderer_id: str):
-        """Settings schema and values, fetched from the renderer on demand."""
-        return await _renderer_config_call(renderer_configs.get(renderer_id))
+        """Settings schema and values, fetched from the renderer on demand.
+
+        What the Core keeps about the renderer — which device module its output
+        is wired into — is answered alongside, so one page shows both.
+        """
+        snapshot = await _renderer_config_call(renderer_configs.get(renderer_id))
+        return core_renderer_settings.merge_into(snapshot, renderer_id)
 
     @app.put("/renderer/{renderer_id}/config")
     async def renderer_config_put(renderer_id: str, payload: Dict[str, Any]):
@@ -1499,13 +1521,28 @@ async def create_app(
         came from the GET. Unlike /server/config there is no schema_version
         precondition: writes name individual paths, so a settings page that went
         stale cannot overwrite a field it did not touch.
+
+        Core-owned paths are applied here and never reach the renderer, so the
+        device mapping can be set while the renderer is offline.
         """
         changes = payload.get("changes", payload)
         if not isinstance(changes, dict) or not changes:
             raise HTTPException(status_code=400, detail="No changes given")
-        return await _renderer_config_call(
-            renderer_configs.update(renderer_id, changes)
+        if renderer_registry.get(renderer_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown renderer")
+        ours, theirs = core_renderer_settings.split(changes)
+        outcomes = await core_renderer_settings.apply(renderer_id, ours)
+        if not theirs:
+            return {
+                "config_version": "",
+                "effect": "instant",
+                "outcomes": outcomes,
+            }
+        result = await _renderer_config_call(
+            renderer_configs.update(renderer_id, theirs)
         )
+        result["outcomes"] = outcomes + result["outcomes"]
+        return result
 
     async def _renderer_config_call(awaitable):
         try:
