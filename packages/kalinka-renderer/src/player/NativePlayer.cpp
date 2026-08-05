@@ -35,11 +35,13 @@ AudioFormat formatOf(const pb::Source &source) {
   return AudioFormat::FormatFlac;
 }
 
-// The noisy virtual PCMs the server's device list also hides.
+// The noisy virtual PCMs the server's device list also hides. "sysdefault:" is
+// the same route as "default:" for a machine with no ~/.asoundrc, and offering
+// both only asks the user to pick between two identical entries.
 bool noisyPcm(const std::string &name) {
-  static const char *prefixes[] = {"front:",  "surround", "iec958:",
-                                   "dmix:",   "dsnoop:",  "hdmi:",
-                                   "usbstream:"};
+  static const char *prefixes[] = {"front:",   "surround",   "iec958:",
+                                   "dmix:",    "dsnoop:",    "hdmi:",
+                                   "usbstream:", "sysdefault"};
   return std::any_of(std::begin(prefixes), std::end(prefixes),
                      [&name](const char *p) { return name.starts_with(p); });
 }
@@ -56,13 +58,7 @@ const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
 }
 
 void NativePlayer::persistOverrides() const {
-  std::map<std::string, std::string> overrides;
-  for (const auto &[key, value] : settings_) {
-    if (defaultSettings().at(key) != value) {
-      overrides[key] = value;
-    }
-  }
-  saveSettingsOverrides(overrides);
+  updateSettingsOverrides(settings_, defaultSettings());
 }
 
 NativePlayer::NativePlayer(asio::io_context &ioc) : ioc_(ioc) {
@@ -362,10 +358,13 @@ void NativePlayer::emit(pb::Envelope &env) {
 void NativePlayer::fillConfig(pb::ConfigSection &out) const {
   out.set_path("output");
   out.set_title("Output");
+  out.set_description("Where this renderer sends audio and how it sets the "
+                      "level.");
 
   pb::ConfigField *driver = out.add_fields();
   driver->set_path("output.driver");
   driver->set_title("Driver");
+  driver->set_description("Audio backend used to reach the sound card.");
   driver->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   driver->set_value(settings_.at("output.driver"));
   driver->set_default_value("alsa");
@@ -376,7 +375,10 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
 
   pb::ConfigField *device = out.add_fields();
   device->set_path("output.device");
-  device->set_title("Device");
+  device->set_title("Output device");
+  device->set_description(
+      "The sound card music plays through. Changing it stops what is "
+      "playing.");
   device->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   device->set_value(settings_.at("output.device"));
   device->set_default_value("default");
@@ -392,30 +394,60 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
     pb::ConfigOption *option = device->add_options();
     option->set_value(pcm.name);
     option->set_label(pcm.label.empty() ? pcm.name : pcm.label);
+    option->set_description(pcm.description);
     currentOffered = currentOffered || pcm.name == device->value();
   }
   if (!currentOffered) {
     // The configured device may be unplugged right now; it must stay
     // selectable or the page could not even show what is set.
+    const AlsaPcmDevice missing = describeAlsaPcm(device->value(), "");
     pb::ConfigOption *option = device->add_options();
     option->set_value(device->value());
-    option->set_label(device->value() + " (not present)");
+    if (device->value() == "default") {
+      // ALSA does not always hint "default", but it always resolves it.
+      option->set_label(missing.label);
+      option->set_description(missing.description);
+    } else {
+      option->set_label(missing.label + " (not detected)");
+      option->set_description(
+          "Configured, but ALSA is not reporting it right now — the card may "
+          "be unplugged or renamed.");
+    }
   }
 
   pb::ConfigField *mode = out.add_fields();
   mode->set_path("output.volume_mode");
   mode->set_title("Volume control");
   mode->set_description(
-      "How volume is applied: the device mixer, software scaling, or fixed "
-      "bit-perfect output");
+      "How the level is changed: in the card, in software, or not at all.");
   mode->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   mode->set_value(settings_.at("output.volume_mode"));
   mode->set_default_value("auto");
   mode->set_apply(pb::APPLY_COST_INSTANT);
-  for (const char *value : {"auto", "hardware", "software", "fixed"}) {
+  struct VolumeChoice {
+    const char *value;
+    const char *label;
+    const char *description;
+  };
+  static const VolumeChoice choices[] = {
+      {"auto", "Automatic",
+       "Uses the card's mixer when it has one, otherwise scales in "
+       "software."},
+      {"hardware", "Card mixer",
+       "Sets the level in the card, leaving the samples unchanged. Needs a "
+       "card that has a mixer."},
+      {"software", "Software",
+       "Scales the samples before sending them. Works with any card; quiet "
+       "levels lose some resolution."},
+      {"fixed", "Fixed output",
+       "Ignores volume commands and always plays at full level — for an "
+       "amplifier that sets the volume itself."},
+  };
+  for (const VolumeChoice &choice : choices) {
     pb::ConfigOption *option = mode->add_options();
-    option->set_value(value);
-    option->set_label(value);
+    option->set_value(choice.value);
+    option->set_label(choice.label);
+    option->set_description(choice.description);
   }
 }
 

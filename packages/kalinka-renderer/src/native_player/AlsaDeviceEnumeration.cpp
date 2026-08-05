@@ -2,9 +2,12 @@
 
 #include <alsa/asoundlib.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -21,28 +24,220 @@ CString getHint(const void *hint, const char *key) {
   return CString(snd_device_name_get_hint(hint, key));
 }
 
-// ALSA's DESC reads as "<card name>\n<pcm name>"; flatten to a
-// single line so the client can render it in a constrained row.
-std::string flattenDesc(const char *raw) {
-  if (!raw) return {};
-  std::string out;
-  out.reserve(std::char_traits<char>::length(raw));
-  bool just_break = false;
+std::vector<std::string> splitLines(const char *raw) {
+  std::vector<std::string> lines;
+  if (!raw) return lines;
+  std::string current;
   for (const char *p = raw; *p; ++p) {
     if (*p == '\n' || *p == '\r') {
-      if (!just_break && !out.empty()) {
-        out += " \xc2\xb7 ";  // " · " — middle-dot separator
-        just_break = true;
-      }
+      if (!current.empty()) lines.push_back(current);
+      current.clear();
     } else {
-      out += *p;
-      just_break = false;
+      current += *p;
     }
+  }
+  if (!current.empty()) lines.push_back(current);
+  return lines;
+}
+
+std::vector<std::string> words(const std::string &text) {
+  std::vector<std::string> out;
+  std::string current;
+  for (char c : text) {
+    if (c == ' ') {
+      if (!current.empty()) out.push_back(current);
+      current.clear();
+    } else {
+      current += c;
+    }
+  }
+  if (!current.empty()) out.push_back(current);
+  return out;
+}
+
+std::string join(const std::vector<std::string> &parts) {
+  std::string out;
+  for (const std::string &part : parts) {
+    if (!out.empty()) out += ' ';
+    out += part;
   }
   return out;
 }
 
+bool hasDigit(const std::string &word) {
+  return std::any_of(word.begin(), word.end(), [](unsigned char c) {
+    return std::isdigit(c) != 0;
+  });
+}
+
+bool equalsIgnoringCase(const std::string &word, const char *other) {
+  return word.size() == std::char_traits<char>::length(other) &&
+         std::equal(word.begin(), word.end(), other,
+                    [](unsigned char a, unsigned char b) {
+                      return std::tolower(a) == std::tolower(b);
+                    });
+}
+
+// Kernel plumbing a person has no use for: widget ids ("wm8804-spdif-0",
+// "i2s-hifi-0") and the "HiFi" every ASoC card carries.
+bool plumbing(const std::string &word) {
+  return equalsIgnoringCase(word, "HiFi") ||
+         (word.find('-') != std::string::npos &&
+          std::isdigit(static_cast<unsigned char>(word.back())));
+}
+
+// Chip ids drivers put in front of the connector — "bcm2835 Headphones".
+bool chipId(const std::string &word) {
+  return hasDigit(word) && std::islower(static_cast<unsigned char>(word[0]));
+}
+
+std::string tidy(std::string name) {
+  if (name.starts_with("vc4-hdmi-")) {
+    // The Pi's HDMI ports, counted from zero by the driver and from one
+    // by everything printed on the board.
+    return "HDMI " + std::to_string(std::atoi(name.c_str() + 9) + 1);
+  }
+  std::vector<std::string> parts = words(name);
+  while (parts.size() > 1 && plumbing(parts.back())) {
+    parts.pop_back();
+  }
+  if (parts.size() > 1 && chipId(parts.front())) {
+    parts.erase(parts.begin());
+  }
+  name = join(parts);
+  if (!name.empty() && !hasDigit(words(name).front())) {
+    name[0] = static_cast<char>(
+        std::toupper(static_cast<unsigned char>(name.front())));
+  }
+  return name;
+}
+
+// ALSA's first DESC line reads "<card>, <pcm>". The card half is usually the
+// name a person would recognise, but some drivers put their module id there
+// ("snd_rpi_hifiberry_digi") and the readable name in the pcm half.
+std::string deviceName(const std::string &descFirstLine) {
+  const size_t split = descFirstLine.find(", ");
+  if (split == std::string::npos) {
+    return tidy(descFirstLine);
+  }
+  const std::string card = descFirstLine.substr(0, split);
+  const std::string pcm = descFirstLine.substr(split + 2);
+  const bool moduleId = card.find('_') != std::string::npos;
+  if (moduleId && !pcm.starts_with(card) &&
+      pcm.find(' ') != std::string::npos) {
+    return tidy(pcm);
+  }
+  return tidy(card);
+}
+
+// "Default ALSA Output (currently PipeWire Media Server)" — the tail says what
+// the device happens to be right now, which belongs in the description.
+std::string takeAside(std::string &text) {
+  if (text.empty() || text.back() != ')') return {};
+  const size_t open = text.rfind('(');
+  if (open == std::string::npos || open == 0) return {};
+  std::string aside = text.substr(open + 1, text.size() - open - 2);
+  text.erase(open);
+  while (!text.empty() && text.back() == ' ') {
+    text.pop_back();
+  }
+  return aside;
+}
+
+std::string sentence(std::string text) {
+  if (text.empty()) return text;
+  text[0] =
+      static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+  if (text.back() != '.' && text.back() != '!') {
+    text += '.';
+  }
+  return text;
+}
+
+std::string subdevice(const std::string &name) {
+  const size_t at = name.find("DEV=");
+  if (at == std::string::npos) return {};
+  const std::string dev = name.substr(at + 4);
+  return dev == "0" ? std::string() : " #" + dev;
+}
+
+std::string prefixOf(const std::string &name) {
+  const size_t colon = name.find(':');
+  return colon == std::string::npos ? name : name.substr(0, colon);
+}
+
+struct Wording {
+  std::string label;  // empty = name it after the card
+  std::string suffix;
+  std::string description;
+};
+
+Wording wordingFor(const std::string &name) {
+  if (name == "default") {
+    return {"System default", "",
+            "Whatever ALSA is set to use, with mixing and resampling as "
+            "needed."};
+  }
+  if (name == "pipewire" || name == "pulse" || name == "jack") {
+    return {"", "",
+            "Hands the audio to the sound server, which mixes and resamples "
+            "it."};
+  }
+  const std::string prefix = prefixOf(name);
+  if (prefix == "hw") {
+    return {"", " (direct)",
+            "Sends samples to the card unchanged. The card must support the "
+            "track's sample rate and format, and nothing else can play "
+            "meanwhile."};
+  }
+  if (prefix == "plughw") {
+    return {"", " (converted)",
+            "Same card, with software conversion: resamples and reformats "
+            "whatever the card cannot take as it is."};
+  }
+  if (prefix == "default" || prefix == "sysdefault") {
+    return {"", " (shared)",
+            "The card's default route: mixed with other applications, "
+            "resampled when needed."};
+  }
+  return {};
+}
+
 }  // namespace
+
+AlsaPcmDevice describeAlsaPcm(const std::string &name,
+                              const std::string &alsaDescription) {
+  AlsaPcmDevice out;
+  out.name = name;
+  if (name == "null") {
+    // The only hint whose own text is worth nothing to a listener.
+    out.label = "No output";
+    out.description = "Discards the audio. Nothing is heard.";
+    return out;
+  }
+
+  const std::vector<std::string> lines = splitLines(alsaDescription.c_str());
+  std::string first = lines.empty() ? std::string() : lines.front();
+  const std::string aside = takeAside(first);
+  const Wording wording = wordingFor(name);
+  const std::string base = !wording.label.empty() ? wording.label
+                           : first.empty()        ? name
+                                                  : deviceName(first);
+
+  out.label = base + subdevice(name) + wording.suffix;
+  out.description = wording.description;
+  if (out.description.empty()) {
+    for (size_t i = 1; i < lines.size(); ++i) {
+      if (!out.description.empty()) out.description += ' ';
+      out.description += sentence(lines[i]);
+    }
+  }
+  if (!aside.empty()) {
+    if (!out.description.empty()) out.description += ' ';
+    out.description += sentence(aside);
+  }
+  return out;
+}
 
 std::vector<AlsaPcmDevice> listAlsaPcmDevices() {
   std::vector<AlsaPcmDevice> out;
@@ -56,11 +251,11 @@ std::vector<AlsaPcmDevice> listAlsaPcmDevices() {
     CString desc = getHint(*h, "DESC");
     CString ioid = getHint(*h, "IOID");
     if (!name) continue;
-    out.push_back({
-        std::string(name.get()),
-        flattenDesc(desc.get()),
-        ioid ? std::string(ioid.get()) : std::string(),
-    });
+    AlsaPcmDevice device =
+        describeAlsaPcm(std::string(name.get()),
+                        desc ? std::string(desc.get()) : std::string());
+    device.ioid = ioid ? std::string(ioid.get()) : std::string();
+    out.push_back(std::move(device));
   }
   snd_device_name_free_hint(hints);
   return out;

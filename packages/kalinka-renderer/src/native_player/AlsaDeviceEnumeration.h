@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-/// Stable identifier + display label for an ALSA PCM device.
+/// Stable identifier + display text for an ALSA PCM device.
 ///
 /// `name` is what's passed to `snd_pcm_open` (e.g. "default" or
 /// "hw:CARD=sofhdadsp,DEV=0"). The CARD=<id> form is stable across
@@ -11,17 +11,26 @@
 /// driver's text id rather than the dynamic card index — using it
 /// avoids the "hw:0,0 became hw:1,0 after upgrade" failure mode.
 ///
-/// `label` is the joined card+pcm description ALSA reports through
-/// `snd_device_name_get_hint("DESC")` with newlines folded to " · "
-/// so the client can show it in a one-line dropdown.
+/// `label` names the device the way a person would, with the access
+/// mode in brackets, because one card shows up several times.
+/// `description` says what that mode costs — bit-perfect, resampled,
+/// or shared.
 ///
 /// `ioid` is "Output", "Input", or empty (= both). The Python layer
 /// filters to outputs.
 struct AlsaPcmDevice {
   std::string name;
   std::string label;
+  std::string description;
   std::string ioid;
 };
+
+/// Turn an ALSA PCM name and its raw `DESC` hint into display text.
+///
+/// Exposed for tests and for naming a configured device that ALSA is
+/// not currently reporting.
+AlsaPcmDevice describeAlsaPcm(const std::string &name,
+                              const std::string &alsaDescription);
 
 /// Enumerate every PCM hint ALSA exposes for the current system.
 ///
