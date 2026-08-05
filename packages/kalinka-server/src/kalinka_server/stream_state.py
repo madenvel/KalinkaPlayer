@@ -73,6 +73,8 @@ class StreamState:
     timestamp: int = 0
     error: Optional[StreamError] = None
     stream_info: Optional[StreamInfo] = None
+    # Which appended stream this is about, None when the renderer named none.
+    stream_id: Optional[int] = None
 
 
 _STATE_NAMES = {
@@ -119,6 +121,15 @@ def to_error(error: Optional[dict]) -> Optional[StreamError]:
     )
 
 
+def to_stream_id(source_token: Optional[str]) -> Optional[int]:
+    """The stream id a source token names — the inverse of what the renderer
+    player stringifies on the way out. Anything else came from elsewhere."""
+    try:
+        return int(source_token)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
 def from_snapshot(snapshot: dict) -> Optional[StreamState]:
     """The queue's view of a renderer snapshot, or None when the renderer has
     not reported a state we play by (``unspecified``, before anything ran)."""
@@ -131,6 +142,7 @@ def from_snapshot(snapshot: dict) -> Optional[StreamState]:
         timestamp=time.monotonic_ns(),
         error=to_error(snapshot.get("error")),
         stream_info=to_stream_info(snapshot.get("format")),
+        stream_id=to_stream_id(snapshot.get("source_token")),
     )
 
 

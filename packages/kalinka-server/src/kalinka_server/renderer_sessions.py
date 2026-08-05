@@ -17,8 +17,9 @@ Reopening after a close is the owner's decision, never the pool's.
 An open session is also the handle for driving the renderer: it carries the
 playback commands (the AudioPlayer surface, one method per command) and the
 state the renderer reports back. Settings are not here — they belong to the
-renderer rather than to whoever is playing through it (renderer_config). Commands are not acknowledged — what one did
-shows up in the state that follows, failure included. The single exception is a
+renderer rather than to whoever is playing through it (renderer_config).
+Commands are not acknowledged — what one did shows up in the state that
+follows, failure included. The single exception is a
 command the renderer refuses outright because it names a session it is not
 running; that comes back as a rejection and closes the session, which was
 provably not there.
@@ -120,13 +121,16 @@ def _fill_source(source, uri: str, mime_type: str, source_token: str) -> None:
     source.source_token = source_token
 
 
-def _invoke(callback, session: "PlaybackSession", reason: CloseReason) -> None:
-    try:
-        result = callback(session, reason)
-        if inspect.isawaitable(result):
-            _detach(result)
-    except Exception:
-        logger.exception("Session close callback failed")
+def _fanout(callbacks, args: tuple, what: str) -> None:
+    """Notify listeners; one that raises must not stop the rest, and one that
+    is async runs on its own."""
+    for callback in callbacks:
+        try:
+            result = callback(*args)
+            if inspect.isawaitable(result):
+                _detach(result)
+        except Exception:
+            logger.exception("Session %s callback failed", what)
 
 
 class PlaybackSession:
@@ -152,6 +156,7 @@ class PlaybackSession:
         self._open_future: Optional[asyncio.Future] = None
         self._callbacks: list[Callable] = []
         self._state_callbacks: list[Callable] = []
+        self._suspend_callbacks: list[Callable] = []
         self._timeout_s = timeout_s
 
     @property
@@ -162,7 +167,8 @@ class PlaybackSession:
         self, callback: Callable[["PlaybackSession", CloseReason], Any]
     ) -> None:
         if self.state is SessionState.CLOSED:
-            _invoke(callback, self, self.close_reason or CloseReason.CLOSED_BY_SERVER)
+            reason = self.close_reason or CloseReason.CLOSED_BY_SERVER
+            _fanout([callback], (self, reason), "close")
             return
         self._callbacks.append(callback)
 
@@ -171,6 +177,11 @@ class PlaybackSession:
     ) -> None:
         """Called as callback(session, change, snapshot) on every change."""
         self._state_callbacks.append(callback)
+
+    def on_suspended(self, callback: Callable[["PlaybackSession"], Any]) -> None:
+        """Called when the link carrying this session drops and it is kept for
+        the renderer's return."""
+        self._suspend_callbacks.append(callback)
 
     async def set_source(
         self, uri: str, *, mime_type: str = "", source_token: str = ""
@@ -286,17 +297,12 @@ class PlaybackSession:
 
     def _apply_state(self, change: StateChange, message: Any) -> None:
         self.snapshot = renderer_state.apply(self.snapshot, change, message)
-        for callback in list(self._state_callbacks):
-            try:
-                result = callback(self, change, self.snapshot)
-                if inspect.isawaitable(result):
-                    _detach(result)
-            except Exception:
-                logger.exception("Session state callback failed")
+        _fanout(list(self._state_callbacks), (self, change, self.snapshot), "state")
 
     def _suspend(self) -> None:
         self._ws = None
         self.state = SessionState.SUSPENDED
+        _fanout(list(self._suspend_callbacks), (self,), "suspend")
 
     def _finish(self, reason: CloseReason) -> None:
         if self.state is SessionState.CLOSED:
@@ -317,8 +323,7 @@ class PlaybackSession:
                 )
             )
         callbacks, self._callbacks = self._callbacks, []
-        for callback in callbacks:
-            _invoke(callback, self, reason)
+        _fanout(callbacks, (self, reason), "close")
 
 
 async def _send_close(

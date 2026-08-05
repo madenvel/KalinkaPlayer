@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from typing import Optional
 
 from .config_model import KalinkaConfig
@@ -42,6 +43,7 @@ from .stream_state import (
     StreamErrorSource,
     StreamState,
     from_snapshot,
+    to_stream_id,
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -224,6 +226,7 @@ class RendererPlayer:
         session = await self._pool.open(renderer_id, announce=announce)
         session.on_state(self._on_session_state)
         session.on_closed(self._on_session_closed)
+        session.on_suspended(self._on_session_suspended)
         self._session = session
         logger.info("Claimed renderer %s for playback", renderer_id)
         return session
@@ -273,6 +276,7 @@ class RendererPlayer:
                 StreamState(
                     state=AudioGraphNodeState.SOURCE_CHANGED,
                     timestamp=time.monotonic_ns(),
+                    stream_id=to_stream_id(snapshot.get("source_token")),
                 )
             )
             return
@@ -280,14 +284,47 @@ class RendererPlayer:
         if translated is None:
             return
         if change is StateChange.SNAPSHOT:
-            # The baseline at open (and on resume): track it, don't act on it.
-            self._last_state = translated
+            # At open this restates what we already report and publishing it
+            # would be noise. On resume it is the only evidence of what the
+            # renderer did while it was unreachable — those transitions were
+            # dropped for want of anywhere to send them.
+            if translated.state is self._last_state.state:
+                self._record(translated)
+            else:
+                self._publish(translated)
             return
         if change is StateChange.PLAYBACK:
             self._publish(translated)
 
-    def _publish(self, state: StreamState) -> None:
+    def _on_session_suspended(self, session: PlaybackSession) -> None:
+        """The link dropped mid-playback. The renderer is most likely playing
+        on, and the session is held for its return, but we can no longer say
+        what it is doing — so report a stall until the snapshot on resume
+        settles it, rather than a position that keeps advancing on faith."""
+        if session is not self._session:
+            return
+        if self._last_state.state not in (
+            AudioGraphNodeState.PREPARING,
+            AudioGraphNodeState.STREAMING,
+        ):
+            return
+        self._publish(
+            replace(
+                self._last_state,
+                state=AudioGraphNodeState.PREPARING,
+                timestamp=time.monotonic_ns(),
+            )
+        )
+
+    def _record(self, state: StreamState) -> None:
+        """Take the state as current without telling the queue, which already
+        believes this. The epoch is deliberately left alone: any release armed
+        for the state we are in is still the right one, and bumping it would
+        defuse that timer without arming another."""
         self._last_state = state
+
+    def _publish(self, state: StreamState) -> None:
+        self._record(state)
         self._epoch += 1
         self._arm_release(state)
         self._monitor.push(state)
