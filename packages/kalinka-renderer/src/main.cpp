@@ -20,6 +20,7 @@
 #include "Identity.h"
 #include "RendererServices.h"
 #include "config/ConfigService.h"
+#include "config/RendererName.h"
 #include "discovery/MdnsDiscovery.h"
 #include "net/ConnectionManager.h"
 #include "player/NativePlayer.h"
@@ -40,8 +41,9 @@ struct Options {
 void usage(const char *argv0) {
   std::printf(
       "Usage: %s [options]\n"
-      "  --name <name>         Friendly name announced to Cores\n"
-      "                        (default: \"Kalinka Renderer on <hostname>\")\n"
+      "  --name <name>         Friendly name announced to Cores; overrides\n"
+      "                        the configured one (default: the setting, or\n"
+      "                        \"Kalinka Renderer on <hostname>\")\n"
       "  --server <host:port>  Connect to a fixed Core instead of mDNS\n"
       "                        discovery; may be repeated\n"
       "  --daemon              Detach and run in the background\n"
@@ -106,12 +108,6 @@ bool parseArgs(int argc, char **argv, Options &opts) {
   return true;
 }
 
-std::string defaultFriendlyName() {
-  char host[256] = "unknown";
-  gethostname(host, sizeof(host) - 1);
-  return std::string("Kalinka Renderer on ") + host;
-}
-
 void setupLogging(const Options &opts) {
   std::string logFile = opts.logFile;
   if (logFile.empty() && opts.daemon) {
@@ -152,10 +148,9 @@ int main(int argc, char **argv) {
   setupLogging(opts);
 
   const Identity identity = Identity::load();
-  const std::string friendlyName =
-      opts.friendlyName.empty() ? defaultFriendlyName() : opts.friendlyName;
+  auto name = std::make_shared<RendererName>(opts.friendlyName);
   spdlog::info("kalinka-renderer {} starting: '{}' (renderer_id={}, pid={})",
-               KALINKA_RENDERER_VERSION, friendlyName, identity.rendererId,
+               KALINKA_RENDERER_VERSION, name->value(), identity.rendererId,
                getpid());
 
   asio::io_context ioc;
@@ -164,9 +159,9 @@ int main(int argc, char **argv) {
       std::make_shared<SessionManager>(
           ioc, std::chrono::seconds(opts.sessionGraceSeconds), player),
       std::make_shared<ConfigService>(
-          std::vector<std::shared_ptr<ConfigContributor>>{player}),
+          std::vector<std::shared_ptr<ConfigContributor>>{name, player}),
   };
-  ConnectionManager manager(ioc, identity, friendlyName, services);
+  ConnectionManager manager(ioc, identity, name->value(), services);
 
   // Discovery callbacks run on the discovery thread; ConnectionManager posts
   // them onto the io_context.
