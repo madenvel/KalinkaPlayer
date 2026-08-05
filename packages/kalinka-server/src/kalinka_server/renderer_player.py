@@ -37,6 +37,7 @@ from .renderer_sessions import (
 from .renderer_state import StateChange
 from .stream_state import (
     AudioGraphNodeState,
+    StateMonitor,
     StreamError,
     StreamErrorSource,
     StreamState,
@@ -58,55 +59,23 @@ PAUSE_RELEASE_TIMEOUT_S = 600.0
 _QUIET_CLOSE_REASONS = {CloseReason.CLOSED_BY_SERVER, CloseReason.SHUTDOWN}
 
 
-class StateMonitor:
-    """Async-iterable stream of StreamState, in place of the native monitor."""
-
-    _STOP = object()
-
-    def __init__(self):
-        self._queue: asyncio.Queue = asyncio.Queue()
-        self._running = True
-
-    def push(self, state: StreamState) -> None:
-        if self._running:
-            self._queue.put_nowait(state)
-
-    def stop(self) -> None:
-        self._running = False
-        self._queue.put_nowait(self._STOP)
-
-    def is_running(self) -> bool:
-        return self._running
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self) -> StreamState:
-        if not self._running:
-            raise StopAsyncIteration
-        item = await self._queue.get()
-        if item is self._STOP:
-            raise StopAsyncIteration
-        return item
-
-
 class RendererPlayer:
     def __init__(
         self,
         config: KalinkaConfig,
         registry: RendererRegistry,
         sessions: SessionPool,
+        monitor: StateMonitor,
     ):
         self._config = config
         self._registry = registry
         self._pool = sessions
-        self._monitor = StateMonitor()
+        # Passed in, not owned: the queue listens to one monitor for its whole
+        # life, while a player lasts only as long as the renderer it drives.
+        self._monitor = monitor
         self._last_state = StreamState(
             state=AudioGraphNodeState.STOPPED, timestamp=time.monotonic_ns()
         )
-        # The native monitor reported the current state on subscription; the
-        # play queue's initial STOPPED event to clients relies on it.
-        self._monitor.push(self._last_state)
         self._session: Optional[PlaybackSession] = None
         # Commands are applied strictly in call order by one sender task.
         self._ops: asyncio.Queue = asyncio.Queue()
@@ -118,9 +87,6 @@ class RendererPlayer:
 
     # ------------------------------------------------------------------
     # The AudioPlayer surface
-
-    def monitor(self) -> StateMonitor:
-        return self._monitor
 
     def get_state(self) -> StreamState:
         return self._last_state

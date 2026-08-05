@@ -333,7 +333,7 @@ async def test_a_switch_stops_the_renderer_that_was_playing():
     """The selection endpoint releases before it pins, so the STOPPED is
     published while the renderer that was playing is still the active one."""
     from kalinka_server.renderer_player import RendererPlayer
-    from kalinka_server.stream_state import AudioGraphNodeState
+    from kalinka_server.stream_state import AudioGraphNodeState, StateMonitor
     from kalinka_server.renderer_sessions import CloseReason
 
     closed: list = []
@@ -344,7 +344,9 @@ async def test_a_switch_stops_the_renderer_that_was_playing():
         async def close(self, reason):
             closed.append(reason)
 
-    player = RendererPlayer(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+    player = RendererPlayer(
+        SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), StateMonitor()
+    )
     player._session = _Session()
 
     await player.release_unless_on("rid-a")
