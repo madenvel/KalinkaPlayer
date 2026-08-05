@@ -35,10 +35,13 @@ void StubPlayer::stop() { reportStopped(); }
 void StubPlayer::fillConfig(pb::ConfigSection &out) const {
   out.set_path("output");
   out.set_title("Output");
+  out.set_description("Where this renderer sends audio and how it sets the "
+                      "level.");
 
   pb::ConfigField *driver = out.add_fields();
   driver->set_path("output.driver");
   driver->set_title("Driver");
+  driver->set_description("Audio backend used to reach the sound card.");
   driver->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   driver->set_value(settings_.at("output.driver"));
   driver->set_default_value("alsa");
@@ -49,7 +52,10 @@ void StubPlayer::fillConfig(pb::ConfigSection &out) const {
 
   pb::ConfigField *device = out.add_fields();
   device->set_path("output.device");
-  device->set_title("Device");
+  device->set_title("Output device");
+  device->set_description(
+      "The sound card music plays through. This build has no audio output, "
+      "so there is nothing to choose.");
   device->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   device->set_value(settings_.at("output.device"));
   device->set_default_value("default");

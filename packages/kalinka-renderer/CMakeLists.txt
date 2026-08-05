@@ -138,6 +138,7 @@ if(GTest_FOUND)
   add_executable(kalinka-renderer-tests
     src/net/WsTransport.cpp
     src/player/StateTranslator.cpp
+    tests/test_alsa_device_naming.cpp
     tests/test_config_service.cpp
     tests/test_protocol_session.cpp
     tests/test_session.cpp
