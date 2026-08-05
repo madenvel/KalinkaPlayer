@@ -81,7 +81,13 @@ from .renderer_ws_handler import handle_renderer_connection
 from .renderer_config import RendererConfigService
 from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry, RendererUnavailable
-from .renderer_sessions import RendererBusy, SessionOpenFailed, SessionPool
+from .renderer_sessions import (
+    RendererBusy,
+    SessionNotActive,
+    SessionOpenFailed,
+    SessionPool,
+)
+from .renderer_test_tone import TonePlayer
 from .server_identity import get_server_id
 
 
@@ -134,6 +140,9 @@ async def lifespan(app: FastAPI):
         # closed the renderer sockets by now, so the renderer itself only
         # learns the session is gone from the STALE reconciliation at its next
         # Hello.
+        test_tone = getattr(app.state, "test_tone", None)
+        if test_tone is not None:
+            await test_tone.shutdown()
         renderer_sessions = getattr(app.state, "renderer_sessions", None)
         if renderer_sessions is not None:
             await renderer_sessions.shutdown()
@@ -434,6 +443,12 @@ async def create_app(
     renderer_sessions.add_open_hook(
         lambda session: renderer_prefs.mark_volume_seeded(session.renderer_id)
     )
+    test_tone = TonePlayer(
+        renderer_registry,
+        renderer_sessions,
+        lambda rid: app.state.player_context.playqueue.release_renderer(rid),
+    )
+    app.state.test_tone = test_tone
 
     @app.get("/queue/list")
     async def read_queue_list(offset: int = 0, limit: int = 10):
@@ -1134,12 +1149,42 @@ async def create_app(
 
     @app.post("/server/test_tone")
     async def server_test_tone(payload: Optional[Dict[str, Any]] = None):
-        """No-op, kept for older clients whose setup wizard calls it.
+        """Play a test tone on one channel of a renderer.
 
-        Audio output moved to renderers; the speaker test belongs on the
-        renderer's config page now.
+        Body: `{"channel": "left"|"right"|"both", "renderer_id": "<id>"}`.
+        Without `renderer_id` — the setup wizard sends a legacy `device`
+        instead, naming an ALSA setting that no longer exists — the tone goes
+        to the active renderer.
+
+        Playback on that renderer stops first: the tone needs the renderer to
+        itself, and a queue left running would be reported as playing while
+        something else is audible.
+
+        Never answers 404 or 405. Older clients read either as "this server
+        cannot play tones at all" and tell the user to upgrade, which would be
+        the wrong advice for an unknown renderer.
         """
-        channel = str((payload or {}).get("channel", "both")).lower()
+        payload = payload or {}
+        channel = str(payload.get("channel", "both")).lower()
+        renderer_id = payload.get("renderer_id") or renderer_registry.active_id()
+        if not renderer_id:
+            raise HTTPException(
+                status_code=503, detail="No renderer is connected"
+            )
+        if renderer_registry.get(renderer_id) is None:
+            raise HTTPException(
+                status_code=409, detail="Unknown or disconnected renderer"
+            )
+        try:
+            await test_tone.play(renderer_id, channel)
+        except RendererBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except (RendererUnavailable, SessionNotActive) as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except (SessionOpenFailed, asyncio.TimeoutError) as exc:
+            raise HTTPException(
+                status_code=504, detail=str(exc) or "the renderer did not answer"
+            )
         return {"message": "Ok", "channel": channel}
 
     @app.get("/server/optional_packages")
