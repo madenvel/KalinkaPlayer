@@ -34,6 +34,7 @@ from kalinka_plugin_sdk.module_config import ModuleConfig
 from kalinka_plugin_sdk.plugin import OutputDevicePlugin, OutputDevicePluginContext
 
 from .renderer_registry import RendererRegistry
+from .renderer_state import StateChange
 from .renderer_sessions import (
     PlaybackSession,
     SessionPool,
@@ -257,11 +258,11 @@ class RendererVolumeDevice(ExternalOutputDevice):
             logger.warning("Could not apply pending volume: %s", e)
 
     async def _on_session_state(
-        self, session: PlaybackSession, payload: str, snapshot: dict
+        self, session: PlaybackSession, change: StateChange, snapshot: dict
     ) -> None:
         if session is not self._session:
             return
-        if payload not in ("volume_changed", "state_snapshot"):
+        if change not in (StateChange.VOLUME, StateChange.SNAPSHOT):
             return
         volume = snapshot.get("volume")
         if volume is None:

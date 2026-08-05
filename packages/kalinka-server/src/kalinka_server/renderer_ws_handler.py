@@ -16,9 +16,10 @@ from google.protobuf.message import DecodeError
 from .config_model import KalinkaConfig
 from .renderer_proto import renderer_pb2 as pb
 from .renderer_config import RendererConfigService
+from .renderer_link import RendererLink
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import CloseReason, SessionPool
-from .renderer_state import STATE_PAYLOADS
+from .renderer_state import StateChange
 from .server_identity import get_server_id
 from .version import get_rest_api_version, get_version
 
@@ -40,8 +41,11 @@ def _kind_name(kind: int) -> str:
     return pb.RendererKind.Name(kind).removeprefix("RENDERER_KIND_").lower()
 
 
-class RendererSession:
-    """Send side of one renderer connection; held by the registry."""
+class RendererSession(RendererLink):
+    """Send side of one renderer connection; held by the registry.
+
+    Implements :class:`RendererLink`, which is all anyone outside this module
+    sees of it."""
 
     def __init__(self, websocket: WebSocket):
         self._websocket = websocket
@@ -254,11 +258,11 @@ async def handle_renderer_connection(
                 sessions.handle_rejection(
                     registered_id or "", rejection=env.command_rejected
                 )
-            elif payload in STATE_PAYLOADS:
+            elif (change := StateChange.for_payload(payload or "")) is not None:
                 sessions.handle_state(
                     registered_id or "",
                     session_id=env.session_id,
-                    payload=payload,
+                    change=change,
                     message=getattr(env, payload),
                 )
             elif payload == "goodbye":

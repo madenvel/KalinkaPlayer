@@ -4,8 +4,7 @@ import pytest
 
 from kalinka_server.renderer_config import RendererConfigService
 from kalinka_server.renderer_proto import renderer_pb2 as pb
-from kalinka_server.renderer_registry import RendererRegistry
-from kalinka_server.renderer_sessions import RendererUnavailable
+from kalinka_server.renderer_registry import RendererRegistry, RendererUnavailable
 
 RENDERER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 

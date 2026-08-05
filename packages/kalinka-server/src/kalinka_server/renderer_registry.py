@@ -11,8 +11,9 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
+from .renderer_link import RendererLink
 from .renderer_prefs import RendererPreferences
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -31,6 +32,10 @@ class RegistrationKind(str, Enum):
     RESTART = "restart"      # same renderer_id, new instance_id
 
 
+class RendererUnavailable(Exception):
+    """The renderer is not connected, so nothing can be asked of it."""
+
+
 @dataclass
 class RendererRecord:
     renderer_id: str
@@ -39,11 +44,19 @@ class RendererRecord:
     software_version: str
     kind: str
     platform: dict[str, str]
-    status: RendererStatus
     connected_at: float
     last_seen: float
-    # Opaque WS-handler handle; compared by identity, `replace` is called on it.
-    session: Optional[Any] = field(default=None, repr=False)
+    # The renderer's connection while it has one; compared by identity.
+    session: Optional[RendererLink] = field(default=None, repr=False)
+
+    @property
+    def status(self) -> RendererStatus:
+        """Holding a session is what being connected means; not stored twice."""
+        return (
+            RendererStatus.CONNECTED
+            if self.session is not None
+            else RendererStatus.OFFLINE
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -63,15 +76,18 @@ class RendererRegistry:
     def __init__(
         self,
         offline_timeout_s: float = DEFAULT_OFFLINE_TIMEOUT_S,
-        replace_session: Optional[Callable[[Any], Awaitable[None]]] = None,
-        on_removed: Optional[Callable[[str, bool], None]] = None,
+        replace_session: Optional[Callable[[RendererLink], Awaitable[None]]] = None,
         prefs: Optional[RendererPreferences] = None,
     ):
         self.offline_timeout_s = offline_timeout_s
         self._replace_session = replace_session
-        self._on_removed = on_removed
+        self._on_removed: Optional[Callable[[str, bool], None]] = None
         self._renderers: dict[str, RendererRecord] = {}
         self._reap_tasks: dict[str, asyncio.Task] = {}
+        self._replace_tasks: set[asyncio.Task] = set()
+        # Held for the selection only: which renderer plays is registry state
+        # that has to survive a restart. The store's other entries belong to
+        # whoever owns that concern (volume delegation -> OutputDeviceRouter).
         self._prefs = prefs if prefs is not None else RendererPreferences()
 
     def register(
@@ -83,13 +99,14 @@ class RendererRegistry:
         software_version: str,
         kind: str,
         platform: dict[str, str],
-        session: Any,
+        session: RendererLink,
     ) -> RegistrationKind:
         self._cancel_reap(renderer_id)
         now = time.time()
         existing = self._renderers.get(renderer_id)
 
         registration = RegistrationKind.NEW
+        connected_at = now
         if existing is not None:
             if existing.session is not None and existing.session is not session:
                 # Newest connection wins; the old one is retired with
@@ -100,12 +117,12 @@ class RendererRegistry:
                     renderer_id,
                 )
                 if self._replace_session is not None:
-                    asyncio.create_task(self._replace_session(existing.session))
-            registration = (
-                RegistrationKind.RECONNECT
-                if existing.instance_id == instance_id
-                else RegistrationKind.RESTART
-            )
+                    self._spawn_replace(existing.session)
+            if existing.instance_id == instance_id:
+                registration = RegistrationKind.RECONNECT
+                connected_at = existing.connected_at
+            else:
+                registration = RegistrationKind.RESTART
 
         self._renderers[renderer_id] = RendererRecord(
             renderer_id=renderer_id,
@@ -114,13 +131,7 @@ class RendererRegistry:
             software_version=software_version,
             kind=kind,
             platform=platform,
-            status=RendererStatus.CONNECTED,
-            connected_at=(
-                existing.connected_at
-                if existing is not None
-                and registration == RegistrationKind.RECONNECT
-                else now
-            ),
+            connected_at=connected_at,
             last_seen=now,
             session=session,
         )
@@ -133,7 +144,7 @@ class RendererRegistry:
         )
         return registration
 
-    def disconnect(self, renderer_id: str, session: Any, clean: bool) -> None:
+    def disconnect(self, renderer_id: str, session: RendererLink, clean: bool) -> None:
         """`clean` = renderer sent Goodbye: remove now instead of OFFLINE-wait."""
         record = self._renderers.get(renderer_id)
         if record is None or record.session is not session:
@@ -149,7 +160,6 @@ class RendererRegistry:
             )
             self._notify_removed(renderer_id, clean=True)
             return
-        record.status = RendererStatus.OFFLINE
         logger.info(
             "Renderer '%s' (id=%s) offline; keeping for %.0fs",
             record.friendly_name,
@@ -170,10 +180,23 @@ class RendererRegistry:
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
 
-    def first_connected_id(self) -> Optional[str]:
+    def live_session(self, renderer_id: str) -> Optional[RendererLink]:
+        """The renderer's session handle while it is connected, else None."""
+        record = self._renderers.get(renderer_id)
+        return record.session if record is not None else None
+
+    def require_session(self, renderer_id: str) -> RendererLink:
+        """Same, for callers that have nothing to say to a renderer that is
+        not there."""
+        session = self.live_session(renderer_id)
+        if session is None:
+            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
+        return session
+
+    def _first_connected_id(self) -> Optional[str]:
         """Earliest-registered renderer that is connected right now."""
         for renderer_id, record in self._renderers.items():
-            if record.status is RendererStatus.CONNECTED and record.session is not None:
+            if record.session is not None:
                 return renderer_id
         return None
 
@@ -188,36 +211,18 @@ class RendererRegistry:
     def selected_id(self) -> Optional[str]:
         return self._prefs.selected_renderer_id
 
-    def volume_control(self, renderer_id: str) -> Optional[str]:
-        """Plugin id of the device module that owns this renderer's volume, or
-        None when the renderer controls its own."""
-        return self._prefs.volume_control(renderer_id)
-
-    def volume_seeded(self, renderer_id: str) -> bool:
-        return self._prefs.volume_seeded(renderer_id)
-
-    def mark_volume_seeded(self, renderer_id: str) -> None:
-        self._prefs.mark_volume_seeded(renderer_id)
-
-    def set_volume_control(self, renderer_id: str, module: Optional[str]) -> None:
-        self._prefs.set_volume_control(renderer_id, module)
-        logger.info(
-            "Renderer %s volume control: %s", renderer_id, module or "renderer itself"
-        )
-
     def active_id(self) -> Optional[str]:
         """The renderer playback opens sessions on: the selected one while it
         is connected, otherwise the first connected. A selected renderer that
         is offline is not forgotten — it wins again when it returns."""
-        selected_id = self._prefs.selected_renderer_id
-        selected = self._renderers.get(selected_id) if selected_id else None
-        if (
-            selected is not None
-            and selected.status is RendererStatus.CONNECTED
-            and selected.session is not None
-        ):
-            return selected.renderer_id
-        return self.first_connected_id()
+        return self.resolve_active(self._prefs.selected_renderer_id)
+
+    def resolve_active(self, selected_id: Optional[str]) -> Optional[str]:
+        """What :meth:`active_id` would return for a given selection. Lets a
+        caller see where playback is headed before committing the choice."""
+        if selected_id and self.live_session(selected_id) is not None:
+            return selected_id
+        return self._first_connected_id()
 
     def list(self) -> list[dict]:
         active = self.active_id()
@@ -227,12 +232,27 @@ class RendererRegistry:
             | {
                 "active": record.renderer_id == active,
                 "selected": record.renderer_id == selected,
-                "volume_control": self._prefs.volume_control(record.renderer_id),
             }
             for record in sorted(
                 self._renderers.values(), key=lambda r: r.friendly_name
             )
         ]
+
+    def _spawn_replace(self, session: RendererLink) -> None:
+        assert self._replace_session is not None
+        # Held onto: the loop keeps only a weak reference, and a task collected
+        # mid-flight would leave the replaced session running.
+        task = asyncio.ensure_future(self._replace_session(session))
+        self._replace_tasks.add(task)
+        task.add_done_callback(self._replace_done)
+
+    def _replace_done(self, task: asyncio.Task) -> None:
+        self._replace_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("Retiring a replaced renderer session failed: %s", exc)
 
     def _schedule_reap(self, renderer_id: str) -> None:
         self._cancel_reap(renderer_id)
@@ -249,7 +269,7 @@ class RendererRegistry:
         await asyncio.sleep(self.offline_timeout_s)
         self._reap_tasks.pop(renderer_id, None)
         record = self._renderers.get(renderer_id)
-        if record is not None and record.status == RendererStatus.OFFLINE:
+        if record is not None and record.session is None:
             del self._renderers[renderer_id]
             logger.info(
                 "Renderer '%s' (id=%s) did not return within %.0fs; removed",
@@ -260,10 +280,10 @@ class RendererRegistry:
             self._notify_removed(renderer_id, clean=False)
 
     async def shutdown(self) -> None:
-        for task in self._reap_tasks.values():
+        pending = [*self._reap_tasks.values(), *self._replace_tasks]
+        for task in pending:
             task.cancel()
-        if self._reap_tasks:
-            await asyncio.gather(
-                *self._reap_tasks.values(), return_exceptions=True
-            )
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         self._reap_tasks.clear()
+        self._replace_tasks.clear()

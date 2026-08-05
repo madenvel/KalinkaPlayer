@@ -9,21 +9,34 @@ are protocol constants and are not meaningful outside the wire.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Optional
 
 from .renderer_proto import renderer_pb2 as pb
 
-# Payload names of everything that carries state; the ws handler routes these.
-STATE_PAYLOADS = frozenset(
-    {
-        "state_snapshot",
-        "playback_state_changed",
-        "source_changed",
-        "audio_format_changed",
-        "volume_changed",
-        "playback_error",
-    }
-)
+
+class StateChange(str, Enum):
+    """One state message, by kind.
+
+    The values are the protobuf oneof payload names, so the wire vocabulary
+    ends here: everything downstream compares enum members and never spells a
+    payload name again.
+    """
+
+    SNAPSHOT = "state_snapshot"
+    PLAYBACK = "playback_state_changed"
+    SOURCE = "source_changed"
+    FORMAT = "audio_format_changed"
+    VOLUME = "volume_changed"
+    ERROR = "playback_error"
+
+    @classmethod
+    def for_payload(cls, payload: str) -> Optional["StateChange"]:
+        """The change a payload name denotes, or None if it carries no state."""
+        try:
+            return cls(payload)
+        except ValueError:
+            return None
 
 
 def empty_state() -> dict:
@@ -113,12 +126,12 @@ def snapshot_to_dict(snapshot) -> dict:
     }
 
 
-def apply(state: dict, payload: str, message) -> dict:
+def apply(state: dict, change: StateChange, message) -> dict:
     """Merge one state message into `state`, returning the updated dict."""
-    if payload == "state_snapshot":
+    if change is StateChange.SNAPSHOT:
         return snapshot_to_dict(message)
 
-    if payload == "playback_state_changed":
+    if change is StateChange.PLAYBACK:
         state["playback_state"] = enum_name(
             pb.PlaybackState, message.state, "PLAYBACK_STATE_"
         )
@@ -132,14 +145,14 @@ def apply(state: dict, payload: str, message) -> dict:
             error_to_dict(message.error) if message.HasField("error") else None
         )
         state["updated_at_unix_ms"] = message.at_unix_ms
-    elif payload == "source_changed":
+    elif change is StateChange.SOURCE:
         _set_source_token(state, message.source_token)
         state["updated_at_unix_ms"] = message.at_unix_ms
-    elif payload == "audio_format_changed":
+    elif change is StateChange.FORMAT:
         state["format"] = audio_format_to_dict(message.format)
-    elif payload == "volume_changed":
+    elif change is StateChange.VOLUME:
         state["volume"] = volume_to_dict(message.volume)
-    elif payload == "playback_error":
+    elif change is StateChange.ERROR:
         state["error"] = error_to_dict(message.error)
     return state
 

@@ -80,8 +80,11 @@ def test_the_renderer_module_is_never_a_candidate():
     assert volume_control_modules(devices) == []
 
 
-def _registry_with(*renderer_ids: str) -> RendererRegistry:
-    registry = RendererRegistry(prefs=RendererPreferences())
+def _registry_with(
+    *renderer_ids: str,
+) -> tuple[RendererRegistry, RendererPreferences]:
+    prefs = RendererPreferences()
+    registry = RendererRegistry(prefs=prefs)
     for renderer_id in renderer_ids:
         registry.register(
             renderer_id=renderer_id,
@@ -92,7 +95,7 @@ def _registry_with(*renderer_ids: str) -> RendererRegistry:
             platform={},
             session=object(),
         )
-    return registry
+    return registry, prefs
 
 
 async def test_router_follows_the_active_renderers_mapping():
@@ -103,12 +106,12 @@ async def test_router_follows_the_active_renderers_mapping():
         "kalinka-renderer": _prepared(renderer_device),
         "musiccast": _prepared(amp),
     }
-    registry = _registry_with("rid-a", "rid-b")
-    router = OutputDeviceRouter(registry, lambda: devices)
+    registry, prefs = _registry_with("rid-a", "rid-b")
+    router = OutputDeviceRouter(registry, prefs, lambda: devices)
 
     assert router.current() is renderer_device
 
-    registry.set_volume_control("rid-a", "musiccast")
+    prefs.set_volume_control("rid-a", "musiccast")
     assert router.current() is amp
 
     # rid-b has no mapping, so selecting it hands control back to the renderer.
@@ -124,9 +127,9 @@ async def test_router_yields_nothing_when_the_owning_module_is_down():
             _Device(SupportedFunction.SET_VOLUME), health=ModuleHealthState.ERROR
         ),
     }
-    registry = _registry_with("rid-a")
-    registry.set_volume_control("rid-a", "musiccast")
-    router = OutputDeviceRouter(registry, lambda: devices)
+    registry, prefs = _registry_with("rid-a")
+    prefs.set_volume_control("rid-a", "musiccast")
+    router = OutputDeviceRouter(registry, prefs, lambda: devices)
 
     assert router.current_name() == "musiccast"
     assert router.current() is None
@@ -135,8 +138,9 @@ async def test_router_yields_nothing_when_the_owning_module_is_down():
 
 async def test_router_defaults_to_the_renderer_device_with_no_renderers():
     renderer_device = _Device(SupportedFunction.SET_VOLUME)
+    registry, prefs = _registry_with()
     router = OutputDeviceRouter(
-        _registry_with(), lambda: {"kalinka-renderer": _prepared(renderer_device)}
+        registry, prefs, lambda: {"kalinka-renderer": _prepared(renderer_device)}
     )
     assert router.current() is renderer_device
 
@@ -158,10 +162,11 @@ class _Prepared:
 async def test_delegated_renderers_are_fixed_at_unity():
     """Attenuating in the renderer *and* the amp would stack up, costing
     headroom and, in software mode, resolution."""
-    registry = _registry_with("rid-a")
-    registry.set_volume_control("rid-a", "musiccast")
+    registry, prefs = _registry_with("rid-a")
+    prefs.set_volume_control("rid-a", "musiccast")
     router = OutputDeviceRouter(
         registry,
+        prefs,
         lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.software)},
     )
     assert router.session_volume_policy("rid-a") == ("fixed", 100)
@@ -169,10 +174,11 @@ async def test_delegated_renderers_are_fixed_at_unity():
 
 
 async def test_renderer_choice_sends_no_mode_once_seeded():
-    registry = _registry_with("rid-a")
-    registry.mark_volume_seeded("rid-a")
+    registry, prefs = _registry_with("rid-a")
+    prefs.mark_volume_seeded("rid-a")
     router = OutputDeviceRouter(
         registry,
+        prefs,
         lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
     )
     assert router.session_volume_policy("rid-a") == ("", None)
@@ -182,9 +188,10 @@ async def test_renderer_choice_sends_no_mode_once_seeded():
 async def test_a_renderer_never_played_through_starts_at_the_default_level():
     """Its mixer may have been left at full scale; the first track this server
     plays must not depend on that."""
-    registry = _registry_with("rid-a")
+    registry, prefs = _registry_with("rid-a")
     router = OutputDeviceRouter(
         registry,
+        prefs,
         lambda: {
             "kalinka-renderer": _Prepared(
                 RendererVolumeStyle.renderer, default_volume=30
@@ -193,16 +200,17 @@ async def test_a_renderer_never_played_through_starts_at_the_default_level():
     )
     assert router.session_volume_policy("rid-a") == ("", 30)
 
-    registry.mark_volume_seeded("rid-a")
+    prefs.mark_volume_seeded("rid-a")
     assert router.session_volume_policy("rid-a") == ("", None)
     await registry.shutdown()
 
 
 async def test_fixed_style_carries_the_default_level_every_session():
-    registry = _registry_with("rid-a")
-    registry.mark_volume_seeded("rid-a")
+    registry, prefs = _registry_with("rid-a")
+    prefs.mark_volume_seeded("rid-a")
     router = OutputDeviceRouter(
         registry,
+        prefs,
         lambda: {
             "kalinka-renderer": _Prepared(
                 RendererVolumeStyle.fixed, default_volume=45
@@ -215,29 +223,25 @@ async def test_fixed_style_carries_the_default_level_every_session():
 
 
 async def test_volume_style_maps_onto_the_wire_value():
-    registry = _registry_with("rid-a")
-    registry.mark_volume_seeded("rid-a")
+    registry, prefs = _registry_with("rid-a")
+    prefs.mark_volume_seeded("rid-a")
     for style, wire in [
         (RendererVolumeStyle.automatic, "auto"),
         (RendererVolumeStyle.driver, "hardware"),
         (RendererVolumeStyle.software, "software"),
     ]:
         router = OutputDeviceRouter(
-            registry, lambda s=style: {"kalinka-renderer": _Prepared(s)}
+            registry, prefs, lambda s=style: {"kalinka-renderer": _Prepared(s)}
         )
         assert router.session_volume_policy("rid-a") == (wire, None)
     await registry.shutdown()
 
 
-async def test_seeding_survives_a_server_restart(tmp_path):
+def test_seeding_survives_a_server_restart(tmp_path):
     path = str(tmp_path / "renderers.json")
-    registry = RendererRegistry(prefs=RendererPreferences(path))
-    registry.mark_volume_seeded("rid-a")
+    RendererPreferences(path).mark_volume_seeded("rid-a")
 
-    revived = RendererRegistry(prefs=RendererPreferences(path))
-    assert revived.volume_seeded("rid-a") is True
-    await registry.shutdown()
-    await revived.shutdown()
+    assert RendererPreferences(path).volume_seeded("rid-a") is True
 
 
 def _bus() -> EventBus:
@@ -261,9 +265,9 @@ async def test_only_the_owning_modules_events_reach_clients():
         "kalinka-renderer": _prepared(_Device(SupportedFunction.GET_VOLUME)),
         "musiccast": _prepared(_Device(SupportedFunction.GET_VOLUME)),
     }
-    registry = _registry_with("rid-a")
+    registry, prefs = _registry_with("rid-a")
     bus = _bus()
-    router = OutputDeviceRouter(registry, lambda: devices, bus)
+    router = OutputDeviceRouter(registry, prefs, lambda: devices, bus)
     renderer_emitter = router.emitter_for("kalinka-renderer")
     amp_emitter = router.emitter_for("musiccast")
 
@@ -271,7 +275,7 @@ async def test_only_the_owning_modules_events_reach_clients():
     renderer_emitter.dispatch(_volume_event(22))
     assert bus.get_snapshot().volume.current_volume == 22
 
-    registry.set_volume_control("rid-a", "musiccast")
+    prefs.set_volume_control("rid-a", "musiccast")
     renderer_emitter.dispatch(_volume_event(33))
     assert bus.get_snapshot().volume.current_volume == 22
     amp_emitter.dispatch(_volume_event(44))
@@ -300,8 +304,8 @@ async def test_only_the_owning_module_hears_playback_events():
             ),
         )
     )
-    registry = _registry_with("rid-a")
-    router = OutputDeviceRouter(registry, lambda: {})
+    registry, prefs = _registry_with("rid-a")
+    router = OutputDeviceRouter(registry, prefs, lambda: {})
     heard: list = []
     listener = router.listener_for("musiccast", bus)
     listener.subscribe([PlayQueueEventType.PlaybackStateChanged], heard.append)
@@ -317,10 +321,94 @@ async def test_only_the_owning_module_hears_playback_events():
     await asyncio.sleep(0.05)
     assert heard == []  # the renderer owns the output, not musiccast
 
-    registry.set_volume_control("rid-a", "musiccast")
+    prefs.set_volume_control("rid-a", "musiccast")
     play()
     await asyncio.sleep(0.05)
     assert len(heard) == 1
+    bus.close()
+    await registry.shutdown()
+
+
+async def test_a_switch_stops_the_renderer_that_was_playing():
+    """The selection endpoint releases before it pins, so the STOPPED is
+    published while the renderer that was playing is still the active one."""
+    from kalinka_server.renderer_player import RendererPlayer
+    from kalinka_server.stream_state import AudioGraphNodeState
+    from kalinka_server.renderer_sessions import CloseReason
+
+    closed: list = []
+
+    class _Session:
+        renderer_id = "rid-a"
+
+        async def close(self, reason):
+            closed.append(reason)
+
+    player = RendererPlayer(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+    player._session = _Session()
+
+    await player.release_unless_on("rid-a")
+    assert closed == [] and player._session is not None
+
+    await player.release_unless_on("rid-b")
+    assert closed == [CloseReason.CLOSED_BY_SERVER]
+    assert player.get_state().state is AudioGraphNodeState.STOPPED
+
+
+async def test_a_module_still_hears_the_end_of_the_playback_it_was_given():
+    """Switching renderers stops playback first, but the STOPPED crosses the
+    bus's threads and may land after ownership has moved. The module that was
+    playing must still get it, or it stays set up for a track that ended."""
+    from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
+    from kalinka_plugin_sdk.events import (
+        PlayQueueEvent,
+        PlayQueueEventType,
+        PlayQueueState,
+        PlaybackStateChangedEvent,
+    )
+    from kalinka_plugin_sdk.datamodel import PlayerStateEnum
+
+    bus = EventBus[PlayQueueState, PlayQueueEventType, PlayQueueEvent](
+        initial_state=PlayQueueState(
+            playback_state=PlaybackState(),
+            track_list=[],
+            playback_mode=PlaybackMode(
+                shuffle=False, repeat_single=False, repeat_all=False
+            ),
+        )
+    )
+    registry, prefs = _registry_with("rid-a")
+    prefs.set_volume_control("rid-a", "musiccast")
+    router = OutputDeviceRouter(registry, prefs, lambda: {})
+    heard: list = []
+    listener = router.listener_for("musiccast", bus)
+    listener.subscribe(
+        [PlayQueueEventType.PlaybackStateChanged],
+        lambda e: isinstance(e, PlaybackStateChangedEvent) and heard.append(e),
+    )
+
+    def dispatch(state):
+        bus.dispatch(PlaybackStateChangedEvent(state=PlaybackState(state=state)))
+
+    dispatch(PlayerStateEnum.PLAYING)
+    await asyncio.sleep(0.05)
+    assert [e.state.state for e in heard] == [PlayerStateEnum.PLAYING]
+
+    # The switch: ownership moves, and the STOPPED for the playback that was
+    # just ended arrives afterwards.
+    prefs.set_volume_control("rid-a", None)
+    dispatch(PlayerStateEnum.STOPPED)
+    await asyncio.sleep(0.05)
+    assert [e.state.state for e in heard] == [
+        PlayerStateEnum.PLAYING,
+        PlayerStateEnum.STOPPED,
+    ]
+
+    # And nothing from the playback that follows on the other renderer.
+    dispatch(PlayerStateEnum.PLAYING)
+    dispatch(PlayerStateEnum.STOPPED)
+    await asyncio.sleep(0.05)
+    assert len(heard) == 2
     bus.close()
     await registry.shutdown()
 
@@ -332,14 +420,14 @@ async def test_resync_publishes_the_new_owners_state():
         ),
         "musiccast": _prepared(_Device(SupportedFunction.GET_VOLUME, volume=70)),
     }
-    registry = _registry_with("rid-a")
+    registry, prefs = _registry_with("rid-a")
     bus = _bus()
-    router = OutputDeviceRouter(registry, lambda: devices, bus)
+    router = OutputDeviceRouter(registry, prefs, lambda: devices, bus)
 
     await router.resync()
     assert bus.get_snapshot().volume.current_volume == 10
 
-    registry.set_volume_control("rid-a", "musiccast")
+    prefs.set_volume_control("rid-a", "musiccast")
     await router.resync()
     assert bus.get_snapshot().volume.current_volume == 70
     await registry.shutdown()
@@ -351,39 +439,11 @@ async def test_resync_reports_no_volume_when_the_owner_is_down():
             _Device(SupportedFunction.GET_VOLUME), health=ModuleHealthState.ERROR
         )
     }
-    registry = _registry_with("rid-a")
-    registry.set_volume_control("rid-a", "musiccast")
+    registry, prefs = _registry_with("rid-a")
+    prefs.set_volume_control("rid-a", "musiccast")
     bus = _bus()
-    router = OutputDeviceRouter(registry, lambda: devices, bus)
+    router = OutputDeviceRouter(registry, prefs, lambda: devices, bus)
 
     await router.resync()
     assert bus.get_snapshot().volume.supported is False
     await registry.shutdown()
-
-
-async def test_mapping_is_per_renderer_and_survives_a_restart(tmp_path):
-    path = str(tmp_path / "renderers.json")
-    registry = RendererRegistry(prefs=RendererPreferences(path))
-    for renderer_id in ("rid-a", "rid-b"):
-        registry.register(
-            renderer_id=renderer_id,
-            instance_id="inst-1",
-            friendly_name=renderer_id,
-            software_version="0.1.0",
-            kind="native",
-            platform={},
-            session=object(),
-        )
-    registry.set_volume_control("rid-a", "musiccast")
-
-    listed = {entry["renderer_id"]: entry for entry in registry.list()}
-    assert listed["rid-a"]["volume_control"] == "musiccast"
-    assert listed["rid-b"]["volume_control"] is None
-
-    revived = RendererRegistry(prefs=RendererPreferences(path))
-    assert revived.volume_control("rid-a") == "musiccast"
-
-    revived.set_volume_control("rid-a", None)
-    assert RendererPreferences(path).volume_control("rid-a") is None
-    await registry.shutdown()
-    await revived.shutdown()

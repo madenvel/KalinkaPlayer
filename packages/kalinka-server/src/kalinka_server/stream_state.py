@@ -1,0 +1,133 @@
+"""What the play queue calls playback state, and how a renderer snapshot maps
+onto it.
+
+The vocabulary is the embedded AudioPlayer's, kept unchanged when playback
+moved out of process: the queue reasons in these terms and does not know a
+renderer is involved. It lives here rather than with the renderer player so
+that the queue does not have to import the renderer to name its own states.
+
+:func:`from_snapshot` is the whole translation from the wire's merged snapshot
+dict (see :mod:`renderer_state`) into a ``StreamState`` — a pure function, so
+it is testable without a session or a player.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+
+class AudioGraphNodeState(Enum):
+    """Playback states, mirroring the native player's enum of the same name."""
+
+    ERROR = -1
+    STOPPED = 0
+    PREPARING = 1
+    STREAMING = 2
+    PAUSED = 3
+    FINISHED = 4
+    SOURCE_CHANGED = 5
+
+
+class StreamErrorSource(Enum):
+    NONE = 0
+    HTTP_STREAM = 1
+    AUDIO_OUTPUT = 2
+    DECODER = 3
+
+
+class StreamType(Enum):
+    BYTES = 0
+    FRAMES = 1
+
+
+@dataclass
+class AudioFormatInfo:
+    sample_rate: int = 0
+    channels: int = 0
+    bits_per_sample: int = 0
+
+
+@dataclass
+class StreamInfo:
+    format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
+    stream_type: StreamType = StreamType.FRAMES
+    stream_size: int = 0
+
+
+@dataclass
+class StreamError:
+    source: StreamErrorSource = StreamErrorSource.NONE
+    message: str = ""
+
+
+@dataclass
+class StreamState:
+    state: AudioGraphNodeState
+    # Position when the state was reported; timestamp is the local receipt
+    # time (monotonic ns), so extrapolation needs no cross-machine clock.
+    position: int = 0
+    timestamp: int = 0
+    error: Optional[StreamError] = None
+    stream_info: Optional[StreamInfo] = None
+
+
+_STATE_NAMES = {
+    "stopped": AudioGraphNodeState.STOPPED,
+    "preparing": AudioGraphNodeState.PREPARING,
+    "playing": AudioGraphNodeState.STREAMING,
+    "paused": AudioGraphNodeState.PAUSED,
+    "finished": AudioGraphNodeState.FINISHED,
+    "error": AudioGraphNodeState.ERROR,
+}
+
+_ERROR_SOURCES = {
+    "none": StreamErrorSource.NONE,
+    "http_stream": StreamErrorSource.HTTP_STREAM,
+    "audio_output": StreamErrorSource.AUDIO_OUTPUT,
+    "decoder": StreamErrorSource.DECODER,
+}
+
+
+def to_stream_info(fmt: Optional[dict]) -> Optional[StreamInfo]:
+    if not fmt:
+        return None
+    return StreamInfo(
+        format=AudioFormatInfo(
+            sample_rate=fmt.get("sample_rate_hz", 0),
+            channels=fmt.get("channels", 0),
+            bits_per_sample=fmt.get("bits_per_sample", 0),
+        ),
+        stream_type=(
+            StreamType.FRAMES
+            if fmt.get("stream_kind") == "frames"
+            else StreamType.BYTES
+        ),
+        stream_size=fmt.get("stream_size_units", 0),
+    )
+
+
+def to_error(error: Optional[dict]) -> Optional[StreamError]:
+    if not error:
+        return None
+    return StreamError(
+        source=_ERROR_SOURCES.get(error.get("source") or "", StreamErrorSource.NONE),
+        message=error.get("message") or "",
+    )
+
+
+def from_snapshot(snapshot: dict) -> Optional[StreamState]:
+    """The queue's view of a renderer snapshot, or None when the renderer has
+    not reported a state we play by (``unspecified``, before anything ran)."""
+    state = _STATE_NAMES.get(snapshot.get("playback_state") or "")
+    if state is None:
+        return None
+    return StreamState(
+        state=state,
+        position=snapshot.get("position_ms", 0),
+        timestamp=time.monotonic_ns(),
+        error=to_error(snapshot.get("error")),
+        stream_info=to_stream_info(snapshot.get("format")),
+    )

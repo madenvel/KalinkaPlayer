@@ -36,8 +36,10 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from . import renderer_state
+from .renderer_link import RendererLink
 from .renderer_proto import renderer_pb2 as pb
-from .renderer_registry import RendererRegistry, RendererStatus
+from .renderer_registry import RendererRegistry
+from .renderer_state import StateChange
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -72,10 +74,6 @@ _WIRE_CLOSE_REASONS = {
     CloseReason.STALE,
     CloseReason.SHUTDOWN,
 }
-
-
-class RendererUnavailable(Exception):
-    """The renderer is not connected, so nothing can be asked of it."""
 
 
 class RendererBusy(Exception):
@@ -137,7 +135,7 @@ class PlaybackSession:
         pool: "SessionPool",
         session_id: str,
         renderer_id: str,
-        ws_session: Any,
+        ws_session: RendererLink,
         timeout_s: float = DEFAULT_TIMEOUT_S,
     ):
         self.session_id = session_id
@@ -150,7 +148,7 @@ class PlaybackSession:
         # The refused command that ended the session, if that is how it ended.
         self.rejection: Optional[dict] = None
         self._pool = pool
-        self._ws = ws_session
+        self._ws: Optional[RendererLink] = ws_session
         self._open_future: Optional[asyncio.Future] = None
         self._callbacks: list[Callable] = []
         self._state_callbacks: list[Callable] = []
@@ -160,14 +158,18 @@ class PlaybackSession:
     def connected(self) -> bool:
         return self._ws is not None
 
-    def on_closed(self, callback: Callable[["PlaybackSession", CloseReason], Any]) -> None:
+    def on_closed(
+        self, callback: Callable[["PlaybackSession", CloseReason], Any]
+    ) -> None:
         if self.state is SessionState.CLOSED:
             _invoke(callback, self, self.close_reason or CloseReason.CLOSED_BY_SERVER)
             return
         self._callbacks.append(callback)
 
-    def on_state(self, callback: Callable[["PlaybackSession", str, dict], Any]) -> None:
-        """Called as callback(session, message_name, snapshot) on every change."""
+    def on_state(
+        self, callback: Callable[["PlaybackSession", StateChange, dict], Any]
+    ) -> None:
+        """Called as callback(session, change, snapshot) on every change."""
         self._state_callbacks.append(callback)
 
     async def set_source(
@@ -266,7 +268,7 @@ class PlaybackSession:
             "rejection": self.rejection,
         }
 
-    def _rebind(self, ws_session: Any) -> None:
+    def _rebind(self, ws_session: RendererLink) -> None:
         self._ws = ws_session
         self.state = SessionState.ACTIVE
         # It kept playing while we were away, so what we hold may be stale.
@@ -282,11 +284,11 @@ class PlaybackSession:
                 exc,
             )
 
-    def _apply_state(self, payload: str, message: Any) -> None:
-        self.snapshot = renderer_state.apply(self.snapshot, payload, message)
+    def _apply_state(self, change: StateChange, message: Any) -> None:
+        self.snapshot = renderer_state.apply(self.snapshot, change, message)
         for callback in list(self._state_callbacks):
             try:
-                result = callback(self, payload, self.snapshot)
+                result = callback(self, change, self.snapshot)
                 if inspect.isawaitable(result):
                     _detach(result)
             except Exception:
@@ -319,7 +321,9 @@ class PlaybackSession:
             _invoke(callback, self, reason)
 
 
-async def _send_close(ws_session: Any, session_id: str, reason: CloseReason) -> None:
+async def _send_close(
+    ws_session: RendererLink, session_id: str, reason: CloseReason
+) -> None:
     try:
         await ws_session.send_session_close(session_id, reason)
     except Exception as exc:
@@ -375,20 +379,13 @@ class SessionPool:
         return [session.to_dict() for session in self._sessions.values()]
 
     async def open(self, renderer_id: str) -> PlaybackSession:
-        record = self._registry.get(renderer_id)
-        if (
-            record is None
-            or record.status is not RendererStatus.CONNECTED
-            or record.session is None
-        ):
-            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
+        ws = self._registry.require_session(renderer_id)
         if renderer_id in self._sessions:
             raise RendererBusy(
                 f"renderer {renderer_id} already has a session with this Core",
                 owner_server_id=self.server_id,
             )
 
-        ws = record.session
         session = PlaybackSession(
             self, str(uuid.uuid4()), renderer_id, ws, self._timeout_s
         )
@@ -451,7 +448,7 @@ class SessionPool:
         renderer_id: str,
         reported_session_id: str,
         reported_owner_server_id: str,
-        ws_session: Any,
+        ws_session: RendererLink,
     ) -> None:
         """Settle renderer-reported session state against the pool, at Hello."""
         session = self._sessions.get(renderer_id)
@@ -553,11 +550,16 @@ class SessionPool:
         session._finish(CloseReason.REJECTED_BY_RENDERER)
 
     def handle_state(
-        self, renderer_id: str, *, session_id: str, payload: str, message: Any
+        self,
+        renderer_id: str,
+        *,
+        session_id: str,
+        change: StateChange,
+        message: Any,
     ) -> None:
-        session = self._session_for(renderer_id, session_id, payload)
+        session = self._session_for(renderer_id, session_id, change.value)
         if session is not None:
-            session._apply_state(payload, message)
+            session._apply_state(change, message)
 
     def _session_for(
         self, renderer_id: str, session_id: str, what: str
@@ -590,7 +592,7 @@ class SessionPool:
             )
             session._finish(CloseReason.RENDERER_ERROR)
 
-    def suspend(self, renderer_id: str, ws_session: Any) -> None:
+    def suspend(self, renderer_id: str, ws_session: RendererLink) -> None:
         """The connection carrying this session dropped."""
         session = self._sessions.get(renderer_id)
         if session is None or session._ws is not ws_session:

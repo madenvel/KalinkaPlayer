@@ -21,21 +21,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import Optional
 
 from .config_model import KalinkaConfig
-from .renderer_registry import RendererRegistry
+from .renderer_registry import RendererRegistry, RendererUnavailable
 from .renderer_sessions import (
     CloseReason,
     PlaybackSession,
     RendererBusy,
-    RendererUnavailable,
     SessionNotActive,
     SessionOpenFailed,
     SessionPool,
     SessionState,
+)
+from .renderer_state import StateChange
+from .stream_state import (
+    AudioGraphNodeState,
+    StreamError,
+    StreamErrorSource,
+    StreamState,
+    from_snapshot,
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -48,107 +53,9 @@ IDLE_RELEASE_TIMEOUT_S = 15.0
 PAUSE_RELEASE_TIMEOUT_S = 600.0
 
 
-class AudioGraphNodeState(Enum):
-    """Playback states, mirroring the native player's enum of the same name."""
-
-    ERROR = -1
-    STOPPED = 0
-    PREPARING = 1
-    STREAMING = 2
-    PAUSED = 3
-    FINISHED = 4
-    SOURCE_CHANGED = 5
-
-
-class StreamErrorSource(Enum):
-    NONE = 0
-    HTTP_STREAM = 1
-    AUDIO_OUTPUT = 2
-    DECODER = 3
-
-
-class StreamType(Enum):
-    BYTES = 0
-    FRAMES = 1
-
-
-@dataclass
-class AudioFormatInfo:
-    sample_rate: int = 0
-    channels: int = 0
-    bits_per_sample: int = 0
-
-
-@dataclass
-class StreamInfo:
-    format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
-    stream_type: StreamType = StreamType.FRAMES
-    stream_size: int = 0
-
-
-@dataclass
-class StreamError:
-    source: StreamErrorSource = StreamErrorSource.NONE
-    message: str = ""
-
-
-@dataclass
-class StreamState:
-    state: AudioGraphNodeState
-    # Position when the state was reported; timestamp is the local receipt
-    # time (monotonic ns), so extrapolation needs no cross-machine clock.
-    position: int = 0
-    timestamp: int = 0
-    error: Optional[StreamError] = None
-    stream_info: Optional[StreamInfo] = None
-
-
-_STATE_NAMES = {
-    "stopped": AudioGraphNodeState.STOPPED,
-    "preparing": AudioGraphNodeState.PREPARING,
-    "playing": AudioGraphNodeState.STREAMING,
-    "paused": AudioGraphNodeState.PAUSED,
-    "finished": AudioGraphNodeState.FINISHED,
-    "error": AudioGraphNodeState.ERROR,
-}
-
-_ERROR_SOURCES = {
-    "none": StreamErrorSource.NONE,
-    "http_stream": StreamErrorSource.HTTP_STREAM,
-    "audio_output": StreamErrorSource.AUDIO_OUTPUT,
-    "decoder": StreamErrorSource.DECODER,
-}
-
 # Reasons the play queue need not hear about: the first is our own close, the
 # second is the whole server going down.
 _QUIET_CLOSE_REASONS = {CloseReason.CLOSED_BY_SERVER, CloseReason.SHUTDOWN}
-
-
-def _to_stream_info(fmt: Optional[dict]) -> Optional[StreamInfo]:
-    if not fmt:
-        return None
-    return StreamInfo(
-        format=AudioFormatInfo(
-            sample_rate=fmt.get("sample_rate_hz", 0),
-            channels=fmt.get("channels", 0),
-            bits_per_sample=fmt.get("bits_per_sample", 0),
-        ),
-        stream_type=(
-            StreamType.FRAMES
-            if fmt.get("stream_kind") == "frames"
-            else StreamType.BYTES
-        ),
-        stream_size=fmt.get("stream_size_units", 0),
-    )
-
-
-def _to_error(error: Optional[dict]) -> Optional[StreamError]:
-    if not error:
-        return None
-    return StreamError(
-        source=_ERROR_SOURCES.get(error.get("source") or "", StreamErrorSource.NONE),
-        message=error.get("message") or "",
-    )
 
 
 class StateMonitor:
@@ -333,11 +240,12 @@ class RendererPlayer:
         logger.info("Claimed renderer %s for playback", renderer_id)
         return session
 
-    async def apply_renderer_selection(self) -> None:
-        """Drop a session held on a renderer that is no longer the active one.
-        Playback stops there; the next play opens on the selected renderer."""
+    async def release_unless_on(self, renderer_id: Optional[str]) -> None:
+        """Drop a session held on any renderer but this one, stopping playback
+        there. Called before a selection change lands, so the STOPPED belongs
+        to the renderer that was playing rather than to its replacement."""
         session = self._session
-        if session is None or session.renderer_id == self._registry.active_id():
+        if session is None or session.renderer_id == renderer_id:
             return
         await self._release(synthesize_stopped=True)
 
@@ -377,11 +285,11 @@ class RendererPlayer:
     # State delivery
 
     def _on_session_state(
-        self, session: PlaybackSession, payload: str, snapshot: dict
+        self, session: PlaybackSession, change: StateChange, snapshot: dict
     ) -> None:
         if session is not self._session:
             return
-        if payload == "source_changed":
+        if change is StateChange.SOURCE:
             self._publish(
                 StreamState(
                     state=AudioGraphNodeState.SOURCE_CHANGED,
@@ -389,21 +297,14 @@ class RendererPlayer:
                 )
             )
             return
-        state = _STATE_NAMES.get(snapshot.get("playback_state") or "")
-        if state is None:
+        translated = from_snapshot(snapshot)
+        if translated is None:
             return
-        translated = StreamState(
-            state=state,
-            position=snapshot.get("position_ms", 0),
-            timestamp=time.monotonic_ns(),
-            error=_to_error(snapshot.get("error")),
-            stream_info=_to_stream_info(snapshot.get("format")),
-        )
-        if payload == "state_snapshot":
+        if change is StateChange.SNAPSHOT:
             # The baseline at open (and on resume): track it, don't act on it.
             self._last_state = translated
             return
-        if payload == "playback_state_changed":
+        if change is StateChange.PLAYBACK:
             self._publish(translated)
 
     def _publish(self, state: StreamState) -> None:

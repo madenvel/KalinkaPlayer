@@ -40,9 +40,9 @@ from kalinka_plugin_sdk.inputmodule import TrackInfo
 
 from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 
-from .renderer_player import (
+from .renderer_player import RendererPlayer
+from .stream_state import (
     AudioGraphNodeState,
-    RendererPlayer,
     StreamErrorSource,
     StreamInfo,
     StreamState,
@@ -498,8 +498,8 @@ class PlayQueueImpl(PlayQueueController):
         self._track_player.stop()
 
     @serialised
-    async def apply_renderer_selection(self):
-        await self._track_player.apply_renderer_selection()
+    async def release_unless_on(self, renderer_id: Optional[str]):
+        await self._track_player.release_unless_on(renderer_id)
 
     @serialised
     async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
