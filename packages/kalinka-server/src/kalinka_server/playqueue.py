@@ -43,6 +43,7 @@ from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 from .renderer_player import RendererPlayer
 from .stream_state import (
     AudioGraphNodeState,
+    StateMonitor,
     StreamErrorSource,
     StreamInfo,
     StreamState,
@@ -128,8 +129,18 @@ class PlayQueueImpl(PlayQueueController):
     ):
         super().__init__()
         self.event_emitter = event_emitter
+        # One monitor for the queue's whole life; players come and go behind
+        # it, so switching renderers never re-points the state listener.
+        self.state_monitor = StateMonitor()
+        # The native monitor reported the current state on subscription; the
+        # initial STOPPED event to clients relies on it.
+        self.state_monitor.push(
+            StreamState(
+                state=AudioGraphNodeState.STOPPED, timestamp=time.monotonic_ns()
+            )
+        )
         self._track_player = RendererPlayer(
-            config, renderer_registry, renderer_sessions
+            config, renderer_registry, renderer_sessions, self.state_monitor
         )
         self.current_track_id = 0
         self.current_format = None
@@ -141,7 +152,6 @@ class PlayQueueImpl(PlayQueueController):
         self.repeat_all = False
 
         self._prefetch_task = None
-        self.state_monitor = self._track_player.monitor()
         self.prepared_tracks: OrderedDict = OrderedDict()
         # The queue owns stream-id allocation; the player only tags.
         self._next_stream_id = 0

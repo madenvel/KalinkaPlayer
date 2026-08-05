@@ -13,6 +13,7 @@ it is testable without a session or a player.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -131,3 +132,35 @@ def from_snapshot(snapshot: dict) -> Optional[StreamState]:
         error=to_error(snapshot.get("error")),
         stream_info=to_stream_info(snapshot.get("format")),
     )
+
+
+class StateMonitor:
+    """Async-iterable stream of StreamState, in place of the native monitor."""
+
+    _STOP = object()
+
+    def __init__(self):
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._running = True
+
+    def push(self, state: StreamState) -> None:
+        if self._running:
+            self._queue.put_nowait(state)
+
+    def stop(self) -> None:
+        self._running = False
+        self._queue.put_nowait(self._STOP)
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> StreamState:
+        if not self._running:
+            raise StopAsyncIteration
+        item = await self._queue.get()
+        if item is self._STOP:
+            raise StopAsyncIteration
+        return item
