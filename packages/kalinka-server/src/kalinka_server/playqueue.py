@@ -153,6 +153,8 @@ class PlayQueueImpl(PlayQueueController):
         self.repeat_all = False
 
         self._prefetch_task = None
+        # Held only so a resume in flight is not collected mid-await.
+        self._resume_task: Optional[asyncio.Task] = None
         self.prepared_tracks: OrderedDict = OrderedDict()
         # The queue owns stream-id allocation; the player only tags.
         self._next_stream_id = 0
@@ -538,8 +540,22 @@ class PlayQueueImpl(PlayQueueController):
         self._track_player.stop()
 
     def _new_player(self) -> RendererPlayer:
-        return RendererPlayer(
+        player = RendererPlayer(
             self._config, self._registry, self._sessions, self.state_monitor
+        )
+        player.on_interrupted(self._resume_after_restart)
+        return player
+
+    def _resume_after_restart(self, position_ms: int) -> None:
+        """Put the current track back on a renderer that restarted under it.
+
+        The session is gone with the instance that held it, so this is a fresh
+        claim and a fresh stream — the same track from where it had reached,
+        which is the nearest thing to the reboot never having happened. Runs
+        off the closing callback, so it is a task rather than an await.
+        """
+        self._resume_task = asyncio.create_task(
+            self._retry_current_track_async(position_ms)
         )
 
     @serialised
