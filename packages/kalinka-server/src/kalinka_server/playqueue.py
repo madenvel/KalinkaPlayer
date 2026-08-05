@@ -592,6 +592,27 @@ class PlayQueueImpl(PlayQueueController):
             )
 
     @serialised
+    async def release_renderer(self, renderer_id: str) -> bool:
+        """Give this renderer up, stopping playback if the queue is on it.
+
+        For whoever needs the renderer to itself — the speaker test, which
+        cannot share the queue's session without its tone being mistaken for
+        the current track ending. Stopping is deliberate and reported: clients
+        see a STOPPED rather than a queue that quietly stops matching what is
+        audible. Returns whether anything was given up.
+        """
+        if self._track_player.renderer_id != renderer_id:
+            return False
+        # As in switch_renderer: cleared before the stop, so the STOPPED does
+        # not restart the queue on a stream that is already on its way out.
+        self.prepared_tracks.clear()
+        self.current_stream_id = None
+        self._cancel_prefetch_timer()
+        await self._track_player.release()
+        logger.info("Released renderer %s for the speaker test", renderer_id)
+        return True
+
+    @serialised
     async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
         self._add(tracks, index)
 
