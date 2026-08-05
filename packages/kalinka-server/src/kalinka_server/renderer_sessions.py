@@ -378,7 +378,9 @@ class SessionPool:
     def list(self) -> list[dict]:
         return [session.to_dict() for session in self._sessions.values()]
 
-    async def open(self, renderer_id: str) -> PlaybackSession:
+    async def open(
+        self, renderer_id: str, *, announce: bool = True
+    ) -> PlaybackSession:
         ws = self._registry.require_session(renderer_id)
         if renderer_id in self._sessions:
             raise RendererBusy(
@@ -418,6 +420,16 @@ class SessionPool:
 
         session.state = SessionState.ACTIVE
         logger.info("Opened session %s on renderer %s", session.session_id, renderer_id)
+        if announce:
+            await self.announce(session)
+        return session
+
+    async def announce(self, session: PlaybackSession) -> None:
+        """Run the open hooks for a session that is the output from now on.
+
+        Separate from open() because switching renderers claims the next one
+        before giving up the current one, and a device module must not adopt a
+        session that may yet be abandoned."""
         for hook in list(self._open_hooks):
             try:
                 result = hook(session)
@@ -425,7 +437,6 @@ class SessionPool:
                     await result
             except Exception:
                 logger.exception("Session open hook failed")
-        return session
 
     def _abort_open(self, session: PlaybackSession, notify: bool = True) -> None:
         """Give up on a session still being opened, releasing the renderer.

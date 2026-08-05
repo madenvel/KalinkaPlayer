@@ -193,27 +193,40 @@ class RendererPlayer:
     # ------------------------------------------------------------------
     # Session lifecycle
 
+    @property
+    def renderer_id(self) -> Optional[str]:
+        return self._session.renderer_id if self._session is not None else None
+
+    async def open(self, renderer_id: str, *, announce: bool = True) -> None:
+        """Claim a renderer now rather than at the first command, raising if it
+        refuses. ``announce=False`` withholds the claim from the pool's open
+        hooks until :meth:`announce`, for one that may still be abandoned."""
+        await self._claim(renderer_id, announce=announce)
+
+    async def announce(self) -> None:
+        """Tell the pool's open hooks this session is the output now."""
+        if self._session is not None:
+            await self._pool.announce(self._session)
+
+    async def release(self) -> None:
+        """Stop playback and drop the session, reporting STOPPED."""
+        await self._release(synthesize_stopped=True)
+
     async def _ensure_session(self) -> PlaybackSession:
         if self._session is not None and self._session.state is not SessionState.CLOSED:
             return self._session
         renderer_id = self._registry.active_id()
         if renderer_id is None:
             raise RendererUnavailable("no renderer is connected")
-        session = await self._pool.open(renderer_id)
+        return await self._claim(renderer_id, announce=True)
+
+    async def _claim(self, renderer_id: str, *, announce: bool) -> PlaybackSession:
+        session = await self._pool.open(renderer_id, announce=announce)
         session.on_state(self._on_session_state)
         session.on_closed(self._on_session_closed)
         self._session = session
         logger.info("Claimed renderer %s for playback", renderer_id)
         return session
-
-    async def release_unless_on(self, renderer_id: Optional[str]) -> None:
-        """Drop a session held on any renderer but this one, stopping playback
-        there. Called before a selection change lands, so the STOPPED belongs
-        to the renderer that was playing rather than to its replacement."""
-        session = self._session
-        if session is None or session.renderer_id == renderer_id:
-            return
-        await self._release(synthesize_stopped=True)
 
     async def _release(self, synthesize_stopped: bool) -> None:
         self._cancel_release()

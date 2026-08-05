@@ -81,7 +81,7 @@ from .renderer_ws_handler import handle_renderer_connection
 from .renderer_config import RendererConfigService
 from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry, RendererUnavailable
-from .renderer_sessions import SessionPool
+from .renderer_sessions import RendererBusy, SessionOpenFailed, SessionPool
 from .server_identity import get_server_id
 
 
@@ -1389,17 +1389,25 @@ async def create_app(
         """Pin playback to a renderer.
 
         Body: `{"renderer_id": "<id>"}`, or null to return to automatic
-        (first connected). A session running on another renderer is closed —
-        playback stops there; the next play opens on the selected one.
+        (first connected). Playback moves with it: the track restarts on the
+        selected renderer from the beginning. A target that is busy or
+        unreachable fails the request and leaves playback where it was.
         """
         renderer_id = payload.get("renderer_id")
         if renderer_id is not None and renderer_registry.get(renderer_id) is None:
             raise HTTPException(status_code=404, detail="Unknown renderer")
-        # Stop first, switch second: the STOPPED then reaches the device module
-        # and the automation while the renderer that was playing is still the
-        # active one, so power-off and gain reset land on the right device.
-        next_active = renderer_registry.resolve_active(renderer_id)
-        await app.state.player_context.playqueue.release_unless_on(next_active)
+        # Hand over before the pin moves, so the STOPPED still belongs to the
+        # renderer that was playing and reaches the module driving it.
+        try:
+            await app.state.player_context.playqueue.switch_renderer(renderer_id)
+        except RendererBusy as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except RendererUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except (SessionOpenFailed, asyncio.TimeoutError) as exc:
+            raise HTTPException(
+                status_code=504, detail=str(exc) or "the renderer did not answer"
+            )
         renderer_registry.select(renderer_id)
         await device_router.resync()
         return _renderer_selection()

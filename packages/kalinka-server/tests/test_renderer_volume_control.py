@@ -329,34 +329,6 @@ async def test_only_the_owning_module_hears_playback_events():
     await registry.shutdown()
 
 
-async def test_a_switch_stops_the_renderer_that_was_playing():
-    """The selection endpoint releases before it pins, so the STOPPED is
-    published while the renderer that was playing is still the active one."""
-    from kalinka_server.renderer_player import RendererPlayer
-    from kalinka_server.stream_state import AudioGraphNodeState, StateMonitor
-    from kalinka_server.renderer_sessions import CloseReason
-
-    closed: list = []
-
-    class _Session:
-        renderer_id = "rid-a"
-
-        async def close(self, reason):
-            closed.append(reason)
-
-    player = RendererPlayer(
-        SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), StateMonitor()
-    )
-    player._session = _Session()
-
-    await player.release_unless_on("rid-a")
-    assert closed == [] and player._session is not None
-
-    await player.release_unless_on("rid-b")
-    assert closed == [CloseReason.CLOSED_BY_SERVER]
-    assert player.get_state().state is AudioGraphNodeState.STOPPED
-
-
 async def test_a_module_still_hears_the_end_of_the_playback_it_was_given():
     """Switching renderers stops playback first, but the STOPPED crosses the
     bus's threads and may land after ownership has moved. The module that was

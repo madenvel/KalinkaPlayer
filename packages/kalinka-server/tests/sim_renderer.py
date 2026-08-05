@@ -53,6 +53,9 @@ class SimRenderer:
         self.volume_supported = True
         self.config_updates: list[dict] = []
         self.volume_policies: list[tuple[str, object]] = []
+        # Set accept=False to play a renderer another Core already holds.
+        self.accept = True
+        self.busy_owner = "another-core"
         # A RendererConfigService to answer config updates through; without it
         # updates are recorded but never acknowledged (the caller times out).
         self.configs = None
@@ -75,8 +78,18 @@ class SimRenderer:
     async def send_session_open(
         self, session_id: str, volume_mode: str = "", volume_percent=None
     ) -> None:
-        self.session_id = session_id
         self.volume_policies.append((volume_mode, volume_percent))
+        if not self.accept:
+            self.pool.handle_open_result(
+                self.RENDERER_ID,
+                session_id=session_id,
+                accepted=False,
+                busy=True,
+                detail="another playback session is running",
+                owner_server_id=self.busy_owner,
+            )
+            return
+        self.session_id = session_id
         self.pool.handle_open_result(
             self.RENDERER_ID,
             session_id=session_id,

@@ -49,7 +49,7 @@ from .stream_state import (
     StreamState,
     StreamType,
 )
-from .renderer_registry import RendererRegistry
+from .renderer_registry import RendererRegistry, RendererUnavailable
 from .renderer_sessions import SessionPool
 
 
@@ -129,6 +129,9 @@ class PlayQueueImpl(PlayQueueController):
     ):
         super().__init__()
         self.event_emitter = event_emitter
+        self._config = config
+        self._registry = renderer_registry
+        self._sessions = renderer_sessions
         # One monitor for the queue's whole life; players come and go behind
         # it, so switching renderers never re-points the state listener.
         self.state_monitor = StateMonitor()
@@ -139,9 +142,7 @@ class PlayQueueImpl(PlayQueueController):
                 state=AudioGraphNodeState.STOPPED, timestamp=time.monotonic_ns()
             )
         )
-        self._track_player = RendererPlayer(
-            config, renderer_registry, renderer_sessions, self.state_monitor
-        )
+        self._track_player = self._new_player()
         self.current_track_id = 0
         self.current_format = None
         self.track_list: list[TrackInfo] = []
@@ -507,9 +508,59 @@ class PlayQueueImpl(PlayQueueController):
     async def stop(self):
         self._track_player.stop()
 
+    def _new_player(self) -> RendererPlayer:
+        return RendererPlayer(
+            self._config, self._registry, self._sessions, self.state_monitor
+        )
+
     @serialised
-    async def release_unless_on(self, renderer_id: Optional[str]):
-        await self._track_player.release_unless_on(renderer_id)
+    async def switch_renderer(self, renderer_id: Optional[str]) -> None:
+        """Move playback to the renderer this selection resolves to.
+
+        The target is claimed before the current renderer is given up, so one
+        that is busy or unreachable raises and leaves playback where it was.
+        Past that the switch is committed: the old session stops, which clients
+        see as a STOPPED, and the track restarts on the new renderer from the
+        beginning. An idle queue claims nothing — the selection just takes
+        effect at the next play.
+        """
+        target = self._registry.resolve_active(renderer_id)
+        old = self._track_player
+        if old.renderer_id is None or old.renderer_id == target:
+            return
+        if target is None:
+            raise RendererUnavailable("no renderer is connected")
+
+        player = self._new_player()
+        await player.open(target, announce=False)
+
+        resume = (
+            self.current_track_id
+            if old.get_state().state
+            in (
+                AudioGraphNodeState.PREPARING,
+                AudioGraphNodeState.STREAMING,
+                AudioGraphNodeState.PAUSED,
+            )
+            else None
+        )
+        # Before the stop, not after: the STOPPED reaches _process_state_update
+        # while `old` is still current, and a queued stream would restart it.
+        self.prepared_tracks.clear()
+        self.current_stream_id = None
+        self._cancel_prefetch_timer()
+
+        await old.release()
+        await old.shutdown()
+        self._track_player = player
+        await player.announce()
+        logger.info("Playback moved to renderer %s", target)
+        if resume is not None:
+            self._begin_resolution(
+                resume,
+                resolve=lambda: self._resolve_playable(resume, 1),
+                next_step=self._play_resolved,
+            )
 
     @serialised
     async def add(self, tracks: list[TrackInfo], index: Optional[int] = None):
