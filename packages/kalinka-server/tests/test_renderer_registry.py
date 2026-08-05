@@ -146,6 +146,20 @@ async def test_selection_wins_while_connected_and_survives_offline():
     await registry.shutdown()
 
 
+async def test_resolve_active_answers_without_committing_the_choice():
+    """The selection endpoint stops playback before pinning, so it needs to
+    know where the choice leads while the old one is still in force."""
+    registry = RendererRegistry(offline_timeout_s=60)
+    _register(registry, object(), renderer_id="rid-a")
+    _register(registry, object(), renderer_id="rid-b")
+
+    assert registry.resolve_active("rid-b") == "rid-b"
+    assert registry.resolve_active(None) == "rid-a"  # automatic
+    assert registry.resolve_active("rid-gone") == "rid-a"  # unknown: fall back
+    assert registry.active_id() == "rid-a"  # nothing was pinned
+    await registry.shutdown()
+
+
 async def test_two_renderers_are_independent():
     registry = RendererRegistry(offline_timeout_s=0.05)
     a, b = object(), object()

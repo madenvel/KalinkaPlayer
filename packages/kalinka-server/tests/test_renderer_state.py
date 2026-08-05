@@ -1,5 +1,6 @@
 from kalinka_server import renderer_state
 from kalinka_server.renderer_proto import renderer_pb2 as pb
+from kalinka_server.renderer_state import StateChange
 
 
 def full_snapshot():
@@ -28,7 +29,7 @@ def full_snapshot():
 
 def test_snapshot_replaces_the_whole_state():
     state = renderer_state.apply(
-        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+        renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
     )
 
     assert state["playback_state"] == "playing"
@@ -44,7 +45,7 @@ def test_snapshot_replaces_the_whole_state():
 
 def test_absent_optionals_read_as_none():
     state = renderer_state.apply(
-        renderer_state.empty_state(), "state_snapshot", pb.StateSnapshot()
+        renderer_state.empty_state(), StateChange.SNAPSHOT, pb.StateSnapshot()
     )
 
     assert state["current_source"] is None
@@ -57,14 +58,14 @@ def test_absent_optionals_read_as_none():
 
 def test_a_new_source_drops_the_descriptor_of_the_old_one():
     state = renderer_state.apply(
-        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+        renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
     )
 
     changed = pb.SourceChanged()
     changed.source_token = "track-2"
     changed.previous_source_token = "track-1"
     changed.at_unix_ms = 1700000005000
-    state = renderer_state.apply(state, "source_changed", changed)
+    state = renderer_state.apply(state, StateChange.SOURCE, changed)
 
     # The event carries a token; the descriptor for it has not been reported.
     assert state["source_token"] == "track-2"
@@ -74,7 +75,7 @@ def test_a_new_source_drops_the_descriptor_of_the_old_one():
 
 def test_changes_patch_only_their_own_fields():
     state = renderer_state.apply(
-        renderer_state.empty_state(), "state_snapshot", full_snapshot()
+        renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
     )
 
     volume = pb.VolumeChanged()
@@ -83,12 +84,12 @@ def test_changes_patch_only_their_own_fields():
     volume.volume.max = 100
     volume.volume.backend = pb.VOLUME_BACKEND_HARDWARE
     volume.external = True
-    state = renderer_state.apply(state, "volume_changed", volume)
+    state = renderer_state.apply(state, StateChange.VOLUME, volume)
 
     fmt = pb.AudioFormatChanged()
     fmt.source_token = "track-1"
     fmt.format.sample_rate_hz = 96000
-    state = renderer_state.apply(state, "audio_format_changed", fmt)
+    state = renderer_state.apply(state, StateChange.FORMAT, fmt)
 
     assert state["volume"] == {
         "supported": True,
@@ -108,7 +109,7 @@ def test_errors_arrive_both_ways():
     failure.error.source = pb.ERROR_SOURCE_HTTP_STREAM
     failure.error.message = "404 from the stream URL"
     failure.error.source_token = "track-1"
-    state = renderer_state.apply(state, "playback_error", failure)
+    state = renderer_state.apply(state, StateChange.ERROR, failure)
 
     assert state["error"] == {
         "source": "http_stream",
@@ -120,7 +121,7 @@ def test_errors_arrive_both_ways():
     changed.state = pb.PLAYBACK_STATE_ERROR
     changed.error.source = pb.ERROR_SOURCE_DECODER
     changed.error.message = "flac decoder gave up"
-    state = renderer_state.apply(state, "playback_state_changed", changed)
+    state = renderer_state.apply(state, StateChange.PLAYBACK, changed)
 
     assert state["playback_state"] == "error"
     assert state["error"]["source"] == "decoder"
@@ -129,6 +130,6 @@ def test_errors_arrive_both_ways():
     # A state change without an error clears the one that was there.
     recovered = pb.PlaybackStateChanged()
     recovered.state = pb.PLAYBACK_STATE_STOPPED
-    state = renderer_state.apply(state, "playback_state_changed", recovered)
+    state = renderer_state.apply(state, StateChange.PLAYBACK, recovered)
 
     assert state["error"] is None

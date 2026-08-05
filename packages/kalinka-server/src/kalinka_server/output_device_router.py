@@ -24,7 +24,7 @@ import logging
 from typing import TYPE_CHECKING, Callable, Mapping, Optional
 
 from kalinka_plugin_sdk import ModuleHealthState
-from kalinka_plugin_sdk.datamodel import DeviceVolume
+from kalinka_plugin_sdk.datamodel import DeviceVolume, PlayerStateEnum
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEvent, ExtDeviceState
 
@@ -34,6 +34,7 @@ from .renderer_output_device import (
     RendererVolumeStyle,
     wire_volume_mode,
 )
+from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry
 
 if TYPE_CHECKING:  # avoids a cycle: player_setup builds the router
@@ -68,12 +69,12 @@ class RoutedDeviceEmitter:
 
 
 class _FilteredStream:
-    """Passes through only what arrives while the owning check holds."""
+    """Passes through only what the accept check lets through."""
 
-    def __init__(self, inner, owns: Callable[[], bool]):
+    def __init__(self, inner, accept: Callable[[object], bool]):
         self._inner = inner
         self._stream = None
-        self._owns = owns
+        self._accept = accept
 
     async def __aenter__(self):
         self._stream = await self._inner.__aenter__()
@@ -88,8 +89,17 @@ class _FilteredStream:
     async def __anext__(self):
         while True:
             item = await self._stream.__anext__()
-            if self._owns():
+            if self._accept(item):
                 return item
+
+
+def _playback_state(item) -> Optional[PlayerStateEnum]:
+    """The player state an event carries: a state change holds it directly, a
+    replay through its queue snapshot. None for anything else."""
+    state = getattr(item, "state", None)
+    if state is None:
+        return None
+    return getattr(getattr(state, "playback_state", state), "state", None)
 
 
 class RoutedPlaybackListener:
@@ -99,25 +109,44 @@ class RoutedPlaybackListener:
     amp wired to one renderer has no business reacting to a track playing on
     another, which would otherwise have it adjusting its own volume for
     somebody else's playback.
+
+    The one exception is the end of a playback the module was told about.
+    Selecting another renderer stops playback first, but the STOPPED that
+    follows travels through the bus's fan-out and worker threads and may only
+    reach the module after ownership has moved. Dropping it would strand the
+    module mid-track — an amp left with a ReplayGain offset applied for a
+    track that is no longer playing.
     """
 
     def __init__(self, plugin_id: str, bus, router: "OutputDeviceRouter"):
         self._plugin_id = plugin_id
         self._bus = bus
         self._router = router
+        self._playing = False
 
     def _owns_output(self) -> bool:
         return self._router.current_name() == self._plugin_id
 
+    def _accept(self, item) -> bool:
+        state = _playback_state(item)
+        if self._owns_output():
+            if state is not None:
+                self._playing = state is not PlayerStateEnum.STOPPED
+            return True
+        if self._playing and state is PlayerStateEnum.STOPPED:
+            self._playing = False
+            return True
+        return False
+
     def stream(self, event_types):
-        return _FilteredStream(self._bus.stream(event_types), self._owns_output)
+        return _FilteredStream(self._bus.stream(event_types), self._accept)
 
     def subscribe(self, event_types, callback=None, listener_id=None):
         if callback is None:
             return self._bus.subscribe(event_types, None, listener_id)
 
         def _gated(item):
-            if self._owns_output():
+            if self._accept(item):
                 callback(item)
 
         return self._bus.subscribe(event_types, _gated, listener_id)
@@ -133,17 +162,19 @@ class OutputDeviceRouter:
     def __init__(
         self,
         registry: RendererRegistry,
+        prefs: RendererPreferences,
         devices: Callable[[], Mapping[str, "PreparedPlugin"]],
         bus: Optional["EventBus"] = None,
     ):
         self._registry = registry
+        self._prefs = prefs
         self._devices = devices
         self._bus = bus
 
     def current_name(self) -> str:
         """Plugin id of the module in charge, delegated or not."""
         active = self._registry.active_id()
-        delegate = self._registry.volume_control(active) if active else None
+        delegate = self._prefs.volume_control(active) if active else None
         return delegate or RendererOutputPlugin.PLUGIN_ID
 
     def current(self) -> Optional[ExternalOutputDevice]:
@@ -171,7 +202,7 @@ class OutputDeviceRouter:
         never played through, so a new one starts somewhere safe rather than
         wherever its mixer happened to be left.
         """
-        if self._registry.volume_control(renderer_id):
+        if self._prefs.volume_control(renderer_id):
             return (wire_volume_mode(RendererVolumeStyle.fixed), 100)
 
         config = self._renderer_config()
@@ -179,7 +210,7 @@ class OutputDeviceRouter:
         default_volume = getattr(config, "default_volume", DEFAULT_VOLUME)
         if style is RendererVolumeStyle.fixed:
             return (wire_volume_mode(style), default_volume)
-        if not self._registry.volume_seeded(renderer_id):
+        if not self._prefs.volume_seeded(renderer_id):
             return (wire_volume_mode(style), default_volume)
         return (wire_volume_mode(style), None)
 

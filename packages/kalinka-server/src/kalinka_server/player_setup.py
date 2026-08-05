@@ -42,6 +42,7 @@ from .module_timeout import TimeLimitedInputModule
 from .output_device_router import OutputDeviceRouter
 from .playqueue import PlayQueueImpl
 from .renderer_output_device import RendererOutputPlugin
+from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import SessionPool
 from .text_embedder import SharedTextEmbedder
@@ -720,6 +721,7 @@ async def setup(
     config: KalinkaConfig,
     overrides: MutableMapping[str, Any],
     renderer_registry: RendererRegistry,
+    renderer_prefs: RendererPreferences,
     renderer_sessions: SessionPool,
     overrides_file: str | None = None,
 ) -> PlayerContext:
@@ -765,7 +767,10 @@ async def setup(
     # Built before the plugin scan: each device plugin is handed an emitter
     # that only reaches clients while that plugin owns the active renderer.
     player_context.device_router = OutputDeviceRouter(
-        renderer_registry, lambda: modules.prepared_devices, device_eventbus
+        renderer_registry,
+        renderer_prefs,
+        lambda: modules.prepared_devices,
+        device_eventbus,
     )
 
     # Scan and setup plugins

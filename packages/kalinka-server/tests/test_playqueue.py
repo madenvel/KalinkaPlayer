@@ -25,7 +25,7 @@ from kalinka_plugin_sdk import (
 )
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
-from kalinka_server.renderer_player import AudioGraphNodeState, StreamErrorSource
+from kalinka_server.stream_state import AudioGraphNodeState, StreamErrorSource
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
 

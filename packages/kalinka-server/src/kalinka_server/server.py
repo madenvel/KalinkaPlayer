@@ -76,11 +76,12 @@ from .queue_ws_handler import (
 from .device_ws_handler import (
     handle_websocket_connection as handle_device_websocket_connection,
 )
-from .renderer_ws_handler import RendererSession, handle_renderer_connection
+from .renderer_link import RendererLink
+from .renderer_ws_handler import handle_renderer_connection
 from .renderer_config import RendererConfigService
 from .renderer_prefs import RendererPreferences
-from .renderer_registry import RendererRegistry
-from .renderer_sessions import RendererUnavailable, SessionPool
+from .renderer_registry import RendererRegistry, RendererUnavailable
+from .renderer_sessions import SessionPool
 from .server_identity import get_server_id
 
 
@@ -268,7 +269,7 @@ async def create_app(
     app.state.overrides = dict(overrides)
     # Renderer services exist before the play queue: playback runs through a
     # renderer session, so the queue needs the registry and the session pool.
-    async def _replace_renderer_session(old_session: RendererSession):
+    async def _replace_renderer_session(old_session: RendererLink):
         await old_session.replace()
 
     renderer_prefs = RendererPreferences(
@@ -288,6 +289,7 @@ async def create_app(
         config,
         app.state.overrides,
         renderer_registry,
+        renderer_prefs,
         renderer_sessions,
         app.state.overrides_file,
     )
@@ -430,7 +432,7 @@ async def create_app(
     # Marked only once the session is actually running, so a refused open does
     # not cost a renderer its one safe-level seeding.
     renderer_sessions.add_open_hook(
-        lambda session: renderer_registry.mark_volume_seeded(session.renderer_id)
+        lambda session: renderer_prefs.mark_volume_seeded(session.renderer_id)
     )
 
     @app.get("/queue/list")
@@ -1357,8 +1359,11 @@ async def create_app(
     async def renderer_list():
         """Known renderers, their connection status, and which module controls
         each one's volume, with the modules available to be picked."""
+        renderers = renderer_registry.list()
+        for row in renderers:
+            row["volume_control"] = renderer_prefs.volume_control(row["renderer_id"])
         return {
-            "renderers": renderer_registry.list(),
+            "renderers": renderers,
             "volume_control_modules": _volume_control_modules(),
         }
 
@@ -1390,8 +1395,12 @@ async def create_app(
         renderer_id = payload.get("renderer_id")
         if renderer_id is not None and renderer_registry.get(renderer_id) is None:
             raise HTTPException(status_code=404, detail="Unknown renderer")
+        # Stop first, switch second: the STOPPED then reaches the device module
+        # and the automation while the renderer that was playing is still the
+        # active one, so power-off and gain reset land on the right device.
+        next_active = renderer_registry.resolve_active(renderer_id)
+        await app.state.player_context.playqueue.release_unless_on(next_active)
         renderer_registry.select(renderer_id)
-        await app.state.player_context.playqueue.apply_renderer_selection()
         await device_router.resync()
         return _renderer_selection()
 
@@ -1412,7 +1421,12 @@ async def create_app(
                 status_code=400,
                 detail=f"'{module}' is not an enabled device module with volume control",
             )
-        renderer_registry.set_volume_control(renderer_id, module)
+        renderer_prefs.set_volume_control(renderer_id, module)
+        logger.info(
+            "Renderer %s volume control: %s",
+            renderer_id,
+            module or "renderer itself",
+        )
         await device_router.resync()
         return {"renderer_id": renderer_id, "volume_control": module}
 

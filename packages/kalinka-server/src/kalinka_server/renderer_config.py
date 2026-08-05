@@ -19,9 +19,10 @@ import logging
 from typing import Any, Optional
 
 from . import renderer_state
+from .renderer_link import RendererLink
 from .renderer_proto import renderer_pb2 as pb
-from .renderer_registry import RendererRegistry, RendererStatus
-from .renderer_sessions import DEFAULT_TIMEOUT_S, RendererUnavailable
+from .renderer_registry import RendererRegistry, RendererUnavailable
+from .renderer_sessions import DEFAULT_TIMEOUT_S
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -127,15 +128,8 @@ class RendererConfigService:
         finally:
             self._pending.pop(key, None)
 
-    def _connection(self, renderer_id: str):
-        record = self._registry.get(renderer_id)
-        if (
-            record is None
-            or record.status is not RendererStatus.CONNECTED
-            or record.session is None
-        ):
-            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
-        return record.session
+    def _connection(self, renderer_id: str) -> RendererLink:
+        return self._registry.require_session(renderer_id)
 
     def handle_reply(self, renderer_id: str, in_reply_to: int, message: Any) -> None:
         future = self._pending.get((renderer_id, in_reply_to))

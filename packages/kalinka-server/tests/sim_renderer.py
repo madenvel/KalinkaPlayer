@@ -20,6 +20,7 @@ from typing import Optional
 from kalinka_server.renderer_proto import renderer_pb2 as pb
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
+from kalinka_server.renderer_state import StateChange
 
 SAMPLE_RATE = 44100
 CHANNELS = 2
@@ -84,7 +85,7 @@ class SimRenderer:
             detail="",
             owner_server_id="",
         )
-        self._send("state_snapshot", self._snapshot())
+        self._send(StateChange.SNAPSHOT, self._snapshot())
 
     async def send_session_close(self, session_id: str, reason) -> None:
         if session_id == self.session_id:
@@ -135,9 +136,9 @@ class SimRenderer:
             self.volume = min(command.set_volume.percent, 100)
             changed = pb.VolumeChanged()
             self._fill_volume(changed.volume)
-            self._send("volume_changed", changed)
+            self._send(StateChange.VOLUME, changed)
         elif op == "request_snapshot":
-            self._send("state_snapshot", self._snapshot())
+            self._send(StateChange.SNAPSHOT, self._snapshot())
 
     def next_message_id(self) -> int:
         self._message_id += 1
@@ -183,7 +184,7 @@ class SimRenderer:
         state.error.source = pb.ERROR_SOURCE_HTTP_STREAM
         state.error.message = message
         state.at_unix_ms = _NOW_UNIX_MS
-        self._send("playback_state_changed", state)
+        self._send(StateChange.PLAYBACK, state)
 
     # ------------------------------------------------------------------
     # The simulated graph
@@ -212,12 +213,12 @@ class SimRenderer:
         if previous is not None:
             changed.previous_source_token = previous
         changed.at_unix_ms = _NOW_UNIX_MS
-        self._send("source_changed", changed)
+        self._send(StateChange.SOURCE, changed)
         self._emit_state(pb.PLAYBACK_STATE_PREPARING, token)
         fmt = pb.AudioFormatChanged()
         fmt.source_token = token
         self._fill_format(fmt.format)
-        self._send("audio_format_changed", fmt)
+        self._send(StateChange.FORMAT, fmt)
         self._emit_state(pb.PLAYBACK_STATE_PLAYING, token)
 
     def _fill_format(self, out: pb.AudioFormat) -> None:
@@ -239,7 +240,7 @@ class SimRenderer:
         if token is not None:
             state.source_token = token
         state.at_unix_ms = _NOW_UNIX_MS
-        self._send("playback_state_changed", state)
+        self._send(StateChange.PLAYBACK, state)
 
     def _snapshot(self) -> pb.StateSnapshot:
         snapshot = pb.StateSnapshot()
@@ -264,12 +265,12 @@ class SimRenderer:
             else pb.VOLUME_BACKEND_NONE
         )
 
-    def _send(self, payload: str, message) -> None:
+    def _send(self, change: StateChange, message) -> None:
         if self.session_id is None:
             return
         self.pool.handle_state(
             self.RENDERER_ID,
             session_id=self.session_id,
-            payload=payload,
+            change=change,
             message=message,
         )

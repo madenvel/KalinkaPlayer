@@ -3,11 +3,11 @@ import asyncio
 import pytest
 
 from kalinka_server.renderer_proto import renderer_pb2 as pb
-from kalinka_server.renderer_registry import RendererRegistry
+from kalinka_server.renderer_registry import RendererRegistry, RendererUnavailable
+from kalinka_server.renderer_state import StateChange
 from kalinka_server.renderer_sessions import (
     CloseReason,
     RendererBusy,
-    RendererUnavailable,
     SessionNotActive,
     SessionOpenFailed,
     SessionPool,
@@ -66,10 +66,10 @@ class FakeWs:
         rejection.detail = detail
         self.pool.handle_rejection(RENDERER_ID, rejection=rejection)
 
-    def send_state(self, session_id, payload, message):
+    def send_state(self, session_id, change, message):
         """The renderer reporting state, unprompted."""
         self.pool.handle_state(
-            RENDERER_ID, session_id=session_id, payload=payload, message=message
+            RENDERER_ID, session_id=session_id, change=change, message=message
         )
 
     async def send_session_close(self, session_id, reason):
@@ -561,9 +561,9 @@ async def test_state_messages_update_the_session():
     register(registry, ws)
     session = await pool.open(RENDERER_ID)
     seen: list[str] = []
-    session.on_state(lambda s, payload, state: seen.append(payload))
+    session.on_state(lambda s, change, state: seen.append(change))
 
-    ws.send_state(session.session_id, "state_snapshot", snapshot_message())
+    ws.send_state(session.session_id, StateChange.SNAPSHOT, snapshot_message())
     assert session.snapshot["playback_state"] == "playing"
     assert session.snapshot["source_token"] == "track-1"
     assert session.snapshot["current_source"]["mime_type"] == "audio/flac"
@@ -580,12 +580,12 @@ async def test_state_messages_update_the_session():
     changed.position_valid = True
     changed.source_token = "track-1"
     changed.at_unix_ms = 1700000009000
-    ws.send_state(session.session_id, "playback_state_changed", changed)
+    ws.send_state(session.session_id, StateChange.PLAYBACK, changed)
 
     assert session.snapshot["playback_state"] == "paused"
     assert session.snapshot["position_ms"] == 9000
     assert session.snapshot["current_source"]["source_token"] == "track-1"
-    assert seen == ["state_snapshot", "playback_state_changed"]
+    assert seen == [StateChange.SNAPSHOT, StateChange.PLAYBACK]
 
 
 @pytest.mark.asyncio
@@ -595,7 +595,7 @@ async def test_state_for_another_session_is_ignored():
     register(registry, ws)
     session = await pool.open(RENDERER_ID)
 
-    ws.send_state("some-other-session", "state_snapshot", snapshot_message())
+    ws.send_state("some-other-session", StateChange.SNAPSHOT, snapshot_message())
 
     assert session.snapshot["playback_state"] == "unspecified"
 
