@@ -82,33 +82,29 @@ def volume_style_options() -> list[dict]:
         {
             "value": RendererVolumeStyle.renderer.value,
             "label": "Renderer choice",
-            "description": "Leave volume control as configured on the "
-            "renderer itself.",
+            "description": "Whatever the renderer is set to.",
         },
         {
             "value": RendererVolumeStyle.automatic.value,
             "label": "Automatic",
-            "description": "Use the renderer's device mixer when it has one "
-            "(bit-perfect); otherwise apply software gain.",
+            "description": "Hardware mixer if there is one, software gain "
+            "otherwise.",
         },
         {
             "value": RendererVolumeStyle.driver.value,
             "label": "Driver",
-            "description": "Always use the renderer's device mixer — "
-            "bit-perfect in Kalinka, though the driver may apply it in "
-            "software.",
+            "description": "Always the hardware mixer.",
         },
         {
             "value": RendererVolumeStyle.software.value,
             "label": "Software",
-            "description": "Apply gain in the renderer's player. Works on any "
-            "device, but only bit-perfect at full volume.",
+            "description": "Gain applied in the player. Bit-perfect only at "
+            "full volume.",
         },
         {
             "value": RendererVolumeStyle.fixed.value,
             "label": "Fixed",
-            "description": "No volume control; bit-perfect output at full "
-            "scale (control volume downstream).",
+            "description": "No volume control. Set the level downstream.",
         },
     ]
 
@@ -126,11 +122,9 @@ class RendererOutputConfig(ModuleConfig):
         title="Volume control",
         json_schema_extra={
             "help": (
-                "How the volume slider drives renderers this server plays "
-                "through. \"Renderer choice\" keeps whatever each renderer is "
-                "configured with; any other choice applies for the duration "
-                "of playback and is undone afterwards. Renderers whose volume "
-                "is delegated to another device are unaffected."
+                "How volume is applied on renderers this server plays "
+                "through. Set only while playing; the renderer keeps its own "
+                "setting the rest of the time."
             ),
             "widget": "enum_dropdown",
             "importance": "simple",
@@ -143,10 +137,9 @@ class RendererOutputConfig(ModuleConfig):
         title="Default volume",
         json_schema_extra={
             "help": (
-                "Level applied the first time this server plays through a "
-                "renderer, so a new one starts somewhere safe instead of "
-                "wherever its mixer was left. Also the level used when volume "
-                "control is \"Fixed\"."
+                "Level set the first time this server plays through a "
+                "renderer, so it never starts louder than you expect. Also "
+                "the level used with fixed volume."
             ),
             "importance": "simple",
         },
