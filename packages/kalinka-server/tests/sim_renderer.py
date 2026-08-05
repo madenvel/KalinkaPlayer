@@ -46,6 +46,11 @@ class SimRenderer:
         self.pool = pool
         self.session_id: Optional[str] = None
         self.current: Optional[str] = None  # source token
+        # The graph rests in FINISHED after a source runs out, not STOPPED.
+        self.finished = False
+        # Clear it to play a dropped link: the graph runs on, but state has
+        # nowhere to go and the renderer drops it rather than queueing it.
+        self.linked = True
         self.queued: list[str] = []
         self.position_ms = 0
         self.commands: list[pb.Command] = []
@@ -183,6 +188,7 @@ class SimRenderer:
         if self.queued:
             self._start(self.queued.pop(0))
         else:
+            self.finished = True
             self._emit_state(pb.PLAYBACK_STATE_FINISHED, ended)
 
     def fail_current(self, message: str = "http error") -> None:
@@ -220,6 +226,7 @@ class SimRenderer:
 
     def _start(self, token: str) -> None:
         previous, self.current = self.current, token
+        self.finished = False
         self.position_ms = 0
         changed = pb.SourceChanged()
         changed.source_token = token
@@ -257,11 +264,12 @@ class SimRenderer:
 
     def _snapshot(self) -> pb.StateSnapshot:
         snapshot = pb.StateSnapshot()
-        snapshot.playback_state = (
-            pb.PLAYBACK_STATE_PLAYING
-            if self.current is not None
-            else pb.PLAYBACK_STATE_STOPPED
-        )
+        if self.current is not None:
+            snapshot.playback_state = pb.PLAYBACK_STATE_PLAYING
+        elif self.finished:
+            snapshot.playback_state = pb.PLAYBACK_STATE_FINISHED
+        else:
+            snapshot.playback_state = pb.PLAYBACK_STATE_STOPPED
         snapshot.position_ms = self.position_ms
         snapshot.position_valid = self.current is not None
         snapshot.captured_at_unix_ms = _NOW_UNIX_MS
@@ -279,7 +287,7 @@ class SimRenderer:
         )
 
     def _send(self, change: StateChange, message) -> None:
-        if self.session_id is None:
+        if self.session_id is None or not self.linked:
             return
         self.pool.handle_state(
             self.RENDERER_ID,

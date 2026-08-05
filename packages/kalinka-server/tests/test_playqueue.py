@@ -975,7 +975,73 @@ def _finished_state():
         position=1000,
         timestamp=time.monotonic_ns(),
         stream_info=None,
+        stream_id=None,
     )
+
+
+def _source_changed(stream_id=None):
+    return SimpleNamespace(
+        state=AudioGraphNodeState.SOURCE_CHANGED,
+        error=None,
+        position=0,
+        timestamp=time.monotonic_ns(),
+        stream_info=None,
+        stream_id=stream_id,
+    )
+
+
+def _prepare(playqueue, index, stream_id):
+    playqueue.prepared_tracks[index] = (
+        TrackUrl(url=f"http://example.com/t{index}.flac", format="FLAC"),
+        stream_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_changed_adopts_the_stream_it_names(playqueue):
+    """Two streams are queued and the renderer switches to the second — it
+    skipped the first, so following the queue order would mislabel the track."""
+    await playqueue.add(make_tracks(4))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    _prepare(playqueue, 1, 41)
+    _prepare(playqueue, 2, 42)
+
+    await playqueue._process_state_update(_source_changed(42))
+
+    assert playqueue.current_track_id == 2
+    assert playqueue.current_stream_id == 42
+    assert playqueue.prepared_tracks == {}  # 41 was skipped, not still pending
+
+
+@pytest.mark.asyncio
+async def test_source_changed_naming_the_playing_stream_changes_nothing(playqueue):
+    """A repeated or reconstructed SOURCE_CHANGED must not consume the stream
+    lined up behind the one already playing."""
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    playqueue.current_stream_id = 40
+    _prepare(playqueue, 1, 41)
+
+    await playqueue._process_state_update(_source_changed(40))
+
+    assert playqueue.current_track_id == 0
+    assert playqueue.current_stream_id == 40
+    assert 1 in playqueue.prepared_tracks
+
+
+@pytest.mark.asyncio
+async def test_an_unnamed_source_change_still_follows_the_queue(playqueue):
+    await playqueue.add(make_tracks(3))
+    await asyncio.sleep(0)
+    playqueue.current_track_id = 0
+    _prepare(playqueue, 1, 41)
+
+    await playqueue._process_state_update(_source_changed(None))
+
+    assert playqueue.current_track_id == 1
+    assert playqueue.current_stream_id == 41
 
 
 @pytest.mark.asyncio

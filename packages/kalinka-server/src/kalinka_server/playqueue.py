@@ -222,13 +222,7 @@ class PlayQueueImpl(PlayQueueController):
                 self._retry_pending = False
             else:
                 self._retry_attempted = False
-            if self.prepared_tracks:
-                item = self.prepared_tracks.popitem(last=False)
-                self.current_track_id = item[0]
-                track_url, stream_id = item[1]
-                self.current_format = track_url.format
-                self.current_stream_id = stream_id
-                self._request_more_tracks()
+            self._adopt_source(new_state.stream_id)
             return
         elif new_state.state == AudioGraphNodeState.ERROR:
             if (
@@ -434,6 +428,41 @@ class PlayQueueImpl(PlayQueueController):
         sid = self._next_stream_id
         self._next_stream_id += 1
         return sid
+
+    def _adopt_source(self, stream_id: Optional[int]) -> None:
+        """Take up the stream the renderer switched to.
+
+        It names the stream, so a switch we did not watch happen — one the
+        renderer made while it was unreachable, or one that skipped a stream it
+        could not open — lands on the track that is really playing rather than
+        on whatever sits at the head of the prepared map.
+        """
+        if stream_id is not None and stream_id == self.current_stream_id:
+            return
+        index = self._prepared_index_of(stream_id)
+        if index is None:
+            if not self.prepared_tracks:
+                return
+            index = next(iter(self.prepared_tracks))
+        entry = None
+        while self.prepared_tracks:
+            popped, entry = self.prepared_tracks.popitem(last=False)
+            if popped == index:
+                break
+        if entry is None:
+            return
+        track_info, self.current_stream_id = entry
+        self.current_track_id = index
+        self.current_format = track_info.format
+        self._request_more_tracks()
+
+    def _prepared_index_of(self, stream_id: Optional[int]) -> Optional[int]:
+        if stream_id is None:
+            return None
+        for index, (_, prepared_id) in self.prepared_tracks.items():
+            if prepared_id == stream_id:
+                return index
+        return None
 
     def _clear_prepared_streams(self) -> None:
         """Remove every prefetched stream and empty the prepared map."""
