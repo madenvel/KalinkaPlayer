@@ -8,3 +8,44 @@ explicit decision, and permission to commit is never permission to push.
 
 Committing locally is fine when asked for. When work is ready, say so and let
 the user decide whether it goes out.
+
+## Comments
+
+No AI slop. The default is **no comment**: code that needs a comment to be
+understood usually needs a better name instead. When a comment does earn its
+place — a non-obvious invariant, a workaround, a reason — keep it to one short
+line that says *why*, never *what*. Do not narrate the code, do not restate the
+signature, do not leave section banners. This applies to every language in the
+repo.
+
+## No TODOs
+
+Never leave `TODO`, `FIXME`, or `XXX` behind. Either do the work now, or leave
+the code correct as-is and tell the user in your reply what remains — the
+conversation is the backlog, not the source.
+
+## Design
+
+Follow SOLID. Classes get one reason to change, depend on abstractions rather
+than concrete collaborators, and stay substitutable for the interfaces they
+implement.
+
+When a change would be easier by bolting onto something that already breaks the
+design, prefer refactoring the hack away over deepening it. But **ask first if
+the refactoring is massive** — touching many files, changing a public interface,
+or reshaping a subsystem. Small, local cleanups on the path of the change need
+no permission.
+
+## Tests
+
+Unit tests are mandatory, and especially so in the C++ code — a change to
+`packages/kalinka-renderer/src/native_player/` ships with tests in
+`packages/kalinka-renderer/tests/native_player/` in the same commit.
+
+The audio graph is the fragile part: any change reaching `AudioGraphNode`,
+`AudioPlayer`, `AudioStreamSwitcher`, the decoders, or `AlsaAudioEmitter` must
+be reviewed for regressions against the existing suite, and the suite must be
+run (`ctest` on the `kalinka-renderer-tests` target), not assumed to pass.
+
+Exception: the server's playqueue suite is slow and flaky — skip
+it when that code is untouched.
