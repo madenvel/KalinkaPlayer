@@ -144,6 +144,7 @@ if(GTest_FOUND)
     src/net/WsTransport.cpp
     src/player/StateTranslator.cpp
     tests/test_alsa_device_naming.cpp
+    tests/test_audio_player.cpp
     tests/test_config_service.cpp
     tests/test_decoder_start_offset.cpp
     tests/test_discovery_cache.cpp
@@ -155,14 +156,33 @@ if(GTest_FOUND)
     tests/test_stream_identity.cpp
     tests/test_switcher_concurrency.cpp
     tests/test_ws_transport.cpp
+    tests/native_player/AlsaAudioEmitter_test.cpp
+    tests/native_player/AudioGraphHttpStream_test.cpp
+    tests/native_player/AudioPlayer_test.cpp
+    tests/native_player/AudioSampleFormat_test.cpp
+    tests/native_player/AudioStreamSwitcher_test.cpp
+    tests/native_player/Buffer_test.cpp
+    tests/native_player/FileInputNode_test.cpp
+    tests/native_player/FlacStreamDecoder_test.cpp
+    tests/native_player/Mp3StreamDecoder_test.cpp
+    tests/native_player/SineWaveNode_test.cpp
+    tests/native_player/StateMonitor_test.cpp
+    tests/native_player/Utils_test.cpp
+    tests/native_player/integration_test.cpp
   )
   target_link_libraries(kalinka-renderer-tests PRIVATE
     kalinka_renderer_core
     kalinka_native_player
+    GTest::gmock
     GTest::gtest_main
   )
   target_compile_definitions(kalinka-renderer-tests PRIVATE
     KALINKA_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+    KALINKA_TEST_FILES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/native_player/files"
+  )
+  target_include_directories(kalinka-renderer-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/native_player
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_player
   )
   include(GoogleTest)
   # TIMEOUT: a deadlock regression hangs instead of failing.
