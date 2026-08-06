@@ -116,6 +116,14 @@ TEST_F(ConfigServiceTest, VersionCoversShapeAndOptionsButNeverValues) {
   EXPECT_NE(snapshot().config_version(), before);
 }
 
+TEST_F(ConfigServiceTest, VersionCoversWhichPageAFieldIsOn) {
+  const std::string before = snapshot().config_version();
+
+  player->bufferImportance = pb::CONFIG_IMPORTANCE_SIMPLE;
+
+  EXPECT_NE(snapshot().config_version(), before);
+}
+
 TEST_F(ConfigServiceTest, AValidWriteReachesThePlayer) {
   player->driverOptions = {"alsa", "pipewire"};
 

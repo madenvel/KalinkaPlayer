@@ -431,6 +431,16 @@ enum ApplyCost {
   APPLY_COST_RESTART_REQUIRED = 3;      // takes effect when the renderer restarts
 }
 
+// Which page a field belongs on. The renderer decides: it is the one that
+// knows which of its settings a user is meant to reach for and which are there
+// for a card that misbehaves. A renderer from before the tier says nothing,
+// and what it declares stays where it has always been shown.
+enum ConfigImportance {
+  CONFIG_IMPORTANCE_UNSPECIFIED = 0;
+  CONFIG_IMPORTANCE_SIMPLE = 1;  // the settings page proper
+  CONFIG_IMPORTANCE_EXPERT = 2;  // found by looking for it, not by scrolling
+}
+
 // One choice for an ENUM field. The device list is this: `value` is whatever
 // the renderer opens (an ALSA PCM name, a WASAPI endpoint id), opaque to the
 // Core, and `label` is what the user picks from.
@@ -450,6 +460,7 @@ message ConfigField {
   repeated ConfigOption options = 7;  // ENUM only
   ApplyCost apply = 8;
   bool read_only = 9;
+  ConfigImportance importance = 10;
 }
 
 message ConfigSection {

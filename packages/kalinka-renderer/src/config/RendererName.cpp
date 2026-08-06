@@ -62,6 +62,7 @@ void RendererName::fillConfig(pb::ConfigSection &out) const {
   name->set_default_value(defaultRendererName());
   name->set_apply(pb::APPLY_COST_RESTART_REQUIRED);
   name->set_read_only(!commandLineName_.empty());
+  name->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
 }
 
 bool RendererName::applyConfig(const std::string &path,

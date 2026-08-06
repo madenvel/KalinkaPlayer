@@ -25,6 +25,8 @@ public:
                                             {"output.exclusive", "false"}};
   std::vector<std::string> driverOptions{"alsa"};
   bool driverReadOnly = false;
+  kalinka::renderer::v1::ConfigImportance bufferImportance =
+      kalinka::renderer::v1::CONFIG_IMPORTANCE_EXPERT;
   bool refuseApply = false;
   // In-effect value may differ from what was asked; empty = store as given.
   std::string normalizedSuffix;
@@ -78,6 +80,7 @@ public:
     buffer->set_type(pb::CONFIG_FIELD_TYPE_INT);
     buffer->set_value(values.at("output.buffer_ms"));
     buffer->set_apply(pb::APPLY_COST_INSTANT);
+    buffer->set_importance(bufferImportance);
 
     pb::ConfigField *exclusive = out.add_fields();
     exclusive->set_path("output.exclusive");

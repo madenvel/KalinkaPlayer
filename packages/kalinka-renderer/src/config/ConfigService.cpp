@@ -20,6 +20,7 @@ std::string versionOf(const pb::ConfigSnapshot &snapshot) {
       blob += field.path() + '\x1f' + field.title() + '\x1f' +
               std::to_string(field.type()) + '\x1f' +
               std::to_string(field.apply()) + '\x1f' +
+              std::to_string(field.importance()) + '\x1f' +
               (field.read_only() ? "1" : "0");
       for (const pb::ConfigOption &option : field.options()) {
         blob += '\x1f' + option.value();

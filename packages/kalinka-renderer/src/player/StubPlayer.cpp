@@ -46,6 +46,7 @@ void StubPlayer::fillConfig(pb::ConfigSection &out) const {
   driver->set_value(settings_.at("output.driver"));
   driver->set_default_value("alsa");
   driver->set_apply(pb::APPLY_COST_RESTART_REQUIRED);
+  driver->set_importance(pb::CONFIG_IMPORTANCE_EXPERT);
   pb::ConfigOption *alsa = driver->add_options();
   alsa->set_value("alsa");
   alsa->set_label("ALSA");
@@ -60,6 +61,7 @@ void StubPlayer::fillConfig(pb::ConfigSection &out) const {
   device->set_value(settings_.at("output.device"));
   device->set_default_value("default");
   device->set_apply(pb::APPLY_COST_INTERRUPTS_PLAYBACK);
+  device->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
   // No enumerator without an audio graph, so no options: an empty list is the
   // truth, and the config layer refuses writes against it.
 }
