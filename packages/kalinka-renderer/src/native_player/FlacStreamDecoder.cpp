@@ -256,8 +256,10 @@ void FlacStreamDecoder::handleSeekSignal(size_t position) {
   }
   buffer.clear();
   if (position >= flacStreamInfo.value().total_samples) {
+    // Answered with where it landed, not what was asked for, as a seek
+    // anywhere else is.
     restartRunAt(flacStreamInfo.value().total_samples);
-    seekSignal.respond(position);
+    seekSignal.respond(flacStreamInfo.value().total_samples);
     return;
   }
 
@@ -285,8 +287,12 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
     bool retval = process_until_end_of_metadata();
     throwOnFlacError(retval);
 
-    processStartOffset();
-    setStreamingState();
+    // Absent metadata, the stream never began: leave the error that says so
+    // rather than replacing it with one about the metadata.
+    if (flacStreamInfo.has_value()) {
+      processStartOffset();
+      setStreamingState();
+    }
 
     while (!token.stop_requested()) {
       while (!token.stop_requested()) {
