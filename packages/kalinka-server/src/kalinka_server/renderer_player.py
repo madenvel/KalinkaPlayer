@@ -111,8 +111,11 @@ class RendererPlayer:
         renderer can play again. An async callback runs on its own."""
         self._interrupted = callback
 
-    def append(self, stream_id: int, url: str, mime_type: str) -> None:
-        self._submit("append", stream_id, url, mime_type)
+    def append(
+        self, stream_id: int, url: str, mime_type: str, start_offset_ms: int = 0
+    ) -> None:
+        """start_offset_ms starts the source partway in, without a seek."""
+        self._submit("append", stream_id, url, mime_type, start_offset_ms)
 
     def remove(self, stream_id: int) -> None:
         self._submit("remove", stream_id)
@@ -185,10 +188,13 @@ class RendererPlayer:
 
     async def _dispatch(self, op: str, *args) -> None:
         if op == "append":
-            stream_id, url, mime_type = args
+            stream_id, url, mime_type, start_offset_ms = args
             session = await self._ensure_session()
             await session.enqueue_source(
-                url, mime_type=mime_type or "", source_token=str(stream_id)
+                url,
+                mime_type=mime_type or "",
+                source_token=str(stream_id),
+                start_offset_ms=start_offset_ms,
             )
             return
         if op == "stop":

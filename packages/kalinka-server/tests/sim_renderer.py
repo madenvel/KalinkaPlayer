@@ -52,6 +52,7 @@ class SimRenderer:
         # nowhere to go and the renderer drops it rather than queueing it.
         self.linked = True
         self.queued: list[str] = []
+        self.start_offsets: dict[str, int] = {}
         self.position_ms = 0
         self.commands: list[pb.Command] = []
         self.volume = 40
@@ -118,12 +119,12 @@ class SimRenderer:
         self.commands.append(copied)
         op = command.WhichOneof("op")
         if op == "enqueue_source":
-            self._enqueue(command.enqueue_source.source.source_token)
+            self._enqueue(command.enqueue_source.source)
         elif op == "set_source":
             displaced = list(self.queued)
             if self.current is not None:
                 displaced.append(self.current)
-            self._enqueue(command.set_source.source.source_token)
+            self._enqueue(command.set_source.source)
             for token in displaced:
                 self._remove(token)
         elif op == "remove_source":
@@ -191,6 +192,12 @@ class SimRenderer:
             self.finished = True
             self._emit_state(pb.PLAYBACK_STATE_FINISHED, ended)
 
+    def report_position(self, position_ms: int) -> None:
+        """The current track has reached position_ms."""
+        self.position_ms = position_ms
+        if self.current is not None:
+            self._emit_state(pb.PLAYBACK_STATE_PLAYING, self.current)
+
     def fail_current(self, message: str = "http error") -> None:
         """The current track's stream breaks mid-play."""
         failed, self.current = self.current, None
@@ -208,7 +215,9 @@ class SimRenderer:
     # ------------------------------------------------------------------
     # The simulated graph
 
-    def _enqueue(self, token: str) -> None:
+    def _enqueue(self, source: pb.Source) -> None:
+        token = source.source_token
+        self.start_offsets[token] = source.start_offset_ms
         if self.current is None:
             self._start(token)
         else:
@@ -227,7 +236,8 @@ class SimRenderer:
     def _start(self, token: str) -> None:
         previous, self.current = self.current, token
         self.finished = False
-        self.position_ms = 0
+        # Where the source was told to begin, as the decoder's start offset.
+        self.position_ms = self.start_offsets.get(token, 0)
         changed = pb.SourceChanged()
         changed.source_token = token
         if previous is not None:
