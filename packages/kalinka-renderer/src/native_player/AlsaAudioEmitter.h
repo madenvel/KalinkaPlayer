@@ -78,7 +78,10 @@ private:
 
   StreamAudioFormat currentStreamAudioFormat;
   PlayedFramesCounter playedFramesCounter;
+  // Absolute in the source's timeline, which need not begin at zero, and
+  // ahead of what has been heard by whatever ALSA still has queued.
   snd_pcm_sframes_t currentSourceTotalFramesWritten = 0;
+  snd_pcm_sframes_t currentSourceStartFrames = 0;
   std::chrono::milliseconds pollTimeout = std::chrono::milliseconds(100);
   snd_pcm_t *pcmHandle = nullptr;
   std::vector<pollfd> ufds;
@@ -104,6 +107,8 @@ private:
   size_t readAndConvertFrames(void *dest, size_t bytes);
 
   void setupAudioFormat(const StreamAudioFormat &streamAudioFormat);
+  snd_pcm_sframes_t queuedFrames();
+  void beginSourceAt(std::optional<long> position);
   StreamState waitForInputToBeReady(std::stop_token token);
   snd_pcm_sframes_t waitForAlsaBufferSpace();
   bool handleInputNodeStateChange();

@@ -8,7 +8,7 @@ StreamState about(AudioGraphNodeState state, std::optional<StreamId> id) {
   stamped.streamId = id;
   return stamped;
 }
-}  // namespace
+} // namespace
 
 AudioStreamSwitcher::AudioStreamSwitcher() {}
 
@@ -147,6 +147,13 @@ size_t AudioStreamSwitcher::waitForDataFor(std::stop_token stopToken,
 }
 
 void AudioStreamSwitcher::acceptSourceChange() { switchToNextSource(); }
+
+std::optional<long> AudioStreamSwitcher::streamReadPosition() const {
+  // Passed through, never cached: the source owns its own timeline.
+  std::lock_guard lock(mutex);
+  return currentInputNode == nullptr ? std::nullopt
+                                     : currentInputNode->streamReadPosition();
+}
 
 size_t AudioStreamSwitcher::seekTo(size_t absolutePosition) {
   std::unique_lock lock(mutex);

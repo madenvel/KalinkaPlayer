@@ -8,10 +8,11 @@
 #include "minimp3/minimp3_ex.h"
 
 Mp3StreamDecoder::Mp3StreamDecoder(std::optional<StreamId> streamId,
-                                   size_t bufferSize)
+                                   size_t bufferSize, size_t startOffsetMs)
     : AudioGraphNode(streamId),
       buffer(bufferSize, std::bind(&Mp3StreamDecoder::onEmptyBuffer, this,
-                                   std::placeholders::_1)) {}
+                                   std::placeholders::_1)),
+      startOffsetMs(startOffsetMs) {}
 
 Mp3StreamDecoder::~Mp3StreamDecoder() {
   if (decodingThread.joinable()) {
@@ -22,7 +23,26 @@ Mp3StreamDecoder::~Mp3StreamDecoder() {
 }
 
 size_t Mp3StreamDecoder::read(void *data, size_t size) {
-  return buffer.read(static_cast<uint8_t *>(data), size);
+  auto readBytes = buffer.read(static_cast<uint8_t *>(data), size);
+  bytesReadInRun += readBytes;
+  return readBytes;
+}
+
+long Mp3StreamDecoder::framesRead() const {
+  const auto frameSize = frameSizeBytes.load();
+  if (frameSize == 0) {
+    return runStartFrame.load(); // not open yet, so nothing has been read
+  }
+  return runStartFrame.load() + bytesReadInRun.load() / frameSize;
+}
+
+std::optional<long> Mp3StreamDecoder::streamReadPosition() const {
+  return framesRead();
+}
+
+void Mp3StreamDecoder::restartRunAt(long frame) {
+  runStartFrame = frame;
+  bytesReadInRun = 0;
 }
 
 size_t Mp3StreamDecoder::waitForData(std::stop_token stopToken, size_t size) {
@@ -115,15 +135,26 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
       throw std::runtime_error("Failed to open MP3 decoder");
     };
 
+    frameSizeBytes = sizeof(mp3d_sample_t) * mp3.info.channels;
     initCompleteSignal.sendValue(true);
 
     constexpr size_t frameBufferSize = MINIMP3_MAX_SAMPLES_PER_FRAME;
     std::array<mp3d_sample_t, frameBufferSize> frameBuffer;
 
+    if (startOffsetMs > 0) {
+      auto startOffsetSamples =
+          static_cast<size_t>(startOffsetMs * mp3.info.hz / 1000);
+      if (startOffsetSamples > mp3.samples / mp3.info.channels) {
+        throw std::runtime_error(
+            "Start offset is greater than the total number of samples");
+      }
+      handleSeekSignal(&mp3, startOffsetSamples);
+    }
+
     while (!token.stop_requested()) {
       while (!token.stop_requested()) {
         if (seekSignal.getValue().has_value()) {
-          handleSeekSignal(&mp3);
+          handleSeekSignal(&mp3, seekSignal.getValue().value());
           continue;
         }
         ssize_t size =
@@ -141,7 +172,7 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
         }
 
         setState(StreamState{
-            AudioGraphNodeState::STREAMING, currentPos,
+            AudioGraphNodeState::STREAMING, framesRead(),
             StreamInfo{
                 .format =
                     StreamAudioFormat{
@@ -182,7 +213,8 @@ void Mp3StreamDecoder::threadRun(std::stop_token token) {
       std::string message =
           std::string("Mp3 decoder thread exception: ") + ex.what();
       spdlog::error(message);
-      setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::DECODER, message}});
+      setState({AudioGraphNodeState::ERROR,
+                StreamError{StreamErrorSource::DECODER, message}});
     }
   }
 
@@ -238,9 +270,8 @@ int Mp3StreamDecoder::seekCallback(uint64_t position) {
   return position - actualPosition;
 }
 
-void Mp3StreamDecoder::handleSeekSignal(void *mp3dec_ex) {
+void Mp3StreamDecoder::handleSeekSignal(void *mp3dec_ex, size_t seekPosFrames) {
   mp3dec_ex_t *mp3 = static_cast<mp3dec_ex_t *>(mp3dec_ex);
-  const auto seekPosFrames = seekSignal.getValue().value();
   // minimp3 returns interleaved data and counts
   // every sample for each channel,so we need
   // to multiply the position by the number of channels.
@@ -274,7 +305,7 @@ void Mp3StreamDecoder::handleSeekSignal(void *mp3dec_ex) {
     throw std::runtime_error("MP3 decoder seek failure");
   }
 
-  currentPos = seekPosFrames;
+  restartRunAt(seekPosFrames);
   spdlog::trace("Mp3StreamDecoder::handleSeekSignal seek to {} -> {}",
-                seekPosFrames, currentPos);
+                seekPosFrames, framesRead());
 }

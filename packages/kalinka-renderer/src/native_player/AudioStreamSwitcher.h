@@ -27,17 +27,17 @@ public:
                                 size_t size) override;
   virtual size_t seekTo(size_t absolutePosition) override;
 
+  virtual std::optional<long> streamReadPosition() const override;
+
   virtual void acceptSourceChange() override;
 
 private:
-  // Renderer delta: SOURCE_CHANGED announces the stream taking over, so
-  // readers never infer it from append order.
   std::optional<StreamId> nextStreamId();
 
   std::list<std::shared_ptr<AudioGraphOutputNode>> inputNodes;
   std::shared_ptr<AudioGraphOutputNode> currentInputNode = nullptr;
 
-  std::mutex mutex;
+  mutable std::mutex mutex;
   std::stop_source stopSource;
 
   int stateCallbackId = -1;

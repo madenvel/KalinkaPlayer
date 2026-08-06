@@ -27,9 +27,11 @@ public:
   // Append a stream under a caller-assigned id (the play queue owns id
   // allocation; ids must be unique among live streams). Playback starts
   // automatically if no non-finished stream is currently active (e.g. after
-  // stop() or clearAll()).
+  // stop() or clearAll()). startOffsetMs begins the stream partway in, so no
+  // seek follows the append.
   void append(StreamId id, const std::string &url,
-              const AudioFormat format = AudioFormat::FormatFlac);
+              const AudioFormat format = AudioFormat::FormatFlac,
+              size_t startOffsetMs = 0);
 
   // Remove a stream from the playback queue by StreamId.
   void remove(StreamId id);

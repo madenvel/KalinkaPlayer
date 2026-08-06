@@ -33,12 +33,7 @@ enum class AudioGraphNodeState {
   SOURCE_CHANGED
 };
 
-enum class StreamErrorSource {
-  NONE,
-  HTTP_STREAM,
-  AUDIO_OUTPUT,
-  DECODER
-};
+enum class StreamErrorSource { NONE, HTTP_STREAM, AUDIO_OUTPUT, DECODER };
 
 struct StreamError {
   StreamErrorSource source;
@@ -60,8 +55,6 @@ struct StreamState {
   long position;
   std::optional<StreamInfo> streamInfo;
   std::optional<StreamError> error;
-  // Renderer delta: which stream this is about; unset means no particular
-  // stream, which is how a track ending differs from the graph being gone.
   std::optional<StreamId> streamId;
   unsigned long long timestamp;
 
@@ -71,8 +64,7 @@ struct StreamState {
         timestamp(getTimestampNs()) {}
 
   StreamState(AudioGraphNodeState state, StreamError error)
-      : state(state), position(0), error(error),
-        timestamp(getTimestampNs()) {}
+      : state(state), position(0), error(error), timestamp(getTimestampNs()) {}
 
   explicit StreamState(AudioGraphNodeState state)
       : state(state), position(0), timestamp(getTimestampNs()) {}
@@ -90,8 +82,8 @@ struct StreamState {
                  ", message=" + error->message + "}";
     }
     return "<StreamState state=" + stateToString(state) +
-           ", position=" + std::to_string(position) +
-           ", error=" + errorStr + ", streamInfo=" +
+           ", position=" + std::to_string(position) + ", error=" + errorStr +
+           ", streamInfo=" +
            (streamInfo.has_value() ? streamInfo.value().toString() : "null") +
            ", streamId=" +
            (streamId.has_value() ? std::to_string(*streamId) : "null") +

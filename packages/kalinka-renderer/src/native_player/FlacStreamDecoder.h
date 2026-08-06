@@ -15,7 +15,9 @@ class FlacStreamDecoder : public AudioGraphOutputNode,
                           public AudioGraphInputNode,
                           public FLAC::Decoder::Stream {
 public:
-  FlacStreamDecoder(std::optional<StreamId> streamId, size_t bufferSize);
+  // startOffsetMs begins decoding partway into the stream instead of at 0.
+  FlacStreamDecoder(std::optional<StreamId> streamId, size_t bufferSize,
+                    size_t startOffsetMs = 0);
 
   virtual void
   connectTo(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
@@ -31,6 +33,8 @@ public:
                                 size_t size) override;
 
   virtual size_t seekTo(size_t absolutePosition) override;
+
+  virtual std::optional<long> streamReadPosition() const override;
 
   virtual ~FlacStreamDecoder();
 
@@ -66,16 +70,23 @@ private:
 
   std::vector<uint8_t> data;
   Buffer<uint8_t> buffer;
-  std::atomic<long> streamReadPosition = 0;
+  const size_t startOffsetMs;
+  // Bytes, not frames: a read that ends mid-frame would round down, forever.
+  std::atomic<long> runStartFrame = 0;
+  std::atomic<long> bytesReadInRun = 0;
+  std::atomic<unsigned int> frameSizeBytes = 0;
 
   Signal<size_t> seekSignal;
 
   std::shared_ptr<AudioGraphOutputNode> inputNode;
 
   void thread_run(std::stop_token token);
+  long framesRead() const;
+  void restartRunAt(long frame);
   void onEmptyBuffer(Buffer<uint8_t> &buffer);
   void throwOnFlacError(bool retval);
   void setStreamingState();
+  void processStartOffset();
   void handleSeekSignal(size_t position);
 };
 

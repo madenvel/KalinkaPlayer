@@ -9,7 +9,9 @@
 class Mp3StreamDecoder : public AudioGraphOutputNode,
                          public AudioGraphInputNode {
 public:
-  Mp3StreamDecoder(std::optional<StreamId> streamId, size_t bufferSize);
+  // startOffsetMs begins decoding partway into the stream instead of at 0.
+  Mp3StreamDecoder(std::optional<StreamId> streamId, size_t bufferSize,
+                   size_t startOffsetMs = 0);
   virtual ~Mp3StreamDecoder();
 
   size_t read(void *data, size_t size) override;
@@ -23,6 +25,8 @@ public:
 
   size_t seekTo(size_t absolutePosition) override;
 
+  std::optional<long> streamReadPosition() const override;
+
   void connectTo(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
 
   void disconnect(std::shared_ptr<AudioGraphOutputNode> inputNode) override;
@@ -31,13 +35,19 @@ private:
   std::jthread decodingThread;
   std::shared_ptr<AudioGraphOutputNode> inputNode;
   Buffer<uint8_t> buffer;
+  const size_t startOffsetMs;
 
   Signal<size_t> seekSignal;
   Signal<bool> initCompleteSignal;
 
-  long currentPos = 0;
+  // Bytes, not frames: a read that ends mid-frame would round down, forever.
+  std::atomic<long> runStartFrame = 0;
+  std::atomic<long> bytesReadInRun = 0;
+  std::atomic<unsigned int> frameSizeBytes = 0;
 
   void threadRun(std::stop_token token);
+  long framesRead() const;
+  void restartRunAt(long frame);
   void onEmptyBuffer(Buffer<uint8_t> &buffer);
 
   typedef size_t (*MP3D_READ_CB)(void *buf, size_t size, void *user_data);
@@ -45,7 +55,7 @@ private:
 
   size_t readCallback(void *buf, size_t size);
   int seekCallback(uint64_t position);
-  void handleSeekSignal(void *mp3dec_ex);
+  void handleSeekSignal(void *mp3dec_ex, size_t seekPosFrames);
 };
 
 #endif // MP3STREAMDECODER_H
