@@ -142,12 +142,14 @@ if(GTest_FOUND)
     src/config/SettingsPersistence.cpp
     src/discovery/DiscoveryCache.cpp
     src/net/WsTransport.cpp
+    src/player/NativePlayer.cpp
     src/player/StateTranslator.cpp
     tests/test_alsa_device_naming.cpp
     tests/test_audio_player.cpp
     tests/test_config_service.cpp
     tests/test_decoder_start_offset.cpp
     tests/test_discovery_cache.cpp
+    tests/test_native_player_settings.cpp
     tests/test_protocol_session.cpp
     tests/test_renderer_name.cpp
     tests/test_session.cpp

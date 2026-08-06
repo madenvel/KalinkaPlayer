@@ -17,6 +17,8 @@ class FakeWs:
         self.requests = 0
         self.updates: list[dict] = []
         self.answer = True
+        # False stands in for a renderer built before the tier existed.
+        self.declare_importance = True
         self.device_options = ["default", "hw:CARD=sofhdadsp,DEV=0"]
         self.values = {"output.driver": "alsa", "output.device": "default"}
         self._next_id = 0
@@ -38,10 +40,19 @@ class FakeWs:
         device.value = self.values["output.device"]
         device.default_value = "default"
         device.apply = pb.APPLY_COST_INTERRUPTS_PLAYBACK
+        if self.declare_importance:
+            device.importance = pb.CONFIG_IMPORTANCE_SIMPLE
         for name in self.device_options:
             option = device.options.add()
             option.value = name
             option.label = name
+        latency = section.fields.add()
+        latency.path = "output.latency_ms"
+        latency.type = pb.CONFIG_FIELD_TYPE_INT
+        latency.value = "160"
+        latency.apply = pb.APPLY_COST_INTERRUPTS_PLAYBACK
+        if self.declare_importance:
+            latency.importance = pb.CONFIG_IMPORTANCE_EXPERT
         return snapshot
 
     async def send_config_request(self, message_id) -> None:
@@ -103,6 +114,29 @@ async def test_config_arrives_as_schema_and_values_together():
     assert [o["value"] for o in field["options"]] == [
         "default",
         "hw:CARD=sofhdadsp,DEV=0",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_renderer_says_which_page_each_field_belongs_on():
+    registry, service, ws = make_service()
+
+    config = await service.get(RENDERER_ID)
+
+    fields = {f["path"]: f["importance"] for f in config["sections"][0]["fields"]}
+    assert fields == {"output.device": "simple", "output.latency_ms": "expert"}
+
+
+@pytest.mark.asyncio
+async def test_a_renderer_that_predates_the_tier_keeps_its_page():
+    registry, service, ws = make_service()
+    ws.declare_importance = False
+
+    config = await service.get(RENDERER_ID)
+
+    assert [f["importance"] for f in config["sections"][0]["fields"]] == [
+        "simple",
+        "simple",
     ]
 
 

@@ -27,6 +27,20 @@ from .renderer_sessions import DEFAULT_TIMEOUT_S
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
+def _importance(field) -> str:
+    """Which page the field belongs on, as the renderer sees it.
+
+    A renderer from before the tier says nothing, and what it declares is what
+    a settings page already showed: silence means the page proper, not the
+    expert list its fields have never been in.
+    """
+    if field.importance == pb.CONFIG_IMPORTANCE_UNSPECIFIED:
+        return "simple"
+    return renderer_state.enum_name(
+        pb.ConfigImportance, field.importance, "CONFIG_IMPORTANCE_"
+    )
+
+
 def _field_to_dict(field) -> dict:
     return {
         "path": field.path,
@@ -47,6 +61,7 @@ def _field_to_dict(field) -> dict:
         ],
         "apply": renderer_state.enum_name(pb.ApplyCost, field.apply, "APPLY_COST_"),
         "read_only": field.read_only,
+        "importance": _importance(field),
     }
 
 

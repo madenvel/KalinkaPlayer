@@ -159,7 +159,8 @@ int main(int argc, char **argv) {
       std::make_shared<SessionManager>(
           ioc, std::chrono::seconds(opts.sessionGraceSeconds), player),
       std::make_shared<ConfigService>(
-          std::vector<std::shared_ptr<ConfigContributor>>{name, player}),
+          std::vector<std::shared_ptr<ConfigContributor>>{
+              name, player, player->bufferSettings()}),
   };
   ConnectionManager manager(ioc, identity, name->value(), services);
 

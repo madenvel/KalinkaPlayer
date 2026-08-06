@@ -2,6 +2,7 @@
 
 import pytest
 
+from kalinka_server.renderer_config import _field_to_dict
 from kalinka_server.renderer_core_settings import (
     DEVICE_MODULE_PATH,
     RENDERER_ITSELF,
@@ -9,6 +10,7 @@ from kalinka_server.renderer_core_settings import (
     CoreRendererSettings,
 )
 from kalinka_server.renderer_prefs import RendererPreferences
+from kalinka_server.renderer_proto import renderer_pb2 as pb
 
 RENDERER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -135,6 +137,13 @@ def test_with_nothing_to_map_to_it_still_says_who_has_the_output(prefs, resync):
 
     assert field["read_only"] is True
     assert field["value"] == "This renderer", "read-only is shown as its value"
+
+
+def test_the_core_field_is_shaped_like_one_of_the_renderers_own(settings):
+    field = _field(settings)
+
+    assert set(field) == set(_field_to_dict(pb.ConfigField())), "one page, one shape"
+    assert field["importance"] == "simple", "it is the mapping a user comes here for"
 
 
 def test_the_core_section_rides_the_renderers_payload(settings):

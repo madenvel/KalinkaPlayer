@@ -46,6 +46,90 @@ bool noisyPcm(const std::string &name) {
                      [&name](const char *p) { return name.starts_with(p); });
 }
 
+// A setting with nothing to it but a number and what to call it: value and
+// default come from the settings map, and applying it means a new graph.
+struct Knob {
+  const char *path;
+  const char *title;
+  const char *description;
+  pb::ConfigFieldType type;
+};
+
+const Knob kOutputKnobs[] = {
+    {"output.latency_ms", "Output latency",
+     "How much audio is kept ahead of the card, in milliseconds. Raise it if "
+     "playback stutters.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"output.period_ms", "Period size",
+     "How often audio is handed to the card, in milliseconds.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"output.format_change_delay_ms", "Pause after a format change",
+     "How long to wait once a new sample rate is set, in milliseconds, for a "
+     "card that needs a moment before it will take audio.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"output.reopen_on_format_change", "Reopen on a format change",
+     "Close and reopen the card when the next track has a different format. "
+     "Some DACs need it.",
+     pb::CONFIG_FIELD_TYPE_BOOL},
+};
+
+const Knob kBufferKnobs[] = {
+    {"buffers.network_stream", "Network buffer",
+     "How much of a streamed track is held in memory, in bytes. Raise it on a "
+     "slow or unreliable connection.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"buffers.network_request", "Network request size",
+     "How much is fetched from the server at a time, in bytes.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"buffers.flac", "FLAC buffer",
+     "Decoded audio held ahead for FLAC playback, in bytes.",
+     pb::CONFIG_FIELD_TYPE_INT},
+    {"buffers.mpeg", "MP3 buffer",
+     "Decoded audio held ahead for MP3 playback, in bytes.",
+     pb::CONFIG_FIELD_TYPE_INT},
+};
+
+// Every setting the graph is built with, and the key it is built under. A
+// write to any of them is a new graph, which is what they declare.
+const std::map<std::string, std::string> &graphKeys() {
+  static const std::map<std::string, std::string> keys{
+      {"output.device", "output.alsa.device"},
+      {"output.latency_ms", "output.alsa.latency_ms"},
+      {"output.period_ms", "output.alsa.period_ms"},
+      {"output.format_change_delay_ms",
+       "fixups.alsa_sleep_after_format_setup_ms"},
+      {"output.reopen_on_format_change",
+       "fixups.alsa_reopen_device_with_new_format"},
+      {"buffers.network_stream", "input.http.buffer_size"},
+      {"buffers.network_request", "input.http.chunk_size"},
+      {"buffers.flac", "decoder.flac.buffer_size"},
+      {"buffers.mpeg", "decoder.mpeg.buffer_size"},
+  };
+  return keys;
+}
+
+bool isKnob(const std::string &path) {
+  const auto named = [&path](const Knob &knob) { return knob.path == path; };
+  return std::any_of(std::begin(kOutputKnobs), std::end(kOutputKnobs), named) ||
+         std::any_of(std::begin(kBufferKnobs), std::end(kBufferKnobs), named);
+}
+
+void declare(pb::ConfigSection &out, const Knob &knob,
+             const std::map<std::string, std::string> &settings,
+             const std::map<std::string, std::string> &defaults) {
+  pb::ConfigField *field = out.add_fields();
+  field->set_path(knob.path);
+  field->set_title(knob.title);
+  field->set_description(knob.description);
+  field->set_type(knob.type);
+  field->set_value(settings.at(knob.path));
+  field->set_default_value(defaults.at(knob.path));
+  field->set_apply(pb::APPLY_COST_INTERRUPTS_PLAYBACK);
+  // Reached for when the card or the link misbehaves, which is not what a
+  // settings page is for.
+  field->set_importance(pb::CONFIG_IMPORTANCE_EXPERT);
+}
+
 }  // namespace
 
 const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
@@ -53,12 +137,58 @@ const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
       {"output.driver", "alsa"},
       {"output.device", "default"},
       {"output.volume_mode", "auto"},
+      // What the server shipped while it did the playing, rather than the
+      // sink's own 100/25.
+      {"output.latency_ms", "160"},
+      {"output.period_ms", "40"},
+      {"output.format_change_delay_ms", "0"},
+      {"output.reopen_on_format_change", "false"},
+      {"buffers.network_stream", "768000"},
+      {"buffers.network_request", "384000"},
+      {"buffers.flac", "1536000"},
+      {"buffers.mpeg", "768000"},
   };
   return defaults;
 }
 
+class NativePlayer::Buffers : public ConfigContributor {
+public:
+  explicit Buffers(std::shared_ptr<NativePlayer> player)
+      : player_(std::move(player)) {}
+
+  void fillConfig(pb::ConfigSection &out) const override {
+    out.set_path("buffers");
+    out.set_title("Buffering");
+    out.set_description("How much of a track the renderer holds in memory "
+                        "while it plays.");
+    for (const Knob &knob : kBufferKnobs) {
+      declare(out, knob, player_->settings_, defaultSettings());
+    }
+  }
+
+  bool applyConfig(const std::string &path, const std::string &value,
+                   std::string &error) override {
+    return player_->applySetting(path, value, error);
+  }
+
+private:
+  const std::shared_ptr<NativePlayer> player_;
+};
+
+std::shared_ptr<ConfigContributor> NativePlayer::bufferSettings() {
+  return std::make_shared<Buffers>(shared_from_this());
+}
+
 void NativePlayer::persistOverrides() const {
   updateSettingsOverrides(settings_, defaultSettings());
+}
+
+Config NativePlayer::graphConfig() const {
+  Config config;
+  for (const auto &[path, key] : graphKeys()) {
+    config[key] = settings_.at(path);
+  }
+  return config;
 }
 
 NativePlayer::NativePlayer(asio::io_context &ioc) : ioc_(ioc) {
@@ -81,9 +211,7 @@ bool NativePlayer::ensurePlayer() {
     return true;
   }
   try {
-    player_ = std::make_unique<AudioPlayer>(Config{
-        {"output.alsa.device", settings_.at("output.device")},
-    });
+    player_ = std::make_unique<AudioPlayer>(graphConfig());
     player_->configureVolume(effectiveVolumeMode(), "");
     startPumps();
     return true;
@@ -370,6 +498,8 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
   driver->set_value(settings_.at("output.driver"));
   driver->set_default_value("alsa");
   driver->set_apply(pb::APPLY_COST_RESTART_REQUIRED);
+  // One backend to choose from, so far.
+  driver->set_importance(pb::CONFIG_IMPORTANCE_EXPERT);
   pb::ConfigOption *alsa = driver->add_options();
   alsa->set_value("alsa");
   alsa->set_label("ALSA");
@@ -384,6 +514,7 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
   device->set_value(settings_.at("output.device"));
   device->set_default_value("default");
   device->set_apply(pb::APPLY_COST_INTERRUPTS_PLAYBACK);
+  device->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
   bool currentOffered = false;
   for (const AlsaPcmDevice &pcm : listAlsaPcmDevices()) {
     if (!pcm.ioid.empty() && pcm.ioid != "Output") {
@@ -425,6 +556,7 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
   mode->set_value(settings_.at("output.volume_mode"));
   mode->set_default_value("auto");
   mode->set_apply(pb::APPLY_COST_INSTANT);
+  mode->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
   struct VolumeChoice {
     const char *value;
     const char *label;
@@ -450,13 +582,28 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
     option->set_label(choice.label);
     option->set_description(choice.description);
   }
+
+  for (const Knob &knob : kOutputKnobs) {
+    declare(out, knob, settings_, defaultSettings());
+  }
 }
 
 bool NativePlayer::applyConfig(const std::string &path,
                                const std::string &value, std::string &error) {
+  return applySetting(path, value, error);
+}
+
+bool NativePlayer::applySetting(const std::string &path,
+                                const std::string &value, std::string &error) {
   auto setting = settings_.find(path);
   if (setting == settings_.end()) {
     error = "unknown setting";
+    return false;
+  }
+  // Sizes and durations, which the graph reads as unsigned: a negative one
+  // throws where it is read, which is halfway into the next track.
+  if (value.starts_with("-") && isKnob(path)) {
+    error = "must not be negative";
     return false;
   }
   if (setting->second == value) {
@@ -465,7 +612,7 @@ bool NativePlayer::applyConfig(const std::string &path,
   setting->second = value;
   persistOverrides();
   spdlog::info("Config {} = '{}'", path, value);
-  if (path == "output.device") {
+  if (graphKeys().contains(path)) {
     rebuildPlayer();
   } else if (path == "output.volume_mode" && player_) {
     // A session override outranks the configured value until it ends.

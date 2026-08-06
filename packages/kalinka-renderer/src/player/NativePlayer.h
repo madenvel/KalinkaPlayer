@@ -27,12 +27,17 @@
  *   threads post them onto the io_context, so everything protocol-facing
  *   stays single-threaded.
  *
- * Configuration: output device (enumerated from ALSA), driver, and volume
- * mode. Changing the device rebuilds the graph — APPLY_COST_INTERRUPTS_
- * PLAYBACK — and anything that was playing is gone, as declared. Overrides
- * that differ from the defaults are persisted to the state directory (see
- * SettingsPersistence) and loaded on construction; an applied change updates
- * memory and the file in one step.
+ * Configuration: output driver, device (enumerated from ALSA), volume mode,
+ * and the numbers the graph is built with — how far ahead of the card it
+ * buffers, how much of a stream it holds in memory. Changing any of the
+ * latter rebuilds the graph — APPLY_COST_INTERRUPTS_PLAYBACK — and anything
+ * that was playing is gone, as declared. Overrides that differ from the
+ * defaults are persisted to the state directory (see SettingsPersistence) and
+ * loaded on construction; an applied change updates memory and the file in one
+ * step.
+ *
+ * The config plane's paths are the renderer's own; the keys the graph is built
+ * with are the backend's, and stay behind them.
  *
  * If the graph cannot be built (no ALSA), the renderer stays up: commands
  * that need audio answer with PLAYBACK_STATE_ERROR, exactly like a track
@@ -40,7 +45,8 @@
  *
  * @note All Player methods on the io_context thread, per the contract.
  */
-class NativePlayer : public Player {
+class NativePlayer : public Player,
+                     public std::enable_shared_from_this<NativePlayer> {
 public:
   explicit NativePlayer(boost::asio::io_context &ioc);
   ~NativePlayer() override;
@@ -62,7 +68,19 @@ public:
                    std::string &error) override;
   void fillSnapshot(kalinka::renderer::v1::StateSnapshot &out) const override;
 
+  /**
+   * @brief The buffering section, declared apart from the sink it feeds.
+   *
+   * Register it beside the player. The values are the player's, so what comes
+   * back holds a share of the player and can be registered for as long as it
+   * likes. Requires the player to be owned by a shared_ptr already.
+   */
+  std::shared_ptr<ConfigContributor> bufferSettings();
+
 private:
+  /// Contributes the buffering section; writes land back on the player.
+  class Buffers;
+
   struct TrackedSource {
     kalinka::renderer::v1::Source source;
     StreamId streamId;
@@ -89,6 +107,11 @@ private:
 
   static const std::map<std::string, std::string> &defaultSettings();
   void persistOverrides() const;
+  /// Whatever section declared the path, the values live here.
+  bool applySetting(const std::string &path, const std::string &value,
+                    std::string &error);
+  /// The settings the graph is built with, under the keys it reads them by.
+  Config graphConfig() const;
   /// What the graph should run: the session override, else the configured one.
   const std::string &effectiveVolumeMode() const;
 
