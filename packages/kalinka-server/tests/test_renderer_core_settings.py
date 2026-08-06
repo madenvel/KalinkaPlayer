@@ -128,10 +128,13 @@ def test_a_mapping_whose_module_is_gone_stays_selectable(prefs, resync):
     assert "unavailable" in field["options"][1]["label"]
 
 
-def test_with_nothing_to_map_to_the_field_is_read_only(prefs, resync):
+def test_with_nothing_to_map_to_it_still_says_who_has_the_output(prefs, resync):
     settings = CoreRendererSettings(prefs, lambda: [], resync)
 
-    assert _field(settings)["read_only"] is True
+    field = _field(settings)
+
+    assert field["read_only"] is True
+    assert field["value"] == "This renderer", "read-only is shown as its value"
 
 
 def test_the_core_section_rides_the_renderers_payload(settings):

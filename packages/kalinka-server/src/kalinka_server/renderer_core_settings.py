@@ -26,6 +26,7 @@ DEVICE_MODULE_PATH = "core.output.device_module"
 
 # The absent mapping: the renderer controls itself.
 RENDERER_ITSELF = ""
+RENDERER_ITSELF_LABEL = "This renderer"
 
 # What a module is offered as, when it has no title of its own.
 Candidates = Callable[[], list[tuple[str, str]]]
@@ -52,7 +53,7 @@ class CoreRendererSettings:
         options = [
             {
                 "value": RENDERER_ITSELF,
-                "label": "This renderer",
+                "label": RENDERER_ITSELF_LABEL,
                 "description": "Volume is applied by the renderer itself.",
             }
         ] + [
@@ -69,6 +70,9 @@ class CoreRendererSettings:
                     "description": "Configured, but the module is not loaded.",
                 }
             )
+        # Nothing to choose between: shown as a value rather than as a
+        # chosen option, so it has to carry the label itself.
+        read_only = not candidates and not mapped
         return {
             "path": SECTION_PATH,
             "title": "Connected device",
@@ -85,11 +89,11 @@ class CoreRendererSettings:
                         "level is set once, downstream."
                     ),
                     "type": "enum",
-                    "value": mapped,
+                    "value": RENDERER_ITSELF_LABEL if read_only else mapped,
                     "default": RENDERER_ITSELF,
                     "options": options,
                     "apply": "instant",
-                    "read_only": not candidates and not mapped,
+                    "read_only": read_only,
                 }
             ],
         }
