@@ -36,6 +36,15 @@ the refactoring is massive** — touching many files, changing a public interfac
 or reshaping a subsystem. Small, local cleanups on the path of the change need
 no permission.
 
+## Ownership (C++)
+
+Raw pointers are for short-lived local work — a buffer walked inside one
+function, a handle a C API hands back. Nothing else. A `T *` member aimed at
+another of our objects is a lifetime bug waiting for its owner to be replaced:
+say what the ownership is instead — `unique_ptr` for a single owner,
+`shared_ptr` where the lifetime is genuinely shared, and a reference where the
+callee only borrows for the duration of the call.
+
 ## Tests
 
 Unit tests are mandatory, and especially so in the C++ code — a change to
