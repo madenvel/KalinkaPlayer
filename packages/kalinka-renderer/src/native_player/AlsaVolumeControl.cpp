@@ -65,7 +65,9 @@ const char *const kPreferredControls[] = {"Master",    "PCM",     "Speaker",
 } // namespace
 
 AlsaVolumeControl::AlsaVolumeControl(const std::string &deviceName,
-                                     const std::string &controlName) {
+                                     const std::string &controlName,
+                                     std::function<void(int)> onExternalChange)
+    : onExternalChange_(std::move(onExternalChange)) {
   available_ = openMixer(deviceName, controlName);
   if (!available_) {
     closeMixer();
@@ -86,7 +88,6 @@ AlsaVolumeControl::AlsaVolumeControl(const std::string &deviceName,
   fcntl(wakePipe_[0], F_SETFD, FD_CLOEXEC);
   fcntl(wakePipe_[1], F_SETFD, FD_CLOEXEC);
 
-  monitoringActive_ = true;
   monitorThread_ =
       std::jthread(std::bind_front(&AlsaVolumeControl::monitorLoop, this));
 }
@@ -255,23 +256,29 @@ void AlsaVolumeControl::setVolume(int percent) {
   lastNotified_ = std::clamp(percent, 0, 100);
 }
 
-int AlsaVolumeControl::subscribe(std::function<void(int)> callback) {
-  std::lock_guard<std::mutex> lock(subscribersMutex_);
+void AlsaVolumeControl::notify(int percent) {
+  if (onExternalChange_) {
+    onExternalChange_(percent);
+  }
+}
+
+int VolumeEvents::subscribe(std::function<void(int)> callback) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const int id = nextSubscriberId_++;
   subscribers_.emplace_back(id, std::move(callback));
   return id;
 }
 
-void AlsaVolumeControl::unsubscribe(int id) {
-  std::lock_guard<std::mutex> lock(subscribersMutex_);
+void VolumeEvents::unsubscribe(int id) {
+  std::lock_guard<std::mutex> lock(mutex_);
   subscribers_.remove_if([id](const auto &p) { return p.first == id; });
 }
 
-void AlsaVolumeControl::notify(int percent) {
-  std::lock_guard<std::mutex> lock(subscribersMutex_);
-  for (auto &[id, cb] : subscribers_) {
+void VolumeEvents::publish(int percent) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto &[id, callback] : subscribers_) {
     (void)id;
-    cb(percent);
+    callback(percent);
   }
 }
 
@@ -336,18 +343,13 @@ void AlsaVolumeControl::monitorLoop(std::stop_token token) {
   }
 }
 
-VolumeMonitor::VolumeMonitor(AlsaVolumeControl *control) : control_(control) {
-  if (control_ != nullptr && control_->available() && control_->monitoring()) {
-    subscriptionId_ = control_->subscribe([this](int percent) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      queue_.push(percent);
-      cv_.notify_all();
-    });
-  } else {
-    // Nothing to watch (software / fixed / no mixer): hand back an inert
-    // monitor so the Python listener loop exits immediately.
-    stopped_ = true;
-  }
+VolumeMonitor::VolumeMonitor(std::shared_ptr<VolumeEvents> events)
+    : events_(std::move(events)) {
+  subscriptionId_ = events_->subscribe([this](int percent) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push(percent);
+    cv_.notify_all();
+  });
 }
 
 VolumeMonitor::~VolumeMonitor() { stop(); }
@@ -382,8 +384,10 @@ bool VolumeMonitor::hasData() {
 bool VolumeMonitor::isRunning() const { return !stopped_; }
 
 void VolumeMonitor::stop() {
-  if (control_ != nullptr && subscriptionId_ >= 0) {
-    control_->unsubscribe(subscriptionId_);
+  // Never while holding this monitor's own lock: the callback takes it, from
+  // whichever thread is publishing.
+  if (subscriptionId_ >= 0) {
+    events_->unsubscribe(subscriptionId_);
     subscriptionId_ = -1;
   }
   {

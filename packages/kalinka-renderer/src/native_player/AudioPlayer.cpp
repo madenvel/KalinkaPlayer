@@ -198,7 +198,8 @@ void AudioPlayer::configureVolume(const std::string &mode,
   if (volumeMode == VolumeMode::Hardware || volumeMode == VolumeMode::Auto) {
     volumeControl = std::make_unique<AlsaVolumeControl>(
         value_or(config, "output.alsa.device", std::string("default")),
-        mixerControl);
+        mixerControl,
+        [events = volumeEvents](int percent) { events->publish(percent); });
   } else {
     volumeControl.reset();
   }
@@ -327,12 +328,9 @@ void AudioPlayer::setVolume(int percent) {
 }
 
 std::unique_ptr<VolumeMonitor> AudioPlayer::volumeMonitor() {
-  std::lock_guard<std::mutex> lock(volumeMutex_);
-  if (activeBackend() == VolumeBackend::Hardware) {
-    return std::make_unique<VolumeMonitor>(volumeControl.get());
-  }
-  // Software / fixed: no external source to track — return an inert monitor.
-  return std::make_unique<VolumeMonitor>(nullptr);
+  // No lock and no backend to ask: the monitor listens to the player, not to
+  // whichever mixer happens to be open, so a later mode change reaches it too.
+  return std::make_unique<VolumeMonitor>(volumeEvents);
 }
 
 void AudioPlayer::disconnectAllStreams() {

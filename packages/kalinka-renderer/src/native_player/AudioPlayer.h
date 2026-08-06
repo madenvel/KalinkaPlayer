@@ -77,8 +77,8 @@ public:
   void setVolume(int percent);
 
   // Monitor external hardware-mixer changes so the UI can track a knob / amixer
-  // / another app. Inert unless the active backend is hardware. Mirrors
-  // monitor() for stream state.
+  // / another app. Reports for as long as it is held, whatever the mode does to
+  // the mixer behind it. Mirrors monitor() for stream state.
   std::unique_ptr<VolumeMonitor> volumeMonitor();
 
 private:
@@ -86,6 +86,11 @@ private:
   std::shared_ptr<AlsaAudioEmitter> audioEmitter;
   std::shared_ptr<AudioStreamSwitcher> streamSwitcher;
   std::list<StreamNodes> streamNodesList;
+
+  // Outlives every mixer handed to it, and is shared with whoever listens: the
+  // one thing here a mode change does not replace, so it needs no guarding.
+  const std::shared_ptr<VolumeEvents> volumeEvents =
+      std::make_shared<VolumeEvents>();
 
   // Guards the volume fields below. The volume API is called off the playback
   // serial executor (so it stays responsive) and may be reconfigured at
