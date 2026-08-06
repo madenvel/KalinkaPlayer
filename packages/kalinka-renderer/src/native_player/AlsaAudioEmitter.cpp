@@ -161,8 +161,15 @@ void AlsaAudioEmitter::setState(const StreamState &newState) {
 #endif
 
 snd_pcm_sframes_t AlsaAudioEmitter::queuedFrames() {
+  // Only a running stream is holding anything: a drop or a drain leaves it in
+  // SETUP with nothing left to play, while the delay goes on reporting the
+  // link latency (PipeWire) long after the buffer is gone.
+  if (pcmHandle == nullptr ||
+      snd_pcm_state(pcmHandle) != SND_PCM_STATE_RUNNING) {
+    return 0;
+  }
   snd_pcm_sframes_t queued = 0;
-  if (pcmHandle == nullptr || snd_pcm_delay(pcmHandle, &queued) < 0) {
+  if (snd_pcm_delay(pcmHandle, &queued) < 0) {
     return 0;
   }
   return std::max<snd_pcm_sframes_t>(0, queued);
@@ -553,19 +560,20 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
 
       bool started = false;
       seekHappened = false;
+      const auto queued = queuedFrames();
 
       // Only with nothing queued do the two agree, and there the source is
       // the authority: it is the end that begins partway in, or seeks itself.
-      const auto queued = queuedFrames();
       if (queued == 0) {
         if (auto position = inputNode->streamReadPosition()) {
-          currentSourceTotalFramesWritten = *position;
+          beginSourceAt(position);
         }
       }
 
-      // What has been heard, rather than what has been handed over.
-      snd_pcm_uframes_t streamStartPosition = std::max<snd_pcm_sframes_t>(
-          0, currentSourceTotalFramesWritten - queued);
+      // What has been heard, rather than what has been handed over, and never
+      // further back than this run began however much the device claims.
+      snd_pcm_uframes_t streamStartPosition = std::max(
+          currentSourceStartFrames, currentSourceTotalFramesWritten - queued);
       paused = false;
 
       while (!token.stop_requested()) {
