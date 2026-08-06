@@ -85,13 +85,55 @@ async def test_playback_moves_to_the_selected_renderer(queue, renderers, emitter
     assert second.current is not None  # playing there now
     assert first.current is None  # and stopped here
     assert first.session_id is None  # the claim was given up
-    assert queue.current_track_id == 0  # same track, from the beginning
+    assert queue.current_track_id == 0  # the same track
+
+
+async def test_the_track_picks_up_where_it_had_reached(queue, renderers):
+    """Carried as the source's start offset, not a seek behind it: a seek this
+    early has no stream to address yet, and would land at zero."""
+    _registry, _pool, first, second = renderers
+    await _play_on(queue, first)
+    first.report_position(5000)
+
+    await queue.switch_renderer("rid-b")
+    await asyncio.sleep(0.2)
+
+    started = [
+        command
+        for command in second.commands
+        if command.WhichOneof("op") == "enqueue_source"
+    ]
+    assert len(started) == 1
+    offset = started[0].enqueue_source.source.start_offset_ms
+    assert 5000 <= offset < 5500, "where it had reached, plus the switch itself"
+    assert not [
+        command for command in second.commands if command.WhichOneof("op") == "seek"
+    ]
+
+
+async def test_a_paused_track_moves_without_drifting(queue, renderers):
+    """Only a running stream advances, so a switch made while paused starts
+    exactly where it was left, however long the pause lasted."""
+    _registry, _pool, first, second = renderers
+    await _play_on(queue, first)
+    first.report_position(5000)
+    await queue.pause(True)
+    await asyncio.sleep(0.2)
+
+    await queue.switch_renderer("rid-b")
+    await asyncio.sleep(0.2)
+
+    started = next(
+        command
+        for command in second.commands
+        if command.WhichOneof("op") == "enqueue_source"
+    )
+    assert started.enqueue_source.source.start_offset_ms == 5000
 
 
 async def test_the_switch_is_visible_as_a_stop(queue, renderers, emitter):
-    """Agreed behaviour while the position offset is not carried over: the
-    track restarts from zero, so pretending playback never stopped would make
-    the UI disagree with what is coming out of the speakers."""
+    """The old renderer really does stop, and clients are told so rather than
+    being shown continuous playback the speakers are not producing."""
     _registry, _pool, first, _second = renderers
     await _play_on(queue, first)
     emitter.reset_mock()

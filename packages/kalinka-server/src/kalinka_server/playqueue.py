@@ -555,8 +555,8 @@ class PlayQueueImpl(PlayQueueController):
         The target is claimed before the current renderer is given up, so one
         that is busy or unreachable raises and leaves playback where it was.
         Past that the switch is committed: the old session stops, which clients
-        see as a STOPPED, and the track restarts on the new renderer from the
-        beginning. An idle queue claims nothing — the selection just takes
+        see as a STOPPED, and the track picks up on the new renderer where it
+        had reached. An idle queue claims nothing — the selection just takes
         effect at the next play.
         """
         target = self._registry.resolve_active(renderer_id)
@@ -569,9 +569,10 @@ class PlayQueueImpl(PlayQueueController):
         player = self._new_player()
         await player.open(target, announce=False)
 
-        resume = (
-            self.current_track_id
-            if old.get_state().state
+        state = old.get_state()
+        resume_at = (
+            self._estimated_progress(state)
+            if state.state
             in (
                 AudioGraphNodeState.PREPARING,
                 AudioGraphNodeState.STREAMING,
@@ -590,12 +591,8 @@ class PlayQueueImpl(PlayQueueController):
         self._track_player = player
         await player.announce()
         logger.info("Playback moved to renderer %s", target)
-        if resume is not None:
-            self._begin_resolution(
-                resume,
-                resolve=lambda: self._resolve_playable(resume, 1),
-                next_step=self._play_resolved,
-            )
+        if resume_at is not None:
+            await self._retry_current_track_async(resume_at)
 
     @serialised
     async def release_renderer(self, renderer_id: str) -> bool:
@@ -1046,11 +1043,12 @@ class PlayQueueImpl(PlayQueueController):
     async def _retry_current_track_async(self, position_ms: int) -> None:
         """Re-fetch the current track's URL off-lane and resume from position_ms.
 
-        Called from the state-update interrupt lane on an HTTP stream error. The
-        fetch must not run here (it would block the interrupt lane and stall all
-        state updates), so it is delegated to the off-lane resolver. Unlike
-        play/next, retry targets exactly the current track (single fetch, no
-        skipping) and reports failure as a PlaybackErrorEvent.
+        Whenever the same track has to be played again on a fresh claim: an
+        HTTP stream error, a renderer that came back, a switch to another one.
+        The fetch must not run on the interrupt lane (it would stall all state
+        updates), so it is delegated to the off-lane resolver. Unlike play/next,
+        this targets exactly the current track (single fetch, no skipping) and
+        reports failure as a PlaybackErrorEvent.
         """
         index = self.current_track_id
         self._begin_resolution(
@@ -1074,7 +1072,13 @@ class PlayQueueImpl(PlayQueueController):
         self._apply_retry(index, track_info, position_ms)
 
     def _apply_retry(self, index: int, track_info, position_ms: int) -> None:
-        """Re-append the already-resolved current track and seek to position_ms."""
+        """Re-append the already-resolved current track, starting at position_ms.
+
+        The offset rides the append rather than a seek behind it: a seek can
+        only address a stream that is already playing, so one sent this early
+        is either dropped or applied before the format is known — which rounds
+        it to the start of the track.
+        """
         self._cancel_prefetch_timer()
 
         if self.current_stream_id is not None:
@@ -1085,11 +1089,10 @@ class PlayQueueImpl(PlayQueueController):
 
         self._retry_pending = True
         stream_id = self._new_stream_id()
-        self._track_player.append(stream_id, track_info.url, track_info.format)
+        self._track_player.append(
+            stream_id, track_info.url, track_info.format, position_ms
+        )
         self.prepared_tracks[index] = (track_info, stream_id)
-
-        if position_ms > 0:
-            self._track_player.seek(position_ms)
 
     def _request_more_tracks(self):
         if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:

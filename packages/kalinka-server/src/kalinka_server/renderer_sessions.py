@@ -104,10 +104,13 @@ class _OpenOutcome:
     owner_server_id: str
 
 
-def _fill_source(source, uri: str, mime_type: str, source_token: str) -> None:
+def _fill_source(
+    source, uri: str, mime_type: str, source_token: str, start_offset_ms: int
+) -> None:
     source.uri = uri
     source.mime_type = mime_type
     source.source_token = source_token
+    source.start_offset_ms = start_offset_ms
 
 
 def _fanout(callbacks, args: tuple, what: str) -> None:
@@ -173,19 +176,41 @@ class PlaybackSession:
         self._suspend_callbacks.append(callback)
 
     async def set_source(
-        self, uri: str, *, mime_type: str = "", source_token: str = ""
+        self,
+        uri: str,
+        *,
+        mime_type: str = "",
+        source_token: str = "",
+        start_offset_ms: int = 0,
     ) -> None:
         """Replace what is playing — append() plus removal of the old stream."""
         command = pb.Command()
-        _fill_source(command.set_source.source, uri, mime_type, source_token)
+        _fill_source(
+            command.set_source.source,
+            uri,
+            mime_type,
+            source_token,
+            start_offset_ms,
+        )
         await self._send(command)
 
     async def enqueue_source(
-        self, uri: str, *, mime_type: str = "", source_token: str = ""
+        self,
+        uri: str,
+        *,
+        mime_type: str = "",
+        source_token: str = "",
+        start_offset_ms: int = 0,
     ) -> None:
         """Prefetch for a gapless switch — append() alongside the current source."""
         command = pb.Command()
-        _fill_source(command.enqueue_source.source, uri, mime_type, source_token)
+        _fill_source(
+            command.enqueue_source.source,
+            uri,
+            mime_type,
+            source_token,
+            start_offset_ms,
+        )
         await self._send(command)
 
     async def remove_source(self, source_token: str) -> None:

@@ -169,11 +169,11 @@ def _restart(renderer) -> None:
     renderer.connect()
 
 
-def _seeks(renderer) -> list[int]:
+def _start_offsets(renderer) -> list[int]:
     return [
-        command.seek.position_ms
+        command.enqueue_source.source.start_offset_ms
         for command in renderer.commands
-        if command.WhichOneof("op") == "seek"
+        if command.WhichOneof("op") == "enqueue_source"
     ]
 
 
@@ -205,10 +205,9 @@ async def test_the_resumed_track_starts_where_it_had_reached(queue, renderer):
     await _restore_link(renderer, "")
     await asyncio.sleep(0.3)
 
-    seeks = _seeks(renderer)
-    assert seeks, "expected a seek to where playback had reached"
-    assert seeks[-1] > 0
-    assert seeks[-1] < 5000, "the reboot must not be counted as playing time"
+    offsets = _start_offsets(renderer)
+    assert offsets[-1] > 0, "expected it to start where playback had reached"
+    assert offsets[-1] < 5000, "the reboot must not be counted as playing time"
 
 
 async def test_a_restart_reports_playing_rather_than_a_stop(
