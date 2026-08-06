@@ -10,10 +10,11 @@
 #include <vector>
 
 FlacStreamDecoder::FlacStreamDecoder(std::optional<StreamId> streamId,
-                                     size_t bufferSize)
+                                     size_t bufferSize, size_t startOffsetMs)
     : AudioGraphNode(streamId),
       buffer(bufferSize, std::bind(&FlacStreamDecoder::onEmptyBuffer, this,
-                                   std::placeholders::_1)) {
+                                   std::placeholders::_1)),
+      startOffsetMs(startOffsetMs) {
   init();
 }
 
@@ -141,6 +142,8 @@ void FlacStreamDecoder::metadata_callback(
     const ::FLAC__StreamMetadata *metadata) {
   if (metadata->type == FLAC__METADATA_TYPE_STREAMINFO) {
     flacStreamInfo = metadata->data.stream_info;
+    frameSizeBytes = sampleSize(bitsToFormat(flacStreamInfo->bits_per_sample)) *
+                     flacStreamInfo->channels;
 
     if (inputNode->getState().streamInfo.has_value()) {
       sourceStreamLength = inputNode->getState().streamInfo.value().streamSize;
@@ -193,6 +196,23 @@ void FlacStreamDecoder::throwOnFlacError(bool retval) {
   }
 }
 
+long FlacStreamDecoder::framesRead() const {
+  const auto frameSize = frameSizeBytes.load();
+  if (frameSize == 0) {
+    return runStartFrame.load(); // no format yet, so nothing has been read
+  }
+  return runStartFrame.load() + bytesReadInRun.load() / frameSize;
+}
+
+std::optional<long> FlacStreamDecoder::streamReadPosition() const {
+  return framesRead();
+}
+
+void FlacStreamDecoder::restartRunAt(long frame) {
+  runStartFrame = frame;
+  bytesReadInRun = 0;
+}
+
 void FlacStreamDecoder::setStreamingState() {
   if (!flacStreamInfo.has_value()) {
     throw std::runtime_error("Stream info not available");
@@ -209,7 +229,22 @@ void FlacStreamDecoder::setStreamingState() {
       .streamType = StreamType::FRAMES,
       .streamSize = flacStreamInfo.value().total_samples};
 
-  setState({AudioGraphNodeState::STREAMING, streamReadPosition, streamInfo});
+  setState({AudioGraphNodeState::STREAMING, framesRead(), streamInfo});
+}
+
+void FlacStreamDecoder::processStartOffset() {
+  if (startOffsetMs > 0) {
+    if (!flacStreamInfo.has_value()) {
+      throw std::runtime_error("Stream info not available");
+    }
+    auto startOffsetSamples =
+        (startOffsetMs * flacStreamInfo.value().sample_rate) / 1000;
+    if (startOffsetSamples >= flacStreamInfo.value().total_samples) {
+      throw std::runtime_error(
+          "Start offset is greater than the total number of samples");
+    }
+    handleSeekSignal(startOffsetSamples);
+  }
 }
 
 void FlacStreamDecoder::handleSeekSignal(size_t position) {
@@ -221,7 +256,7 @@ void FlacStreamDecoder::handleSeekSignal(size_t position) {
   }
   buffer.clear();
   if (position >= flacStreamInfo.value().total_samples) {
-    streamReadPosition = flacStreamInfo.value().total_samples;
+    restartRunAt(flacStreamInfo.value().total_samples);
     seekSignal.respond(position);
     return;
   }
@@ -233,7 +268,7 @@ void FlacStreamDecoder::handleSeekSignal(size_t position) {
     spdlog::warn("Seek failed, offset={}, state={}", position,
                  FLAC__StreamDecoderStateString[get_state()]);
   } else {
-    streamReadPosition = position;
+    restartRunAt(position);
   }
   setStreamingState();
 }
@@ -250,7 +285,8 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
     bool retval = process_until_end_of_metadata();
     throwOnFlacError(retval);
 
-    bool streamingStateSet = false;
+    processStartOffset();
+    setStreamingState();
 
     while (!token.stop_requested()) {
       while (!token.stop_requested()) {
@@ -261,14 +297,10 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
         }
         retval = process_single();
         throwOnFlacError(retval);
-        if (!streamingStateSet) {
-          setStreamingState();
-          streamingStateSet = true;
-        }
 
         if (seekSignal.getValue().has_value()) {
           handleSeekSignal(*seekSignal.getValue());
-          if (static_cast<FLAC__uint64>(streamReadPosition) ==
+          if (static_cast<FLAC__uint64>(framesRead()) ==
               flacStreamInfo.value().total_samples) {
             break;
           }
@@ -288,7 +320,8 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
       std::string message =
           std::string("Flac decoder thread exception: ") + ex.what();
       spdlog::warn(message);
-      setState({AudioGraphNodeState::ERROR, StreamError{StreamErrorSource::DECODER, message}});
+      setState({AudioGraphNodeState::ERROR,
+                StreamError{StreamErrorSource::DECODER, message}});
     }
   }
   buffer.setEof();
@@ -298,7 +331,7 @@ void FlacStreamDecoder::thread_run(std::stop_token token) {
 void FlacStreamDecoder::onEmptyBuffer(Buffer<uint8_t> &buffer) {
   auto currentState = getState();
   if (buffer.isEof() && currentState.state != AudioGraphNodeState::ERROR) {
-    setState(StreamState{AudioGraphNodeState::FINISHED, streamReadPosition,
+    setState(StreamState{AudioGraphNodeState::FINISHED, framesRead(),
                          currentState.streamInfo});
   }
 }
@@ -314,7 +347,7 @@ FlacStreamDecoder::~FlacStreamDecoder() {
 size_t FlacStreamDecoder::read(void *data, size_t size) {
   perfmon_begin("FlacStreamDecoder::read");
   auto readBytes = buffer.read(static_cast<uint8_t *>(data), size);
-  streamReadPosition += readBytes;
+  bytesReadInRun += readBytes;
   perfmon_end("FlacStreamDecoder::read");
   return readBytes;
 }

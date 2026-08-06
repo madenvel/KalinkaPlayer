@@ -132,6 +132,10 @@ message Source {
   string uri = 1;           // http(s)://, file://
   string mime_type = 2;     // "audio/flac", "audio/mpeg"
   string source_token = 3;  // Core-assigned, opaque to the renderer, echoed back
+  // Where in the stream to begin, so a source can start anywhere without a
+  // seek behind it: resuming a track on another renderer, or one track of a
+  // cue-sheet rip. Positions the renderer reports stay absolute in the stream.
+  uint64 start_offset_ms = 4;
 }
 
 message VolumeState {

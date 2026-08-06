@@ -169,7 +169,8 @@ void NativePlayer::reportUnavailable(const char *command) {
 StreamId NativePlayer::appendSource(const pb::Source &source) {
   const StreamId id = nextStreamId_++;
   sources_.push_back(TrackedSource{source, id});
-  player_->append(id, source.uri(), formatOf(source));
+  player_->append(id, source.uri(), formatOf(source),
+                  source.start_offset_ms());
   return id;
 }
 

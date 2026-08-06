@@ -100,7 +100,7 @@ struct StreamNodes {
   const StreamId id;
 
   StreamNodes(StreamId id, const std::string &url, const Config &config,
-              const AudioFormat format)
+              const AudioFormat format, size_t startOffsetMs = 0)
       : url(url), id(id) {
     if (url.substr(0, 7) == "tone://") {
       // Speaker-test tone, generated in-process — emits PCM frames directly,
@@ -127,7 +127,8 @@ struct StreamNodes {
           value_or(config, "input.http.chunk_size", CHUNK_SIZE)));
     }
 
-    auto decoder = connectDecoder(nodeChain.back(), config, format);
+    auto decoder =
+        connectDecoder(nodeChain.back(), config, format, startOffsetMs);
     if (nodeChain.back() != decoder) {
       nodeChain.emplace_back(std::move(decoder));
     }
@@ -135,17 +136,20 @@ struct StreamNodes {
 
   std::shared_ptr<AudioGraphOutputNode>
   connectDecoder(std::shared_ptr<AudioGraphOutputNode> outputNode,
-                 const Config &config, const AudioFormat format) {
+                 const Config &config, const AudioFormat format,
+                 size_t startOffsetMs) {
     switch (format) {
     case AudioFormat::FormatFlac: {
       auto decoder = std::make_shared<FlacStreamDecoder>(
-          id, value_or(config, "decoder.flac.buffer_size", FLAC_BUFFER_SIZE));
+          id, value_or(config, "decoder.flac.buffer_size", FLAC_BUFFER_SIZE),
+          startOffsetMs);
       decoder->connectTo(outputNode);
       return decoder;
     }
     case AudioFormat::FormatMpeg: {
       auto decoder = std::make_shared<Mp3StreamDecoder>(
-          id, value_or(config, "decoder.mpeg.buffer_size", MPEG_BUFFER_SIZE));
+          id, value_or(config, "decoder.mpeg.buffer_size", MPEG_BUFFER_SIZE),
+          startOffsetMs);
       decoder->connectTo(outputNode);
       return decoder;
     }
@@ -213,14 +217,15 @@ void AudioPlayer::configureVolume(const std::string &mode,
 AudioPlayer::~AudioPlayer() { stop(); }
 
 void AudioPlayer::append(StreamId id, const std::string &url,
-                         const AudioFormat format) {
+                         const AudioFormat format, size_t startOffsetMs) {
   cleanUpFinishedStreams();
   if (std::any_of(streamNodesList.begin(), streamNodesList.end(),
                   [id](const StreamNodes &s) { return s.id == id; })) {
     spdlog::warn("Stream id={} already queued; appending anyway", id);
   }
-  spdlog::debug("Appending stream id={} url={}", id, url);
-  StreamNodes newStream(id, url, config, format);
+  spdlog::debug("Appending stream id={} url={} startOffset={}ms", id, url,
+                startOffsetMs);
+  StreamNodes newStream(id, url, config, format, startOffsetMs);
   streamSwitcher->connectTo(newStream.nodeChain.back());
   audioEmitter->connectTo(streamSwitcher);
   streamNodesList.emplace_back(std::move(newStream));

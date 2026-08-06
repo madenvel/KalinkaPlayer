@@ -11,11 +11,15 @@
 enum class ToneChannel { Both = 0, Left, Right };
 
 class SineWaveNode : public AudioGraphOutputNode {
-  size_t position = 0;
+  size_t position = 0; // bytes handed out
   size_t totalDataSize = 0;
   StreamInfo streamInfo;
   int frequency;
   ToneChannel channel;
+
+  size_t frameSizeBytes() const {
+    return streamInfo.format.channels * (streamInfo.format.bitsPerSample >> 3);
+  }
 
 public:
   SineWaveNode(std::optional<StreamId> streamId, int frequency, int durationMs,
@@ -69,6 +73,10 @@ public:
                                 size_t size) override {
     (void)timeout;
     return waitForData(stopToken, size);
+  }
+
+  virtual std::optional<long> streamReadPosition() const override {
+    return static_cast<long>(position / frameSizeBytes());
   }
 
   virtual size_t seekTo(size_t positionSamples) override {

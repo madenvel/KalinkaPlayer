@@ -160,6 +160,20 @@ void AlsaAudioEmitter::setState(const StreamState &newState) {
 }
 #endif
 
+snd_pcm_sframes_t AlsaAudioEmitter::queuedFrames() {
+  snd_pcm_sframes_t queued = 0;
+  if (pcmHandle == nullptr || snd_pcm_delay(pcmHandle, &queued) < 0) {
+    return 0;
+  }
+  return std::max<snd_pcm_sframes_t>(0, queued);
+}
+
+void AlsaAudioEmitter::beginSourceAt(std::optional<long> position) {
+  currentSourceStartFrames =
+      std::max<snd_pcm_sframes_t>(0, position.value_or(0));
+  currentSourceTotalFramesWritten = currentSourceStartFrames;
+}
+
 StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
   StreamState inputNodeState = inputNode->getState();
   while (!token.stop_requested()) {
@@ -179,12 +193,10 @@ StreamState AlsaAudioEmitter::waitForInputToBeReady(std::stop_token token) {
       setState({AudioGraphNodeState::ERROR, *inputNodeState.error});
       break;
     case AudioGraphNodeState::SOURCE_CHANGED:
-      // Renderer delta: nothing is on the wire, so the incoming stream is
-      // ours at once and the handover is announced in its name.
       setStreamId(inputNodeState.streamId);
       setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
       inputNode->acceptSourceChange();
-      currentSourceTotalFramesWritten = 0;
+      beginSourceAt(inputNode->streamReadPosition());
       break;
     default:
       setState(StreamState(AudioGraphNodeState::STOPPED));
@@ -326,11 +338,12 @@ snd_pcm_sframes_t AlsaAudioEmitter::waitForAlsaBufferSpace() {
 bool AlsaAudioEmitter::handleInputNodeStateChange() {
   auto inputNodeState = inputNode->getState();
   if (inputNodeState.state == AudioGraphNodeState::SOURCE_CHANGED) {
-    // Renderer delta: adopted below, at whichever moment the path accepts it.
     const std::optional<StreamId> incomingStreamId = inputNodeState.streamId;
     inputNode->acceptSourceChange();
     inputNodeState = inputNode->getState();
-    currentSourceTotalFramesWritten = 0;
+    // Unconditional, unlike the source loop: the queue holds the outgoing
+    // track, so it says nothing about where the incoming one begins.
+    beginSourceAt(inputNode->streamReadPosition());
 
     auto newStreamInfo = inputNodeState.streamInfo;
     if (inputNodeState.state != AudioGraphNodeState::STREAMING ||
@@ -348,16 +361,15 @@ bool AlsaAudioEmitter::handleInputNodeStateChange() {
       spdlog::debug("Reporting source change in {}ms, frames={}",
                     framesToTimeMs(framesDelay).count(), framesDelay);
 
-      // Renderer delta: gapless, so identity flips only once the frames
-      // already buffered run out — when the listener hears the switch.
       playedFramesCounter.callOnOrAfterFrame(
           framesDelay,
-          [this, streamInfo = newStreamInfo,
-           incomingStreamId](snd_pcm_sframes_t frames) {
+          [this, streamInfo = newStreamInfo, incomingStreamId,
+           start = currentSourceStartFrames](snd_pcm_sframes_t frames) {
             setStreamId(incomingStreamId);
             setState(StreamState(AudioGraphNodeState::SOURCE_CHANGED));
             setState(StreamState{AudioGraphNodeState::STREAMING,
-                                 framesToTimeMs(frames).count(), streamInfo});
+                                 framesToTimeMs(start + frames).count(),
+                                 streamInfo});
           });
     }
   } else if (inputNodeState.state == AudioGraphNodeState::FINISHED ||
@@ -540,12 +552,20 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
       streamInfo.value().format = currentStreamAudioFormat;
 
       bool started = false;
-      if (seekHappened) {
-        currentSourceTotalFramesWritten = inputNodeState.position;
-        seekHappened = false;
+      seekHappened = false;
+
+      // Only with nothing queued do the two agree, and there the source is
+      // the authority: it is the end that begins partway in, or seeks itself.
+      const auto queued = queuedFrames();
+      if (queued == 0) {
+        if (auto position = inputNode->streamReadPosition()) {
+          currentSourceTotalFramesWritten = *position;
+        }
       }
 
-      snd_pcm_uframes_t streamStartPosition = currentSourceTotalFramesWritten;
+      // What has been heard, rather than what has been handed over.
+      snd_pcm_uframes_t streamStartPosition = std::max<snd_pcm_sframes_t>(
+          0, currentSourceTotalFramesWritten - queued);
       paused = false;
 
       while (!token.stop_requested()) {

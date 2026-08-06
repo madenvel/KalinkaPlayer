@@ -76,6 +76,13 @@ public:
                                 size_t size) = 0;
   virtual size_t seekTo(size_t absolutePosition) { return -1; }
 
+  // How far the data handed out so far reaches, in frames. Live, unlike the
+  // position in StreamState, which is only stamped when the state changes.
+  // Empty before the format is known, or for a node that deals in bytes.
+  virtual std::optional<long> streamReadPosition() const {
+    return std::nullopt;
+  }
+
   virtual ~AudioGraphOutputNode() = default;
 };
 

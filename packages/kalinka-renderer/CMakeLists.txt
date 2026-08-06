@@ -145,6 +145,7 @@ if(GTest_FOUND)
     src/player/StateTranslator.cpp
     tests/test_alsa_device_naming.cpp
     tests/test_config_service.cpp
+    tests/test_decoder_start_offset.cpp
     tests/test_discovery_cache.cpp
     tests/test_protocol_session.cpp
     tests/test_renderer_name.cpp
@@ -159,6 +160,9 @@ if(GTest_FOUND)
     kalinka_renderer_core
     kalinka_native_player
     GTest::gtest_main
+  )
+  target_compile_definitions(kalinka-renderer-tests PRIVATE
+    KALINKA_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
   )
   include(GoogleTest)
   # TIMEOUT: a deadlock regression hangs instead of failing.

@@ -41,7 +41,6 @@ void AudioGraphNode::setState(const StreamState &newState) {
   if (!stamped.streamId.has_value()) {
     stamped.streamId = boundStreamId;
   }
-  // Renderer delta: a gapless switch reports STREAMING for both tracks.
   if (state.state == stamped.state && state.streamId == stamped.streamId) {
     return;
   }
