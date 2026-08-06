@@ -155,6 +155,7 @@ if(GTest_FOUND)
     tests/test_state_translator.cpp
     tests/test_stream_identity.cpp
     tests/test_switcher_concurrency.cpp
+    tests/test_volume_monitor_lifetime.cpp
     tests/test_ws_transport.cpp
     tests/native_player/AlsaAudioEmitter_test.cpp
     tests/native_player/AudioGraphHttpStream_test.cpp

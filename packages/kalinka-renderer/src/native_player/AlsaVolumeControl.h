@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <functional>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
@@ -32,10 +33,31 @@ struct VolumeState {
   int backend = static_cast<int>(VolumeBackend::None);
 };
 
+/// Where external volume changes arrive, whichever mixer is behind them at the
+/// time.
+///
+/// One per player and never replaced, unlike the mixer handle: configureVolume()
+/// drops and remakes that on every mode change, and whoever listens has to
+/// survive it. Subscribers hold a share of this, so there is nothing to outlive.
+class VolumeEvents {
+public:
+  /// Subscribe to external changes. The callback runs on the mixer's monitor
+  /// thread with the new 0..100 value. Returns an id for unsubscribe().
+  int subscribe(std::function<void(int)> callback);
+  void unsubscribe(int id);
+
+  void publish(int percent);
+
+private:
+  std::mutex mutex_;
+  std::list<std::pair<int, std::function<void(int)>>> subscribers_;
+  int nextSubscriberId_ = 0;
+};
+
 /// Hardware ALSA mixer control for a single card, plus a background thread that
 /// watches for *external* changes (alsamixer, amixer, a hardware knob, another
-/// app) and notifies subscribers — the local analogue of MusicCast pushing
-/// volume events back to the UI.
+/// app) and reports them — the local analogue of MusicCast pushing volume
+/// events back to the UI.
 ///
 /// All mixer access is serialized; get/set are safe to call from any thread.
 class AlsaVolumeControl {
@@ -45,8 +67,12 @@ public:
   ///        it.
   /// @param controlName overrides the simple-mixer element to use; empty means
   ///        auto-pick (Master → PCM → … → first element with playback volume).
+  /// @param onExternalChange where changes go, given at construction because
+  ///        the monitor thread starts here and a listener attached afterwards
+  ///        would miss whatever came first.
   AlsaVolumeControl(const std::string &deviceName,
-                    const std::string &controlName);
+                    const std::string &controlName,
+                    std::function<void(int)> onExternalChange = {});
   ~AlsaVolumeControl();
 
   AlsaVolumeControl(const AlsaVolumeControl &) = delete;
@@ -55,22 +81,11 @@ public:
   /// True when a usable playback-volume mixer element was found.
   bool available() const { return available_; }
 
-  /// True when the external-change monitor thread is running. It is false when
-  /// the self-pipe could not be created: get/set still work, but no change
-  /// notifications are produced, so a VolumeMonitor must treat this as inert
-  /// rather than block forever waiting for a notify() that never comes.
-  bool monitoring() const { return monitoringActive_; }
-
   /// Current volume in 0..100, or -1 when unavailable.
   int getVolume();
 
   /// Set volume, clamped to 0..100. No-op when unavailable.
   void setVolume(int percent);
-
-  /// Subscribe to external-change notifications. The callback runs on the
-  /// monitor thread with the new 0..100 value. Returns an id for unsubscribe().
-  int subscribe(std::function<void(int)> callback);
-  void unsubscribe(int id);
 
 private:
   bool openMixer(const std::string &deviceName, const std::string &controlName);
@@ -87,24 +102,25 @@ private:
   long rawMin_ = 0;
   long rawMax_ = 0;
   bool available_ = false;
-  bool monitoringActive_ = false;
   int lastNotified_ = -1;
 
-  std::mutex subscribersMutex_;
-  std::list<std::pair<int, std::function<void(int)>>> subscribers_;
-  int nextSubscriberId_ = 0;
+  /// Set once, before the monitor thread starts; read only by that thread.
+  const std::function<void(int)> onExternalChange_;
 
   int wakePipe_[2] = {-1, -1}; // self-pipe to break poll() on shutdown
   std::jthread monitorThread_;
 };
 
 /// Blocks until the hardware mixer changes — the volume analogue of
-/// StateMonitor. Python awaits wait() on a worker thread (the GIL is released
-/// while blocked). Constructing with a null/unavailable control yields an inert
-/// monitor whose wait() returns immediately and isRunning() is false.
+/// StateMonitor.
+///
+/// Subscribed to the player's VolumeEvents rather than to a mixer, so it keeps
+/// working across a mode change and cannot be left holding a mixer that has
+/// been remade. It shares ownership of what it listens to, and stops reporting
+/// only when stop() says so.
 class VolumeMonitor {
 public:
-  explicit VolumeMonitor(AlsaVolumeControl *control);
+  explicit VolumeMonitor(std::shared_ptr<VolumeEvents> events);
   ~VolumeMonitor();
 
   VolumeMonitor(const VolumeMonitor &) = delete;
@@ -118,7 +134,7 @@ public:
   void stop();
 
 private:
-  AlsaVolumeControl *control_;
+  const std::shared_ptr<VolumeEvents> events_;
   int subscriptionId_ = -1;
   std::mutex mutex_;
   std::condition_variable cv_;
