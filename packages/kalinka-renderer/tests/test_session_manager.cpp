@@ -93,6 +93,44 @@ TEST_F(SessionManagerTest, OwnedByFindsOnlyTheOwner) {
   EXPECT_EQ(manager->ownedBy(""), nullptr);
 }
 
+TEST_F(SessionManagerTest, ShutdownClosesTheRunningSession) {
+  auto manager = makeManager();
+  std::string busyOwner;
+  auto session = manager->open("sid-1", "owner-1", busyOwner);
+  auto transport = std::make_shared<FakeTransport>();
+  session->attach(transport);
+
+  manager->shutdown();
+
+  EXPECT_EQ(manager->current(), nullptr);
+  EXPECT_EQ(transport->sessionClosed, 1);
+  EXPECT_EQ(player->calls.back(), "stop");
+}
+
+TEST_F(SessionManagerTest, ShutdownDoesNotWaitForTheOwnerGrace) {
+  auto manager = makeManager(60s);
+  std::string busyOwner;
+  auto session = manager->open("sid-1", "owner-1", busyOwner);
+  auto transport = std::make_shared<FakeTransport>();
+  session->attach(transport);
+  session->onConnectionClosed(transport.get());  // grace timer armed
+
+  manager->shutdown();
+
+  EXPECT_EQ(manager->current(), nullptr);
+  EXPECT_EQ(player->calls.back(), "stop");
+  ioc.run();  // returns at once only if shutdown cancelled the 60s grace
+}
+
+TEST_F(SessionManagerTest, ShutdownWithoutASessionIsANoOp) {
+  auto manager = makeManager();
+
+  manager->shutdown();
+
+  EXPECT_EQ(manager->current(), nullptr);
+  EXPECT_TRUE(player->calls.empty());
+}
+
 TEST_F(SessionManagerTest, ASessionEndingOnItsOwnClearsTheSlot) {
   auto manager = makeManager(0s);
   std::string busyOwner;

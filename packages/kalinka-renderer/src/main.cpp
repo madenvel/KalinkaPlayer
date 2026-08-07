@@ -189,10 +189,13 @@ int main(int argc, char **argv) {
         if (discovery) {
           discovery->stop();  // joins the discovery thread
         }
-        manager.stop();  // Goodbye + close on every session
+        // Playback first: it must not outlive the process into the owner
+        // grace, and closing while connections are up tells them cleanly.
+        services.sessions->shutdown();
+        manager.stop();  // Goodbye + close on every connection
       });
 
-  // Runs until the signal handler has fired and every session has closed
+  // Runs until the signal handler has fired and every connection has closed
   // (each stop() carries a 2s hard deadline, so this cannot hang).
   ioc.run();
 

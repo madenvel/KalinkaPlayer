@@ -59,6 +59,10 @@ public:
   bool close(const std::string &sessionId,
              const std::string &requesterServerId);
 
+  /// Close the running session, if any: the process is exiting, and playback
+  /// must not outlive it — the owner grace is for owners, not for shutdown.
+  void shutdown();
+
   /// The running session, if there is one. Broadcast in Hello.
   std::shared_ptr<Session> current() const { return current_; }
 
