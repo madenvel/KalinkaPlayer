@@ -1456,15 +1456,13 @@ async def create_app(
         """Pin playback to a renderer.
 
         Body: `{"renderer_id": "<id>"}`, or null to return to automatic
-        (first connected). Playback moves with it: the track restarts on the
-        selected renderer from the beginning. A target that is busy or
-        unreachable fails the request and leaves playback where it was.
+        (first connected). Playback moves with it and resumes from its current
+        position. A target that is busy or unreachable fails the request and
+        leaves playback and the selection where they were.
         """
         renderer_id = payload.get("renderer_id")
         if renderer_id is not None and renderer_registry.get(renderer_id) is None:
             raise HTTPException(status_code=404, detail="Unknown renderer")
-        # Hand over before the pin moves, so the STOPPED still belongs to the
-        # renderer that was playing and reaches the module driving it.
         try:
             await app.state.player_context.playqueue.switch_renderer(renderer_id)
         except RendererBusy as exc:
@@ -1475,7 +1473,6 @@ async def create_app(
             raise HTTPException(
                 status_code=504, detail=str(exc) or "the renderer did not answer"
             )
-        renderer_registry.select(renderer_id)
         await device_router.resync()
         return _renderer_selection()
 
