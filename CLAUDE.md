@@ -36,6 +36,12 @@ the refactoring is massive** — touching many files, changing a public interfac
 or reshaping a subsystem. Small, local cleanups on the path of the change need
 no permission.
 
+Don't repeat yourself once the fragment is big enough to name. A block that
+would be copied and then edited in two places belongs in one — a function, a
+base class, a shared module — so there is a single place to fix when it turns
+out to be wrong. Two lines that merely look alike are not duplication:
+extracting those costs more than it saves.
+
 ## Ownership (C++)
 
 Raw pointers are for short-lived local work — a buffer walked inside one
@@ -58,3 +64,11 @@ run (`ctest` on the `kalinka-renderer-tests` target), not assumed to pass.
 
 Exception: the server's playqueue suite is slow and flaky — skip
 it when that code is untouched.
+
+## Review
+
+Always review the code once the work is done. Read the finished diff back as a
+reviewer would, against these rules — SOLID, no duplication worth naming, no
+slop comments, no TODOs, tests present and run. Fix what the review turns up
+before saying the work is ready; if something is deliberate, say why in your
+reply rather than leaving it unexplained.
