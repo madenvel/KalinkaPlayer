@@ -36,6 +36,7 @@ void WsTransport::start() { connect(); }
 void WsTransport::connect() {
   markDown();
   failing_ = false;
+  const uint64_t gen = ++generation_;
   inbox_.clear();  // discard messages from a previous connection
   // A read that failed mid-message leaves partial bytes behind; they must not
   // prefix the next connection's first message.
@@ -46,13 +47,13 @@ void WsTransport::connect() {
   auto self = shared_from_this();
   resolver_.async_resolve(
       endpoint_.host, std::to_string(endpoint_.port),
-      [self](beast::error_code ec, tcp::resolver::results_type results) {
-        if (self->stopping_) return;
+      [self, gen](beast::error_code ec, tcp::resolver::results_type results) {
+        if (self->stopping_ || gen != self->generation_) return;
         if (ec) return self->fail("resolve", ec);
         asio::async_connect(
             self->ws_->next_layer(), results,
-            [self](beast::error_code ec, const tcp::endpoint &) {
-              if (self->stopping_) return;
+            [self, gen](beast::error_code ec, const tcp::endpoint &) {
+              if (self->stopping_ || gen != self->generation_) return;
               if (ec) return self->fail("connect", ec);
               self->ws_->binary(true);
               self->ws_->set_option(wsTimeouts());
@@ -60,8 +61,8 @@ void WsTransport::connect() {
                   self->endpoint_.host + ":" +
                   std::to_string(self->endpoint_.port);
               self->ws_->async_handshake(
-                  host, "/renderer/ws", [self](beast::error_code ec) {
-                    if (self->stopping_) return;
+                  host, "/renderer/ws", [self, gen](beast::error_code ec) {
+                    if (self->stopping_ || gen != self->generation_) return;
                     if (ec) return self->fail("ws handshake", ec);
                     self->up_ = true;
                     self->retryDelay_ = self->initialRetryDelay_;
@@ -76,8 +77,9 @@ void WsTransport::connect() {
 
 void WsTransport::readLoop() {
   auto self = shared_from_this();
-  ws_->async_read(readBuffer_, [self](beast::error_code ec, std::size_t) {
-    if (self->stopping_) return;
+  const uint64_t gen = generation_;
+  ws_->async_read(readBuffer_, [self, gen](beast::error_code ec, std::size_t) {
+    if (self->stopping_ || gen != self->generation_) return;
     if (ec) return self->fail("read", ec);
     self->enqueueMessage(beast::buffers_to_string(self->readBuffer_.data()));
     self->readBuffer_.consume(self->readBuffer_.size());
@@ -148,8 +150,12 @@ void WsTransport::writeNext() {
   }
   writing_ = true;
   auto self = shared_from_this();
+  // No stopping_ check below: stop() relies on this loop to flush the final
+  // frame; only a superseded stream's completion must bail.
+  const uint64_t gen = generation_;
   ws_->async_write(asio::buffer(writeQueue_.front()),
-                   [self](beast::error_code ec, std::size_t) {
+                   [self, gen](beast::error_code ec, std::size_t) {
+                     if (gen != self->generation_) return;
                      if (!self->writeQueue_.empty()) {
                        self->writeQueue_.pop_front();
                      }
@@ -207,7 +213,8 @@ void WsTransport::scheduleRetry() {
                                                     kMaxRetryDelay);
   auto self = shared_from_this();
   retryTimer_.async_wait([self](const boost::system::error_code &ec) {
-    if (ec || self->stopping_) return;
+    // gaveUp_ too: giving up between the schedule and the firing must win.
+    if (ec || self->stopping_ || self->gaveUp_) return;
     self->connect();
   });
 }
