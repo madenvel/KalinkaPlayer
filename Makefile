@@ -174,8 +174,8 @@ kalinka-plugins-deb: build-env
 		fi; \
 	done
 
-## Build all deb packages (server and plugins)
-build-all-deb: kalinka-server-deb kalinka-plugins-deb copy-debs
+## Build all deb packages (server, plugins and renderer)
+build-all-deb: kalinka-server-deb kalinka-plugins-deb renderer-deb copy-debs
 	@echo "All deb packages built successfully!"
 	@echo "Debs moved to debs/ directory"
 
@@ -191,7 +191,7 @@ help:
 	@echo "  build-env         Create the venv (if missing) with the wheel-build toolchain"
 	@echo "  kalinka-server-deb  Build kalinka-server deb package"
 	@echo "  kalinka-plugins-deb Build all plugin deb packages (including SDK)"
-	@echo "  build-all-deb     Build all deb packages (server and plugins) and move to debs/"
+	@echo "  build-all-deb     Build all deb packages (server, plugins, renderer) and move to debs/"
 	@echo "  copy-debs         Move built deb packages to debs/ directory"
 	@echo "  test              Run all tests"
 	@echo "  clean             Clean build artifacts"
