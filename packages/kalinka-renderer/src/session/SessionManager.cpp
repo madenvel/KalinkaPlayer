@@ -51,6 +51,13 @@ bool SessionManager::close(const std::string &sessionId,
   return true;
 }
 
+void SessionManager::shutdown() {
+  // A local copy: closing clears current_ from under us via forget().
+  if (auto session = current_) {
+    session->close("renderer shutting down");
+  }
+}
+
 std::shared_ptr<Session>
 SessionManager::ownedBy(const std::string &serverId) const {
   if (current_ && !serverId.empty() && current_->ownerServerId() == serverId) {
