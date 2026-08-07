@@ -24,7 +24,9 @@
  * this class's business — that is the ProtocolSession bound to it.
  *
  * @note Single-threaded io_context. Every async handler holds
- *       shared_from_this(), so a completion cannot outlive its transport.
+ *       shared_from_this(), so a completion cannot outlive its transport, and
+ *       carries the generation of the stream that queued it, so a superseded
+ *       stream's completions do nothing.
  */
 class WsTransport : public std::enable_shared_from_this<WsTransport> {
 public:
@@ -47,7 +49,8 @@ public:
   /// Must be called once, before start().
   void bind(Events events);
 
-  /// Begin connecting. Nothing happens until this is called.
+  /// Begin connecting. Nothing happens until this is called. Calling it again
+  /// supersedes the current connection with a fresh one.
   void start();
 
   /**
@@ -95,6 +98,10 @@ private:
 
   boost::asio::ip::tcp::resolver resolver_;
   std::optional<WsStream> ws_;  // recreated per connection attempt
+  // Bumped per connect(). The replaced stream's handlers still complete
+  // (cancelled); treating one as a failure of the new stream starts a
+  // reconnect loop that kills every connection it makes.
+  uint64_t generation_ = 0;
   boost::beast::flat_buffer readBuffer_;
 
   // Bounded inbox between the read loop and message processing.

@@ -156,6 +156,38 @@ TEST_F(WsTransportTest, ADropReportsDownAndReconnects) {
   transport->stop({});
 }
 
+TEST_F(WsTransportTest, ASupersededConnectionsCancelledReadIsNotAFailure) {
+  auto transport = makeTransport();
+  transport->start();
+  ASSERT_TRUE(runUntil([&] { return ups == 1; }));
+
+  // What a retry firing against a healthy link does: connect() replaces the
+  // stream while its read is still pending. The cancelled read must not count
+  // as a loss of the new connection — that way lies a reconnect loop killing
+  // every connection it makes, once per retry delay.
+  transport->start();
+
+  ASSERT_TRUE(runUntil([&] { return ups == 2; }));
+  ioc.run_for(200ms);  // many 10ms retry periods
+  EXPECT_EQ(ups, 2);
+  EXPECT_EQ(downs, 1);
+  transport->stop({});
+}
+
+TEST_F(WsTransportTest, GiveUpWithARetryPendingStaysGivenUp) {
+  auto transport = makeTransport();
+  transport->start();
+  ASSERT_TRUE(runUntil([&] { return ups == 1; }));
+
+  server.drop();
+  ASSERT_TRUE(runUntil([&] { return downs == 1; }));  // retry now scheduled
+
+  transport->giveUp();
+
+  ioc.run_for(200ms);
+  EXPECT_EQ(ups, 1);  // the pending retry must not resurrect the link
+}
+
 TEST_F(WsTransportTest, GiveUpReportsDownAndStaysDown) {
   auto transport = makeTransport();
   transport->start();
