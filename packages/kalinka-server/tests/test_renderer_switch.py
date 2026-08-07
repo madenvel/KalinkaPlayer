@@ -76,12 +76,14 @@ async def _play_on(queue, renderer) -> None:
 
 
 async def test_playback_moves_to_the_selected_renderer(queue, renderers, emitter):
-    _registry, _pool, first, second = renderers
+    registry, _pool, first, second = renderers
     await _play_on(queue, first)
 
     await queue.switch_renderer("rid-b")
     await asyncio.sleep(0.2)
 
+    assert registry.active_id() == "rid-b"
+    assert registry.selected_id == "rid-b"
     assert second.current is not None  # playing there now
     assert first.current is None  # and stopped here
     assert first.session_id is None  # the claim was given up
@@ -151,7 +153,7 @@ async def test_a_renderer_that_will_not_have_us_leaves_playback_alone(
     queue, renderers
 ):
     """The point of claiming the target first: a refusal costs nothing."""
-    _registry, _pool, first, second = renderers
+    registry, _pool, first, second = renderers
     await _play_on(queue, first)
     playing = first.current
     second.accept = False
@@ -163,15 +165,21 @@ async def test_a_renderer_that_will_not_have_us_leaves_playback_alone(
     assert first.current == playing  # never interrupted
     assert first.session_id is not None
     assert second.session_id is None
+    assert registry.active_id() == "rid-a"
+    assert registry.selected_id is None
 
 
-async def test_switching_with_nothing_playing_claims_nothing(queue, renderers):
+async def test_switching_with_nothing_playing_selects_but_claims_nothing(
+    queue, renderers
+):
     """Selecting a renderer is not a reason to hold one; the choice takes
     effect at the next play."""
-    _registry, _pool, first, second = renderers
+    registry, _pool, first, second = renderers
 
     await queue.switch_renderer("rid-b")
 
+    assert registry.active_id() == "rid-b"
+    assert registry.selected_id == "rid-b"
     assert first.session_id is None
     assert second.session_id is None
 
@@ -189,3 +197,5 @@ async def test_selecting_an_offline_renderer_leaves_playback_where_it_is(
 
     assert first.current is not None
     assert first.session_id is not None
+    assert registry.active_id() == "rid-a"
+    assert registry.selected_id == "rid-b"

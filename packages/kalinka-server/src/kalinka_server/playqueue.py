@@ -562,12 +562,16 @@ class PlayQueueImpl(PlayQueueController):
         target = self._registry.resolve_active(renderer_id)
         old = self._track_player
         if old.renderer_id is None or old.renderer_id == target:
+            self._registry.select(renderer_id)
             return
         if target is None:
             raise RendererUnavailable("no renderer is connected")
 
         player = self._new_player()
         await player.open(target, announce=False)
+
+        # Commit after the provisional claim, before playback events use the route.
+        self._registry.select(renderer_id)
 
         state = old.get_state()
         resume_at = (

@@ -297,6 +297,37 @@ async def test_switching_renderers_still_powers_down_the_one_left_behind(
         await automation.shutdown()
 
 
+async def test_switching_renderers_on_the_same_device_does_not_power_cycle(
+    config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
+):
+    router = FakeRouter(mock_device, name="musiccast")
+    automation = DeviceAutomation(
+        config=config,
+        playqueue=mock_playqueue,
+        playqueue_eventbus=playqueue_eventbus,
+        ext_device_eventbus=ext_device_eventbus,
+        router=router,
+    )
+    try:
+        await automation._handle_playback_state_change(
+            PlaybackState(state=PlayerStateEnum.PLAYING)
+        )
+        mock_device.is_power_on.return_value = True
+        await automation._handle_playback_state_change(
+            PlaybackState(state=PlayerStateEnum.STOPPED)
+        )
+        await automation._handle_playback_state_change(
+            PlaybackState(state=PlayerStateEnum.BUFFERING)
+        )
+        await asyncio.sleep(0)
+
+        mock_device.power_on.assert_called_once()
+        mock_device.power_off.assert_not_called()
+        assert not _pending(automation)
+    finally:
+        await automation.shutdown()
+
+
 async def test_auto_power_on_on_buffering(
     config, mock_playqueue, playqueue_eventbus, ext_device_eventbus, mock_device
 ):
