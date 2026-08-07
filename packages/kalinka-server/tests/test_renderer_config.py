@@ -19,6 +19,8 @@ class FakeWs:
         self.answer = True
         # False stands in for a renderer built before the tier existed.
         self.declare_importance = True
+        # As does this, for one built before a field could say what it accepts.
+        self.declare_bounds = True
         self.device_options = ["default", "hw:CARD=sofhdadsp,DEV=0"]
         self.values = {"output.driver": "alsa", "output.device": "default"}
         self._next_id = 0
@@ -53,6 +55,12 @@ class FakeWs:
         latency.apply = pb.APPLY_COST_INTERRUPTS_PLAYBACK
         if self.declare_importance:
             latency.importance = pb.CONFIG_IMPORTANCE_EXPERT
+        if self.declare_bounds:
+            latency.unit = "ms"
+            latency.widget = pb.CONFIG_WIDGET_SLIDER
+            latency.range.min = 20
+            latency.range.max = 1000
+            latency.range.step = 10
         return snapshot
 
     async def send_config_request(self, message_id) -> None:
@@ -138,6 +146,32 @@ async def test_a_renderer_that_predates_the_tier_keeps_its_page():
         "simple",
         "simple",
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_bounded_field_carries_what_it_accepts():
+    registry, service, ws = make_service()
+
+    config = await service.get(RENDERER_ID)
+
+    fields = {f["path"]: f for f in config["sections"][0]["fields"]}
+    latency = fields["output.latency_ms"]
+    assert latency["range"] == {"min": 20, "max": 1000, "step": 10}
+    assert latency["unit"] == "ms"
+    assert latency["widget"] == "slider"
+
+
+@pytest.mark.asyncio
+async def test_a_field_with_no_bounds_says_so_rather_than_inventing_them():
+    registry, service, ws = make_service()
+    ws.declare_bounds = False
+
+    config = await service.get(RENDERER_ID)
+
+    for field in config["sections"][0]["fields"]:
+        assert field["range"] is None, field["path"]
+        assert field["unit"] == ""
+        assert field["widget"] == ""
 
 
 @pytest.mark.asyncio

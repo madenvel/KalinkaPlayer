@@ -140,6 +140,56 @@ TEST_F(NativePlayerSettingsTest, ANegativeSizeIsRefusedRatherThanStored) {
   EXPECT_FALSE(loadSettingsOverrides().contains("buffers.flac"));
 }
 
+TEST_F(NativePlayerSettingsTest, ADraggedKnobSaysWhatItAccepts) {
+  const pb::ConfigSection section = output();
+
+  const pb::ConfigField *latency = field(section, "output.latency_ms");
+  ASSERT_NE(latency, nullptr);
+  ASSERT_TRUE(latency->has_range());
+
+  EXPECT_EQ(latency->unit(), "ms");
+  EXPECT_EQ(latency->widget(), pb::CONFIG_WIDGET_SLIDER);
+  EXPECT_EQ(latency->range().min(), 20);
+  EXPECT_EQ(latency->range().max(), 1000);
+  EXPECT_EQ(latency->range().step(), 10);
+  EXPECT_GE(std::stoll(latency->default_value()), latency->range().min());
+  EXPECT_LE(std::stoll(latency->default_value()), latency->range().max());
+}
+
+TEST_F(NativePlayerSettingsTest, ABufferIsBoundedButTyped) {
+  for (const pb::ConfigField &knob : buffers().fields()) {
+    ASSERT_TRUE(knob.has_range()) << knob.path();
+    EXPECT_EQ(knob.widget(), pb::CONFIG_WIDGET_NUMBER) << knob.path();
+    EXPECT_EQ(knob.unit(), "bytes") << knob.path();
+    EXPECT_GE(std::stoll(knob.default_value()), knob.range().min())
+        << knob.path();
+    EXPECT_LE(std::stoll(knob.default_value()), knob.range().max())
+        << knob.path();
+  }
+}
+
+TEST_F(NativePlayerSettingsTest, ABoolKnobDeclaresNoRange) {
+  const pb::ConfigSection section = output();
+
+  const pb::ConfigField *reopen =
+      field(section, "output.reopen_on_format_change");
+  ASSERT_NE(reopen, nullptr);
+
+  EXPECT_FALSE(reopen->has_range());
+  EXPECT_EQ(reopen->widget(), pb::CONFIG_WIDGET_UNSPECIFIED);
+  EXPECT_TRUE(reopen->unit().empty());
+}
+
+TEST_F(NativePlayerSettingsTest, TheEdgesOfTheRangeAreAccepted) {
+  ASSERT_TRUE(player_->applyConfig("output.latency_ms", "20", error_))
+      << error_;
+  EXPECT_EQ(field(output(), "output.latency_ms")->value(), "20");
+
+  ASSERT_TRUE(player_->applyConfig("output.latency_ms", "1000", error_))
+      << error_;
+  EXPECT_EQ(field(output(), "output.latency_ms")->value(), "1000");
+}
+
 TEST_F(NativePlayerSettingsTest, AnUndeclaredPathIsRefused) {
   EXPECT_FALSE(player_->applyConfig("output.nonsense", "1", error_));
   EXPECT_EQ(error_, "unknown setting");

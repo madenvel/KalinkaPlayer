@@ -2,7 +2,9 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "player/Player.h"
@@ -27,6 +29,8 @@ public:
   bool driverReadOnly = false;
   kalinka::renderer::v1::ConfigImportance bufferImportance =
       kalinka::renderer::v1::CONFIG_IMPORTANCE_EXPERT;
+  // Unset until a test declares what the buffer accepts.
+  std::optional<std::pair<int64_t, int64_t>> bufferRange;
   bool refuseApply = false;
   // In-effect value may differ from what was asked; empty = store as given.
   std::string normalizedSuffix;
@@ -81,6 +85,10 @@ public:
     buffer->set_value(values.at("output.buffer_ms"));
     buffer->set_apply(pb::APPLY_COST_INSTANT);
     buffer->set_importance(bufferImportance);
+    if (bufferRange) {
+      buffer->mutable_range()->set_min(bufferRange->first);
+      buffer->mutable_range()->set_max(bufferRange->second);
+    }
 
     pb::ConfigField *exclusive = out.add_fields();
     exclusive->set_path("output.exclusive");

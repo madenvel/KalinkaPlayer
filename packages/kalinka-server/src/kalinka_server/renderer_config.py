@@ -41,6 +41,23 @@ def _importance(field) -> str:
     )
 
 
+def _widget(field) -> str:
+    """How the field is edited, or "" when the renderer leaves it to the Core."""
+    if field.widget == pb.CONFIG_WIDGET_UNSPECIFIED:
+        return ""
+    return renderer_state.enum_name(pb.ConfigWidget, field.widget, "CONFIG_WIDGET_")
+
+
+def _range(field) -> Optional[dict]:
+    if not field.HasField("range"):
+        return None
+    return {
+        "min": field.range.min,
+        "max": field.range.max,
+        "step": field.range.step,
+    }
+
+
 def _field_to_dict(field) -> dict:
     return {
         "path": field.path,
@@ -62,6 +79,9 @@ def _field_to_dict(field) -> dict:
         "apply": renderer_state.enum_name(pb.ApplyCost, field.apply, "APPLY_COST_"),
         "read_only": field.read_only,
         "importance": _importance(field),
+        "range": _range(field),
+        "unit": field.unit,
+        "widget": _widget(field),
     }
 
 
