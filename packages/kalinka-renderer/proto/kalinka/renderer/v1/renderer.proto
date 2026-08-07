@@ -441,6 +441,23 @@ enum ConfigImportance {
   CONFIG_IMPORTANCE_EXPERT = 2;  // found by looking for it, not by scrolling
 }
 
+// How an INT field is best edited. The renderer decides: bounds alone do not
+// say, since a byte count spans orders of magnitude and is typed, while a
+// latency in milliseconds is dragged.
+enum ConfigWidget {
+  CONFIG_WIDGET_UNSPECIFIED = 0;  // the Core picks from the type
+  CONFIG_WIDGET_SLIDER = 1;
+  CONFIG_WIDGET_NUMBER = 2;
+}
+
+// What an INT field will accept. The renderer enforces it too — a write
+// outside the range is refused, not clamped.
+message ConfigRange {
+  int64 min = 1;
+  int64 max = 2;
+  int64 step = 3;  // 0 when any value in range will do
+}
+
 // One choice for an ENUM field. The device list is this: `value` is whatever
 // the renderer opens (an ALSA PCM name, a WASAPI endpoint id), opaque to the
 // Core, and `label` is what the user picks from.
@@ -461,6 +478,9 @@ message ConfigField {
   ApplyCost apply = 8;
   bool read_only = 9;
   ConfigImportance importance = 10;
+  optional ConfigRange range = 11;  // INT only
+  string unit = 12;                 // shown beside the value, e.g. "ms"
+  ConfigWidget widget = 13;
 }
 
 message ConfigSection {

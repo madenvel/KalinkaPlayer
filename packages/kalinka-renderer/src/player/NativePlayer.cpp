@@ -46,6 +46,17 @@ bool noisyPcm(const std::string &name) {
                      [&name](const char *p) { return name.starts_with(p); });
 }
 
+// What a numeric knob accepts. A range wide enough to be typed rather than
+// dragged says so with `slider = false`.
+struct Bounds {
+  int64_t min = 0;
+  int64_t max = 0;
+  int64_t step = 0;
+  bool slider = false;
+
+  bool declared() const { return max > min; }
+};
+
 // A setting with nothing to it but a number and what to call it: value and
 // default come from the settings map, and applying it means a new graph.
 struct Knob {
@@ -53,40 +64,44 @@ struct Knob {
   const char *title;
   const char *description;
   pb::ConfigFieldType type;
+  const char *unit = "";
+  Bounds bounds{};
 };
 
 const Knob kOutputKnobs[] = {
     {"output.latency_ms", "Output latency",
      "How much audio is kept ahead of the card, in milliseconds. Raise it if "
      "playback stutters.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "ms", {20, 1000, 10, true}},
     {"output.period_ms", "Period size",
      "How often audio is handed to the card, in milliseconds.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "ms", {5, 200, 5, true}},
     {"output.format_change_delay_ms", "Pause after a format change",
      "How long to wait once a new sample rate is set, in milliseconds, for a "
      "card that needs a moment before it will take audio.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "ms", {0, 2000, 50, true}},
     {"output.reopen_on_format_change", "Reopen on a format change",
      "Close and reopen the card when the next track has a different format. "
      "Some DACs need it.",
      pb::CONFIG_FIELD_TYPE_BOOL},
 };
 
+// Bytes, and the useful settings span orders of magnitude: bounded to keep a
+// typo from starving or exhausting the machine, but typed rather than dragged.
 const Knob kBufferKnobs[] = {
     {"buffers.network_stream", "Network buffer",
      "How much of a streamed track is held in memory, in bytes. Raise it on a "
      "slow or unreliable connection.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "bytes", {64000, 33554432}},
     {"buffers.network_request", "Network request size",
      "How much is fetched from the server at a time, in bytes.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "bytes", {16000, 8388608}},
     {"buffers.flac", "FLAC buffer",
      "Decoded audio held ahead for FLAC playback, in bytes.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "bytes", {64000, 33554432}},
     {"buffers.mpeg", "MP3 buffer",
      "Decoded audio held ahead for MP3 playback, in bytes.",
-     pb::CONFIG_FIELD_TYPE_INT},
+     pb::CONFIG_FIELD_TYPE_INT, "bytes", {64000, 33554432}},
 };
 
 // Every setting the graph is built with, and the key it is built under. A
@@ -128,6 +143,16 @@ void declare(pb::ConfigSection &out, const Knob &knob,
   // Reached for when the card or the link misbehaves, which is not what a
   // settings page is for.
   field->set_importance(pb::CONFIG_IMPORTANCE_EXPERT);
+  field->set_unit(knob.unit);
+  if (!knob.bounds.declared()) {
+    return;
+  }
+  pb::ConfigRange *range = field->mutable_range();
+  range->set_min(knob.bounds.min);
+  range->set_max(knob.bounds.max);
+  range->set_step(knob.bounds.step);
+  field->set_widget(knob.bounds.slider ? pb::CONFIG_WIDGET_SLIDER
+                                       : pb::CONFIG_WIDGET_NUMBER);
 }
 
 }  // namespace
@@ -601,7 +626,8 @@ bool NativePlayer::applySetting(const std::string &path,
     return false;
   }
   // Sizes and durations, which the graph reads as unsigned: a negative one
-  // throws where it is read, which is halfway into the next track.
+  // throws where it is read, which is halfway into the next track. The service
+  // refuses what a knob's declared range excludes before it ever reaches here.
   if (value.starts_with("-") && isKnob(path)) {
     error = "must not be negative";
     return false;

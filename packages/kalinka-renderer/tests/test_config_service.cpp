@@ -177,6 +177,35 @@ TEST_F(ConfigServiceTest, ValuesMustParseAsTheFieldType) {
   EXPECT_TRUE(player->calls.empty());
 }
 
+TEST_F(ConfigServiceTest, AValueOutsideTheDeclaredRangeIsRefused) {
+  player->bufferRange = {20, 1000};
+
+  EXPECT_EQ(apply("output.buffer_ms", "5000").outcomes(0).error(),
+            "must be between 20 and 1000");
+  EXPECT_EQ(apply("output.buffer_ms", "-1").outcomes(0).error(),
+            "must be between 20 and 1000");
+  EXPECT_TRUE(player->calls.empty());
+}
+
+TEST_F(ConfigServiceTest, TheEdgesOfADeclaredRangeAreAccepted) {
+  player->bufferRange = {20, 1000};
+
+  EXPECT_TRUE(apply("output.buffer_ms", "20").outcomes(0).applied());
+  EXPECT_TRUE(apply("output.buffer_ms", "1000").outcomes(0).applied());
+}
+
+TEST_F(ConfigServiceTest, AFieldWithNoRangeTakesAnyNumber) {
+  EXPECT_TRUE(apply("output.buffer_ms", "999999").outcomes(0).applied());
+}
+
+TEST_F(ConfigServiceTest, VersionCoversWhatAFieldAccepts) {
+  const std::string before = snapshot().config_version();
+
+  player->bufferRange = {20, 1000};
+
+  EXPECT_NE(snapshot().config_version(), before);
+}
+
 TEST_F(ConfigServiceTest, PlayerRefusalIsReportedPerPath) {
   player->refuseApply = true;
 

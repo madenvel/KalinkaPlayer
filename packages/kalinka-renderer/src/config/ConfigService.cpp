@@ -21,7 +21,11 @@ std::string versionOf(const pb::ConfigSnapshot &snapshot) {
               std::to_string(field.type()) + '\x1f' +
               std::to_string(field.apply()) + '\x1f' +
               std::to_string(field.importance()) + '\x1f' +
-              (field.read_only() ? "1" : "0");
+              (field.read_only() ? "1" : "0") + '\x1f' + field.unit() + '\x1f' +
+              std::to_string(field.widget()) + '\x1f' +
+              std::to_string(field.range().min()) + '\x1f' +
+              std::to_string(field.range().max()) + '\x1f' +
+              std::to_string(field.range().step());
       for (const pb::ConfigOption &option : field.options()) {
         blob += '\x1f' + option.value();
       }
@@ -69,11 +73,17 @@ bool validate(const pb::ConfigField &field, const std::string &value,
     return false;
   }
   case pb::CONFIG_FIELD_TYPE_INT: {
-    int parsed = 0;
+    int64_t parsed = 0;
     const char *end = value.data() + value.size();
     auto [stop, ec] = std::from_chars(value.data(), end, parsed);
     if (ec != std::errc{} || stop != end) {
       error = "not a number";
+      return false;
+    }
+    if (field.has_range() &&
+        (parsed < field.range().min() || parsed > field.range().max())) {
+      error = "must be between " + std::to_string(field.range().min()) +
+              " and " + std::to_string(field.range().max());
       return false;
     }
     return true;

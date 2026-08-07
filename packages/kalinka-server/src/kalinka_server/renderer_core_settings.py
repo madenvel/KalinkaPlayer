@@ -95,6 +95,9 @@ class CoreRendererSettings:
                     "apply": "instant",
                     "read_only": read_only,
                     "importance": "simple",
+                    "range": None,
+                    "unit": "",
+                    "widget": "",
                 }
             ],
         }
