@@ -10,7 +10,12 @@ SessionManager::SessionManager(boost::asio::io_context &ioc,
 std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
                                               const std::string &ownerServerId,
                                               std::string &busyOwner,
-                                              const SessionVolume &volume) {
+                                              const SessionVolume &volume,
+                                              std::string *error) {
+  busyOwner.clear();
+  if (error) {
+    error->clear();
+  }
   if (current_) {
     if (current_->sessionId() == sessionId &&
         current_->ownerServerId() == ownerServerId) {
@@ -29,7 +34,12 @@ std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
           self->forget(sessionId);
         }
       },
-      volume);
+      volume, error);
+  if (!current_) {
+    spdlog::warn("Refusing session {}: {}", sessionId,
+                 error ? *error : "volume safety policy failed");
+    return nullptr;
+  }
   spdlog::info("Session {} opened by server {}", sessionId, ownerServerId);
   return current_;
 }

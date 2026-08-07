@@ -217,17 +217,23 @@ message Welcome {
 message SessionOpen {
   string session_id = 1;
 
-  // Volume policy for the life of this session, undone when it ends. Nothing
-  // here is written to the renderer's configuration: a Core that fixes volume
-  // because an amp downstream owns it must not leave the renderer fixed for
-  // whoever uses it next.
+  // Volume policy applied before this session can play. The mode override is
+  // undone when the session ends; level changes remain as the current level.
+  // Nothing here is written to the renderer's configuration: a Core that fixes
+  // volume because an amp downstream owns it must not leave the renderer fixed
+  // for whoever uses it next.
   //
   // Empty mode = leave the renderer's own setting alone. Otherwise one of the
   // output.volume_mode values: "auto", "hardware", "software", "fixed".
   string volume_mode = 2;
-  // Level to set when the session opens; absent leaves the current one. With
-  // "fixed" this is the level the renderer stays at.
+  // Exact level for delegated output. A current renderer ignores it for direct
+  // output and applies its local ceiling instead; Cores still send a direct
+  // value as a safe fallback for older renderers.
   optional uint32 volume_percent = 3;
+
+  // True when a downstream device owns volume. The renderer then skips its
+  // safe-start ceiling and runs the session at the requested fixed level.
+  bool volume_control_delegated = 4;
 }
 
 message SessionOpenResult {

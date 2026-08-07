@@ -105,7 +105,9 @@ def volume_style_options() -> list[dict]:
         {
             "value": RendererVolumeStyle.fixed.value,
             "label": "Fixed",
-            "description": "No volume control. Set the level downstream.",
+            "description": "Full-level output for a mapped downstream "
+            "volume device. Direct playback is refused because its safe "
+            "starting level cannot be enforced.",
         },
     ]
 
@@ -138,9 +140,9 @@ class RendererOutputConfig(ModuleConfig):
         title="Default volume",
         json_schema_extra={
             "help": (
-                "Level set the first time this server plays through a "
-                "renderer, so it never starts louder than you expect. Also "
-                "the level used with fixed volume."
+                "Level shown until a renderer reports its current volume, "
+                "and the safe fallback for older renderers. New renderers "
+                "use their own per-renderer safe-start setting."
             ),
             "importance": "simple",
         },

@@ -104,6 +104,13 @@ class _OpenOutcome:
     owner_server_id: str
 
 
+@dataclass(frozen=True)
+class SessionVolumePolicy:
+    mode: str = ""
+    percent: Optional[int] = None
+    delegated: bool = False
+
+
 def _fill_source(
     source, uri: str, mime_type: str, source_token: str, start_offset_ms: int
 ) -> None:
@@ -364,17 +371,17 @@ class SessionPool:
         self._sessions: dict[str, PlaybackSession] = {}
         self._open_hooks: list[Callable] = []
         self._volume_policy: Callable[
-            [str], tuple[str, Optional[int]]
-        ] = lambda _renderer_id: ("", None)
+            [str], SessionVolumePolicy
+        ] = lambda _renderer_id: SessionVolumePolicy()
 
     def set_volume_policy(
-        self, provider: Callable[[str], tuple[str, Optional[int]]]
+        self, provider: Callable[[str], SessionVolumePolicy]
     ) -> None:
         """Install what decides the volume policy carried on SessionOpen.
 
-        Session-scoped by construction: the renderer undoes it when the session
-        ends, so a renderer fixed because an amp owns its volume is not left
-        fixed for whoever uses it next.
+        The renderer restores a temporary volume mode when the session ends, so
+        a renderer fixed because an amp owns its volume is not left fixed for
+        whoever uses it next. A safe-start level remains the current level.
         """
         self._volume_policy = provider
 
@@ -413,10 +420,13 @@ class SessionPool:
         self._sessions[renderer_id] = session
         session._open_future = asyncio.get_running_loop().create_future()
 
-        volume_mode, volume_percent = self._volume_policy(renderer_id)
+        volume = self._volume_policy(renderer_id)
         try:
             await ws.send_session_open(
-                session.session_id, volume_mode, volume_percent
+                session.session_id,
+                volume_mode=volume.mode,
+                volume_percent=volume.percent,
+                volume_control_delegated=volume.delegated,
             )
             outcome = await asyncio.wait_for(
                 session._open_future, self._timeout_s

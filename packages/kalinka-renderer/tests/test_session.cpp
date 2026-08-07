@@ -199,21 +199,19 @@ TEST_F(SessionTest, UnknownConnectionClosingChangesNothing) {
 TEST_F(SessionTest, SessionVolumePolicyIsAppliedAtOpenAndUndoneAtClose) {
   auto session = Session::create(ioc, "sid-1", "owner-1", 60s, player,
                                  [this] { ++ended; },
-                                 SessionVolume{"fixed", 100});
-  EXPECT_EQ(player->calls.front(), "begin_session_volume:fixed:100");
+                                 SessionVolume{"fixed", 100, true});
+  ASSERT_EQ(player->sessionVolumes.size(), 1u);
+  EXPECT_EQ(player->sessionVolumes[0].mode, "fixed");
+  EXPECT_EQ(player->sessionVolumes[0].percent, 100);
+  EXPECT_TRUE(player->sessionVolumes[0].delegated);
 
   session->close("done");
-  EXPECT_NE(std::find(player->calls.begin(), player->calls.end(),
-                      "end_session_volume"),
-            player->calls.end());
+  EXPECT_EQ(player->sessionVolumeEnds, 1);
 }
 
-TEST_F(SessionTest, NoPolicyLeavesTheRenderersOwnVolumeAlone) {
+TEST_F(SessionTest, DirectSessionAppliesTheRendererSafetyPolicy) {
   auto session = makeSession();
-  EXPECT_EQ(std::find_if(player->calls.begin(), player->calls.end(),
-                         [](const std::string &call) {
-                           return call.starts_with("begin_session_volume");
-                         }),
-            player->calls.end());
+  ASSERT_EQ(player->sessionVolumes.size(), 1u);
+  EXPECT_FALSE(player->sessionVolumes[0].delegated);
   session->close("done");
 }

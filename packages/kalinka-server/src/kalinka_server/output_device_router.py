@@ -36,6 +36,7 @@ from .renderer_output_device import (
 )
 from .renderer_prefs import RendererPreferences
 from .renderer_registry import RendererRegistry
+from .renderer_sessions import SessionVolumePolicy
 
 if TYPE_CHECKING:  # avoids a cycle: player_setup builds the router
     from kalinka_eventbus import EventBus
@@ -189,30 +190,29 @@ class OutputDeviceRouter:
         context = getattr(prepared, "plugin_context", None)
         return getattr(context, "config", None)
 
-    def session_volume_policy(self, renderer_id: str) -> tuple[str, Optional[int]]:
-        """What SessionOpen should carry for this renderer: (mode, percent).
+    def session_volume_policy(self, renderer_id: str) -> SessionVolumePolicy:
+        """What SessionOpen should carry for this renderer.
 
         A delegated renderer is fixed at full scale — the amp downstream owns
         the level, and attenuating twice would cost headroom and, in software
         mode, resolution.
 
-        Otherwise the renderer device's ``volume_style`` decides the mode, and
-        "renderer choice" sends none at all. A level is sent when the style is
-        "fixed" (that *is* the level), and once per renderer this server has
-        never played through, so a new one starts somewhere safe rather than
-        wherever its mixer happened to be left.
+        Otherwise the renderer device's ``volume_style`` decides the mode. The
+        renderer applies its own safe-start ceiling before accepting every
+        direct-output session. The old exact level remains on the wire as a
+        safe fallback for renderers that predate the ceiling protocol.
         """
         if self._prefs.volume_control(renderer_id):
-            return (wire_volume_mode(RendererVolumeStyle.fixed), 100)
+            return SessionVolumePolicy(
+                mode=wire_volume_mode(RendererVolumeStyle.fixed),
+                percent=100,
+                delegated=True,
+            )
 
         config = self._renderer_config()
         style = getattr(config, "volume_style", RendererVolumeStyle.renderer)
-        default_volume = getattr(config, "default_volume", DEFAULT_VOLUME)
-        if style is RendererVolumeStyle.fixed:
-            return (wire_volume_mode(style), default_volume)
-        if not self._prefs.volume_seeded(renderer_id):
-            return (wire_volume_mode(style), default_volume)
-        return (wire_volume_mode(style), None)
+        fallback = getattr(config, "default_volume", DEFAULT_VOLUME)
+        return SessionVolumePolicy(mode=wire_volume_mode(style), percent=fallback)
 
     def emitter_for(self, plugin_id: str) -> Optional[RoutedDeviceEmitter]:
         if self._bus is None:

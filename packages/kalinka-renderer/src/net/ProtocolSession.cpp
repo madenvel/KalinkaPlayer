@@ -152,15 +152,21 @@ void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {
     result->set_detail("session opened before the handshake completed");
   } else {
     std::string busyOwner;
-    SessionVolume volume{open.volume_mode(), std::nullopt};
+    std::string openError;
+    SessionVolume volume{open.volume_mode(), std::nullopt,
+                         open.volume_control_delegated()};
     if (open.has_volume_percent()) {
       volume.percent = open.volume_percent();
     }
     if (auto session = services_.sessions->open(sessionId, serverId_, busyOwner,
-                                                volume)) {
+                                                volume, &openError)) {
       result->set_accepted(true);
       session_ = std::move(session);
       accepted = true;
+    } else if (!openError.empty()) {
+      result->set_accepted(false);
+      result->set_error(pb::SessionOpenResult::ERROR_INTERNAL);
+      result->set_detail(openError);
     } else {
       result->set_accepted(false);
       result->set_error(pb::SessionOpenResult::ERROR_BUSY);

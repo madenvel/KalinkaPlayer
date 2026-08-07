@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 
 #include "../config/SettingsPersistence.h"
@@ -162,6 +163,7 @@ const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
       {"output.driver", "alsa"},
       {"output.device", "default"},
       {"output.volume_mode", "auto"},
+      {"output.safe_start_volume_percent", "30"},
       // What the server shipped while it did the playing, rather than the
       // sink's own 100/25.
       {"output.latency_ms", "160"},
@@ -608,6 +610,24 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
     option->set_description(choice.description);
   }
 
+  pb::ConfigField *safeStart = out.add_fields();
+  safeStart->set_path("output.safe_start_volume_percent");
+  safeStart->set_title("Safe starting volume");
+  safeStart->set_description(
+      "Highest volume allowed when a directly controlled playback session "
+      "starts. Lower levels are left unchanged; externally controlled output "
+      "bypasses this limit.");
+  safeStart->set_type(pb::CONFIG_FIELD_TYPE_INT);
+  safeStart->set_value(settings_.at("output.safe_start_volume_percent"));
+  safeStart->set_default_value("30");
+  safeStart->set_apply(pb::APPLY_COST_INSTANT);
+  safeStart->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
+  safeStart->set_unit("%");
+  safeStart->mutable_range()->set_min(0);
+  safeStart->mutable_range()->set_max(100);
+  safeStart->mutable_range()->set_step(1);
+  safeStart->set_widget(pb::CONFIG_WIDGET_SLIDER);
+
   for (const Knob &knob : kOutputKnobs) {
     declare(out, knob, settings_, defaultSettings());
   }
@@ -655,21 +675,80 @@ const std::string &NativePlayer::effectiveVolumeMode() const {
                             : settings_.at("output.volume_mode");
 }
 
-void NativePlayer::beginSessionVolume(const SessionVolume &volume) {
-  if (!volume.mode.empty()) {
-    const bool changed = volume.mode != effectiveVolumeMode();
-    sessionVolumeMode_ = volume.mode;
-    if (changed) {
-      spdlog::info("Session volume mode: '{}' (configured '{}' is kept)",
-                   volume.mode, settings_.at("output.volume_mode"));
-      if (player_) {
-        player_->configureVolume(volume.mode, "");
-      }
+bool NativePlayer::beginSessionVolume(const SessionVolume &volume,
+                                      std::string &error) {
+  error.clear();
+  if (!ensurePlayer()) {
+    error = "audio output is unavailable; safe starting volume cannot be "
+            "enforced";
+    return false;
+  }
+
+  const auto applyMode = [this](const std::string &mode) {
+    if (mode.empty()) {
+      return;
     }
+    const bool changed = mode != effectiveVolumeMode();
+    sessionVolumeMode_ = mode;
+    if (changed) {
+      spdlog::info("Session volume mode: '{}' (configured '{}' is kept)", mode,
+                   settings_.at("output.volume_mode"));
+      player_->configureVolume(mode, "");
+    }
+  };
+
+  if (volume.delegated) {
+    if (volume.mode != "fixed") {
+      error = "delegated volume control requires fixed output";
+      return false;
+    }
+    // Reopen a controllable backend first: the renderer may itself be
+    // configured as fixed while its hardware mixer is still attenuated.
+    player_->configureVolume("auto", "");
+    player_->setVolume(
+        static_cast<int>(std::min(volume.percent.value_or(100), 100u)));
+    sessionVolumeMode_ = "fixed";
+    player_->configureVolume("fixed", "");
+    return true;
   }
-  if (volume.percent) {
-    setVolume(*volume.percent);
+
+  if (volume.mode == "fixed") {
+    error = "safe starting volume cannot be enforced with fixed output";
+    return false;
   }
+  applyMode(volume.mode);
+
+  const std::string &configuredCeiling =
+      settings_.at("output.safe_start_volume_percent");
+  uint32_t ceiling = 0;
+  const char *end = configuredCeiling.data() + configuredCeiling.size();
+  const auto [stop, parseError] =
+      std::from_chars(configuredCeiling.data(), end, ceiling);
+  if (parseError != std::errc{} || stop != end || ceiling > 100) {
+    endSessionVolume();
+    error = "safe starting volume setting is invalid";
+    return false;
+  }
+  VolumeState state = player_->getVolume();
+  if (!state.supported) {
+    endSessionVolume();
+    error = "volume control is unavailable; safe starting volume cannot be "
+            "enforced";
+    return false;
+  }
+  if (state.current <= static_cast<int>(ceiling)) {
+    return true;
+  }
+
+  player_->setVolume(static_cast<int>(ceiling));
+  state = player_->getVolume();
+  if (!state.supported || state.current > static_cast<int>(ceiling)) {
+    endSessionVolume();
+    error = "renderer failed to apply its safe starting volume";
+    return false;
+  }
+  spdlog::info("Session start volume capped at {}%", state.current);
+  return true;
 }
 
 void NativePlayer::endSessionVolume() {

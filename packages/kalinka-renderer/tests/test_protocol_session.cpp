@@ -136,6 +136,39 @@ TEST_F(ProtocolSessionTest, SessionOpenAnswersResultThenSnapshot) {
   EXPECT_EQ(wire.sent[1].session_id(), "sid-1");
 }
 
+TEST_F(ProtocolSessionTest, DelegatedVolumeControlReachesThePlayer) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a");
+
+  pb::Envelope env;
+  pb::SessionOpen *open = env.mutable_session_open();
+  open->set_session_id("sid-1");
+  open->set_volume_mode("fixed");
+  open->set_volume_percent(100);
+  open->set_volume_control_delegated(true);
+  feed(*protocol, env);
+
+  ASSERT_EQ(player->sessionVolumes.size(), 1u);
+  EXPECT_TRUE(player->sessionVolumes[0].delegated);
+}
+
+TEST_F(ProtocolSessionTest, FailedVolumeSafetyRefusesTheSession) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a");
+  player->sessionVolumeError = "safe starting volume unavailable";
+
+  openSession(*protocol, "sid-1");
+
+  ASSERT_EQ(wire.sent.size(), 1u);
+  const pb::SessionOpenResult &result = wire.sent[0].session_open_result();
+  EXPECT_FALSE(result.accepted());
+  EXPECT_EQ(result.error(), pb::SessionOpenResult::ERROR_INTERNAL);
+  EXPECT_EQ(result.detail(), "safe starting volume unavailable");
+  EXPECT_EQ(services.sessions->current(), nullptr);
+}
+
 TEST_F(ProtocolSessionTest, ASecondCoreIsToldWhoOwnsTheSession) {
   FakeWire wireA, wireB;
   auto a = makeProtocol(wireA);

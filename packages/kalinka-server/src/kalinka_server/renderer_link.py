@@ -33,6 +33,7 @@ class RendererLink(Protocol):
         session_id: str,
         volume_mode: str = "",
         volume_percent: Optional[int] = None,
+        volume_control_delegated: bool = False,
     ) -> None: ...
 
     async def send_command(self, session_id: str, command: pb.Command) -> None: ...

@@ -12,10 +12,10 @@
 struct SessionVolume {
   /// One of the output.volume_mode values; empty leaves the configured one.
   std::string mode;
-  /// Level to set at session open; absent leaves the current one.
+  /// Exact delegated-output level; ignored for direct output.
   std::optional<uint32_t> percent;
-
-  bool empty() const { return mode.empty() && !percent.has_value(); }
+  /// A downstream device owns volume, so the direct-output ceiling is skipped.
+  bool delegated = false;
 };
 
 /**
@@ -132,17 +132,24 @@ public:
   virtual void setVolume(uint32_t percent) = 0;
 
   /**
-   * @brief Apply a volume policy for the life of one session.
+   * @brief Apply a volume policy before one session can play.
    *
-   * Held in memory and undone by endSessionVolume(), never written to the
-   * renderer's configuration: a Core that fixes volume because an amp
-   * downstream owns it must not leave this renderer fixed for whoever uses it
-   * next, and a crash mid-session must come back with the renderer's own
-   * setting. The configured value is what the config plane keeps reporting.
+   * The mode override is held in memory and undone by endSessionVolume(); level
+   * changes remain as the current level. Nothing is written to the renderer's
+   * configuration: a Core that fixes volume because an amp downstream owns it
+   * must not leave this renderer fixed for whoever uses it next, and a crash
+   * mid-session must come back with the renderer's own setting. The configured
+   * value is what the config plane keeps reporting.
    *
-   * Default: ignore it. A player with no volume policy loses nothing.
+   * @param volume Session policy supplied by the Core.
+   * @param error  Why the safety policy could not be applied.
+   * @return false when playback must not start because the policy could not be
+   *         enforced.
    */
-  virtual void beginSessionVolume(const SessionVolume &) {}
+  virtual bool beginSessionVolume(const SessionVolume &, std::string &error) {
+    error = "player cannot enforce the session volume policy";
+    return false;
+  }
 
   /// Restore the configured volume mode. Idempotent.
   virtual void endSessionVolume() {}

@@ -60,7 +60,8 @@ public:
   void resume() override;
   void stop() override;
   void setVolume(uint32_t percent) override;
-  void beginSessionVolume(const SessionVolume &volume) override;
+  bool beginSessionVolume(const SessionVolume &volume,
+                          std::string &error) override;
   void endSessionVolume() override;
   void seek(uint64_t positionMs) override;
   void fillConfig(kalinka::renderer::v1::ConfigSection &out) const override;
