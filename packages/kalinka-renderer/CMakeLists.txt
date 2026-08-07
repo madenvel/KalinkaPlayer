@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(kalinka-renderer VERSION 0.1.0 LANGUAGES CXX)
 
+# What the binary announces to a Core and logs at startup. The packaging
+# scripts pass the version the package carries, so a build off a release says
+# which commit it came from; a plain build is the release being worked towards.
+set(KALINKA_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Version the renderer reports")
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -91,7 +97,7 @@ add_library(kalinka_renderer_core STATIC
   src/session/SessionManager.cpp
 )
 target_compile_definitions(kalinka_renderer_core PRIVATE
-  KALINKA_RENDERER_VERSION="${PROJECT_VERSION}"
+  KALINKA_RENDERER_VERSION="${KALINKA_VERSION}"
 )
 target_include_directories(kalinka_renderer_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -120,7 +126,7 @@ add_executable(kalinka-renderer
   src/player/StubPlayer.cpp
 )
 target_compile_definitions(kalinka-renderer PRIVATE
-  KALINKA_RENDERER_VERSION="${PROJECT_VERSION}"
+  KALINKA_RENDERER_VERSION="${KALINKA_VERSION}"
 )
 target_include_directories(kalinka-renderer SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mdns

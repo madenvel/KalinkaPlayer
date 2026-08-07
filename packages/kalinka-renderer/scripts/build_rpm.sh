@@ -10,14 +10,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PKG_DIR"
 
-VERSION="${RENDERER_VERSION:-$(sed -n 's/^project(kalinka-renderer VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)}"
+# shellcheck source=version.sh
+. "$SCRIPT_DIR/version.sh"
+VERSION=$(renderer_version)
 if [ -z "$VERSION" ]; then
     echo "Error: could not determine the renderer version." >&2
     exit 1
 fi
+echo "Building version: $VERSION"
 
 TOPDIR="$PKG_DIR/build-rpm"
+
+# rpmbuild --build-in-place litters the source dir with find-debuginfo lists
+# and its cmake build tree. Cleared going in as well as coming out: that tree
+# caches the source path, the path carries the version, and one left behind by
+# an interrupted build fails the next one at a different version.
+clean_source_litter() {
+    rm -rf "$PKG_DIR/redhat-linux-build"
+    rm -f "$PKG_DIR"/debugfiles.list "$PKG_DIR"/debuglinks.list \
+        "$PKG_DIR"/debugsourcefiles.list "$PKG_DIR"/debugsources.list \
+        "$PKG_DIR"/elfbins.list
+}
+
 rm -rf "$TOPDIR"
+clean_source_litter
 
 rpmbuild -bb --build-in-place \
     --define "renderer_version $VERSION" \
@@ -30,13 +46,7 @@ if [ -z "$RPM_PATH" ]; then
     exit 1
 fi
 cp "$RPM_PATH" "$PKG_DIR/"
-
-# rpmbuild --build-in-place litters the source dir with find-debuginfo lists
-# and its cmake build tree.
-rm -rf "$PKG_DIR/redhat-linux-build"
-rm -f "$PKG_DIR"/debugfiles.list "$PKG_DIR"/debuglinks.list \
-    "$PKG_DIR"/debugsourcefiles.list "$PKG_DIR"/debugsources.list \
-    "$PKG_DIR"/elfbins.list
+clean_source_litter
 
 echo "Successfully built: $(basename "$RPM_PATH")"
 ls -lh "$PKG_DIR/$(basename "$RPM_PATH")"
