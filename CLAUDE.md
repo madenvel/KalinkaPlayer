@@ -18,6 +18,12 @@ line that says *why*, never *what*. Do not narrate the code, do not restate the
 signature, do not leave section banners. This applies to every language in the
 repo.
 
+Declarations are the exception: classes and the interfaces they expose get
+Doxygen comments — a `/** @brief ... */` block, with `@param`, `@return` and
+`@note` only where they carry something, a `///` one-liner where that is
+enough. Document the contract — what the thing is for, ownership, threading,
+what a caller may rely on — still never a restatement of the signature.
+
 ## No TODOs
 
 Never leave `TODO`, `FIXME`, or `XXX` behind. Either do the work now, or leave
