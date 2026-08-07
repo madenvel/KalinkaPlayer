@@ -31,7 +31,7 @@ server over mDNS, accepts a playback session and plays audio through the
 local ALSA device.
 
 %build
-%cmake -DCMAKE_BUILD_TYPE=Release
+%cmake -DCMAKE_BUILD_TYPE=Release -DKALINKA_VERSION="%{renderer_version}"
 %cmake_build --target kalinka-renderer
 
 %install

@@ -12,14 +12,18 @@ PKG_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PKG_DIR"
 
 ARCH=$(dpkg --print-architecture)
-VERSION="${RENDERER_VERSION:-$(sed -n 's/^project(kalinka-renderer VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)}"
+# shellcheck source=version.sh
+. "$SCRIPT_DIR/version.sh"
+VERSION=$(renderer_version)
 if [ -z "$VERSION" ]; then
     echo "Error: could not determine the renderer version." >&2
     exit 1
 fi
+echo "Building version: $VERSION"
 
 BUILD_DIR=build-release
-cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
+    -DKALINKA_VERSION="$VERSION"
 cmake --build "$BUILD_DIR" -j "$(nproc)" --target kalinka-renderer
 
 # Subshell: os-release defines its own VERSION and would clobber ours.
