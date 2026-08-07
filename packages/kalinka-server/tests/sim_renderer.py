@@ -82,9 +82,15 @@ class SimRenderer:
     # The ws-session surface the pool drives
 
     async def send_session_open(
-        self, session_id: str, volume_mode: str = "", volume_percent=None
+        self,
+        session_id: str,
+        volume_mode: str = "",
+        volume_percent=None,
+        volume_control_delegated: bool = False,
     ) -> None:
-        self.volume_policies.append((volume_mode, volume_percent))
+        self.volume_policies.append(
+            (volume_mode, volume_percent, volume_control_delegated)
+        )
         if not self.accept:
             self.pool.handle_open_result(
                 self.RENDERER_ID,

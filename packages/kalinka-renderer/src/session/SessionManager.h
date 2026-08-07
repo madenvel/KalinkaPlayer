@@ -13,9 +13,9 @@
  * @brief Hands out the renderer's one playback session.
  *
  * The slot is single, and may be empty: open() creates the session or refuses
- * because another one is running — the only rejection there is. The manager
- * tracks the running session; the session itself decides how it ends and
- * reports back here, so current() is never stale.
+ * because another one is running or the player cannot apply its start policy.
+ * The manager tracks the running session; the session itself decides how it
+ * ends and reports back here, so current() is never stale.
  *
  * @note Must be held in a shared_ptr (it is one of RendererServices);
  *       sessions report their end through a weak reference to it.
@@ -40,14 +40,17 @@ public:
    * replay of what Hello broadcasts, and must not hand the graph over.
    *
    * @param busyOwner Filled with the server_id holding the session when this
-   *                  returns nullptr.
+   *                  returns nullptr because the renderer is busy.
+   * @param volume    Volume policy that must be applied before commands run.
+   * @param error     Filled when the player's start policy fails.
    * @return The session — the caller attaches its connection to it — or
-   *         nullptr when another session is already running.
+   *         nullptr when it cannot be opened.
    */
   std::shared_ptr<Session> open(const std::string &sessionId,
                                 const std::string &ownerServerId,
                                 std::string &busyOwner,
-                                const SessionVolume &volume = {});
+                                const SessionVolume &volume = {},
+                                std::string *error = nullptr);
 
   /**
    * @brief End the session. Only its owner may do this.

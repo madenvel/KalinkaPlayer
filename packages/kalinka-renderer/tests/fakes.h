@@ -21,6 +21,9 @@ class FakePlayer : public Player {
 public:
   StateSink sink;
   std::vector<std::string> calls;
+  std::vector<SessionVolume> sessionVolumes;
+  int sessionVolumeEnds = 0;
+  std::string sessionVolumeError;
 
   std::map<std::string, std::string> values{{"output.driver", "alsa"},
                                             {"output.buffer_ms", "100"},
@@ -53,13 +56,13 @@ public:
   void setVolume(uint32_t percent) override {
     calls.push_back("set_volume:" + std::to_string(percent));
   }
-  void beginSessionVolume(const SessionVolume &volume) override {
-    calls.push_back("begin_session_volume:" + volume.mode + ":" +
-                    (volume.percent ? std::to_string(*volume.percent) : "-"));
+  bool beginSessionVolume(const SessionVolume &volume,
+                          std::string &error) override {
+    sessionVolumes.push_back(volume);
+    error = sessionVolumeError;
+    return error.empty();
   }
-  void endSessionVolume() override {
-    calls.push_back("end_session_volume");
-  }
+  void endSessionVolume() override { ++sessionVolumeEnds; }
   void seek(uint64_t positionMs) override {
     calls.push_back("seek:" + std::to_string(positionMs));
   }

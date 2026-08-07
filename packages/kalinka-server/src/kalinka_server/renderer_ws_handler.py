@@ -83,14 +83,16 @@ class RendererSession(RendererLink):
         session_id: str,
         volume_mode: str = "",
         volume_percent: Optional[int] = None,
+        volume_control_delegated: bool = False,
     ) -> None:
         env = self._envelope()
         env.session_open.session_id = session_id
-        # Session-scoped: the renderer undoes both when the session ends and
-        # persists neither. Empty mode leaves its own setting alone.
+        # The renderer restores the mode when the session ends and persists
+        # none of this policy. Empty mode leaves its own setting alone.
         env.session_open.volume_mode = volume_mode
         if volume_percent is not None:
             env.session_open.volume_percent = volume_percent
+        env.session_open.volume_control_delegated = volume_control_delegated
         await self._send(env)
 
     async def send_command(self, session_id: str, command: pb.Command) -> None:

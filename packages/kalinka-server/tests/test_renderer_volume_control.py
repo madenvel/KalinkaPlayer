@@ -21,6 +21,7 @@ from kalinka_server.output_device_router import OutputDeviceRouter
 from kalinka_server.renderer_output_device import RendererVolumeStyle
 from kalinka_server.renderer_prefs import RendererPreferences
 from kalinka_server.renderer_registry import RendererRegistry
+from kalinka_server.renderer_sessions import SessionVolumePolicy
 
 
 class _Device:
@@ -169,62 +170,51 @@ async def test_delegated_renderers_are_fixed_at_unity():
         prefs,
         lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.software)},
     )
-    assert router.session_volume_policy("rid-a") == ("fixed", 100)
+    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
+        mode="fixed", percent=100, delegated=True
+    )
     await registry.shutdown()
 
 
-async def test_renderer_choice_sends_no_mode_once_seeded():
+async def test_renderer_choice_is_direct_and_leaves_the_mode_alone():
     registry, prefs = _registry_with("rid-a")
-    prefs.mark_volume_seeded("rid-a")
     router = OutputDeviceRouter(
         registry,
         prefs,
         lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
     )
-    assert router.session_volume_policy("rid-a") == ("", None)
+    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(percent=30)
     await registry.shutdown()
 
 
-async def test_a_renderer_never_played_through_starts_at_the_default_level():
-    """Its mixer may have been left at full scale; the first track this server
-    plays must not depend on that."""
+async def test_every_direct_session_uses_the_renderer_safety_policy():
     registry, prefs = _registry_with("rid-a")
     router = OutputDeviceRouter(
         registry,
         prefs,
-        lambda: {
-            "kalinka-renderer": _Prepared(
-                RendererVolumeStyle.renderer, default_volume=30
-            )
-        },
+        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
     )
-    assert router.session_volume_policy("rid-a") == ("", 30)
-
-    prefs.mark_volume_seeded("rid-a")
-    assert router.session_volume_policy("rid-a") == ("", None)
+    expected = SessionVolumePolicy(percent=30)
+    assert router.session_volume_policy("rid-a") == expected
+    assert router.session_volume_policy("rid-a") == expected
     await registry.shutdown()
 
 
-async def test_fixed_style_carries_the_default_level_every_session():
+async def test_fixed_style_is_not_mistaken_for_delegated_output():
     registry, prefs = _registry_with("rid-a")
-    prefs.mark_volume_seeded("rid-a")
     router = OutputDeviceRouter(
         registry,
         prefs,
-        lambda: {
-            "kalinka-renderer": _Prepared(
-                RendererVolumeStyle.fixed, default_volume=45
-            )
-        },
+        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.fixed)},
     )
-    assert router.session_volume_policy("rid-a") == ("fixed", 45)
-    assert router.session_volume_policy("rid-a") == ("fixed", 45)
+    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
+        mode="fixed", percent=30
+    )
     await registry.shutdown()
 
 
 async def test_volume_style_maps_onto_the_wire_value():
     registry, prefs = _registry_with("rid-a")
-    prefs.mark_volume_seeded("rid-a")
     for style, wire in [
         (RendererVolumeStyle.automatic, "auto"),
         (RendererVolumeStyle.driver, "hardware"),
@@ -233,15 +223,10 @@ async def test_volume_style_maps_onto_the_wire_value():
         router = OutputDeviceRouter(
             registry, prefs, lambda s=style: {"kalinka-renderer": _Prepared(s)}
         )
-        assert router.session_volume_policy("rid-a") == (wire, None)
+        assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
+            mode=wire, percent=30
+        )
     await registry.shutdown()
-
-
-def test_seeding_survives_a_server_restart(tmp_path):
-    path = str(tmp_path / "renderers.json")
-    RendererPreferences(path).mark_volume_seeded("rid-a")
-
-    assert RendererPreferences(path).volume_seeded("rid-a") is True
 
 
 def _bus() -> EventBus:

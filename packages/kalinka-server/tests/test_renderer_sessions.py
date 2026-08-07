@@ -10,6 +10,7 @@ from kalinka_server.renderer_sessions import (
     RendererBusy,
     SessionNotActive,
     SessionOpenFailed,
+    SessionVolumePolicy,
     SessionPool,
     SessionState,
 )
@@ -34,9 +35,17 @@ class FakeWs:
         self.fail_send = False
         self.volume_policies = []
 
-    async def send_session_open(self, session_id, volume_mode="", volume_percent=None):
+    async def send_session_open(
+        self,
+        session_id,
+        volume_mode="",
+        volume_percent=None,
+        volume_control_delegated=False,
+    ):
         self.opened.append(session_id)
-        self.volume_policies.append((volume_mode, volume_percent))
+        self.volume_policies.append(
+            (volume_mode, volume_percent, volume_control_delegated)
+        )
         if self.answer:
             self.pool.handle_open_result(
                 RENDERER_ID,
@@ -121,20 +130,24 @@ async def test_the_volume_policy_rides_session_open():
     register(registry, ws)
 
     assert ws.volume_policies == []
-    pool.set_volume_policy(lambda renderer_id: ("fixed", 100))
+    pool.set_volume_policy(
+        lambda renderer_id: SessionVolumePolicy(
+            mode="fixed", percent=100, delegated=True
+        )
+    )
     session = await pool.open(RENDERER_ID)
 
-    assert ws.volume_policies == [("fixed", 100)]
+    assert ws.volume_policies == [("fixed", 100, True)]
     await session.close()
 
 
-async def test_no_policy_provider_leaves_the_renderers_own_volume_alone():
+async def test_no_policy_provider_sends_a_direct_session():
     registry, pool = make_pool()
     ws = FakeWs(pool)
     register(registry, ws)
 
     session = await pool.open(RENDERER_ID)
-    assert ws.volume_policies == [("", None)]
+    assert ws.volume_policies == [("", None, False)]
     await session.close()
 
 

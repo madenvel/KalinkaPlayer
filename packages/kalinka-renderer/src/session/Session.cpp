@@ -13,7 +13,8 @@ std::shared_ptr<Session> Session::create(asio::io_context &ioc,
                                          std::chrono::seconds ownerGrace,
                                          std::shared_ptr<Player> player,
                                          std::function<void()> onEnded,
-                                         SessionVolume volume) {
+                                         SessionVolume volume,
+                                         std::string *error) {
   auto session = std::shared_ptr<Session>(
       new Session(ioc, std::move(sessionId), std::move(ownerServerId),
                   ownerGrace, std::move(player), std::move(onEnded)));
@@ -24,9 +25,14 @@ std::shared_ptr<Session> Session::create(asio::io_context &ioc,
           self->publish(env);
         }
       });
-  if (!volume.empty()) {
-    session->volumePolicy_ = true;
-    session->player_->beginSessionVolume(volume);
+  std::string ignoredError;
+  std::string &openError = error ? *error : ignoredError;
+  if (!session->player_->beginSessionVolume(volume, openError)) {
+    if (openError.empty()) {
+      openError = "session volume policy could not be applied";
+    }
+    session->player_->setStateSink({});
+    return nullptr;
   }
   return session;
 }
@@ -118,9 +124,7 @@ void Session::close(const char *reason) {
   // owner is told the session closed, not that playback stopped.
   player_->setStateSink({});
   player_->stop();
-  if (volumePolicy_) {
-    player_->endSessionVolume();
-  }
+  player_->endSessionVolume();
   for (const auto &weak : transports_) {
     if (auto transport = weak.lock()) {
       transport->onSessionClosed();

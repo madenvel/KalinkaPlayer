@@ -86,6 +86,8 @@ TEST_F(NativePlayerSettingsTest, OnlyWhatAUserPicksIsOnThePageProper) {
             pb::CONFIG_IMPORTANCE_SIMPLE);
   EXPECT_EQ(field(section, "output.volume_mode")->importance(),
             pb::CONFIG_IMPORTANCE_SIMPLE);
+  EXPECT_EQ(field(section, "output.safe_start_volume_percent")->importance(),
+            pb::CONFIG_IMPORTANCE_SIMPLE);
   EXPECT_EQ(field(section, "output.driver")->importance(),
             pb::CONFIG_IMPORTANCE_EXPERT);
   EXPECT_EQ(field(section, "output.latency_ms")->importance(),
@@ -188,6 +190,90 @@ TEST_F(NativePlayerSettingsTest, TheEdgesOfTheRangeAreAccepted) {
   ASSERT_TRUE(player_->applyConfig("output.latency_ms", "1000", error_))
       << error_;
   EXPECT_EQ(field(output(), "output.latency_ms")->value(), "1000");
+}
+
+TEST_F(NativePlayerSettingsTest, SafeStartVolumeIsConfigurablePerRenderer) {
+  const pb::ConfigSection initial = output();
+  const pb::ConfigField *safeStart =
+      field(initial, "output.safe_start_volume_percent");
+  ASSERT_NE(safeStart, nullptr);
+  EXPECT_EQ(safeStart->value(), "30");
+  EXPECT_EQ(safeStart->default_value(), "30");
+  ASSERT_TRUE(safeStart->has_range());
+  EXPECT_EQ(safeStart->range().min(), 0);
+  EXPECT_EQ(safeStart->range().max(), 100);
+  EXPECT_EQ(safeStart->apply(), pb::APPLY_COST_INSTANT);
+
+  ASSERT_TRUE(player_->applyConfig("output.safe_start_volume_percent", "45",
+                                   error_))
+      << error_;
+  const pb::ConfigSection updated = output();
+  EXPECT_EQ(field(updated, "output.safe_start_volume_percent")->value(), "45");
+  EXPECT_EQ(loadSettingsOverrides().at("output.safe_start_volume_percent"),
+            "45");
+
+  std::string sessionError;
+  ASSERT_TRUE(player_->beginSessionVolume(
+      SessionVolume{"", 30, false}, sessionError))
+      << sessionError;
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_EQ(snapshot.volume().current(), 45u);
+  player_->endSessionVolume();
+}
+
+TEST_F(NativePlayerSettingsTest, DirectSessionCapsVolumeBeforePlayback) {
+  std::string error;
+  ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
+
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_TRUE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 30u);
+  player_->endSessionVolume();
+}
+
+TEST_F(NativePlayerSettingsTest, DirectSessionDoesNotRaiseAQuietVolume) {
+  player_->setVolume(20);
+  std::string error;
+  ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
+
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_EQ(snapshot.volume().current(), 20u);
+  player_->endSessionVolume();
+}
+
+TEST_F(NativePlayerSettingsTest,
+       DirectSessionCapsVolumeLeftAtUnityByADelegatedSession) {
+  player_->setVolume(20);
+  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "fixed", error_))
+      << error_;
+  std::string error;
+  ASSERT_TRUE(player_->beginSessionVolume(
+      SessionVolume{"fixed", 100, true}, error))
+      << error;
+  player_->endSessionVolume();
+
+  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "auto", error_))
+      << error_;
+
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_EQ(snapshot.volume().current(), 100u);
+
+  ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
+  player_->fillSnapshot(snapshot);
+  EXPECT_EQ(snapshot.volume().current(), 30u);
+  player_->endSessionVolume();
+}
+
+TEST_F(NativePlayerSettingsTest, DirectFixedOutputIsRefusedAsUnsafe) {
+  std::string error;
+  EXPECT_FALSE(player_->beginSessionVolume(
+      SessionVolume{"fixed", std::nullopt, false}, error));
+  EXPECT_EQ(error,
+            "safe starting volume cannot be enforced with fixed output");
 }
 
 TEST_F(NativePlayerSettingsTest, AnUndeclaredPathIsRefused) {
