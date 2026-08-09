@@ -85,7 +85,6 @@ class JamendoConfig(ModuleConfig):
         ),
         title="Mood index path",
         description="Where the mood-search index is stored.",
-        json_schema_extra={"importance": "expert"},
     )
     ai_index_url: str = Field(
         default=f"{_RELEASE}/{_INDEX_ASSET}",
@@ -94,5 +93,4 @@ class JamendoConfig(ModuleConfig):
             "Downloaded automatically if the index is missing — leave empty "
             "if you manage the file yourself."
         ),
-        json_schema_extra={"importance": "expert"},
     )

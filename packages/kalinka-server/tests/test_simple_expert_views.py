@@ -57,6 +57,20 @@ def _all_field_paths_in_pages(pages) -> set[str]:
     return out
 
 
+def _general_page(schema):
+    return next(p for p in schema.pages if p.id == "general")
+
+
+def _leaf_paths(model, prefix):
+    """Every settable leaf of a config model, as dotted paths."""
+    for name, value in model.__dict__.items():
+        path = f"{prefix}.{name}"
+        if isinstance(value, BaseModel):
+            yield from _leaf_paths(value, path)
+        else:
+            yield path
+
+
 def _find_module(schema, module_id):
     for p in schema.pages:
         for m in p.modules:
@@ -115,27 +129,52 @@ def test_simple_view_includes_simple_fields_and_excludes_expert():
     # Audit-defaulted EXPERT tuning must NOT leak in:
     assert "base_config.search.candidate_limit" not in paths
     assert "base_config.server.oobe_complete" not in paths
+    assert "base_config.server.log_level" not in paths
     assert "input_modules.localfiles.db_path" not in paths
     assert "input_modules.localfiles.searcher.weight_knn" not in paths
     assert "input_modules.localfiles.embedder.batch_size_clap" not in paths
 
 
 def test_kalinka_expert_section_dropped_from_simple_view():
-    """KalinkaConfig.presentation_layout marks the 'Search' section as
-    Importance.EXPERT — section-level tag wins, all of its fields are
-    removed from the simple view."""
+    """KalinkaConfig tags the 'search' member ``importance: expert`` — the
+    section-level tag wins, all of its fields are removed from the simple
+    view."""
     schema = build_presentation(
         base_config=KalinkaConfig(),
         input_modules={},
         devices={},
     )
-    for p in schema.pages:
-        if p.id != "general":
-            continue
-        for s in p.sections:
-            assert s.id != "base_config.search", (
-                "search section should be pruned out of the simple view"
-            )
+    ids = {s.id for s in _general_page(schema).sections}
+    assert "base_config.search" not in ids
+    assert "base_config.embedding" not in ids
+
+
+def test_general_page_sections_follow_declaration_order():
+    """Sections come from KalinkaConfig's own members, in the order they
+    are declared — there is no hand-written layout to fall out of sync
+    with the model."""
+    schema = build_presentation(
+        base_config=KalinkaConfig(),
+        input_modules={},
+        devices={},
+    )
+    assert [s.id for s in _general_page(schema).sections] == [
+        "base_config.server",
+        "base_config.device_automation",
+    ]
+
+
+def test_every_base_config_leaf_reaches_the_expert_list():
+    """A field added to a config model must stay settable without anyone
+    remembering to register it in a layout."""
+    schema = build_presentation(
+        base_config=KalinkaConfig(),
+        input_modules={},
+        devices={},
+    )
+    paths = {f.path for f in schema.expert_fields}
+    for path in _leaf_paths(KalinkaConfig(), "base_config"):
+        assert path in paths
 
 
 # ---------------------------------------------------------------------------

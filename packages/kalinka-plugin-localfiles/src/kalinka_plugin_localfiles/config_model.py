@@ -1,5 +1,5 @@
 import os
-from typing import ClassVar
+from typing import Any, ClassVar
 from pydantic import BaseModel, Field
 from kalinka_plugin_sdk import paths
 from kalinka_plugin_sdk.module_config import ModuleConfig
@@ -9,9 +9,7 @@ from kalinka_plugin_sdk.module_config import ModuleConfig
 # "simple" (always shown on the structured settings page) and
 # "expert" (the default; reachable only via about:config search).
 # Mark a field "simple" only when it's mandatory or frequently changed.
-_SIMPLE = {"importance": "simple"}
-# Advanced/tuning fields hidden behind the expert ("about:config") view.
-_EXPERT = {"importance": "expert"}
+_SIMPLE: dict[str, Any] = {"importance": "simple"}
 
 
 class EmbedderClapConfig(BaseModel):
@@ -64,7 +62,6 @@ class MoodConfig(BaseModel):
                 "How strongly mood matching influences results for mood-style "
                 "searches — searches without a mood are unaffected"
             ),
-            **_EXPERT,
         },
     )
     candidates: int = Field(
@@ -74,7 +71,6 @@ class MoodConfig(BaseModel):
                 "How many tracks are considered when ranking by mood — "
                 "higher is more thorough but slower"
             ),
-            **_EXPERT,
         },
     )
     nn_fallback: bool = Field(
@@ -84,7 +80,6 @@ class MoodConfig(BaseModel):
                 "Guess the intended mood when the search doesn't contain a "
                 "known mood word — turn off to match only literal mood words"
             ),
-            **_EXPERT,
         },
     )
     nn_threshold: float = Field(
@@ -94,18 +89,15 @@ class MoodConfig(BaseModel):
                 "How confident the mood guess must be before it affects "
                 "ranking — below this, results are ranked normally"
             ),
-            **_EXPERT,
         },
     )
     nn_top_k: int = Field(
         default=3, ge=1, le=10, title="NN fallback neighbours",
-        json_schema_extra=_EXPERT,
     )
     backfill_batch: int = Field(
         default=256, title="Mood backfill batch size",
         json_schema_extra={
             "help": "Tracks processed per pass when computing mood data for the library",
-            **_EXPERT,
         },
     )
 
@@ -151,7 +143,6 @@ class EmbedderConfig(BaseModel):
                 "long with nothing to index (0 = keep loaded)"
             ),
             "constraints": {"unit": "s"},
-            **_EXPERT,
         },
     )
     max_job_attempts: int = Field(
