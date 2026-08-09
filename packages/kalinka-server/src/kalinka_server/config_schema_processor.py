@@ -152,43 +152,30 @@ _LEGACY_IMPORTANCE_ALIASES = {
 }
 
 
-def _importance_from_extras(extras: dict[str, Any]) -> Importance:
-    """Resolve the field's tier. Defaults to EXPERT for unmarked fields:
-    only fields the user *explicitly* opts into via ``"importance":
-    "simple"`` (or the legacy ``"normal"``) appear in the simple view.
+def _importance_from_extras(
+    extras: dict[str, Any], default: Importance = Importance.EXPERT
+) -> Importance:
+    """Resolve a tier tag, falling back to ``default`` when untagged.
+
+    The two callers pass opposite defaults on purpose. A *leaf* defaults
+    to EXPERT, so the structured page shows only what a developer opted
+    in. A *section* defaults to SIMPLE, so pruning is content-driven — a
+    group disappears once every leaf under it is expert — and tagging a
+    section ``"expert"`` force-hides the whole group whatever its
+    children say.
     """
     hint = extras.get("importance")
     if hint is None:
-        return Importance.EXPERT
-    if hint in _LEGACY_IMPORTANCE_ALIASES:
-        return _LEGACY_IMPORTANCE_ALIASES[hint]
-    try:
-        return Importance(hint)
-    except ValueError:
-        logger.warning("Unknown importance %r; defaulting to EXPERT", hint)
-        return Importance.EXPERT
-
-
-def _section_importance_from_extras(extras: dict[str, Any]) -> Importance:
-    """Section-level tier resolver. Defaults to SIMPLE (not EXPERT) so
-    pruning is purely *content*-driven: a section is dropped iff every
-    field beneath it is EXPERT. Only an explicit ``"importance":
-    "expert"`` on the section's owning field force-hides the whole
-    group regardless of its children — used for things like the
-    "Buffers & decoders" group on the General page.
-    """
-    hint = extras.get("importance")
-    if hint is None:
-        return Importance.SIMPLE
+        return default
     if hint in _LEGACY_IMPORTANCE_ALIASES:
         return _LEGACY_IMPORTANCE_ALIASES[hint]
     try:
         return Importance(hint)
     except ValueError:
         logger.warning(
-            "Unknown section importance %r; defaulting to SIMPLE", hint
+            "Unknown importance %r; defaulting to %s", hint, default.value
         )
-        return Importance.SIMPLE
+        return default
 
 
 def _enum_values(field: FieldInfo) -> list[str] | None:
@@ -251,7 +238,9 @@ def _auto_sections(model: BaseModel, prefix: str) -> list[SectionSpec]:
             nested_model = getattr(model, field_name)
             sub_sections = _sections_for(nested_model, child_path)
             extras = _json_extra(field)
-            section_importance = _section_importance_from_extras(extras)
+            section_importance = _importance_from_extras(
+                extras, Importance.SIMPLE
+            )
 
             # Absorb the child's "General" auto-section (if any) onto the parent
             # wrapper so a BaseModel with both scalars and nested models renders

@@ -1,11 +1,11 @@
-from typing import ClassVar
+from typing import Any, ClassVar
 from pydantic import Field
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
 # Fields default to the EXPERT tier (about:config search only). Mark a
 # field "simple" to surface it on the main settings page.
-_SIMPLE = {"importance": "simple"}
+_SIMPLE: dict[str, Any] = {"importance": "simple"}
 
 
 class KalinkaPluginMusiccastConfig(ModuleConfig):

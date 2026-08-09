@@ -14,8 +14,11 @@ Authoring entry points:
       Or by implementing::
           @classmethod
           def presentation_layout(cls, instance, prefix: str) -> list[SectionSpec]: ...
-      for full control of section grouping (used by KalinkaConfig to flatten
-      base_config into peer sections on the General page).
+      for full control of section grouping. Note that such a layout is then
+      the *only* source of fields for that subtree — a leaf it forgets to
+      list is settable nowhere, expert search included — so prefer the
+      auto-derived layout (one section per nested model, in declaration
+      order) unless the grouping genuinely can't be expressed that way.
 """
 
 from __future__ import annotations

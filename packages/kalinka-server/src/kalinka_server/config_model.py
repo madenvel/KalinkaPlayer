@@ -14,24 +14,29 @@ through the about:config-style search. To put a field on the main
 settings page (mandatory or frequently changed), tag it
 ``"importance": "simple"`` explicitly.
 
-KalinkaConfig.presentation_layout() defines the General page grouping and
-collapses the redundant `base_config` level so the UI shows peer sections.
+An ``importance`` on a KalinkaConfig member tags the whole *section*
+instead, where the default is the other way round: a section shows up as
+soon as one of its fields is simple, and ``"expert"`` hides the group
+whatever its fields say.
+
+The General page is the sections below in declaration order, each named
+by its ``title``, so field order here is the order the app renders.
 """
 
 import os
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from kalinka_plugin_sdk import paths
 
-if TYPE_CHECKING:
-    from .presentation_schema import SectionSpec
-
 
 # Shared extras — keeps audit-tagging consistent across the file.
 _SIMPLE: dict[str, Any] = {"importance": "simple"}
+
+# On a section, "expert" hides the group even if a field below turns simple.
+_EXPERT_SECTION: dict[str, Any] = {"importance": "expert"}
 
 # Release hosting the MiniLM text encoder (model.onnx + tokenizer.json are
 # appended at fetch time). Same release the Jamendo mood index ships from —
@@ -49,6 +54,14 @@ class LogLevel(str, Enum):
 
 
 class ServerConfig(BaseModel):
+    service_name: str = Field(
+        default="My Kalinka Service",
+        title="Service name",
+        json_schema_extra={
+            "help": "How this server appears in the app when found on your network",
+            **_SIMPLE,
+        },
+    )
     interface: str = Field(
         default="all",
         title="Network interface",
@@ -66,18 +79,9 @@ class ServerConfig(BaseModel):
             **_SIMPLE,
         },
     )
-    service_name: str = Field(
-        default="My Kalinka Service",
-        title="Service name",
-        json_schema_extra={
-            "help": "How this server appears in the app when found on your network",
-            **_SIMPLE,
-        },
-    )
     log_level: LogLevel = Field(
         default=LogLevel.info,
         title="Log level",
-        json_schema_extra=_SIMPLE,
     )
     auto_upgrade: bool = Field(
         default=False,
@@ -289,90 +293,16 @@ class KalinkaConfig(BaseModel):
     """Main Kalinka configuration."""
 
     server: ServerConfig = Field(default_factory=ServerConfig, title="Server")
-    search: SearchConfig = Field(default_factory=SearchConfig, title="Search")
-    embedding: EmbeddingConfig = Field(
-        default_factory=EmbeddingConfig, title="Text embedding"
-    )
     device_automation: DeviceAutomationConfig = Field(
         default_factory=DeviceAutomationConfig, title="Device automation"
     )
-
-    @classmethod
-    def presentation_layout(
-        cls, instance: "KalinkaConfig", prefix: str
-    ) -> list["SectionSpec"]:
-        """Flat General page layout: five peer sections, promoting nested
-        BaseModels out of `base_config`.
-        """
-        from .config_schema_processor import _build_field_spec
-        from .presentation_schema import Importance, SectionSpec
-
-        def leaf(path_suffix: str):
-            parts = path_suffix.split(".")
-            model = instance
-            for p in parts[:-1]:
-                model = getattr(model, p)
-            field = model.__class__.model_fields[parts[-1]]
-            spec = _build_field_spec(
-                f"{prefix}.{path_suffix}", parts[-1], field
-            )
-            assert spec is not None, path_suffix
-            return spec
-
-        srv = SectionSpec(
-            id=f"{prefix}.server",
-            title="Server",
-            fields=[
-                leaf("server.service_name"),
-                leaf("server.interface"),
-                leaf("server.port"),
-                leaf("server.log_level"),
-                leaf("server.auto_upgrade"),
-                leaf("server.oobe_complete"),
-            ],
-        )
-
-        device_auto = SectionSpec(
-            id=f"{prefix}.device_automation",
-            title="Device automation",
-            fields=[
-                leaf("device_automation.auto_power_on"),
-                leaf("device_automation.auto_power_off"),
-                leaf("device_automation.auto_off_timeout_seconds"),
-            ],
-        )
-
-        search_section = SectionSpec(
-            id=f"{prefix}.search",
-            title="Search",
-            importance=Importance.EXPERT,
-            fields=[
-                leaf("search.ai_suppress_full_match_score"),
-                leaf("search.best_match_min_score"),
-                leaf("search.best_match_max_results"),
-                leaf("search.candidate_limit"),
-                leaf("search.ai_suggestions_limit"),
-                leaf("search.suggest_min_score"),
-                leaf("search.related_max_results"),
-                leaf("search.route_max_results"),
-                leaf("search.route_min_similarity"),
-                leaf("search.route_decoy_margin"),
-            ],
-        )
-
-        embedding_section = SectionSpec(
-            id=f"{prefix}.embedding",
-            title="Text embedding",
-            importance=Importance.EXPERT,
-            fields=[
-                leaf("embedding.model_dir"),
-                leaf("embedding.model_url"),
-            ],
-        )
-
-        return [
-            srv,
-            device_auto,
-            search_section,
-            embedding_section,
-        ]
+    search: SearchConfig = Field(
+        default_factory=SearchConfig,
+        title="Search",
+        json_schema_extra=_EXPERT_SECTION,
+    )
+    embedding: EmbeddingConfig = Field(
+        default_factory=EmbeddingConfig,
+        title="Text embedding",
+        json_schema_extra=_EXPERT_SECTION,
+    )
