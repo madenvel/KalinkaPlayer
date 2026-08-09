@@ -7,9 +7,9 @@
  * @brief A resolved Kalinka Core on the network.
  *
  * @note `key` identifies the service instance for dedupe and removal. Until a
- *       Core advertises a stable server_id in TXT (design §6.1) the mDNS
- *       instance name stands in, so the same Core seen under two instance names
- *       is two endpoints.
+ *       Core advertises a stable server_id in TXT, the mDNS instance name
+ *       stands in, so the same Core seen under two instance names is two
+ *       endpoints.
  */
 struct CoreEndpoint {
   std::string key;
