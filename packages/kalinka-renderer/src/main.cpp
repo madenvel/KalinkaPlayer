@@ -1,9 +1,10 @@
-// kalinka-renderer — standalone native renderer for Kalinka Core (MVP).
+// kalinka-renderer — standalone native renderer for Kalinka Core.
 //
-// Browses for _kalinkaplayer._tcp Cores via avahi (or connects to fixed
-// endpoints given with --server), registers with each via the Hello/Welcome
-// handshake, and waits. SIGINT/SIGTERM shut it down gracefully (Goodbye,
-// WebSocket close, joined threads).
+// Browses for _kalinkaplayer._tcp Cores (or connects to fixed endpoints given
+// with --server), registers with each via the Hello/Welcome handshake, and
+// plays for whichever one opens a playback session. SIGINT/SIGTERM shut it
+// down gracefully (playback stopped, Goodbye, WebSocket close, joined
+// threads).
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>

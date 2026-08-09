@@ -1,10 +1,11 @@
-// Kalinka renderer protocol — MVP subset.
+// Kalinka renderer protocol, version 1.
 //
 // One Envelope per binary WebSocket message on ws://<core>/renderer/ws.
 // This file carries the registration handshake (Hello -> Welcome), the
 // playback-session lifecycle, playback commands, state reporting, renderer
-// configuration and Goodbye. Field numbers follow the full design in
-// docs/native-renderer-design.md §4 so later additions extend, not renumber.
+// configuration and Goodbye. Reserved numbers are never reused, so later
+// additions extend rather than renumber. What an implementation must do with
+// these messages is docs/native-renderer-design.md §4.
 
 syntax = "proto3";
 
@@ -55,7 +56,7 @@ message Envelope {
   // device list is configuration, not state, and lives in ConfigSnapshot now.
   // They stay held in case hot-plug ever needs to be pushed.
   // 1013 / 2002 were considered for an application-level Pong / Ping and must
-  // not be reused (design §4).
+  // not be reused.
   reserved 1006, 1007, 1013, 2002;
 }
 
@@ -174,7 +175,7 @@ message StateSnapshot {
   repeated string queued_source_tokens = 11;
 
   reserved 8;   // output_devices; the list is configuration
-  reserved 12;  // ownership; superseded by playback sessions (design §7.1)
+  reserved 12;  // ownership; superseded by playback sessions (design §3.3)
 }
 
 // First message on every new connection; registers the renderer with the Core.
@@ -211,7 +212,7 @@ message Welcome {
 // A session is the Core's exclusive claim on the renderer's audio graph. The
 // id is minted by the Core and held in memory on both sides, so a crash on
 // either side ends the session: what survives is reconciled at the next Hello
-// (design §7.1).
+// (design §3.3).
 // ============================================================================
 
 message SessionOpen {
@@ -312,9 +313,9 @@ message Command {
 
   // 1 held for command_id, which had no use once commands stopped being
   // acknowledged; 2 for force_takeover and 21 for release_control, both part of
-  // the ownership-lease policy (design §7) that playback sessions supersede;
+  // the ownership-lease policy that playback sessions supersede;
   // 19 / 20 for refresh_output_devices / select_output_device, which are
-  // configuration and answer synchronously (§7.3), not playback commands.
+  // configuration and answer synchronously (design §3.4), not playback commands.
   reserved 1, 2, 19, 20, 21;
 }
 
