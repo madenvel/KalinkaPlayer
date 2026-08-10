@@ -97,8 +97,12 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
+          # protobuf-lite-devel carries libprotobuf-lite.so, which is what the
+          # generated code links; protobuf-devel alone leaves CMake's
+          # protobuf::libprotobuf-lite target undefined.
           dnf install -y make git rpm-build cmake gcc-c++ \
-            protobuf-devel protobuf-compiler boost-devel spdlog-devel \
+            protobuf-devel protobuf-lite-devel protobuf-compiler \
+            boost-devel spdlog-devel \
             alsa-lib-devel libcurl-devel curlpp-devel flac-devel \
             pkgconf-pkg-config systemd-rpm-macros
 

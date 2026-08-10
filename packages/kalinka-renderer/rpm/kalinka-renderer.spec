@@ -14,6 +14,7 @@ URL:            https://github.com/madenvel/KalinkaPlayer
 BuildRequires:  cmake >= 3.16
 BuildRequires:  gcc-c++
 BuildRequires:  protobuf-devel
+BuildRequires:  protobuf-lite-devel
 BuildRequires:  protobuf-compiler
 BuildRequires:  boost-devel
 BuildRequires:  spdlog-devel
