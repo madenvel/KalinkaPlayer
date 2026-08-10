@@ -1,9 +1,17 @@
 # Kalinka Player Installation Guide
 
+**Installing Kalinka to use it?** One command does it, and the walkthrough that follows — first run, adding music, troubleshooting — lives in [README.md](README.md#installation):
+
+```bash
+curl -fsSL https://kalinkaplayer.com/install.sh | sudo bash
+```
+
+This file covers the two paths that command doesn't: running from a source checkout, and building the packages yourself.
+
 ## Development Installation
 
 ### Prerequisites
-- Python 3.11 (the dev venv is pinned to 3.11 to match production)
+- Python 3.11 or newer (production runs 3.13)
 - Git
 - Build tools (gcc, make, etc.)
 - ALSA development libraries
@@ -18,13 +26,14 @@ git clone https://github.com/madenvel/KalinkaPlayer.git
 cd KalinkaPlayer
 ```
 
-2. Install the system build prerequisites (including Python 3.11):
+2. Install the system build prerequisites (Python, plus the C++ toolchain for the renderer):
 ```bash
-sudo apt install python3.11 python3.11-venv python3.11-dev g++ libasound2-dev \
-  libflac-dev libflac++-dev libcurlpp-dev libspdlog-dev libfmt-dev build-essential
+sudo apt install python3 python3-venv python3-dev g++ cmake protobuf-compiler \
+  libprotobuf-dev libboost-dev libasound2-dev libflac-dev libflac++-dev \
+  libcurlpp-dev libspdlog-dev libfmt-dev pkg-config build-essential
 ```
 
-3. One-step setup — creates a venv at `.venv` with Python 3.11 (or reuses an already-active `$VIRTUAL_ENV`), installs the SDK, server and all plugins editable, builds the native player, and seeds the fakeroot plus a default config. It refuses to run against a non-3.11 interpreter; override the path with `make dev-setup PYTHON=/path/to/python3.11` if needed:
+3. One-step setup — creates a venv at `.venv` (or reuses an already-active `$VIRTUAL_ENV`), installs the SDK, server and all plugins editable, and seeds the fakeroot plus a default config. It refuses anything older than Python 3.11; point it at a specific interpreter with `make dev-setup PYTHON=/path/to/python3.13`:
 ```bash
 make dev-setup
 ```
@@ -34,15 +43,13 @@ make dev-setup
 make dev-run            # add ARGS=--debug for verbose logging
 ```
 
-After editing C++ under `packages/kalinka-server/src/native_player`, run `make dev-rebuild-native` and restart. See the **Running from source (development)** section of [README.md](README.md) for the full workflow — in-app restart without systemd and `KALINKA_PREFIX` relocation.
+Audio plays in the renderer, a separate C++ program in `packages/kalinka-renderer`: build it with `make renderer-build` and run `packages/kalinka-renderer/build/kalinka-renderer` alongside the server — it discovers the dev server over mDNS like any other. After editing its sources rebuild and restart that binary; the server itself is pure Python and only needs a restart. See the **Running from source (development)** section of [README.md](README.md) for the full workflow — in-app restart without systemd and `KALINKA_PREFIX` relocation.
 
-## Production Installation
+## Installing packages you built yourself
 
-Production runs as the `kalusr` system user under systemd, installed from
-per-platform `.deb` packages. See the **Installation** section of
-[README.md](README.md) for the full walkthrough.
+The server runs as the `kalusr` system user under systemd; the renderer runs as `kalrndr`, the only one of the two in the `audio` group.
 
-1. Build the packages (server + all plugins); artifacts land in `debs/`:
+1. Build the app bundle (server + plugins); artifacts land in `debs/`:
 ```bash
 make build-all-deb
 ```
@@ -55,6 +62,13 @@ sudo apt-get install -f   # pull in any missing dependencies
 ```
 On first start `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates
 the runtime venv and installs the shipped wheels.
+
+3. **Install a renderer, or the machine stays silent.** It is not part of the bundle above — it builds per-platform and releases on its own train:
+```bash
+make renderer-deb                                   # needs the C++ toolchain
+sudo apt install ./packages/kalinka-renderer/kalinka-renderer-*.deb
+```
+Or take a published one instead of building it: `./scripts/install-renderer.sh`. Either way the browser player works without it, since the browser is its own renderer.
 
 ## Version Management
 

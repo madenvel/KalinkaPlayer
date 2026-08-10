@@ -2,7 +2,7 @@
 
 Full disclosure up front: I build Kalinka. This is the write-up I wish I could link when someone asks "so what is it, and why not just use X?" — what the system actually is, how it's put together, and an honest map of where it beats the alternatives and where it clearly doesn't. Facts about the other products were checked in July 2026; if I've gotten something wrong about your favorite player, corrections are welcome.
 
-> Based on Kalinka v3.4, July 2026. Website: [kalinkaplayer.com](https://kalinkaplayer.com)
+> Based on Kalinka v4.0, August 2026. Website: [kalinkaplayer.com](https://kalinkaplayer.com)
 
 ## The short version
 
@@ -10,7 +10,7 @@ Kalinka is an open-source music system for people who run their own audio hardwa
 
 It's two cooperating pieces of software:
 
-- **KalinkaPlayer** — a lightweight backend service for Linux (arm64/amd64). It owns the music library, the play queue and the audio output, and exposes a REST + WebSocket API. The performance-critical audio engine is written in C++ and talks to ALSA directly.
+- **KalinkaPlayer** — a lightweight backend service for Linux (arm64/amd64). It owns the music library, the play queue and the configuration, and exposes a REST + WebSocket API. The audio itself is played by a **renderer**: a small C++ program that talks to ALSA directly, installed alongside the server by default and equally able to run on a different box on the same network.
 - **Kalinka Music App** — a Flutter client for Android, Linux desktop and Web that discovers the server on your network automatically and acts as the remote control: browsing, search, queue, favorites, playlists and live server settings. An optional browser-based player can be installed on the server as well.
 
 Everything beyond the core ships as **plugins**: the local-files library (the most developed part by far), streaming sources ([Jamendo](https://www.jamendo.com)'s Creative-Commons catalog, and an experimental [Qobuz](https://www.qobuz.com) integration for subscribers), and device integrations such as Yamaha MusicCast volume/power control.
@@ -35,6 +35,8 @@ The part I care about is *where* it runs: on your own hardware, over your own fi
 
 Playback is a C++ audio graph with direct ALSA access — no PulseAudio or PipeWire in the middle — giving a bit-perfect path where your ALSA configuration permits. It plays FLAC (up to 192 kHz / 24-bit) and MP3, from local files or HTTP streams, with gapless transitions between consecutive tracks of the same format. The server idles comfortably on a Raspberry Pi; the machine's resources go to your library, not to the runtime.
 
+That graph lives in its own process — the **renderer** — rather than inside the server, and the split is what lets one library drive more than one set of speakers. A renderer finds the server over mDNS, connects out to it and then fetches the audio over HTTP itself, so the stream never passes through the core: a Pi in the living room and another in the study each pull their own bytes. You choose which one is playing from the app, and switching hands the music over mid-track rather than starting it again. The default install puts a renderer on the server machine, so a single box behaves exactly as it always did; the browser player is a renderer too, which is why a laptop can play from a server that has no sound card at all.
+
 ### One queue, many sources
 
 Sources are equal citizens in the play queue: local tracks, Jamendo streams and Qobuz titles can be queued back-to-back. Search fans out across sources and merges results with best-match ranking, so "play that song" doesn't require remembering which backend it lives in.
@@ -45,7 +47,7 @@ The server core is small; sources and devices arrive through a plugin SDK with t
 
 ## Architecture
 
-Kalinka is a hub-and-spokes design. The **core server** owns the API, play queue, playback state, configuration and the native audio engine. **Plugins** — connected through the SDK's typed interfaces — provide everything source- or device-specific. **Clients** are thin: the Flutter app and optional web player drive the server over REST, with WebSocket channels pushing live queue/device state back.
+Kalinka is a hub-and-spokes design. The **core server** owns the API, play queue, playback state and configuration. **Renderers** are what actually produce sound: separate processes, on the same machine or elsewhere on the network, that register with the core over a small protobuf protocol and fetch their audio themselves. **Plugins** — connected through the SDK's typed interfaces — provide everything source- or device-specific. **Clients** are thin: the Flutter app and optional web player drive the server over REST, with WebSocket channels pushing live queue/device state back.
 
 ```mermaid
 flowchart TD
@@ -54,13 +56,18 @@ flowchart TD
         WEB["Browser player<br/>(optional kalinka-web bundle)"]
     end
 
-    subgraph CORE["kalinka-server — core service (Python + C++)"]
+    subgraph CORE["kalinka-server — core service (Python)"]
         API["REST + WebSocket API<br/>(FastAPI)"]
         DISC["Service discovery<br/>(zeroconf / SSDP)"]
         QUEUE["Play queue &amp; playback state"]
         SEARCH["Search &amp; catalog aggregation<br/>(fuzzy · semantic · best-match merge · suggestions)"]
         CONF["Config &amp; state manager<br/>(schema-driven, live-editable)"]
-        NATIVE["Native audio engine (C++)<br/>FLAC &amp; MP3 decode · gapless switching<br/>file &amp; HTTP inputs · direct ALSA output"]
+        RSESS["Renderer sessions<br/>(registry · protocol · output selection)"]
+    end
+
+    subgraph RENDERERS["Renderers — same box or elsewhere on the LAN"]
+        NATIVE["kalinka-renderer (C++)<br/>FLAC &amp; MP3 decode · gapless switching<br/>file &amp; HTTP inputs · direct ALSA output"]
+        BROWSER["Browser player<br/>(plays in the page)"]
     end
 
     subgraph SDK["Plugin SDK (kalinka-plugin-sdk)"]
@@ -92,7 +99,10 @@ flowchart TD
     API --> QUEUE
     API --> SEARCH
     API --> CONF
-    QUEUE --> NATIVE
+    QUEUE --> RSESS
+    RSESS -->|"commands &amp; state<br/>(protobuf over WebSocket)"| NATIVE
+    RSESS --> BROWSER
+    WEB -.->|"is one"| BROWSER
     NATIVE --> DAC
 
     SEARCH --> IM
@@ -106,6 +116,7 @@ flowchart TD
     LF -->|"enrichment lookups"| META
     JAM --> JAPI
     QOB --> QAPI
+    NATIVE -.->|"audio streams"| FILES
     NATIVE -.->|"audio streams"| JAPI
     NATIVE -.->|"audio streams"| QAPI
     MC --> AMP
