@@ -9,6 +9,7 @@ from .events import PlayQueueEventType, PlayQueueEvent, PlayQueueState
 from .ext_device_events import ExtDeviceEventType, ExtDeviceEvent, ExtDeviceState
 from .module_config import ModuleConfig
 from .module_health import ModuleHealthState, ModuleState
+from .optional_packages import OptionalPackageSpec
 from .inputmodule import InputModule
 from .ext_device import ExternalOutputDevice
 
@@ -70,6 +71,13 @@ class PluginBase(ABC, Generic[PLUGIN_CLASS, CTX_TYPE]):
     # fields here. The server reads this at load time to build the
     # presentation schema and the resolver registry. The default is empty.
     DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {}
+
+    # Optional: pip packages the plugin installs on demand rather than
+    # depending on outright, keyed by the token install requests use. The
+    # server reads this at load time to build the global allow-list, and
+    # the deb build exports it to a root-owned manifest. The default is
+    # empty — a plugin whose dependencies are all hard needs no entry.
+    OPTIONAL_PACKAGES: ClassVar[dict[str, OptionalPackageSpec]] = {}
 
     @abstractmethod
     async def setup(self, context: CTX_TYPE) -> None:

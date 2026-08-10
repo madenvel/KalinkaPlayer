@@ -28,9 +28,6 @@ class KalinkaPluginJamendo(InputModulePlugin):
         self._context: Optional[InputPluginContext] = None
         self._provision_task: Optional[asyncio.Task] = None
 
-    def module_name(self) -> str:
-        return "Jamendo Input Module"
-
     def get_interface(self) -> Optional[InputModule]:
         return self.interface
 

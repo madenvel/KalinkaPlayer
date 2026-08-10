@@ -135,9 +135,6 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             ),
         }
 
-    def module_name(self) -> str:
-        return "Local Files Input Module"
-
     def get_interface(self) -> Optional[InputModule]:
         return self._inputmodule
 
@@ -491,8 +488,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
     def _shutdown_process(self, proc):
         """Shutdown a process by sending a termination signal"""
 
-        if proc is None or not proc.is_alive():
-            logger.warning(f"Process is not running or already shut down.")
+        # A sub-feature that was never started has no process — routine
+        # since AI search is off by default, so not worth a warning.
+        if proc is None:
+            return
+        if not proc.is_alive():
+            logger.warning("Process already shut down.")
             return
 
         # Send shutdown command over the process's socket
