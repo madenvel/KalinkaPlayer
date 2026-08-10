@@ -35,7 +35,9 @@ def get_version() -> str:
 # Client-facing REST/WebSocket API contract version. Bump deliberately when the
 # client API changes; independent of the package version above. Distinct from
 # kalinka_plugin_sdk.API_VERSION (the server<->plugin SDK contract).
-REST_API_VERSION = "0.1"
+# 0.2: playback moved to renderers — output selection lives behind /renderer/*,
+# and the built-in local-alsa device is gone.
+REST_API_VERSION = "0.2"
 
 
 def get_rest_api_version() -> str:
