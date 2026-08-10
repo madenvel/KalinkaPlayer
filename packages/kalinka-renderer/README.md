@@ -117,8 +117,10 @@ KALINKA_TEST_ALSA_DEVICE=default ctest --output-on-failure
 
 `make renderer-deb` and `make renderer-rpm` build a stripped Release binary plus
 its systemd unit, on (a container of) the distro being targeted. There is also a
-flatpak manifest in [flatpak/](flatpak/). The unit runs as `kalusr` in the
-`audio` group and keeps its state in `/var/lib/kalinka-renderer`.
+flatpak manifest in [flatpak/](flatpak/). The unit runs as `kalrndr` — its own
+account, in the `audio` group, separate from the server's `kalusr` so the
+network-facing half cannot read the server's config or trigger its upgrades —
+and keeps its state in `/var/lib/kalinka-renderer`.
 
 Releases ride their own train — `kalinka-renderer-v*` tags, separate from the
 app bundle — and install with:

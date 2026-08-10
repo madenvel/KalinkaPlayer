@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-USER="kalusr"
+# The renderer has its own account rather than sharing the server's kalusr:
+# it is the network-facing half, and it has no business reading the server's
+# config (API keys, 0600 kalusr) or touching the upgrade trigger kalusr may
+# write. All it needs is the sound devices and its own state directory.
+USER="kalrndr"
+STATE_DIR="/var/lib/kalinka-renderer"
 UNIT_NAME="kalinka-renderer.service"
 
 case "$1" in
   configure)
-    # Same system user as kalinka-server, created by whichever package lands
-    # first; neither removes it on purge.
     if ! id -u "$USER" >/dev/null 2>&1; then
       adduser --system --no-create-home --group --disabled-login "$USER"
     fi
     usermod -aG audio "$USER" || true
+
+    # Releases up to 0.1.0 ran as kalusr, so an upgraded box has a state
+    # directory the new user cannot write. The renderer id lives in there and
+    # is how a server tells one renderer from another — losing it would strand
+    # the output selection against an id that never comes back.
+    if [ -d "$STATE_DIR" ]; then
+      chown -R "$USER:$USER" "$STATE_DIR"
+    fi
 
     systemctl daemon-reload
     systemctl enable "$UNIT_NAME"

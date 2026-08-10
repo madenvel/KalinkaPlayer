@@ -6,8 +6,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=kalusr
-Group=kalusr
+User=kalrndr
+Group=kalrndr
 SupplementaryGroups=audio
 # /var/lib/kalinka-renderer — where the renderer persists its stable id.
 StateDirectory=kalinka-renderer

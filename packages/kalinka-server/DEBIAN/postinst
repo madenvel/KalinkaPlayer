@@ -17,10 +17,23 @@ case "$1" in
     echo "[1/4] Ensure system user exists (nologin)"
     if ! id -u "$USER" >/dev/null 2>&1; then
       adduser --system --no-create-home --group --disabled-login "$USER"
-      usermod -aG audio "$USER" || true
     else
       usermod -s /usr/sbin/nologin "$USER" || true
-      usermod -aG audio "$USER" || true
+    fi
+
+    # No audio group: the server stopped opening sound devices when playback
+    # moved to the renderer, and the renderer now runs as its own user. Drop
+    # the membership older versions granted — unless a renderer old enough to
+    # still run as kalusr is installed here, which would lose its sound card
+    # the moment we did. Its own upgrade moves it off kalusr, and the next
+    # server upgrade finishes this.
+    RENDERER_UNIT=/usr/lib/systemd/system/kalinka-renderer.service
+    if id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx audio; then
+      if [ -f "$RENDERER_UNIT" ] && grep -q '^User=kalusr' "$RENDERER_UNIT"; then
+        echo "      leaving $USER in 'audio': kalinka-renderer still runs as $USER"
+      else
+        gpasswd -d "$USER" audio >/dev/null 2>&1 || true
+      fi
     fi
 
     echo "[2/4] Create install/config directories"

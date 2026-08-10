@@ -52,6 +52,18 @@ install -D -m 644 rpm/kalinka-server.sysusers %{buildroot}%{_sysusersdir}/kalink
 # Mirror the deb postinst: config dir locked to the service user, a world-
 # writable music drop-off (sticky, setgid — single-admin appliance), units
 # enabled and the server (re)started so an install is immediately live.
+# Mirrors the deb: the server no longer opens sound devices, so it gives up
+# the audio group older versions granted it. Held back while a renderer old
+# enough to still run as kalusr is installed, since that one would lose its
+# sound card with it.
+if id -nG kalusr 2>/dev/null | tr ' ' '\n' | grep -qx audio; then
+    if [ -f /usr/lib/systemd/system/kalinka-renderer.service ] && \
+       grep -q '^User=kalusr' /usr/lib/systemd/system/kalinka-renderer.service; then
+        :
+    else
+        gpasswd -d kalusr audio >/dev/null 2>&1 || :
+    fi
+fi
 install -d -m 0750 -o kalusr -g kalusr /etc/kalinka
 [ -d /srv/kalinka ] || install -d -m 0755 /srv/kalinka
 if [ ! -d /srv/kalinka/music ]; then

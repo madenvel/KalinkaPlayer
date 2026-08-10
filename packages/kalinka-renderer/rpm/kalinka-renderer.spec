@@ -49,6 +49,11 @@ install -D -m 644 rpm/kalinka-renderer.sysusers %{buildroot}%{_sysusersdir}/kali
 if [ $1 -eq 1 ]; then
     systemctl enable --now kalinka-renderer.service || :
 fi
+# Upgrading from a version that ran as kalusr: hand the state directory to
+# the renderer's own user, or it loses the id the server knows it by.
+if [ -d /var/lib/kalinka-renderer ]; then
+    chown -R kalrndr:kalrndr /var/lib/kalinka-renderer || :
+fi
 
 %preun
 %systemd_preun kalinka-renderer.service
