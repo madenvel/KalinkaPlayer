@@ -206,7 +206,7 @@ superseded stream's completions do nothing.
 
 A vendored DNS-SD browser watches `_kalinkaplayer._tcp` on port 5353 (no avahi
 or Bonjour daemon). A Core is reported only when its TXT carries a
-`renderer_proto` equal to the version this renderer speaks; a Core whose TXT
+`renderer_proto` inside the version range this renderer speaks; a Core whose TXT
 changes — an upgrade re-announcing, say — flips in or out, so a Core that would
 only reject the renderer is never dialled.
 
@@ -317,15 +317,20 @@ Optional — an implementation may be pointed at a Core by configuration. To
 discover: browse `_kalinkaplayer._tcp.local.` and read the `renderer_proto` TXT
 value, which is the protocol version that Core speaks. A Core without the key
 does not have the endpoint at all. Connect only when that version is one you
-speak; the reference renderer speaks exactly one, so it requires equality.
+speak — the reference renderer matches it against the range it offers in
+`Hello`, so a Core that moves ahead of it stops being dialled rather than being
+dialled and rejected.
 
 ### 4.3 Handshake
 
 1. On every link-up, send `Hello` **first**, before anything else. A second
    `Hello` on one connection is a protocol error and the Core will close.
-2. `Hello` must carry `protocol_versions` (the range you speak — the reference
-   sends `min == max == 1`), `renderer_id`, `instance_id`, `friendly_name`,
-   `software_version` and `kind`. `platform` is informational.
+2. `Hello` must carry `protocol_versions`, `renderer_id`, `instance_id`,
+   `friendly_name`, `software_version` and `kind`. `platform` is informational.
+   - `protocol_versions` is the range you speak, and the Core picks a version
+     inside it. Advertise every version you still handle, not only the newest:
+     the reference renderer sends the `kMin`/`kMax` pair from
+     `src/Protocol.h` — both 1 today.
    - `renderer_id` is **stable across restarts and upgrades** — it is how a
      Core tells one renderer from another. Persist it; mint one on first run.
    - `instance_id` is **fresh per process** — it is how a Core knows the

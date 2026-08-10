@@ -5,14 +5,20 @@
 # Downloads the .deb assets for a `kalinka-v*` GitHub release and installs them
 # with apt so system dependencies are pulled in automatically. Every package
 # in the bundle — server, plugins, SDK — is pure Python and arch-independent
-# (_all), so the same artifacts install on any machine. (Audio output lives in
-# the separately-released kalinka-renderer; see install-renderer.sh.)
+# (_all), so the same artifacts install on any machine.
 #
-# The browser player (kalinka-web) is released separately from the app repo;
-# its latest arch-independent package is fetched and installed too, so the
-# server can serve the player UI at its root URL. This is best-effort — the
-# server runs fine without it (and shows an install page), so a lookup failure
-# only warns.
+# Two pieces ship on their own release trains and are installed on top, each
+# best-effort so a lookup failure only warns:
+#
+#   * the browser player (kalinka-web), released from the app repo — the
+#     server serves it at its root URL, and shows an install page without it;
+#   * the renderer (kalinka-renderer), which is what actually plays audio, in
+#     per-arch packages picked by install-renderer.sh. Installing it here is
+#     what makes a plain install play sound through this machine's sound card;
+#     rendering boxes elsewhere on the network run that script themselves.
+#
+# Re-running the script upgrades whatever is already installed, which is how
+# the server's own auto-upgrade reaches all three.
 #
 # Usage:
 #   ./install-release.sh                 # install the latest kalinka-v* release
@@ -23,6 +29,9 @@
 #   KALINKA_REPO     owner/repo to pull the server release from (default: madenvel/KalinkaPlayer)
 #   KALINKA_WEB_REPO owner/repo for the kalinka-web package (default: madenvel/KalinkaAI)
 #   KALINKA_WEB      set to 0 to skip installing the browser player
+#   KALINKA_RENDERER set to 0 to skip installing the local renderer
+#   KALINKA_RENDERER_INSTALLER  URL of the renderer installer to use instead of
+#                    the published one (only needed to test an unmerged change)
 #   GITHUB_TOKEN     optional, only to avoid the 60-req/hr anonymous API limit
 #   NO_APT_UPDATE    set to 1 to skip `apt-get update` before installing
 #
@@ -32,6 +41,7 @@ set -euo pipefail
 
 REPO="${KALINKA_REPO:-madenvel/KalinkaPlayer}"
 API="https://api.github.com/repos/${REPO}/releases"
+RENDERER_INSTALLER="${KALINKA_RENDERER_INSTALLER:-https://raw.githubusercontent.com/$REPO/main/scripts/install-renderer.sh}"
 REQUEST="${1:-}"   # optional version or tag
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -188,13 +198,40 @@ if ! $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL"/*.deb; then
   $SUDO apt-get "${APT_OPTS[@]}" -f install -y
 fi
 
+# --- renderer -----------------------------------------------------------------
+# Runs after the bundle so a renderer that has no package for this platform
+# still leaves a working server behind.
+install_renderer() {
+  local script self
+  self="${BASH_SOURCE[0]:-}"
+  if [ -f "$self" ] && [ -r "$(dirname "$self")/install-renderer.sh" ]; then
+    # Run from a checkout: use the sibling script, not the published one.
+    script="$(cd "$(dirname "$self")" && pwd)/install-renderer.sh"
+  else
+    script="$TMPDIR_DL/install-renderer.sh"
+    download "$RENDERER_INSTALLER" "$script"
+  fi
+  KALINKA_REPO="$REPO" bash "$script"
+}
+
+if [ "${KALINKA_RENDERER:-1}" != "0" ]; then
+  echo
+  echo ">> Installing the renderer on this machine ..."
+  if ! install_renderer; then
+    echo ">> note: the renderer could not be installed — the server is up and" >&2
+    echo "   the browser player still plays audio in the browser. Install it" >&2
+    echo "   later with scripts/install-renderer.sh, or set KALINKA_RENDERER=0" >&2
+    echo "   to skip this step." >&2
+  fi
+fi
+
 # --- report -------------------------------------------------------------------
 echo
 echo ">> Installed:"
 if have dpkg-query; then
   for pkg in kalinka-server kalinka-plugin-sdk kalinka-plugin-localfiles \
              kalinka-plugin-musiccast kalinka-plugin-jamendo \
-             kalinka-plugin-dummydevice kalinka-web; do
+             kalinka-plugin-dummydevice kalinka-web kalinka-renderer; do
     dpkg-query -W -f='   ${Package} ${Version}\n' "$pkg" 2>/dev/null || true
   done
 fi

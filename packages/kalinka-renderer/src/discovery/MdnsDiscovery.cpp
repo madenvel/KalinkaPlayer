@@ -303,9 +303,8 @@ void MdnsDiscovery::drainSocket() {
         continue;  // capability not judgeable from this message
       }
       const auto proto = packet.rendererProto.find(instance);
-      const bool capable =
-          proto != packet.rendererProto.end() &&
-          proto->second == static_cast<int>(kRendererProtocolVersion);
+      const bool capable = proto != packet.rendererProto.end() &&
+                           rendererProtocolSupported(proto->second);
       const auto announced = cache_.announced(instance);
       if (announced.has_value() && *announced == capable) {
         continue;  // no change; the lifetime above is what this message added
@@ -320,8 +319,9 @@ void MdnsDiscovery::drainSocket() {
         } else {
           spdlog::info(
               "[Discovery] '{}' has no renderer support (renderer_proto "
-              "missing or != {}); will connect if it appears",
-              displayName(instance), kRendererProtocolVersion);
+              "missing or outside {}-{}); will connect if it appears",
+              displayName(instance), kMinRendererProtocolVersion,
+              kMaxRendererProtocolVersion);
         }
         continue;
       }

@@ -89,6 +89,13 @@ server release. Nothing to do here when cutting a server release.
    `install-release.sh`), which picks deb vs rpm and the right arch for
    the machine it runs on.
 
+   Publishing this release reaches existing installs on its own:
+   `install-release.sh` runs the renderer installer for the machine it is
+   on, and the server's update check watches this tag family, so a server
+   with auto-upgrade on picks up a renderer release without a `kalinka-v*`
+   release to carry it. Renderers on separate boxes still upgrade by
+   running the script there.
+
 2. The package version comes from the tag; the `VERSION` in
    `packages/kalinka-renderer/CMakeLists.txt` is only the dev-build fallback.
    Bump it to match the tag when convenient, not as a release step.

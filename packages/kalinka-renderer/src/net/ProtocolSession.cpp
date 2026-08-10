@@ -11,8 +11,6 @@
 namespace pb = kalinka::renderer::v1;
 
 namespace {
-constexpr uint32_t kProtocolVersion = kRendererProtocolVersion;
-
 int64_t nowUnixMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -59,8 +57,8 @@ void ProtocolSession::bind(Wire wire) { wire_ = std::move(wire); }
 void ProtocolSession::onUp() {
   pb::Envelope env;
   pb::Hello *hello = env.mutable_hello();
-  hello->mutable_protocol_versions()->set_min(kProtocolVersion);
-  hello->mutable_protocol_versions()->set_max(kProtocolVersion);
+  hello->mutable_protocol_versions()->set_min(kMinRendererProtocolVersion);
+  hello->mutable_protocol_versions()->set_max(kMaxRendererProtocolVersion);
   hello->set_renderer_id(identity_.rendererId);
   hello->set_instance_id(identity_.instanceId);
   hello->set_friendly_name(friendlyName_);
