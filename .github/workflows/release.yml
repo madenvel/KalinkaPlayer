@@ -87,8 +87,12 @@ jobs:
   rpm:
     name: Build (rpm)
     runs-on: ubuntu-24.04
+    # Not fedora:45 — that tag is rawhide, and its Python runs ahead of the
+    # wheels the build needs: pydantic-core has no cp315 build, so pip falls
+    # back to compiling it from source and wants a Rust and C toolchain this
+    # job has no business carrying. A released Fedora has wheels.
     container:
-      image: fedora:45
+      image: fedora:44
     steps:
       - name: Install build dependencies
         run: |
