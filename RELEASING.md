@@ -82,7 +82,7 @@ server release. Nothing to do here when cutting a server release.
    git push origin kalinka-renderer-v0.1.0
    ```
    The `renderer-release.yml` workflow builds the debs (arm64 Debian 13,
-   amd64 Ubuntu 24.04), the Fedora 45 RPMs (both arches) and the flatpak
+   amd64 Ubuntu 24.04), the Fedora 44 RPMs (both arches) and the flatpak
    bundles, and publishes them to the tag's own release — never marked
    "latest" (that slot belongs to `kalinka-v*`). Users install with
    `scripts/install-renderer.sh` (served from `main`, like

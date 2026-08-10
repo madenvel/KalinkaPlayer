@@ -9,7 +9,7 @@ name: Renderer release
 # Formats:
 #   * .deb  — arm64 on debian:trixie (Raspberry Pi OS / Debian 13),
 #             amd64 on ubuntu:24.04
-#   * .rpm  — Fedora 45, amd64 + arm64
+#   * .rpm  — Fedora 44, amd64 + arm64
 #   * .flatpak — freedesktop 24.08 bundle, x86_64 + aarch64 (best-effort,
 #             never blocks the release)
 
@@ -51,8 +51,11 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
+          # pkg-config: CMakeLists' FindPkgConfig call needs it, and
+          # ubuntu:24.04 does not pull it in with --no-install-recommends
+          # (debian:trixie does, which is why only amd64 ever noticed).
           apt-get install -y --no-install-recommends \
-            build-essential make git ca-certificates dpkg-dev cmake \
+            build-essential make git ca-certificates dpkg-dev cmake pkg-config \
             libboost-dev libcurlpp-dev libcurl4-openssl-dev libflac++-dev \
             libasound2-dev libspdlog-dev libfmt-dev \
             protobuf-compiler libprotobuf-dev
@@ -86,8 +89,11 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    # Not fedora:45 — that tag is rawhide, and it moved to protobuf 6.x, whose
+    # generated C++ this source does not compile against. A released Fedora
+    # keeps the toolchain still and the .fc44 dist tag is what the rpm carries.
     container:
-      image: fedora:45
+      image: fedora:44
     steps:
       - name: Install build dependencies
         run: |
@@ -186,15 +192,26 @@ jobs:
           **Manual install — Debian 13 / Raspberry Pi OS (arm64) or Ubuntu 24.04 (amd64):**
           download the matching \`.deb\` and \`sudo apt install ./kalinka-renderer-*.deb\`.
 
-          **Fedora 45:** download the matching \`.rpm\` and \`sudo dnf install ./kalinka-renderer-*.rpm\`.
+          **Fedora:** download the matching \`.rpm\` and \`sudo dnf install ./kalinka-renderer-*.rpm\`.
 
           The deb/rpm install a systemd service that starts immediately and on
           every boot.
+          EOF
+
+          # The flatpak job is best-effort, so only promise a bundle that is
+          # actually here — release notes describing a missing asset are worse
+          # than notes that stay quiet about it.
+          if ls release/*.flatpak >/dev/null 2>&1; then
+            cat >> notes.md <<EOF
 
           **Flatpak (any distro):** \`flatpak install ./kalinka-renderer-<arch>.flatpak\`,
           then \`flatpak run io.github.madenvel.KalinkaRenderer\`. Flatpak cannot
           register a system service — see \`packages/kalinka-renderer/flatpak/README.md\`
           for the systemd user unit.
+          EOF
+          fi
+
+          cat >> notes.md <<EOF
 
           Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`.
           EOF
