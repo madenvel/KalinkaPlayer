@@ -91,13 +91,6 @@ class TestTowerLoading:
         assert worker._clap.text_loaded is True
         assert worker._clap.audio_loaded is True
 
-    def test_disabled_clap_version_skips_load(self):
-        worker = _make_worker()
-        worker.config.embedder.clap.current_version = 0
-        with _patch_deps():
-            assert worker._ensure_text_model() is False
-            assert worker._ensure_audio_model() is False
-
 
 class TestAudioIdleUnload:
     def test_unloads_after_idle_timeout(self):

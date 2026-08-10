@@ -64,23 +64,20 @@ def test_default_plugin_base_returns_empty():
     assert asyncio.run(_Stub().required_packages()) == []
 
 
-def test_returns_empty_when_no_subfeatures_need_packages(monkeypatch):
-    """Searcher and embedder both disabled → nothing to install."""
+def test_returns_empty_when_ai_search_is_off(monkeypatch):
+    """AI search off → nothing to install."""
     cfg = LocalFilesConfig()
-    cfg.searcher.enabled = False
-    cfg.embedder.enabled = False
+    cfg.ai_search.enabled = False
     _set_importable(monkeypatch, set())  # nothing installed
 
     plugin = _plugin_with(cfg)
     assert asyncio.run(plugin.required_packages()) == []
 
 
-def test_returns_empty_when_subfeatures_enabled_and_deps_present(monkeypatch):
-    """Even with searcher + embedder on, no install is queued when the
-    imports already resolve."""
+def test_returns_empty_when_ai_search_on_and_deps_present(monkeypatch):
+    """No install is queued when the imports already resolve."""
     cfg = LocalFilesConfig()
-    cfg.searcher.enabled = True
-    cfg.embedder.enabled = True
+    cfg.ai_search.enabled = True
     _set_importable(
         monkeypatch,
         {"numpy", "onnxruntime", "soundfile", "soxr", "tokenizers"},
@@ -90,46 +87,19 @@ def test_returns_empty_when_subfeatures_enabled_and_deps_present(monkeypatch):
     assert asyncio.run(plugin.required_packages()) == []
 
 
-def test_searcher_needs_numpy_alone(monkeypatch):
-    """Searcher's mood ranking leg only needs numpy."""
+def test_ai_search_pulls_full_clap_stack(monkeypatch):
+    """One flag covers indexing and querying, so it pulls both legs'
+    dependencies — numpy for mood ranking plus the CLAP stack — and
+    lists the shared numpy once."""
     cfg = LocalFilesConfig()
-    cfg.searcher.enabled = True
-    cfg.embedder.enabled = False
-    _set_importable(monkeypatch, set())
-
-    plugin = _plugin_with(cfg)
-    assert asyncio.run(plugin.required_packages()) == ["numpy"]
-
-
-def test_embedder_pulls_full_clap_stack(monkeypatch):
-    cfg = LocalFilesConfig()
-    cfg.searcher.enabled = False
-    cfg.embedder.enabled = True
-    _set_importable(monkeypatch, set())
-
-    plugin = _plugin_with(cfg)
-    result = asyncio.run(plugin.required_packages())
-    assert set(result) == {
-        "numpy", "onnxruntime", "soundfile", "soxr", "tokenizers"
-    }
-
-
-def test_searcher_plus_embedder_dedupes_numpy(monkeypatch):
-    """numpy is required by both subfeatures but only listed once."""
-    cfg = LocalFilesConfig()
-    cfg.searcher.enabled = True
-    cfg.embedder.enabled = True
+    cfg.ai_search.enabled = True
     _set_importable(monkeypatch, set())
 
     plugin = _plugin_with(cfg)
     result = asyncio.run(plugin.required_packages())
     assert result.count("numpy") == 1
     assert set(result) == {
-        "numpy",
-        "onnxruntime",
-        "soundfile",
-        "soxr",
-        "tokenizers",
+        "numpy", "onnxruntime", "soundfile", "soxr", "tokenizers"
     }
 
 
@@ -137,8 +107,7 @@ def test_partial_install_only_lists_missing(monkeypatch):
     """Packages already importable are filtered out; only the missing
     ones come back."""
     cfg = LocalFilesConfig()
-    cfg.embedder.enabled = True
-    cfg.searcher.enabled = False
+    cfg.ai_search.enabled = True
     # numpy + tokenizers installed; onnxruntime + soundfile + soxr are not.
     _set_importable(monkeypatch, {"numpy", "tokenizers"})
 

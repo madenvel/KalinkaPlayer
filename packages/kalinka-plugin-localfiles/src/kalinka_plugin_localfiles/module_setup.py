@@ -85,14 +85,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             widget="rich_text",
             value_type="str",
         ),
-        "searcher.status_view": DynamicFieldDecl(
-            section_id="searcher",
-            label="Status",
-            widget="rich_text",
-            value_type="str",
-        ),
-        "embedder.status_view": DynamicFieldDecl(
-            section_id="embedder",
+        "ai_search.status_view": DynamicFieldDecl(
+            section_id="ai_search",
             label="Status",
             widget="rich_text",
             value_type="str",
@@ -136,11 +130,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             "enricher": _SubfeatureBookkeeping(
                 title="Metadata enricher", required=False
             ),
-            "searcher": _SubfeatureBookkeeping(
-                title="Search", required=False
-            ),
-            "embedder": _SubfeatureBookkeeping(
-                title="CLAP embeddings", required=False
+            "ai_search": _SubfeatureBookkeeping(
+                title="AI search", required=False
             ),
         }
 
@@ -161,7 +152,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         # has already reset it (persist-first) before this boot, leaving the
         # armed value here for us to act on exactly once. Purge before any
         # worker opens the DB so the indexer rebuilds it from scratch.
-        if config.rescan_on_startup:
+        if config.rebuild_library:
             logger.warning(
                 "Rebuild requested — purging DB and artwork before scan."
             )
@@ -173,12 +164,20 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             expand_music_folders(config.music_folders),
         )
 
+        # The queues are the module's "is there a searcher?" test, so hand
+        # them over only when one will actually run: a request nobody reads
+        # blocks ai_search() for its full 30 s timeout.
+        search_queues = (
+            (self._search_request_queue, self._search_response_queue)
+            if config.ai_search.enabled
+            else (None, None)
+        )
+
         # The LocalFilesInputModule will use its own specialized DB
         self._inputmodule = LocalFilesInputModule(
             config,
             input_module_db,
-            self._search_request_queue,
-            self._search_response_queue,
+            *search_queues,
             media_server=self._media_server,
         )
 
@@ -221,23 +220,11 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         )
         self._librarian_proc.start()
 
-        # The embedder process must run when:
-        # 1. embedder.enabled — to compute CLAP audio/text embeddings, or
-        # 2. searcher needs KNN — to serve text-encode requests for search.
-        clap_version = config.embedder.clap.current_version
-        need_embedder = config.embedder.enabled or (
-            config.searcher.enabled and clap_version > 0
-        )
-
-        if config.searcher.enabled:
-            # Searcher owns tags + FTS + search; nudges embedder when tags are done.
-            # Text-encode queues let the searcher request CLAP encoding from
-            # the embedder process instead of loading the ~600 MB model itself.
-            text_encode_queues = (
-                (self._text_encode_request_queue, self._text_encode_response_queue)
-                if need_embedder
-                else (None, None)
-            )
+        # AI search is served by two processes: the searcher answers queries,
+        # the embedder indexes the library and encodes query text for the
+        # searcher over IPC, so only one process loads the ~600 MB CLAP model.
+        # Neither is useful alone, so one config flag starts both.
+        if config.ai_search.enabled:
             self._searcher_proc = multiprocessing.Process(
                 target=searcher.main,
                 args=(
@@ -247,14 +234,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                     self._search_response_queue,
                     self._searcher_nudge_queue,
                     self._embedder_nudge_queue,
-                    *text_encode_queues,
+                    self._text_encode_request_queue,
+                    self._text_encode_response_queue,
                 ),
             )
             self._searcher_proc.start()
 
-        if need_embedder:
-            # Embedder is CLAP-only; also serves text-encode requests for
-            # the searcher so only one process loads the CLAP model.
             self._embedder_proc = multiprocessing.Process(
                 target=embedder.main,
                 args=(
@@ -349,63 +334,48 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             enr.state = ModuleHealthState.READY
             enr.message = ""
 
-        # Searcher: the mood ranking leg needs numpy.
-        srch = self._subfeatures["searcher"]
-        if not config.searcher.enabled:
-            srch.state = ModuleHealthState.DISABLED
-            srch.message = "Disabled in configuration."
+        # AI search: the query and indexing halves report as one feature.
+        # CLAP needs numpy + onnxruntime + soundfile + soxr + tokenizers
+        # (soundfile/soxr replaced librosa).
+        ai = self._subfeatures["ai_search"]
+        if not config.ai_search.enabled:
+            ai.state = ModuleHealthState.DISABLED
+            ai.message = "Disabled in configuration."
         else:
-            missing: list[str] = []
-            if not _is_importable("numpy"):
-                missing.append("numpy")
+            missing = [
+                pkg
+                for pkg, import_name in (
+                    ("numpy", "numpy"),
+                    ("onnxruntime", "onnxruntime"),
+                    ("soundfile", "soundfile"),
+                    ("soxr", "soxr"),
+                    ("tokenizers", "tokenizers"),
+                )
+                if not _is_importable(import_name)
+            ]
+            dead = [
+                name
+                for name, proc in (
+                    ("Searcher", self._searcher_proc),
+                    ("Embedder", self._embedder_proc),
+                )
+                if proc is None or not proc.is_alive()
+            ]
             if missing:
-                srch.state = ModuleHealthState.ERROR
-                srch.message = (
-                    "Mood ranking unavailable. Missing package(s): "
+                ai.state = ModuleHealthState.ERROR
+                ai.message = (
+                    "AI search unavailable. Missing package(s): "
                     + ", ".join(f"`{m}`" for m in missing)
                     + ". Use **Restart with install** in the modules page to "
                     "fetch them."
                 )
-                srch.missing_packages = tuple(missing)
-            elif self._searcher_proc is None or not self._searcher_proc.is_alive():
-                srch.state = ModuleHealthState.ERROR
-                srch.message = "Searcher subprocess failed to start."
+                ai.missing_packages = tuple(missing)
+            elif dead:
+                ai.state = ModuleHealthState.ERROR
+                ai.message = f"Subprocess failed to start: {', '.join(dead)}."
             else:
-                srch.state = ModuleHealthState.READY
-                srch.message = ""
-
-        # Embedder: CLAP audio embedding needs numpy + onnxruntime +
-        # soundfile + soxr + tokenizers (soundfile/soxr replaced librosa).
-        emb = self._subfeatures["embedder"]
-        if not config.embedder.enabled:
-            emb.state = ModuleHealthState.DISABLED
-            emb.message = "Disabled in configuration."
-        else:
-            missing = []
-            for pkg, import_name in (
-                ("numpy", "numpy"),
-                ("onnxruntime", "onnxruntime"),
-                ("soundfile", "soundfile"),
-                ("soxr", "soxr"),
-                ("tokenizers", "tokenizers"),
-            ):
-                if not _is_importable(import_name):
-                    missing.append(pkg)
-            if missing:
-                emb.state = ModuleHealthState.ERROR
-                emb.message = (
-                    "CLAP audio embedding unavailable. Missing package(s): "
-                    + ", ".join(f"`{m}`" for m in missing)
-                    + ". Use **Restart with install** in the modules page to "
-                    "fetch them."
-                )
-                emb.missing_packages = tuple(missing)
-            elif self._embedder_proc is None or not self._embedder_proc.is_alive():
-                emb.state = ModuleHealthState.ERROR
-                emb.message = "Embedder subprocess failed to start."
-            else:
-                emb.state = ModuleHealthState.READY
-                emb.message = ""
+                ai.state = ModuleHealthState.READY
+                ai.message = ""
 
     # ------------------------------------------------------------------
     # SDK overrides
@@ -507,13 +477,9 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         if cfg.enricher.enabled and cfg.enricher.plugins.procedural_artwork.enabled:
             need("numpy", "numpy")
 
-        # Searcher: numpy for the mood ranking leg.
-        if cfg.searcher.enabled:
-            need("numpy", "numpy")
-
-        # Embedder CLAP pipeline: numpy + the CLAP-side deps
+        # AI search: numpy for mood ranking, plus the CLAP-side deps
         # (soundfile + soxr handle audio decode/resample, replacing librosa).
-        if cfg.embedder.enabled:
+        if cfg.ai_search.enabled:
             need("numpy", "numpy")
             need("onnxruntime", "onnxruntime")
             need("soundfile", "soundfile")

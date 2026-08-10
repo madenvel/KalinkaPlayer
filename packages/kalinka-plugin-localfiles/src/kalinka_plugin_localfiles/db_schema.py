@@ -614,7 +614,7 @@ async def _init_vec_tables(db_path: str) -> None:
     vec0 columns are typed. Legacy builds stored ``float[512]``; we now store
     ``int8[512]``. On a format mismatch (PRAGMA user_version) we drop the typed
     vec tables and clear the embedding blobs; the bumped
-    ``embedder.clap.current_version`` reschedules the jobs that recompute them.
+    ``CLAP_MODEL_VERSION`` reschedules the jobs that recompute them.
     Until they refill, a typed-mismatch MATCH raises and the search layer reads
     it as "no vector hits" — KNN search is empty but never crashes.
     """

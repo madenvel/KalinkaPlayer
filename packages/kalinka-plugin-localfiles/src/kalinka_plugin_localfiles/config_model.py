@@ -11,37 +11,8 @@ from kalinka_plugin_sdk.module_config import ModuleConfig
 # Mark a field "simple" only when it's mandatory or frequently changed.
 _SIMPLE: dict[str, Any] = {"importance": "simple"}
 
-
-class EmbedderClapConfig(BaseModel):
-    ckpt_path: str = Field(
-        default="",
-        title="Override model path",
-        # Expected contents: clap_audio_encoder.onnx, clap_text_encoder.onnx,
-        # clap_tokenizer.json.
-        description=(
-            "Folder containing a custom CLAP model. Leave empty to use the "
-            "standard model from the model directory."
-        ),
-        json_schema_extra={"widget": "path"},
-    )
-    current_version: int = Field(
-        # v4: float32 -> int8 vectors. Keys embedding_jobs.model_version to
-        # reschedule the embed jobs; independent of (and need not match)
-        # embedding_utils.CLAP_EMBED_FORMAT_VERSION, which handles the on-disk
-        # vec-table format. A stored-format change must bump both.
-        default=4,
-        title="Model version",
-        json_schema_extra={"help": "Increment to force re-embedding"},
-    )
-
-
-class AiSearchConfig(BaseModel):
-    max_results: int = Field(
-        default=20, title="Max results per entity type",
-    )
-    knn_candidates: int = Field(
-        default=50, title="KNN candidates before re-ranking",
-    )
+# Independent of the tier: what the app's first-run wizard asks for.
+_PROMPT: dict[str, Any] = {"setup": "prompt"}
 
 
 class MoodConfig(BaseModel):
@@ -52,9 +23,7 @@ class MoodConfig(BaseModel):
     CLAP models; on by default, degrades silently to pure CLAP if unavailable.
     """
 
-    enabled: bool = Field(
-        default=True, title="Enable mood ranking", json_schema_extra=_SIMPLE,
-    )
+    enabled: bool = Field(default=True, title="Enable mood ranking")
     weight: float = Field(
         default=0.6, ge=0.0, le=1.0, title="Mood weight",
         json_schema_extra={
@@ -102,26 +71,40 @@ class MoodConfig(BaseModel):
     )
 
 
-class SearcherConfig(BaseModel):
+class AiSearchConfig(BaseModel):
+    """Semantic search over the library.
+
+    Covers both halves of the feature — embedding the library into CLAP
+    vectors, and serving queries against them — because they are useless
+    apart: vectors nothing reads, or a query path with nothing to read.
+
+    BEST MATCH (literal name lookup) is not here; it lives server-side in
+    ``kalinka_server.SearchConfig``.
+    """
+
     enabled: bool = Field(
-        default=True, title="Enable searcher", json_schema_extra=_SIMPLE,
+        default=False,
+        title="Enable AI search",
+        json_schema_extra={
+            "help": (
+                "Search by mood, genre and how the music sounds rather than "
+                "by name. Costs about 500 MB of memory while the server runs "
+                "and around 750 MB while it indexes, plus hours of CPU to "
+                "index a large library the first time. Figures are "
+                "approximate and change with the model."
+            ),
+            **_SIMPLE,
+            **_PROMPT,
+        },
     )
-    mood: MoodConfig = Field(
-        default_factory=MoodConfig, title="Mood ranking"
+    max_results: int = Field(
+        default=20, title="Max results per entity type",
     )
     knn_candidate_limit: int = Field(
         default=50, title="Max KNN candidates before re-ranking",
     )
-    # BEST MATCH now lives server-side (kalinka_server.SearchConfig); the old
-    # best_match_* / suppress_ai_on_navigational fields were removed from here.
-
-
-class EmbedderConfig(BaseModel):
-    enabled: bool = Field(
-        default=False, title="Enable embedder", json_schema_extra=_SIMPLE,
-    )
-    batch_size_clap: int = Field(
-        default=4, title="CLAP audio embedding batch size",
+    audio_batch_size: int = Field(
+        default=4, title="Audio embedding batch size",
     )
     poll_interval_seconds: int = Field(
         default=300,
@@ -153,18 +136,24 @@ class EmbedderConfig(BaseModel):
         title="Model directory",
         json_schema_extra={"widget": "path"},
     )
-    clap: EmbedderClapConfig = Field(
-        default_factory=EmbedderClapConfig, title="CLAP audio embedding"
+    custom_model_dir: str = Field(
+        default="",
+        title="Override model path",
+        # Expected contents: clap_audio_encoder.onnx, clap_text_encoder.onnx,
+        # clap_tokenizer.json.
+        description=(
+            "Folder containing a custom CLAP model. Leave empty to use the "
+            "standard model from the model directory."
+        ),
+        json_schema_extra={"widget": "path"},
     )
-    ai_search: AiSearchConfig = Field(
-        default_factory=AiSearchConfig, title="AI search"
+    mood: MoodConfig = Field(
+        default_factory=MoodConfig, title="Mood ranking"
     )
 
 
 class MusicBrainzConfig(BaseModel):
-    enabled: bool = Field(
-        default=True, title="Enable MusicBrainz", json_schema_extra=_SIMPLE,
-    )
+    enabled: bool = Field(default=True, title="Enable MusicBrainz")
     artist_threshold: int = Field(
         default=90, title="Artist match threshold", ge=0, le=100,
         json_schema_extra={"constraints": {"unit": "%"}},
@@ -186,9 +175,8 @@ class MusicBrainzConfig(BaseModel):
 
 
 class AcoustIDConfig(BaseModel):
-    enabled: bool = Field(
-        default=False, title="Enable AcoustID", json_schema_extra=_SIMPLE,
-    )
+    """Audio-fingerprint identification. Active exactly when a key is set."""
+
     api_key: str = Field(
         default="",
         title="AcoustID API key",
@@ -204,14 +192,23 @@ class AcoustIDConfig(BaseModel):
 
 
 class WikidataConfig(BaseModel):
-    enabled: bool = Field(
-        default=True, title="Enable Wikidata", json_schema_extra=_SIMPLE,
-    )
+    enabled: bool = Field(default=True, title="Enable Wikidata")
 
 
 class DeezerConfig(BaseModel):
+    enabled: bool = Field(default=True, title="Enable Deezer")
+
+
+class FilesystemConfig(BaseModel):
     enabled: bool = Field(
-        default=True, title="Enable Deezer", json_schema_extra=_SIMPLE,
+        default=True,
+        title="Use file name/path for enrichment",
+        json_schema_extra={
+            "help": (
+                "Last-resort metadata for files no online source could "
+                "identify — off means they stay untitled"
+            ),
+        },
     )
 
 
@@ -240,10 +237,8 @@ class PluginsConfig(BaseModel):
     procedural_artwork: ProceduralArtworkConfig = Field(
         default_factory=ProceduralArtworkConfig, title="Generated album art"
     )
-    filesystem_fallback_enabled: bool = Field(
-        default=True,
-        title="Use file name/path for enrichment",
-        json_schema_extra=_SIMPLE,
+    filesystem: FilesystemConfig = Field(
+        default_factory=FilesystemConfig, title="File name fallback"
     )
 
     user_agent: str = Field(
@@ -278,7 +273,7 @@ class LocalFilesConfig(ModuleConfig):
         # /home (kalusr has none) nor the kalusr-only state dir. See media_dir().
         default_factory=lambda: [paths.media_dir()],
         title="Music folders",
-        json_schema_extra={"widget": "folder_list", **_SIMPLE},
+        json_schema_extra={"widget": "folder_list", **_SIMPLE, **_PROMPT},
     )
     db_path: str = Field(
         default_factory=lambda: os.path.join(paths.state_dir(), "localfiles.db"),
@@ -298,7 +293,7 @@ class LocalFilesConfig(ModuleConfig):
     file_watch_enabled: bool = Field(
         default=True,
         title="Enable file watching",
-        json_schema_extra={"help": "Rescan on filesystem changes", **_SIMPLE},
+        json_schema_extra={"help": "Rescan on filesystem changes"},
     )
     folder_first_clustering: bool = Field(
         default=True,
@@ -310,7 +305,7 @@ class LocalFilesConfig(ModuleConfig):
                 "longer fragment an album. Re-clusters the library on the next "
                 "scan."
             ),
-            **_SIMPLE,
+            **_PROMPT,
         },
     )
     quiescence_seconds: int = Field(
@@ -327,7 +322,7 @@ class LocalFilesConfig(ModuleConfig):
     enricher: EnricherConfig = Field(
         default_factory=EnricherConfig, title="Enricher"
     )
-    rescan_on_startup: bool = Field(
+    rebuild_library: bool = Field(
         default=False,
         title="Rebuild library on next restart",
         json_schema_extra={
@@ -341,9 +336,6 @@ class LocalFilesConfig(ModuleConfig):
             **_SIMPLE,
         },
     )
-    searcher: SearcherConfig = Field(
-        default_factory=SearcherConfig, title="Searcher"
-    )
-    embedder: EmbedderConfig = Field(
-        default_factory=EmbedderConfig, title="Embedder (AI search)"
+    ai_search: AiSearchConfig = Field(
+        default_factory=AiSearchConfig, title="AI search"
     )

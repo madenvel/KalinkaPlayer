@@ -133,12 +133,15 @@ class LocalFilesInputModule(InputModule):
         if self._search_request_queue is None or self._search_response_queue is None:
             return EmptyList(offset, limit)
 
-        ai_cfg = self.config.embedder.ai_search
-        knn_limit = ai_cfg.knn_candidates
+        ai_cfg = self.config.ai_search
 
-        logger.info("ai_search: sending query %r (limit=%d)", query, knn_limit)
+        logger.info(
+            "ai_search: sending query %r (limit=%d)", query, ai_cfg.max_results
+        )
         async with self._search_lock:
-            self._search_request_queue.put({"query": query, "limit": knn_limit})
+            self._search_request_queue.put(
+                {"query": query, "limit": ai_cfg.max_results}
+            )
             try:
                 ids: dict = await asyncio.get_event_loop().run_in_executor(
                     None,
@@ -148,7 +151,7 @@ class LocalFilesInputModule(InputModule):
                 logger.warning("ai_search: timed out waiting for searcher response")
                 return EmptyList(offset, limit)
 
-        track_ids = ids.get("tracks", [])[: ai_cfg.max_results]
+        track_ids = ids.get("tracks", [])
         logger.info("ai_search: response — %d tracks", len(track_ids))
         if not track_ids:
             return EmptyList(offset, limit)
@@ -1288,12 +1291,11 @@ class LocalFilesInputModule(InputModule):
             except Exception as e:
                 logger.warning("get_indexer_status: enrichment failed: %s", e)
 
-        # Only when embedding jobs actually drain: with embedder.enabled
-        # off the worker exits before its job loop (even in text-encode-only
-        # mode), so leftover jobs would report as pending forever — a
-        # never-finishing "Preparing AI search" stage that also blocks
-        # suggestion attestation.
-        if self.config.embedder.enabled:
+        # Only when embedding jobs actually drain: with AI search off there
+        # is no embedder at all, so leftover jobs would report as pending
+        # forever — a never-finishing "Preparing AI search" stage that also
+        # blocks suggestion attestation.
+        if self.config.ai_search.enabled:
             try:
                 result.update(
                     await AsyncEmbedderDb(self.config).get_embedding_coverage()

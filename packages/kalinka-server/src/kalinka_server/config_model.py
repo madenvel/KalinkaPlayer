@@ -6,6 +6,7 @@ recognized by the presentation emitter:
     widget       — one of the values of presentation_schema.Widget
     help         — inline sublabel / help text shown under the label
     importance   — "simple" | "expert" (default: "expert")
+    setup        — "required" | "prompt" | "hidden" (default: "hidden")
     constraints  — dict with slider_min/slider_max/step/unit (merges with
                    Pydantic's own ge/le/etc.)
 
@@ -18,6 +19,12 @@ An ``importance`` on a KalinkaConfig member tags the whole *section*
 instead, where the default is the other way round: a section shows up as
 soon as one of its fields is simple, and ``"expert"`` hides the group
 whatever its fields say.
+
+``setup`` is a separate axis and says nothing about the tier: it is what
+the app's first-run wizard asks for. Tag a field ``"required"`` when the
+owning module cannot work without an answer (such a field must default
+to empty), ``"prompt"`` when the default works but the choice is worth
+making early. Everything else stays hidden from the wizard.
 
 The General page is the sections below in declaration order, each named
 by its ``title``, so field order here is the order the app renders.
@@ -34,6 +41,7 @@ from kalinka_plugin_sdk import paths
 
 # Shared extras — keeps audit-tagging consistent across the file.
 _SIMPLE: dict[str, Any] = {"importance": "simple"}
+_PROMPT: dict[str, Any] = {"setup": "prompt"}
 
 # On a section, "expert" hides the group even if a field below turns simple.
 _EXPERT_SECTION: dict[str, Any] = {"importance": "expert"}
@@ -60,6 +68,7 @@ class ServerConfig(BaseModel):
         json_schema_extra={
             "help": "How this server appears in the app when found on your network",
             **_SIMPLE,
+            **_PROMPT,
         },
     )
     interface: str = Field(

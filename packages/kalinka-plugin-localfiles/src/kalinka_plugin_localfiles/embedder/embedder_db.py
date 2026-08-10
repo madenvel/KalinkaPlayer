@@ -133,9 +133,6 @@ class AsyncEmbedderDb:
 
         Returns total jobs inserted.
         """
-        if clap_version <= 0:
-            return 0
-
         inserted = 0
 
         async with self._open() as conn:

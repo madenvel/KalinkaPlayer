@@ -15,6 +15,12 @@ from __future__ import annotations
 CLAP_INT8_CAP = 0.25
 CLAP_INT8_SCALE = 127.0 / CLAP_INT8_CAP
 
+# CLAP model generation. Keys embedding_jobs.model_version, so bumping it
+# reschedules every embed job. Independent of (and need not match)
+# CLAP_EMBED_FORMAT_VERSION below, which governs the on-disk vector format;
+# a stored-format change must bump both. v4: float32 -> int8 vectors.
+CLAP_MODEL_VERSION = 4
+
 # Stored CLAP vector format, recorded in PRAGMA user_version. On a mismatch the
 # schema layer rebuilds the typed vec0 tables and clears embedding blobs so the
 # embedder recomputes them. 0/unset = legacy float32; 2 = int8 symmetric.

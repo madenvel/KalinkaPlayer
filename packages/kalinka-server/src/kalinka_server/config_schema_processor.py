@@ -19,6 +19,11 @@ The default tier for a field that doesn't declare ``importance`` is EXPERT.
 Anything user-facing must opt in explicitly via
 ``Field(json_schema_extra={"importance": "simple"})``.
 
+A second, independent tag drives the app's first-run wizard:
+``Field(json_schema_extra={"setup": "required" | "prompt"})``, defaulting
+to ``hidden``. It rides on every emitted FieldSpec and does not move a
+field between the simple and expert views.
+
 A monotonic ``schema_version`` string lets the client detect staleness
 after plugin reloads.
 """
@@ -48,6 +53,7 @@ from .presentation_schema import (
     PageSpec,
     PresentationSchema,
     SectionSpec,
+    Setup,
     Severity,
     Widget,
 )
@@ -178,6 +184,43 @@ def _importance_from_extras(
         return default
 
 
+def _setup_from_extras(extras: dict[str, Any]) -> Setup:
+    """Resolve the first-run tag, defaulting to HIDDEN when untagged.
+
+    Independent of ``importance``: setup asks *when the app collects a
+    value*, importance asks *where it sits in the settings screen*.
+    """
+    hint = extras.get("setup")
+    if hint is None:
+        return Setup.HIDDEN
+    try:
+        return Setup(hint)
+    except ValueError:
+        logger.warning("Unknown setup %r; defaulting to hidden", hint)
+        return Setup.HIDDEN
+
+
+def _warn_if_required_has_default(path: str, field: FieldInfo) -> None:
+    """A REQUIRED field must start empty — the wizard reads "still unset"
+    off the value itself, so a usable default would report the module as
+    configured before the user has supplied anything."""
+    if field.is_required():
+        return
+    try:
+        default = field.get_default(call_default_factory=True)
+    except ValueError:
+        # Factory wants the other fields' values; a diagnostic isn't worth
+        # building them.
+        return
+    if default:
+        logger.warning(
+            "Field %s is tagged setup=required but defaults to %r; a "
+            "required field must default to the empty value for its type",
+            path,
+            default,
+        )
+
+
 def _enum_values(field: FieldInfo) -> list[str] | None:
     ann = _unwrap_optional(field.annotation)
     if isinstance(ann, type) and issubclass(ann, Enum):
@@ -204,6 +247,9 @@ def _build_field_spec(
         raise ValueError(f"_build_field_spec called on section {field_name}")
 
     extras = _json_extra(field)
+    setup = _setup_from_extras(extras)
+    if setup is Setup.REQUIRED:
+        _warn_if_required_has_default(path, field)
     return FieldSpec(
         path=path,
         label=field.title or field_name,
@@ -213,6 +259,7 @@ def _build_field_spec(
         default=field.default if field.default is not None else None,
         readonly=bool(field.frozen),
         importance=_importance_from_extras(extras),
+        setup=setup,
         enum_values=_enum_values(field) if wire_type == "enum" else None,
         constraints=_extract_constraints(field, extras),
     )

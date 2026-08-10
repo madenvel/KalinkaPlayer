@@ -1,5 +1,6 @@
 """Tests for CLAP text-encoding IPC between searcher and embedder."""
 
+import asyncio
 import multiprocessing
 import queue
 import threading
@@ -10,6 +11,10 @@ import pytest
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.searcher.searcher import SearchWorker
 from kalinka_plugin_localfiles.searcher.searcher_db import AsyncSearcherDb
+
+
+async def _async_noop(*args, **kwargs):
+    return None
 
 
 def _make_config(**overrides) -> LocalFilesConfig:
@@ -118,37 +123,64 @@ class TestSearchWorkerKnnLegAvailability:
         assert result == []
 
 
-class TestModuleSetupEmbedderLifecycle:
-    """Embedder process starts when searcher needs KNN."""
+class TestAiSearchIsOneSwitch:
+    """The index and the query path cannot be enabled apart."""
 
-    def test_embedder_starts_when_clap_version_positive(self):
-        """If searcher.enabled and clap version > 0, embedder must start."""
-        config = _make_config()
-        # Default: searcher.enabled=True, embedder.enabled=False, clap.current_version=1
-        clap_version = config.embedder.clap.current_version
-        need_embedder = config.embedder.enabled or (
-            config.searcher.enabled and clap_version > 0
-        )
-        assert need_embedder is True
+    def test_disabled_by_default(self):
+        assert _make_config().ai_search.enabled is False
 
-    def test_embedder_not_needed_when_clap_version_zero(self):
-        """If CLAP version is 0 and embedder disabled, no embedder needed."""
+    def test_single_flag_gates_both_halves(self):
+        """Both subprocesses read one flag, so neither can run alone —
+        vectors nothing reads and a query path with nothing to read were
+        both reachable when this was two settings."""
+        config = _make_config(ai_search={"enabled": True})
+        assert config.ai_search.enabled is True
+        assert not hasattr(config, "searcher")
+        assert not hasattr(config, "embedder")
+
+
+class TestSearchQueueWiring:
+    """The input module gets search queues only when a searcher reads them."""
+
+    @staticmethod
+    def _queues_passed_with(ai_search_enabled: bool, tmp_path):
+        """Run setup() with the subprocess/DB machinery stubbed out and
+        report the (request, response) queues handed to the input module."""
+        from kalinka_plugin_localfiles import module_setup
+
         config = _make_config(
-            embedder={"enabled": False, "clap": {"current_version": 0}}
+            ai_search={"enabled": ai_search_enabled},
+            db_path=str(tmp_path / "lf.db"),
+            artwork_path=str(tmp_path / "art"),
+            music_folders=[str(tmp_path)],
         )
-        clap_version = config.embedder.clap.current_version
-        need_embedder = config.embedder.enabled or (
-            config.searcher.enabled and clap_version > 0
-        )
-        assert need_embedder is False
+        captured = {}
 
-    def test_embedder_starts_when_explicitly_enabled(self):
-        """If embedder.enabled is True, it starts regardless of clap version."""
-        config = _make_config(
-            embedder={"enabled": True, "clap": {"current_version": 0}}
-        )
-        clap_version = config.embedder.clap.current_version
-        need_embedder = config.embedder.enabled or (
-            config.searcher.enabled and clap_version > 0
-        )
-        assert need_embedder is True
+        def fake_module(cfg, db, req=None, resp=None, media_server=None):
+            captured["queues"] = (req, resp)
+            return Mock()
+
+        media_server = Mock()
+        media_server.start = _async_noop
+
+        with patch.object(module_setup, "LocalFilesInputModule", fake_module), \
+                patch.object(module_setup, "init_db", _async_noop), \
+                patch.object(module_setup, "MediaHttpServer", lambda *a: media_server), \
+                patch.object(module_setup.multiprocessing, "Process", Mock()), \
+                patch.object(
+                    module_setup.KalinkaPluginLocalFiles,
+                    "_evaluate_subfeatures",
+                    _async_noop,
+                ):
+            plugin = module_setup.KalinkaPluginLocalFiles()
+            asyncio.run(plugin.setup(Mock(config=config)))
+            plugin._log_listener.stop()
+        return captured["queues"]
+
+    def test_no_queues_when_ai_search_disabled(self, tmp_path):
+        """A request nobody reads would block ai_search() for the full 30 s
+        IPC timeout, stalling the whole assembled search response."""
+        assert self._queues_passed_with(False, tmp_path) == (None, None)
+
+    def test_queues_wired_when_ai_search_enabled(self, tmp_path):
+        assert all(q is not None for q in self._queues_passed_with(True, tmp_path))

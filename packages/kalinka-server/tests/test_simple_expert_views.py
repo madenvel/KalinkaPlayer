@@ -131,8 +131,9 @@ def test_simple_view_includes_simple_fields_and_excludes_expert():
     assert "base_config.server.oobe_complete" not in paths
     assert "base_config.server.log_level" not in paths
     assert "input_modules.localfiles.db_path" not in paths
-    assert "input_modules.localfiles.searcher.weight_knn" not in paths
-    assert "input_modules.localfiles.embedder.batch_size_clap" not in paths
+    assert "input_modules.localfiles.ai_search.knn_candidate_limit" not in paths
+    assert "input_modules.localfiles.ai_search.audio_batch_size" not in paths
+    assert "input_modules.localfiles.ai_search.mood.enabled" not in paths
 
 
 def test_kalinka_expert_section_dropped_from_simple_view():
@@ -270,7 +271,7 @@ def test_expert_list_includes_both_simple_and_expert_fields():
     # The app-written first-run flag stays expert-only but settable:
     assert "base_config.server.oobe_complete" in paths
     # Nested expert leaves:
-    assert "input_modules.localfiles.searcher.knn_candidate_limit" in paths
+    assert "input_modules.localfiles.ai_search.knn_candidate_limit" in paths
 
 
 def test_expert_list_is_sorted_by_path():
@@ -347,7 +348,7 @@ def test_expert_list_excludes_dynamic_fields():
     )
     expert_paths = {f.path for f in schema.expert_fields}
     assert (
-        "input_modules.localfiles.searcher.status_view" not in expert_paths
+        "input_modules.localfiles.ai_search.status_view" not in expert_paths
     ), "dynamic fields must not appear in the expert/about:config list"
 
 

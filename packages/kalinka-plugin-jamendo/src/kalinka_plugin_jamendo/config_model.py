@@ -55,7 +55,11 @@ class JamendoConfig(ModuleConfig):
             "[Jamendo Dev Portal](https://devportal.jamendo.com), then "
             "paste the application's Client ID here."
         ),
-        json_schema_extra={"widget": "password", "importance": "simple"},
+        json_schema_extra={
+            "widget": "password",
+            "importance": "simple",
+            "setup": "required",
+        },
     )
     audio_format: JamendoAudioFormat = Field(
         default=JamendoAudioFormat.MP3_VBR,
@@ -64,7 +68,7 @@ class JamendoConfig(ModuleConfig):
             "Streaming format. FLAC is only available for tracks whose "
             "artist allowed lossless download and falls back to MP3 otherwise."
         ),
-        json_schema_extra={"importance": "simple"},
+        json_schema_extra={"importance": "simple", "setup": "prompt"},
     )
     ai_search_enabled: bool = Field(
         default=True,
@@ -74,7 +78,7 @@ class JamendoConfig(ModuleConfig):
             "melancholic for tonight\". The data it needs downloads "
             "automatically the first time."
         ),
-        json_schema_extra={"importance": "simple"},
+        json_schema_extra={"importance": "simple", "setup": "prompt"},
     )
     ai_index_path: str = Field(
         # Persistent state dir (<prefix>/var/lib/kalinka), same place CLAP models

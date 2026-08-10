@@ -92,13 +92,13 @@ class MetadataEnricher:
 
         # The order of plugins matters for the enrichment process
         # as the first one found a match will be used
-        if config.enricher.plugins.acoustid.enabled:
+        if config.enricher.plugins.acoustid.api_key:
             logger.info("Loading AcoustIdPlugin")
             self.plugins.append(AcoustIdPlugin(config, self.db_manager))
 
-        # Filesystem fallback plugin - always enabled and runs last
-        # This provides basic metadata extraction from file paths when other plugins fail
-        if config.enricher.plugins.filesystem_fallback_enabled:
+        # Runs early but claims little: it only fills what the online
+        # sources leave empty, so untagged files still get a title.
+        if config.enricher.plugins.filesystem.enabled:
             logger.info("Loading FilesystemFallbackPlugin")
             self.plugins.append(FilesystemFallbackPlugin(config, self.db_manager))
 
