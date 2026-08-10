@@ -57,8 +57,12 @@ jobs:
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # Not build-all-deb: that also builds the renderer, which needs a C++
+      # toolchain this container has no reason to carry and belongs to
+      # renderer-release.yml anyway — its packages are per-arch, and this job
+      # runs on one.
       - name: Build .deb packages
-        run: make build-all-deb
+        run: make kalinka-server-deb kalinka-plugins-deb copy-debs
 
       - name: Collect artifacts
         run: |
