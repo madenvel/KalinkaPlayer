@@ -194,10 +194,7 @@ Runs the SDK and server Python test suites. Most packages also include their own
 
 # Contributing
 
-1. Fork the repository and create a feature branch.
-2. Make changes with editable installs active so they take effect immediately.
-3. Run `make test` (and any package-specific tests for the area you touched).
-4. Open a pull request describing the change and which plugin or server area it affects.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to send a change, and for the project's disclosure on AI-assisted development.
 
 # Notes
 

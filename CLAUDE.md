@@ -9,6 +9,12 @@ explicit decision, and permission to commit is never permission to push.
 Committing locally is fine when asked for. When work is ready, say so and let
 the user decide whether it goes out.
 
+**No AI attribution footers.** Commit messages end at their last body
+paragraph and PR bodies at their last content section — no
+`Co-Authored-By: Claude`, no "Generated with Claude Code". AI use is disclosed
+at the repository level in [CONTRIBUTING.md](CONTRIBUTING.md), not per
+commit.
+
 ## Comments
 
 No AI slop. The default is **no comment**: code that needs a comment to be
