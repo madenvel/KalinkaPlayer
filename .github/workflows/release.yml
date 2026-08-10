@@ -164,21 +164,34 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-release.sh | sudo bash -s -- $VERSION
           \`\`\`
 
-          Downloads this release's packages and installs them with \`apt\` (drop the \`-s -- $VERSION\` to always get the latest release instead). All bundle packages are arch-independent (\`_all.deb\`) — the same artifacts install on any machine. It also pulls the browser player (\`kalinka-web\`) from the [app repo's latest release](https://github.com/madenvel/KalinkaAI/releases) — once installed, open \`http://<server-ip>:8000\` in any browser on your network to control playback.
+          Downloads this release's packages and installs them with \`apt\` (drop the \`-s -- $VERSION\` to always get the latest release instead). All bundle packages are arch-independent (\`_all.deb\`) — the same artifacts install on any machine. It also pulls the browser player (\`kalinka-web\`) from the [app repo's latest release](https://github.com/madenvel/KalinkaAI/releases) — once installed, open \`http://<server-ip>:8000\` in any browser on your network to control playback — and the renderer that plays the audio, on this same machine.
 
-          **Manual install:** download all the \`_all.deb\` packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. For the browser player, add \`kalinka-web_*_all.deb\` from the [app releases](https://github.com/madenvel/KalinkaAI/releases).
+          **Manual install:** download all the \`_all.deb\` packages, then run \`sudo apt install ./*.deb\` in the download directory. Verify downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. For the browser player, add \`kalinka-web_*_all.deb\` from the [app releases](https://github.com/madenvel/KalinkaAI/releases). A manual install installs no renderer, so that server has no audio output until you add one.
 
-          **Network renderer:** \`kalinka-renderer\` versions and releases separately — get the newest deb/rpm/flatpak from the [latest \`kalinka-renderer-v*\` release](https://github.com/$GITHUB_REPOSITORY/releases?q=kalinka-renderer-v&expanded=true).
+          **Renderers on other machines** run their own installer, which picks the package for that box:
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install-renderer.sh | sudo bash
+          \`\`\`
+
+          The renderer versions separately — see the [latest \`kalinka-renderer-v*\` release](https://github.com/$GITHUB_REPOSITORY/releases?q=kalinka-renderer-v&expanded=true).
           EOF
 
           # Commit list since the previous kalinka-v* tag (skipped for the
-          # first release ever).
+          # first release ever). Folded away: a release can carry eighty
+          # commit subjects, and a wall of them buries the install
+          # instructions above it. Highlights worth reading are written by
+          # hand afterwards — `gh release edit "$TAG" --notes-file`.
           PREV=$(git tag -l 'kalinka-v*' --sort=-v:refname | sed -n "/^${TAG}\$/{n;p}")
           if [ -n "$PREV" ]; then
             {
               echo
-              echo "## What's Changed"
+              echo "<details>"
+              echo "<summary>Full commit log since ${PREV#kalinka-v}</summary>"
+              echo
               git log --no-merges --pretty='* %s — %h' "$PREV..$TAG"
+              echo
+              echo "</details>"
               echo
               echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$PREV...$TAG"
             } >> notes.md
