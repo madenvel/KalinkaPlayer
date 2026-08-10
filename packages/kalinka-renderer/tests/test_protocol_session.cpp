@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "Protocol.h"
 #include "fakes.h"
 #include "net/ProtocolSession.h"
 #include "session/SessionManager.h"
@@ -90,8 +91,8 @@ TEST_F(ProtocolSessionTest, HelloGoesOutWhenTheLinkComesUp) {
   EXPECT_EQ(hello.renderer_id(), "rid-1");
   EXPECT_EQ(hello.instance_id(), "iid-1");
   EXPECT_EQ(hello.friendly_name(), "Unit Renderer");
-  EXPECT_EQ(hello.protocol_versions().min(), 1u);
-  EXPECT_EQ(hello.protocol_versions().max(), 1u);
+  EXPECT_EQ(hello.protocol_versions().min(), kMinRendererProtocolVersion);
+  EXPECT_EQ(hello.protocol_versions().max(), kMaxRendererProtocolVersion);
   EXPECT_TRUE(hello.active_session_id().empty());
 }
 
@@ -352,4 +353,20 @@ TEST_F(ProtocolSessionTest, GarbageIsDroppedWithoutSideEffects) {
 
   EXPECT_TRUE(wire.sent.empty());
   EXPECT_FALSE(wire.gaveUp);
+}
+
+TEST(RendererProtocolRange, SpansAtLeastOneVersion) {
+  EXPECT_LE(kMinRendererProtocolVersion, kMaxRendererProtocolVersion);
+}
+
+TEST(RendererProtocolRange, AcceptsEveryVersionInsideItAndNothingOutside) {
+  for (auto version = kMinRendererProtocolVersion;
+       version <= kMaxRendererProtocolVersion; ++version) {
+    EXPECT_TRUE(rendererProtocolSupported(static_cast<int>(version)))
+        << "refused a Core speaking " << version;
+  }
+  EXPECT_FALSE(rendererProtocolSupported(
+      static_cast<int>(kMinRendererProtocolVersion) - 1));
+  EXPECT_FALSE(rendererProtocolSupported(
+      static_cast<int>(kMaxRendererProtocolVersion) + 1));
 }

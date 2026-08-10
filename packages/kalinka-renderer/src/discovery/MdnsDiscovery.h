@@ -17,9 +17,10 @@
  * hears announcements and goodbyes, and answers to the periodic PTR queries
  * (doubling 1s -> 60s).
  *
- * Servers without a matching "renderer_proto" TXT value are never reported; a
- * TXT change — a server upgrade re-announcing, say — flips them in or out, so
- * servers that would only reject us are never bombarded with connections.
+ * Servers whose "renderer_proto" TXT value falls outside the range this binary
+ * speaks are never reported; a TXT change — a server upgrade re-announcing,
+ * say — flips them in or out, so servers that would only reject us are never
+ * bombarded with connections.
  *
  * A server is reported gone when it says goodbye, and also when it simply stops
  * answering: every answer restarts its lifetime in the DiscoveryCache, and one

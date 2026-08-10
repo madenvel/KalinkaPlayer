@@ -127,3 +127,7 @@ app bundle — and install with:
 ./scripts/install-renderer.sh          # latest
 ./scripts/install-renderer.sh 0.1.0    # a specific version
 ```
+
+The server's own installer runs that script for the machine it installs on, so
+a stock install already has a local renderer and upgrades it along with the
+server. Boxes that only render run the script themselves.

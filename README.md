@@ -62,9 +62,9 @@ Smart Search is opt-in per plugin, so you can enable it only where you want it.
 
 Audio is played by a **renderer**, not by the server itself, so gapless and bit-perfect behaviour depend on the renderer in use.
 
-The default renderer (`kalinka-renderer`, C++) targets Linux systems with ALSA and talks to the sound card directly. It plays FLAC & MP3 up to 192 kHz / 24-bit (the FLAC limit), supports gapless playback (consecutive tracks of the same format), and is **bit-perfect** where ALSA configuration permits\*: it does not alter the audio unless specifically instructed to — for example when software volume control is enabled.
+The default renderer (`kalinka-renderer`, C++) targets Linux systems with ALSA and talks to the sound card directly. It plays FLAC & MP3 up to 192 kHz / 24-bit (the FLAC limit), supports gapless playback (consecutive tracks of the same format), and is **bit-perfect** where ALSA configuration permits\*: it does not alter the audio unless specifically instructed to — for example when software volume control is enabled. It is installed alongside the server by default, and can also be installed on its own on any number of other machines (see [Installation](#installation)).
 
-In-browser playback through the web interface is also supported: open the server's address in a browser and play right there. It is a convenience path — no gapless playback at this point, and no bit-perfect guarantee, since audio goes through the browser's audio stack.
+In-browser playback through the web interface is also supported: open the server's address in a browser and play right there. The browser is a renderer in its own right here, so this needs nothing installed — it is a convenience path, though: no gapless playback at this point, and no bit-perfect guarantee, since audio goes through the browser's audio stack.
 
 # Architecture
 
@@ -98,6 +98,34 @@ The server exposes a REST API (FastAPI) plus WebSocket channels for live state. 
 | Live      | `WS /queue/ws`, `WS /device/ws`, plus SSE-style `GET /queue/events`, `GET /device/events` |
 
 # Installation
+
+## Quick install
+
+One command sets up a complete player on a Debian/Ubuntu/Raspberry Pi OS box:
+
+```bash
+curl -fsSL https://kalinkaplayer.com/install.sh | sudo bash
+```
+
+It installs the app bundle (server, plugins, SDK), the browser player (`kalinka-web`), and the renderer (`kalinka-renderer`) on that same machine — so audio plays through its sound card straight away — and both services start on boot. Re-running it upgrades everything that is already installed.
+
+Two environment variables opt out of the extras: `KALINKA_RENDERER=0` for a server that only drives renderers on other machines, and `KALINKA_WEB=0` to leave out the browser player. Note that the web player needs no renderer of its own: the browser *is* the output, so a server reached from a browser plays audio with nothing else installed.
+
+## Renderers on other machines
+
+The renderer bundled by the quick install plays through the machine the server runs on. To make another box an output — a Pi wired to an amplifier, say — install only the renderer there:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/madenvel/KalinkaPlayer/main/scripts/install-renderer.sh | sudo bash
+```
+
+It picks the right package for that machine (`.deb` on Debian/Ubuntu, `.rpm` on Fedora, per architecture) and starts the service; there is also a flatpak for other distributions, see [`packages/kalinka-renderer/flatpak/README.md`](packages/kalinka-renderer/flatpak/README.md). Renderers appear in the app's output list on their own — but only if they can hear the server: **discovery is mDNS**, so the renderer and the server must share a network segment where multicast to `224.0.0.251:5353` gets through. Wi-Fi access points with client isolation or multicast filtering, VLANs without an mDNS reflector and Docker's default bridge all block it; put both ends on the same subnet, or bridge mDNS across it. Once a renderer has found the server it connects out to it and fetches media over HTTP itself, so nothing else needs opening in the other direction.
+
+Renderers installed this way are upgraded by re-running that same command on their own machine.
+
+## Updating
+
+With `server.auto_upgrade` enabled the server checks the published releases hourly and upgrades itself during quiet hours while playback is stopped; otherwise the app offers the upgrade and you press the button. Either way it runs the same installer as above, so the server, the plugins, the browser player and the local renderer all move together — the renderer has its own release train (`kalinka-renderer-v*`) and version, and is upgraded whenever a newer one has been published.
 
 ## Debian Package
 Deb packages are provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section. The whole app bundle (server, plugins, SDK) is pure Python and arch-independent (`_all.deb`); only the renderer ships per-arch builds, from its own `kalinka-renderer-v*` releases.
@@ -138,6 +166,8 @@ sudo dpkg -i debs/kalinka-server_*.deb
 sudo dpkg -i debs/kalinka-plugin-*.deb
 sudo apt-get install -f   # install any missing dependencies
 ```
+The renderer is not part of that bundle — build and install it separately (`make renderer-deb`, then `sudo apt install ./packages/kalinka-renderer/kalinka-renderer-*.deb`) if this machine should play audio itself.
+
 At startup `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates `/opt/kalinka/venv` and pip-installs every wheel found under `/opt/kalinka/wheels/`. Plugins ship their wheel there and trigger a server restart, so they're picked up automatically (see [`docs/plugin-deb-packaging.md`](docs/plugin-deb-packaging.md)).
 
 #### Service management

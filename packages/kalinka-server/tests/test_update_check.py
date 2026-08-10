@@ -7,7 +7,11 @@ from datetime import datetime
 
 from kalinka_server import update_check
 from kalinka_server.update_check import (
+    _BUNDLE_TAG_PREFIX,
+    _RENDERER_TAG_PREFIX,
     UpdateChecker,
+    deb_is_newer,
+    installed_renderer_version,
     is_newer,
     latest_release_version,
     upgrade_supported,
@@ -29,21 +33,40 @@ def _feed(*tags):
     )
 
 
+class _FakeRun:
+    """Stands in for subprocess.run, recording the command it was given."""
+
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.commands = []
+
+    def __call__(self, cmd, **kwargs):
+        self.commands.append(cmd)
+        return self
+
+
 class TestLatestReleaseVersion:
     def test_picks_first_matching_release(self):
         feed = _feed("kalinka-v3.3.0", "kalinka-v3.2.0")
-        assert latest_release_version(feed) == "3.3.0"
+        assert latest_release_version(feed, _BUNDLE_TAG_PREFIX) == "3.3.0"
 
     def test_skips_foreign_tags(self):
         feed = _feed("jamendo-ai-v2", "kalinka-v3.3.0")
-        assert latest_release_version(feed) == "3.3.0"
+        assert latest_release_version(feed, _BUNDLE_TAG_PREFIX) == "3.3.0"
+
+    def test_renderer_and_bundle_trains_do_not_shadow_each_other(self):
+        feed = _feed("kalinka-renderer-v0.2.0", "kalinka-v3.3.0")
+        assert latest_release_version(feed, _BUNDLE_TAG_PREFIX) == "3.3.0"
+        assert latest_release_version(feed, _RENDERER_TAG_PREFIX) == "0.2.0"
 
     def test_none_when_no_matching_release(self):
-        assert latest_release_version(_feed("jamendo-ai-v1")) is None
-        assert latest_release_version(_feed()) is None
+        foreign = _feed("jamendo-ai-v1")
+        assert latest_release_version(foreign, _BUNDLE_TAG_PREFIX) is None
+        assert latest_release_version(_feed(), _BUNDLE_TAG_PREFIX) is None
 
     def test_none_on_malformed_feed(self):
-        assert latest_release_version("<html>not a feed") is None
+        assert latest_release_version("<html>not a feed", _BUNDLE_TAG_PREFIX) is None
 
 
 class TestIsNewer:
@@ -63,6 +86,59 @@ class TestIsNewer:
     def test_invalid_versions_are_not_newer(self):
         assert not is_newer("not-a-version", "3.2.0")
         assert not is_newer("3.3.0", "not-a-version")
+
+
+class TestInstalledRendererVersion:
+    def test_reports_the_installed_package_version(self, monkeypatch):
+        run = _FakeRun(stdout="0.2.0\n")
+        monkeypatch.setattr(update_check.subprocess, "run", run)
+        assert installed_renderer_version() == "0.2.0"
+        assert run.commands[0][:2] == ["dpkg-query", "-W"]
+
+    def test_none_when_the_package_is_not_installed(self, monkeypatch):
+        monkeypatch.setattr(
+            update_check.subprocess, "run", _FakeRun(returncode=1)
+        )
+        assert installed_renderer_version() is None
+
+    def test_none_when_a_known_package_has_no_version(self, monkeypatch):
+        # dpkg-query succeeds with an empty Version for a purged package.
+        monkeypatch.setattr(update_check.subprocess, "run", _FakeRun(stdout=""))
+        assert installed_renderer_version() is None
+
+    def test_none_without_dpkg(self, monkeypatch):
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("dpkg-query")
+
+        monkeypatch.setattr(update_check.subprocess, "run", missing)
+        assert installed_renderer_version() is None
+
+
+class TestDebIsNewer:
+    def test_asks_dpkg_and_reads_its_verdict(self, monkeypatch):
+        run = _FakeRun(returncode=0)
+        monkeypatch.setattr(update_check.subprocess, "run", run)
+        assert deb_is_newer("0.2.0", "0.1.0")
+        assert run.commands[0] == [
+            "dpkg",
+            "--compare-versions",
+            "0.2.0",
+            "gt",
+            "0.1.0",
+        ]
+
+    def test_not_newer_when_dpkg_says_no(self, monkeypatch):
+        monkeypatch.setattr(
+            update_check.subprocess, "run", _FakeRun(returncode=1)
+        )
+        assert not deb_is_newer("0.1.0", "0.2.0")
+
+    def test_not_newer_when_dpkg_cannot_be_run(self, monkeypatch):
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("dpkg")
+
+        monkeypatch.setattr(update_check.subprocess, "run", missing)
+        assert not deb_is_newer("0.2.0", "0.1.0")
 
 
 class TestUpgradeSupported:
@@ -115,6 +191,19 @@ class TestValidateUpgradeRequest:
         # A newer release was published since the client saw the banner.
         assert validate_upgrade_request("3.3.0", "3.4.0", "3.2.0") is not None
 
+    def test_accepts_current_bundle_when_only_the_renderer_is_behind(self):
+        # One installer run covers both, so the client keeps echoing the
+        # bundle version it was shown.
+        assert (
+            validate_upgrade_request("3.3.0", "3.3.0", "3.3.0", True) is None
+        )
+
+    def test_rejects_stale_target_even_with_a_behind_renderer(self):
+        assert (
+            validate_upgrade_request("3.2.0", "3.3.0", "3.3.0", True)
+            is not None
+        )
+
 
 class TestMaybeAutoUpgrade:
     def _armed_checker(self, monkeypatch, latest="3.3.0", supported=True):
@@ -166,6 +255,13 @@ class TestMaybeAutoUpgrade:
         self._attempt(checker, datetime(2026, 7, 27, 4, 0))
         assert requests == []
 
+    def test_fires_for_a_behind_renderer_alone(self, monkeypatch):
+        # Bundle equal to the running version; only the renderer is behind.
+        checker, requests = self._armed_checker(monkeypatch, latest="3.2.0")
+        checker._renderer_stale = True
+        self._attempt(checker, datetime(2026, 7, 27, 3, 0))
+        assert requests == [1]
+
     def test_does_not_fire_when_unsupported(self, monkeypatch):
         checker, requests = self._armed_checker(monkeypatch, supported=False)
         self._attempt(checker, datetime(2026, 7, 27, 3, 0))
@@ -183,7 +279,7 @@ class TestMaybeAutoUpgrade:
 
 
 class TestUpdateChecker:
-    def _checker_with_fetches(self, results):
+    def _checker_with_fetches(self, results, monkeypatch, installed=None):
         checker = UpdateChecker()
         fetches = iter(results)
 
@@ -191,19 +287,35 @@ class TestUpdateChecker:
             return next(fetches)
 
         checker._fetch = fake_fetch
+        monkeypatch.setattr(
+            update_check, "installed_renderer_version", lambda: installed
+        )
+        monkeypatch.setattr(update_check, "deb_is_newer", lambda a, b: True)
         return checker
 
     def test_starts_with_no_known_release(self):
-        assert UpdateChecker().latest is None
+        checker = UpdateChecker()
+        assert checker.latest is None
+        assert checker.latest_renderer is None
+        assert checker.installed_renderer is None
 
-    def test_check_updates_latest(self):
-        checker = self._checker_with_fetches(["3.3.0"])
+    def test_check_updates_both_release_trains(self, monkeypatch):
+        checker = self._checker_with_fetches(
+            [_feed("kalinka-v3.3.0", "kalinka-renderer-v0.2.0")],
+            monkeypatch,
+            installed="0.1.0",
+        )
         assert asyncio.run(checker.check_now()) == "3.3.0"
         assert checker.latest == "3.3.0"
+        assert checker.latest_renderer == "0.2.0"
+        assert checker.installed_renderer == "0.1.0"
 
-    def test_failed_check_keeps_last_known_result(self):
+    def test_failed_check_keeps_last_known_result(self, monkeypatch):
         # An available update must not vanish on a network blip.
-        checker = self._checker_with_fetches(["3.3.0", None])
+        checker = self._checker_with_fetches(
+            [_feed("kalinka-v3.3.0", "kalinka-renderer-v0.2.0"), None],
+            monkeypatch,
+        )
 
         async def run():
             await checker.check_now()
@@ -211,3 +323,72 @@ class TestUpdateChecker:
 
         asyncio.run(run())
         assert checker.latest == "3.3.0"
+        assert checker.latest_renderer == "0.2.0"
+
+    def test_a_feed_page_without_a_renderer_release_keeps_the_known_one(
+        self, monkeypatch
+    ):
+        # Renderer releases are rare enough to fall off the single feed page.
+        checker = self._checker_with_fetches(
+            [
+                _feed("kalinka-v3.3.0", "kalinka-renderer-v0.2.0"),
+                _feed("kalinka-v3.4.0"),
+            ],
+            monkeypatch,
+        )
+
+        async def run():
+            await checker.check_now()
+            await checker.check_now()
+
+        asyncio.run(run())
+        assert checker.latest == "3.4.0"
+        assert checker.latest_renderer == "0.2.0"
+
+
+class TestRendererUpdateAvailable:
+    def _checked(self, monkeypatch, installed, published, newer=True):
+        """Checker after one check against the given local/published pair."""
+        checker = UpdateChecker()
+
+        async def fake_fetch():
+            tags = ["kalinka-v3.3.0"]
+            if published:
+                tags.append(f"kalinka-renderer-v{published}")
+            return _feed(*tags)
+
+        checker._fetch = fake_fetch
+        monkeypatch.setattr(
+            update_check, "installed_renderer_version", lambda: installed
+        )
+        monkeypatch.setattr(update_check, "deb_is_newer", lambda a, b: newer)
+        asyncio.run(checker.check_now())
+        return checker
+
+    def test_available_when_the_release_outranks_the_installed_package(
+        self, monkeypatch
+    ):
+        checker = self._checked(monkeypatch, "0.1.0", "0.2.0")
+        assert checker.renderer_update_available()
+
+    def test_not_available_when_up_to_date(self, monkeypatch):
+        checker = self._checked(monkeypatch, "0.2.0", "0.2.0", newer=False)
+        assert not checker.renderer_update_available()
+
+    def test_not_available_when_no_renderer_is_installed(self, monkeypatch):
+        # Adding one is an install decision, not an upgrade.
+        checker = self._checked(monkeypatch, None, "0.2.0")
+        assert not checker.renderer_update_available()
+
+    def test_not_available_when_no_renderer_release_is_known(self, monkeypatch):
+        checker = self._checked(monkeypatch, "0.1.0", None)
+        assert not checker.renderer_update_available()
+
+    def test_not_available_before_the_first_check(self):
+        assert not UpdateChecker().renderer_update_available()
+
+    def test_update_available_covers_either_component(self, monkeypatch):
+        checker = self._checked(monkeypatch, "0.1.0", "0.2.0")
+        monkeypatch.setattr(update_check, "get_version", lambda: "3.3.0")
+        assert not checker.bundle_update_available()
+        assert checker.update_available()
