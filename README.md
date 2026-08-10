@@ -113,9 +113,14 @@ Two environment variables opt out of the extras: `KALINKA_RENDERER=0` for a serv
 
 ## Getting started
 
-The installer leaves you with a running server, so the rest is five minutes of pointing it at your music.
+The installer leaves you with a running server, and the rest of the setup happens from a client rather than in config files — the server has nothing to edit by hand.
 
-**1. Open the player.** Browse to `http://<server-ip>:8000` from any device on your network. That page is the browser player: it can control the server *and* play audio itself, so you can hear something before installing anything else. For the full experience, install the **Kalinka Music App** ([Android, Linux and Windows builds](https://github.com/madenvel/KalinkaAI/releases/latest)) — it finds the server by itself; if it doesn't, **Settings → Connection** takes a host and port by hand.
+**1. Get a client, and finish the setup in it.** Either one works, and you can use both:
+
+- **The Kalinka Music App** — [Android, Linux and Windows builds](https://github.com/madenvel/KalinkaAI/releases/latest). It finds the server on its own; if discovery is blocked on your network, **Settings → Connection** takes a host and port by hand.
+- **Any web browser** — go to `http://<server-ip>:8000`. Nothing to install, and the page plays audio itself, so you can hear something without setting up an output first.
+
+Whichever you open walks you through first-time setup: naming the server, pointing it at your music and choosing where sound comes out. The step-by-step version with screenshots lives in the app repo — [initial setup guide](https://github.com/madenvel/KalinkaAI/blob/main/docs/initial-setup.md).
 
 **2. Add music.** The installer creates `/srv/kalinka/music`, writable by anyone so you can drop files in over SFTP or a file manager without `sudo`:
 
