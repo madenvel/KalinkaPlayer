@@ -163,10 +163,10 @@ def _minimal_config(tmp_path) -> LocalFilesConfig:
     spin up the image-fetch plugins' HTTP clients needlessly."""
     cfg = _config(tmp_path)
     cfg.enricher.plugins.musicbrainz.enabled = True
-    cfg.enricher.plugins.acoustid.enabled = False
+    cfg.enricher.plugins.acoustid.api_key = ""
     cfg.enricher.plugins.wikidata.enabled = False
     cfg.enricher.plugins.deezer.enabled = False
-    cfg.enricher.plugins.filesystem_fallback_enabled = False
+    cfg.enricher.plugins.filesystem.enabled = False
     return cfg
 
 
@@ -180,7 +180,7 @@ def test_enabling_a_plugin_changes_fingerprint(tmp_path):
     base = _enricher(_minimal_config(tmp_path)).compute_fingerprint()
 
     cfg = _minimal_config(tmp_path)
-    cfg.enricher.plugins.acoustid.enabled = True
+    cfg.enricher.plugins.acoustid.api_key = "secret-key"
     with_acoustid = _enricher(cfg).compute_fingerprint()
 
     assert base != with_acoustid
@@ -197,12 +197,11 @@ def test_changing_match_threshold_changes_fingerprint(tmp_path):
 
 
 def test_acoustid_key_presence_changes_fingerprint(tmp_path):
-    cfg_no_key = _minimal_config(tmp_path)
-    cfg_no_key.enricher.plugins.acoustid.enabled = True
-    no_key = _enricher(cfg_no_key).compute_fingerprint()
+    """The key is the only AcoustID switch: no key means the plugin is not
+    loaded at all, so its presence must move the fingerprint."""
+    no_key = _enricher(_minimal_config(tmp_path)).compute_fingerprint()
 
     cfg_key = _minimal_config(tmp_path)
-    cfg_key.enricher.plugins.acoustid.enabled = True
     cfg_key.enricher.plugins.acoustid.api_key = "secret-key"
     with_key = _enricher(cfg_key).compute_fingerprint()
 
@@ -222,7 +221,7 @@ def test_bumping_a_disabled_plugin_is_invisible(tmp_path, monkeypatch):
     assert disabled_v999 == disabled_v1  # AcoustID disabled → bump invisible
 
     cfg = _minimal_config(tmp_path)
-    cfg.enricher.plugins.acoustid.enabled = True
+    cfg.enricher.plugins.acoustid.api_key = "secret-key"
     enabled_v999 = _enricher(cfg).compute_fingerprint()
 
     monkeypatch.setattr(AcoustIdPlugin, "ENRICHER_VERSION", 1, raising=True)

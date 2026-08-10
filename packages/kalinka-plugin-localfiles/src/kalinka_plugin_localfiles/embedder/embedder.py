@@ -28,7 +28,12 @@ import time
 from typing import Optional
 
 from ..config_model import LocalFilesConfig
-from ..embedding_utils import decode_embedding, encode_embedding, normalise
+from ..embedding_utils import (
+    CLAP_MODEL_VERSION,
+    decode_embedding,
+    encode_embedding,
+    normalise,
+)
 from ..pip_utils import ensure_package
 from ..worker_utils import set_proc_title, sleep_interruptible
 from .embedder_db import AsyncEmbedderDb
@@ -107,8 +112,8 @@ class EmbeddingWorker:
         from .clap_onnx import ClapOnnxModel
 
         self._clap = ClapOnnxModel(
-            model_dir=self.config.embedder.model_dir,
-            ckpt_path=self.config.embedder.clap.ckpt_path,
+            model_dir=self.config.ai_search.model_dir,
+            custom_model_dir=self.config.ai_search.custom_model_dir,
         )
         return self._clap
 
@@ -116,9 +121,6 @@ class EmbeddingWorker:
         """Load the text encoder (+ tokenizer + VA head). Resident for queries."""
         if self._text_available:
             return True
-        cfg = self.config.embedder
-        if cfg.clap.current_version == 0:
-            return False
         if not _ensure_numpy():
             return False
         for pkg in ("onnxruntime", "tokenizers"):
@@ -153,9 +155,6 @@ class EmbeddingWorker:
         if self._audio_available:
             self._audio_last_used_at = time.monotonic()
             return True
-        cfg = self.config.embedder
-        if cfg.clap.current_version == 0:
-            return False
         if not _ensure_numpy():
             return False
         for pkg in ("onnxruntime", "soundfile", "soxr", "tokenizers"):
@@ -270,8 +269,8 @@ class EmbeddingWorker:
     # ------------------------------------------------------------------
 
     async def _process_clap_batch(self) -> bool:
-        cfg = self.config.embedder
-        batch = await self.db.claim_batch("clap_audio", cfg.batch_size_clap)
+        cfg = self.config.ai_search
+        batch = await self.db.claim_batch("clap_audio", cfg.audio_batch_size)
         if not batch:
             return False
 
@@ -320,7 +319,7 @@ class EmbeddingWorker:
         """
         if not self._text_available or self._clap is None or not self._clap.has_va_head:
             return False
-        cfg = self.config.searcher.mood
+        cfg = self.config.ai_search.mood
         batch = await self.db.get_tracks_needing_va(cfg.backfill_batch)
         if not batch:
             return False
@@ -389,8 +388,8 @@ class EmbeddingWorker:
 
     async def _process_clap_text_batch(self) -> bool:
         """Process clap_text jobs: embed track metadata text with CLAP."""
-        cfg = self.config.embedder
-        batch = await self.db.claim_batch("clap_text", cfg.batch_size_clap)
+        cfg = self.config.ai_search
+        batch = await self.db.claim_batch("clap_text", cfg.audio_batch_size)
         if not batch:
             return False
 
@@ -529,16 +528,14 @@ class EmbeddingWorker:
         text_encode_request_queue: Optional[multiprocessing.Queue] = None,
         text_encode_response_queue: Optional[multiprocessing.Queue] = None,
     ):
-        cfg = self.config.embedder
+        cfg = self.config.ai_search
         poll = cfg.poll_interval_seconds
-        embedding_enabled = cfg.enabled
         audio_idle_timeout = cfg.audio_model_idle_timeout_seconds
 
         logger.info("EmbeddingWorker started (CLAP-only pipeline)")
 
-        if embedding_enabled:
-            await self.db._check_vec_available()
-            await self.db.recover_stale_jobs()
+        await self.db._check_vec_available()
+        await self.db.recover_stale_jobs()
 
         # Start text-encode handler for searcher KNN queries (always runs)
         encode_task = None
@@ -552,33 +549,14 @@ class EmbeddingWorker:
             )
             logger.info("Text-encode handler started (serving searcher KNN queries)")
 
-        # AI search enabled == CLAP on + a searcher that will query us. Pre-load
-        # the text tower now (in a thread, so we don't block the event loop)
-        # so the first user search doesn't pay a ~480 MB model load — the old
-        # "first query after idle times out" failure. The audio tower stays
+        # Pre-load the text tower now (in a thread, so we don't block the event
+        # loop) so the first user search doesn't pay a ~480 MB model load — the
+        # old "first query after idle times out" failure. The audio tower stays
         # unloaded until there's something to index.
-        if cfg.clap.current_version > 0 and self.config.searcher.enabled:
-            logger.info("AI search enabled; pre-loading CLAP text model")
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._ensure_text_model
-            )
-
-        if not embedding_enabled:
-            logger.info(
-                "Embedding jobs disabled; running text-encode service only"
-            )
-            # Just keep the text-encode handler running
-            if encode_task:
-                try:
-                    await encode_task
-                except asyncio.CancelledError:
-                    pass
-            else:
-                # Nothing to do — wait for shutdown
-                while not shutdown_event.is_set():
-                    await asyncio.sleep(1.0)
-            logger.info("EmbeddingWorker shutting down")
-            return
+        logger.info("Pre-loading CLAP text model")
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._ensure_text_model
+        )
 
         # Wait for the first nudge or poll cycle before loading models.
         # On a fresh restart with an already-indexed library there's
@@ -595,49 +573,47 @@ class EmbeddingWorker:
 
         while not shutdown_event.is_set():
             # Schedule new CLAP jobs for enriched tracks
-            await self.db.schedule_new_jobs(cfg.clap.current_version)
+            await self.db.schedule_new_jobs(CLAP_MODEL_VERSION)
 
             did_work = False
             retry_gap = poll
 
             # Process CLAP audio — loads the audio tower on demand.
-            if cfg.clap.current_version > 0:
-                while await self.db.has_pending_jobs("clap_audio"):
-                    if time.monotonic() - self._audio_load_attempted_at >= retry_gap:
-                        self._ensure_audio_model()
+            while await self.db.has_pending_jobs("clap_audio"):
+                if time.monotonic() - self._audio_load_attempted_at >= retry_gap:
+                    self._ensure_audio_model()
 
-                    try:
-                        batch_processed = await self._process_clap_batch()
-                        if batch_processed:
-                            did_work = True
-                        else:
-                            break
-                    except Exception:
-                        logger.exception("Unexpected error in CLAP batch; will retry")
+                try:
+                    batch_processed = await self._process_clap_batch()
+                    if batch_processed:
+                        did_work = True
+                    else:
                         break
+                except Exception:
+                    logger.exception("Unexpected error in CLAP batch; will retry")
+                    break
 
             # Process CLAP text (metadata) embeddings — text tower only.
-            if cfg.clap.current_version > 0:
-                while await self.db.has_pending_jobs("clap_text"):
-                    if time.monotonic() - self._text_load_attempted_at >= retry_gap:
-                        self._ensure_text_model()
+            while await self.db.has_pending_jobs("clap_text"):
+                if time.monotonic() - self._text_load_attempted_at >= retry_gap:
+                    self._ensure_text_model()
 
-                    try:
-                        batch_processed = await self._process_clap_text_batch()
-                        if batch_processed:
-                            did_work = True
-                        else:
-                            break
-                    except Exception:
-                        logger.exception(
-                            "Unexpected error in CLAP text batch; will retry"
-                        )
+                try:
+                    batch_processed = await self._process_clap_text_batch()
+                    if batch_processed:
+                        did_work = True
+                    else:
                         break
+                except Exception:
+                    logger.exception(
+                        "Unexpected error in CLAP text batch; will retry"
+                    )
+                    break
 
             # Backfill mood (V,A) for embedded tracks that lack it — cheap (one
             # tiny matmul per track from the stored vector). Uses the VA head,
             # which lives in the text tower, so it needs no audio session.
-            if self.config.searcher.mood.enabled and cfg.clap.current_version > 0:
+            if self.config.ai_search.mood.enabled:
                 if time.monotonic() - self._text_load_attempted_at >= retry_gap:
                     self._ensure_text_model()
                 try:

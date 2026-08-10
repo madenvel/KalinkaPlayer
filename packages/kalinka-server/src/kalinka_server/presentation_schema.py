@@ -6,7 +6,7 @@ so the client renders unambiguously without re-mapping anything.
 
 Authoring entry points:
     * Per-field via `Field(..., json_schema_extra={"widget": ..., "help": ...,
-      "importance": ..., "constraints": ...})`.
+      "importance": ..., "setup": ..., "constraints": ...})`.
     * Per-config-class by declaring class attributes:
           __module_icon__: str          — material icon name for module cards
           __module_icon_color__: str    — hex color for icon tile
@@ -49,6 +49,29 @@ class Importance(str, Enum):
 
     SIMPLE = "simple"
     EXPERT = "expert"
+
+
+class Setup(str, Enum):
+    """First-run wizard participation — orthogonal to :class:`Importance`.
+
+    ``Importance`` says where a field lives in the settings screen once
+    the server is running; ``Setup`` says whether the app asks for it
+    while walking a new user through first-run setup. A field can be any
+    combination of the two.
+
+    * REQUIRED — the owning module cannot work until the user supplies a
+      value (an API key, an auth token). The wizard must ask, and the
+      module stays unconfigured until it is answered, so a required
+      field carries no usable default: its declared default is the empty
+      value for its type.
+    * PROMPT — worth asking during setup, but the default already works.
+    * HIDDEN — not part of setup; changeable later in settings. This is
+      the default for any field that doesn't declare a ``setup`` tag.
+    """
+
+    REQUIRED = "required"
+    PROMPT = "prompt"
+    HIDDEN = "hidden"
 
 
 class Severity(str, Enum):
@@ -139,6 +162,7 @@ class FieldSpec(BaseModel):
     readonly: bool = False
     dynamic: bool = False           # Value is resolved by the owning module at request time
     importance: Importance = Importance.EXPERT
+    setup: Setup = Setup.HIDDEN
     enum_values: Optional[list[str]] = None
     constraints: Optional[Constraints] = None
 
@@ -212,7 +236,10 @@ class PresentationSchema(BaseModel):
       across the whole config tree, sorted by dotted path, used to back
       the about:config-style search. Includes both simple and expert
       tiers so power users have a single searchable surface (each
-      entry carries its own ``importance`` tag).
+      entry carries its own ``importance`` tag). Being the complete
+      index, it is also what the first-run wizard filters on
+      ``setup`` — a field is offered during setup whatever tier it
+      belongs to.
 
     Both views share a single ``schema_version``: a field's
     re-categorisation or any plugin reload invalidates both at once.

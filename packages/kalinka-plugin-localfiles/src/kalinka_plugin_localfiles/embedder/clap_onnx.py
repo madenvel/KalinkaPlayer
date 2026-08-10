@@ -315,8 +315,8 @@ class ClapOnnxModel:
     load() -> get_audio_embedding / get_text_embedding -> unload().
     """
 
-    def __init__(self, model_dir: str, ckpt_path: str = ""):
-        # ckpt_path overrides model_dir if it points to a directory with
+    def __init__(self, model_dir: str, custom_model_dir: str = ""):
+        # custom_model_dir overrides model_dir if it points to a directory with
         # ONNX files. Both come from user config and may contain a
         # leading ``~`` — expand here so every downstream consumer
         # (``_ensure_model_file``, ``os.makedirs``, ORT session loader)
@@ -325,11 +325,13 @@ class ClapOnnxModel:
         # creates a directory named ``~`` under the server's CWD, which
         # then masks subsequent "delete cached models and re-download"
         # migrations because the real home directory is empty.
-        expanded_ckpt = os.path.expanduser(ckpt_path) if ckpt_path else ""
+        expanded_custom = (
+            os.path.expanduser(custom_model_dir) if custom_model_dir else ""
+        )
         expanded_dir = os.path.expanduser(model_dir)
         self._model_dir = (
-            expanded_ckpt
-            if (expanded_ckpt and os.path.isdir(expanded_ckpt))
+            expanded_custom
+            if (expanded_custom and os.path.isdir(expanded_custom))
             else expanded_dir
         )
         self._audio_session = None

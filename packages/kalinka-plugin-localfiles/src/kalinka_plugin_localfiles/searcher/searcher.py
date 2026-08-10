@@ -143,7 +143,7 @@ class SearchWorker:
         try:
             # Reuse the CLAP-artifact downloader (not the tag-model one above).
             from ..embedder.clap_onnx import _ensure_model_file as _ensure_clap
-            model_dir = os.path.expanduser(self.config.embedder.model_dir)
+            model_dir = os.path.expanduser(self.config.ai_search.model_dir)
             path = _ensure_clap("mood_index", model_dir)
             if not path:
                 return None
@@ -174,7 +174,7 @@ class SearchWorker:
         words, va, emb = idx
         if not words:  # empty/corrupt index — no mood mapping possible
             return None, 0.0
-        mcfg = self.config.searcher.mood
+        mcfg = self.config.ai_search.mood
 
         # 1) Keyword spotting — literal mood word(s) present in the query.
         tokens = set(re.findall(r"[a-z]+", query.lower()))
@@ -237,7 +237,7 @@ class SearchWorker:
         that hides these suggestions for a name query now live in the server,
         which assembles them across all sources from ``search()``.
         """
-        cfg = self.config.searcher
+        cfg = self.config.ai_search
 
         # Encode the query once (CLAP text via IPC); the blob is reused by the
         # KNN leg and the mood NN fallback so we don't double the IPC round-trip.

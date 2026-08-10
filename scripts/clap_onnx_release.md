@@ -71,18 +71,15 @@ If the new export does *or doesn't* produce a `.onnx.data` sibling for
 the audio encoder, sync `_MODEL_URLS` / `_MODEL_FILENAMES` to match —
 extra entries cause spurious 404 download attempts on first boot.
 
-In [`config_model.py`](../packages/kalinka-plugin-localfiles/src/kalinka_plugin_localfiles/config_model.py):
+In [`embedding_utils.py`](../packages/kalinka-plugin-localfiles/src/kalinka_plugin_localfiles/embedding_utils.py):
 
 ```python
-class EmbedderClapConfig(BaseModel):
-    model_name = "..."           # informational; update for the UI
-    current_version: int = N     # bump — drives re-embedding
+CLAP_MODEL_VERSION = N     # bump — drives re-embedding
 ```
 
-Bumping `current_version` is what causes the embedder to invalidate the
-existing `embedding_clap_audio` blobs and re-schedule embedding jobs
-for every track. **If you forget this, the new model is loaded but
-never used** — the searcher will keep KNN-ing against old vectors.
+Bumping `CLAP_MODEL_VERSION` is what causes the embedder to invalidate the existing `embedding_clap_audio` blobs and re-schedule embedding jobs for every track. **If you forget this, the new model is loaded but never used** — the searcher will keep KNN-ing against old vectors.
+
+It is a code constant, not a config field: a version the user could edit is a version that silently disables search when set wrong, and the value has to match what the shipped model actually is.
 
 ### 4. Deploy & migrate
 
@@ -99,7 +96,7 @@ rm /var/lib/kalinka/models/clap_tokenizer.json
 
 # (Optional) start the server; the embedder will:
 #   - download new ONNX from the GitHub release
-#   - notice current_version > stored versions
+#   - notice CLAP_MODEL_VERSION > stored versions
 #   - schedule embedding jobs for every track
 #   - work through them in the background
 systemctl --user start kalinka
@@ -133,13 +130,7 @@ To revert without redeploying old code:
 1. Stop the server.
 2. Restore the old model files from `/var/lib/kalinka/models/` (or
    manually download from the previous release tag).
-3. Set `clap.current_version` in `localfiles_config.cfg` *below* the
-   value at which the current embeddings were computed (e.g., back to
-   2 if you're rolling back from 3). Don't restart with the higher
-   default still in `config_model.py` — pydantic will reset it on
-   next config load.
-4. Restart. The embedder will not re-schedule jobs (because
-   `current_version` ≤ stored version) and the searcher will continue
-   using the older embeddings.
+3. Revert the `CLAP_MODEL_VERSION` bump in code and redeploy.
+4. Restart. The embedder will not re-schedule jobs (because the constant is now ≤ the stored version) and the searcher will continue using the older embeddings.
 
-Cleaner rollback: revert the bump commit in code, redeploy.
+There is no config-only rollback: the version lives in code so that the shipped model and the version that keys its embeddings can never disagree.

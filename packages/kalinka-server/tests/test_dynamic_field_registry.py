@@ -61,20 +61,20 @@ def _prepared(decls: dict[str, DynamicFieldDecl], instance: Any) -> _FakePrepare
 
 def test_registry_builds_full_paths_from_kind_and_id():
     decls = {
-        "searcher.status_view": DynamicFieldDecl(
-            section_id="searcher", label="Status", widget="rich_text"
+        "ai_search.status_view": DynamicFieldDecl(
+            section_id="ai_search", label="Status", widget="rich_text"
         ),
     }
-    instance = _FakeInstance({"searcher.status_view": "ok"})
+    instance = _FakeInstance({"ai_search.status_view": "ok"})
     registry = build_dynamic_field_registry(
         input_modules={"localfiles": _prepared(decls, instance)},
         devices={},
     )
-    assert set(registry) == {"input_modules.localfiles.searcher.status_view"}
-    entry = registry["input_modules.localfiles.searcher.status_view"]
+    assert set(registry) == {"input_modules.localfiles.ai_search.status_view"}
+    entry = registry["input_modules.localfiles.ai_search.status_view"]
     assert entry.plugin_id == "localfiles"
     assert entry.kind == "input_module"
-    assert entry.subpath == "searcher.status_view"
+    assert entry.subpath == "ai_search.status_view"
 
 
 def test_registry_skips_plugins_without_instances():
@@ -145,10 +145,10 @@ def test_resolve_value_returns_none_on_unexpected_exception(caplog):
 
 
 def test_build_values_includes_resolved_dynamic_values():
-    instance = _FakeInstance({"searcher.status_view": "**Ready**"})
+    instance = _FakeInstance({"ai_search.status_view": "**Ready**"})
     decls = {
-        "searcher.status_view": DynamicFieldDecl(
-            section_id="searcher", label="Status"
+        "ai_search.status_view": DynamicFieldDecl(
+            section_id="ai_search", label="Status"
         ),
     }
     registry = build_dynamic_field_registry(
@@ -158,7 +158,7 @@ def test_build_values_includes_resolved_dynamic_values():
         build_values(KalinkaConfig(), {}, {}, registry.values())
     )
     assert (
-        values["input_modules.localfiles.searcher.status_view"] == "**Ready**"
+        values["input_modules.localfiles.ai_search.status_view"] == "**Ready**"
     )
 
 
@@ -184,10 +184,10 @@ def test_schema_injects_dynamic_field_into_named_section():
     # Use a real plugin config so the schema has matching sub-sections.
     from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 
-    instance = _FakeInstance({"searcher.status_view": "x"})
+    instance = _FakeInstance({"ai_search.status_view": "x"})
     decls = {
-        "searcher.status_view": DynamicFieldDecl(
-            section_id="searcher", label="Status", widget="rich_text"
+        "ai_search.status_view": DynamicFieldDecl(
+            section_id="ai_search", label="Status", widget="rich_text"
         ),
     }
     registry = build_dynamic_field_registry(
@@ -215,11 +215,11 @@ def test_schema_injects_dynamic_field_into_named_section():
             if ms.id == "localfiles":
                 hit = find_field(
                     ms.sections,
-                    "input_modules.localfiles.searcher.status_view",
+                    "input_modules.localfiles.ai_search.status_view",
                 )
                 assert hit is not None, "dynamic field not injected"
                 section, field = hit
-                assert section.id == "input_modules.localfiles.searcher"
+                assert section.id == "input_modules.localfiles.ai_search"
                 assert field.dynamic is True
                 assert field.readonly is True
                 assert field.widget.value == "rich_text"
@@ -232,10 +232,10 @@ def test_dynamic_field_lands_directly_after_enabled():
     controls the same sub-feature, not at the bottom of the section."""
     from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 
-    instance = _FakeInstance({"searcher.status_view": "x"})
+    instance = _FakeInstance({"ai_search.status_view": "x"})
     decls = {
-        "searcher.status_view": DynamicFieldDecl(
-            section_id="searcher", label="Status", widget="rich_text"
+        "ai_search.status_view": DynamicFieldDecl(
+            section_id="ai_search", label="Status", widget="rich_text"
         ),
     }
     registry = build_dynamic_field_registry(
@@ -257,22 +257,22 @@ def test_dynamic_field_lands_directly_after_enabled():
                 return nested
         return None
 
-    searcher = None
+    ai_section = None
     for page in schema.pages:
         for ms in page.modules:
             if ms.id == "localfiles":
-                searcher = find_section(
-                    ms.sections, "input_modules.localfiles.searcher"
+                ai_section = find_section(
+                    ms.sections, "input_modules.localfiles.ai_search"
                 )
                 break
-    assert searcher is not None, "searcher section not emitted"
+    assert ai_section is not None, "ai_search section not emitted"
 
     enabled_idx = next(
-        i for i, f in enumerate(searcher.fields) if f.path.endswith(".enabled")
+        i for i, f in enumerate(ai_section.fields) if f.path.endswith(".enabled")
     )
     status_idx = next(
         i
-        for i, f in enumerate(searcher.fields)
+        for i, f in enumerate(ai_section.fields)
         if f.path.endswith(".status_view")
     )
     assert status_idx == enabled_idx + 1, (
@@ -353,8 +353,7 @@ def test_module_top_level_scalars_render_flat_not_under_general():
     # Nested sub-sections are kept
     section_ids = {s.id for s in module_spec.sections}
     assert "input_modules.localfiles.enricher" in section_ids
-    assert "input_modules.localfiles.searcher" in section_ids
-    assert "input_modules.localfiles.embedder" in section_ids
+    assert "input_modules.localfiles.ai_search" in section_ids
 
 
 def test_schema_warns_when_section_id_is_unknown(caplog):
@@ -401,7 +400,7 @@ def test_put_config_rejects_writes_to_dynamic_paths():
     app = FastAPI()
     # The registry the real server caches at startup, scoped to the test.
     app.state.dynamic_paths = frozenset(
-        {"input_modules.localfiles.searcher.status_view"}
+        {"input_modules.localfiles.ai_search.status_view"}
     )
     app.state.schema_version = "test-version"
 
@@ -424,7 +423,7 @@ def test_put_config_rejects_writes_to_dynamic_paths():
         "/server/config",
         json={
             "changes": {
-                "input_modules.localfiles.searcher.status_view": "x",
+                "input_modules.localfiles.ai_search.status_view": "x",
             }
         },
     )
@@ -434,6 +433,6 @@ def test_put_config_rejects_writes_to_dynamic_paths():
     # 2. Writing to a static path with the same prefix is accepted.
     r = client.put(
         "/server/config",
-        json={"changes": {"input_modules.localfiles.searcher.enabled": True}},
+        json={"changes": {"input_modules.localfiles.ai_search.enabled": True}},
     )
     assert r.status_code == 200, r.text

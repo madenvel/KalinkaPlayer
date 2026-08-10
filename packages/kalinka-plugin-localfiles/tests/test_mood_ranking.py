@@ -207,7 +207,7 @@ class TestQueryToVa:
     async def test_nn_threshold_one_no_div_by_zero(self):
         # nn_threshold == 1.0 with an exact-cosine match must not divide by zero.
         config = LocalFilesConfig(db_path=_db_path())
-        config.searcher.mood.nn_threshold = 1.0
+        config.ai_search.mood.nn_threshold = 1.0
         db = AsyncSearcherDb(config)
         w = _make_worker(config, db)
         q = np.zeros(512, dtype=np.float32)
@@ -228,7 +228,7 @@ class TestQueryToVa:
     @pytest.mark.asyncio
     async def test_nn_below_threshold_is_non_mood(self):
         config = LocalFilesConfig(db_path=_db_path())
-        config.searcher.mood.nn_threshold = 0.5
+        config.ai_search.mood.nn_threshold = 0.5
         db = AsyncSearcherDb(config)
         w = _make_worker(config, db)
         # Orthogonal to every mood word -> cos 0 < threshold -> no mood.
@@ -240,7 +240,7 @@ class TestQueryToVa:
     @pytest.mark.asyncio
     async def test_nn_fallback_disabled(self):
         config = LocalFilesConfig(db_path=_db_path())
-        config.searcher.mood.nn_fallback = False
+        config.ai_search.mood.nn_fallback = False
         db = AsyncSearcherDb(config)
         w = _make_worker(config, db)
         q = np.zeros(512, dtype=np.float32)
