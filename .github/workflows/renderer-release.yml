@@ -221,10 +221,29 @@ jobs:
           EOF
 
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # No --latest: that slot stays pinned to kalinka-v* app releases.
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
+              --latest=false \
               --title "Kalinka Renderer $VERSION" \
               --notes-file notes.md
           fi
           gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
+
+      # --latest=false is not enough on its own: with nothing pinned, GitHub
+      # hands "Latest" to whatever was published most recently, and that is
+      # this release. The slot belongs to the app bundle, so give it back to
+      # the newest kalinka-v* explicitly.
+      - name: Restore the Latest badge to the app bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          newest=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,isDraft,isPrerelease \
+            --jq '[.[] | select(.isDraft == false and .isPrerelease == false)
+                  | select(.tagName | startswith("kalinka-v"))][0].tagName')
+          if [ -n "$newest" ]; then
+            echo "Pinning Latest back to $newest"
+            gh release edit "$newest" --repo "$GITHUB_REPOSITORY" --latest
+          else
+            echo "No published kalinka-v* release yet; leaving Latest alone"
+          fi
