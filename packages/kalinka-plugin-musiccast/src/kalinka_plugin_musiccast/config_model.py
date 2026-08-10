@@ -17,7 +17,16 @@ class KalinkaPluginMusiccastConfig(ModuleConfig):
     __module_icon__: ClassVar[str] = "speaker_outlined"
     __preview_fields__: ClassVar[list[str]] = ["device_addr", "zone_name"]
 
-    name: str = Field(default="musiccast", title="MusicCast", frozen=True, exclude=True)
+    name: str = Field(
+        default="musiccast",
+        title="MusicCast",
+        description=(
+            "A Yamaha MusicCast receiver or speaker on your network. Kalinka "
+            "switches its input and follows its volume and power state."
+        ),
+        frozen=True,
+        exclude=True,
+    )
     enabled: bool = Field(
         default=False, title="Module enabled", json_schema_extra=_SIMPLE,
     )

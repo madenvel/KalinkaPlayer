@@ -480,7 +480,8 @@ def _module_spec(
         else:
             kept_sections.append(s)
 
-    title = cls.model_fields["name"].title or config.name
+    name_field = cls.model_fields["name"]
+    title = name_field.title or config.name
     banners_raw = getattr(cls, "__module_banners__", [])
     banners = [b if isinstance(b, Banner) else Banner(**b) for b in banners_raw]
 
@@ -488,6 +489,7 @@ def _module_spec(
         id=config.name,
         kind=kind,  # type: ignore[arg-type]
         title=title,
+        description=name_field.description,
         icon=getattr(cls, "__module_icon__", None),
         icon_color=getattr(cls, "__module_icon_color__", None),
         preview_fields=list(getattr(cls, "__preview_fields__", [])),
@@ -564,6 +566,7 @@ def _prune_module_to_simple(module: ModuleSpec) -> ModuleSpec:
         id=module.id,
         kind=module.kind,
         title=module.title,
+        description=module.description,
         icon=module.icon,
         icon_color=module.icon_color,
         preview_fields=list(module.preview_fields),

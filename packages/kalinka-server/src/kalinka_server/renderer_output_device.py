@@ -117,6 +117,10 @@ class RendererOutputConfig(ModuleConfig):
     name: str = Field(
         default="kalinka-renderer",
         title="Kalinka Renderer",
+        description=(
+            "Volume for Kalinka renderers — the speakers this server plays "
+            "to directly, rather than a separate amplifier."
+        ),
         frozen=True,
         exclude=True,
     )

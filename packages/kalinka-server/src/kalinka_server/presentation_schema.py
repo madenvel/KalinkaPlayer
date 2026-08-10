@@ -7,6 +7,10 @@ so the client renders unambiguously without re-mapping anything.
 Authoring entry points:
     * Per-field via `Field(..., json_schema_extra={"widget": ..., "help": ...,
       "importance": ..., "setup": ..., "constraints": ...})`.
+    * Per-module by the excluded ``name`` field: its ``title`` is the module's
+      display name and its ``description`` the one-line summary of what the
+      module is. The field itself is never rendered (``exclude=True``), so
+      both are read out of band.
     * Per-config-class by declaring class attributes:
           __module_icon__: str          — material icon name for module cards
           __module_icon_color__: str    — hex color for icon tile
@@ -203,6 +207,10 @@ class ModuleSpec(BaseModel):
     id: str
     kind: Literal["input_module", "device"]
     title: str
+    # One sentence on what the source or device *is*, for someone deciding
+    # whether to enable it. Unlike ``preview_fields`` (composed from live
+    # values) it is static, so it reads the same for a disabled module.
+    description: Optional[str] = None
     icon: Optional[str] = None
     icon_color: Optional[str] = None
     preview_fields: list[str] = Field(default_factory=list)

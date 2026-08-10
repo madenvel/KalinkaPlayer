@@ -263,7 +263,17 @@ class LocalFilesConfig(ModuleConfig):
         "scan_interval_minutes",
     ]
 
-    name: str = Field(default="localfiles", title="Local files", frozen=True, exclude=True)
+    name: str = Field(
+        default="localfiles",
+        title="Local files",
+        description=(
+            "Music files on this device or a mounted share, indexed into a "
+            "browsable library with artwork and metadata filled in from "
+            "MusicBrainz and friends."
+        ),
+        frozen=True,
+        exclude=True,
+    )
     enabled: bool = Field(
         default=True, title="Module enabled", json_schema_extra=_SIMPLE,
     )

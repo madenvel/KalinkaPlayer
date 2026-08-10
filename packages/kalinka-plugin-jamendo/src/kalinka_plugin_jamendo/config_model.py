@@ -45,7 +45,17 @@ class JamendoConfig(ModuleConfig):
     __module_icon_color__: ClassVar[str] = "#2E7D32"  # Jamendo green
     __preview_fields__: ClassVar[list[str]] = ["audio_format"]
 
-    name: str = Field(default="jamendo", title="Jamendo", frozen=True, exclude=True)
+    name: str = Field(
+        default="jamendo",
+        title="Jamendo",
+        description=(
+            "A catalogue of free, legally streamable music from independent "
+            "artists. Needs a free Client ID from the Jamendo developer "
+            "portal."
+        ),
+        frozen=True,
+        exclude=True,
+    )
     client_id: str = Field(
         default="",
         title="Client ID",

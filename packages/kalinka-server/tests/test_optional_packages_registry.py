@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from kalinka_plugin_sdk import OptionalPackageSpec
+from kalinka_plugin_sdk.module_config import ModuleConfig
+from kalinka_plugin_sdk.plugin import InputModulePlugin
 from kalinka_server.optional_packages_registry import (
     build_catalog,
     build_registry,
@@ -49,6 +51,25 @@ def test_registry_collects_from_input_modules_and_devices():
     assert set(registry) == {"numpy", "alsa_extras"}
     assert registry["numpy"][0] == "localfiles"
     assert registry["alsa_extras"][0] == "fancydac"
+
+
+def test_plugin_declaring_none_contributes_none():
+    """``OPTIONAL_PACKAGES`` is declared on PluginBase with an empty default,
+    so a plugin with only hard dependencies needs no entry — and the
+    registry's defensive getattr still holds for plugins built against an
+    SDK that predates the declaration."""
+
+    class _NoOptionalDeps(InputModulePlugin):
+        PLUGIN_ID = "thin"
+        REQUIRES_SDK = ">=1.0,<2"
+        CONFIG_MODEL = ModuleConfig
+
+        async def setup(self, context):  # pragma: no cover — never called
+            pass
+
+    assert _NoOptionalDeps.OPTIONAL_PACKAGES == {}
+    prepared = FakePrepared(plugin_class=_NoOptionalDeps)
+    assert build_registry({"thin": prepared}, {}) == {}
 
 
 def test_registry_first_declarer_wins_on_duplicate_keys(caplog):
