@@ -58,7 +58,7 @@ make build-all-deb
 ```bash
 sudo dpkg -i debs/kalinka-server_*.deb
 sudo dpkg -i debs/kalinka-plugin-*.deb
-sudo apt-get install -f   # pull in any missing dependencies
+sudo apt install -f   # pull in any missing dependencies
 ```
 On first start `kalinka.service` runs `/opt/kalinka/bootstrap.sh`, which creates
 the runtime venv and installs the shipped wheels.

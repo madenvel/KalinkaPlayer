@@ -204,7 +204,7 @@ Install the server first, then the plugins you want:
 ```bash
 sudo dpkg -i debs/kalinka-server_*.deb
 sudo dpkg -i debs/kalinka-plugin-*.deb
-sudo apt-get install -f   # install any missing dependencies
+sudo apt install -f   # install any missing dependencies
 ```
 The renderer is not part of that bundle — build and install it separately (`make renderer-deb`, then `sudo apt install ./packages/kalinka-renderer/kalinka-renderer-*.deb`) if this machine should play audio itself.
 
