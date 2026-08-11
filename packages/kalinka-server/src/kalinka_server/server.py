@@ -451,8 +451,13 @@ async def create_app(
     app.state.device_router = device_router
     # Every session opens with the volume policy its renderer's wiring implies.
     renderer_sessions.set_volume_policy(device_router.session_volume_policy)
-    # Under /server so the browser-player mount at "/" cannot shadow it.
-    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR), name=TONE_MOUNT_NAME)
+    # Under /server so the browser-player mount at "/" cannot shadow it, and
+    # check_dir off so a packaging slip costs the speaker test, not the boot.
+    app.mount(
+        TONE_ROUTE,
+        StaticFiles(directory=TONE_DIR, check_dir=False),
+        name=TONE_MOUNT_NAME,
+    )
     test_tone = TonePlayer(
         renderer_registry,
         renderer_sessions,

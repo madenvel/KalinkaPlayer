@@ -68,8 +68,8 @@ def tone_filename(channel: str) -> str:
 
 
 def tone_uri(channel: str) -> str:
-    """The renderer's in-process generator, which nothing sends any more. Kept
-    because renderers still accept it and it needs nothing served."""
+    """The renderer's in-process generator. Nothing sends it now; it is kept
+    while renderers still accept it."""
     return (
         f"tone://{channel}?freq={TONE_FREQUENCY_HZ}"
         f"&duration_ms={TONE_DURATION_MS}"
