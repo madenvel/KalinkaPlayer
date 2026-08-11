@@ -57,9 +57,6 @@ MAX_LIMIT = 200
 # holds well over MAX_LIMIT albums.
 NEW_RELEASES_WINDOW_DAYS = 180
 
-# Map the user-facing audio quality label (config.audio_format, stored as the
-# enum *value* because the config uses use_enum_values=True) to Jamendo's
-# audioformat code and the MIME type we report back to the player.
 FORMAT_CODE = {
     "MP3 (VBR ~V0)": "mp32",
     "MP3 (96 kbps)": "mp31",
@@ -72,11 +69,6 @@ FORMAT_MIME = {
     "ogg": "audio/ogg",
     "flac": "audio/flac",
 }
-
-
-# ---------------------------------------------------------------------------
-# EntityId helpers
-# ---------------------------------------------------------------------------
 
 
 def artist_id(id: str) -> EntityId:
@@ -101,11 +93,6 @@ def user_id(id: str) -> EntityId:
 
 def catalog_id(id: str) -> EntityId:
     return EntityId(id=id, type=EntityType.CATALOG, source=SOURCE)
-
-
-# ---------------------------------------------------------------------------
-# HTTP transport with retry on transient failures (mirrors the qobuz plugin)
-# ---------------------------------------------------------------------------
 
 
 # Retried: failures that are discovered in milliseconds and are genuinely
@@ -157,7 +144,6 @@ class RetryTransport(httpx.AsyncHTTPTransport):
                 await asyncio.sleep(self.backoff_factor * attempt)
                 attempt += 1
                 continue
-            # Final attempt's 5xx is returned to the caller, not swallowed.
             return response
 
 
@@ -309,11 +295,6 @@ async def get_client(config: JamendoConfig) -> JamendoClient:
     return JamendoClient(config.client_id)
 
 
-# ---------------------------------------------------------------------------
-# Image helpers
-# ---------------------------------------------------------------------------
-
-
 def _resize(url: Optional[str], width: int) -> Optional[str]:
     """Return ``url`` requesting a specific image width.
 
@@ -349,11 +330,6 @@ def _estimated_total(offset: int, limit: int, count: int) -> int:
     if limit and count >= limit:
         total += limit
     return total
-
-
-# ---------------------------------------------------------------------------
-# Preview configs reused across catalog sections
-# ---------------------------------------------------------------------------
 
 
 def _album_tracks_section(aid: str) -> BrowseItem:
@@ -430,22 +406,18 @@ class JamendoInputModule(InputModule):
         mood_index: Optional[JamendoMoodIndex] = None,
     ):
         self.client = client
-        # Mood/semantic index; None disables ai_search (returns empty).
+        # None disables ai_search, which then returns nothing.
         self._mood_index = mood_index
         # config.audio_format is the enum *value* (use_enum_values=True).
         self.audio_format = FORMAT_CODE.get(config.audio_format, "mp32")
         self.audio_mime = FORMAT_MIME[self.audio_format]
-        # Cache of track metadata keyed by track id, populated whenever tracks
-        # are listed (browse/search). The /tracks/ metadata endpoint is an
-        # incomplete index — it returns nothing for many valid tracks (old or
-        # freshly published) — so get_track_info reads metadata from here first
-        # and only queries /tracks/ for ids it hasn't already seen. Playback
-        # URLs come from /tracks/file/, which resolves every track by id.
+        # The /tracks/ metadata index returns nothing for many valid tracks (old
+        # or freshly published), so tracks are cached as they are listed and
+        # get_track_info reads metadata from here before asking /tracks/.
         self._track_cache: "OrderedDict[str, Track]" = OrderedDict()
         self._cache_max = 5000
-        # Resolved artist cards keyed by artist id. Related Artists resolves
-        # the same popular artists over and over across searches; serving
-        # them from here skips the /artists round-trip entirely.
+        # Related Artists resolves the same popular artists across searches;
+        # serving them from here skips the /artists round-trip.
         self._artist_cache: "OrderedDict[str, BrowseItem]" = OrderedDict()
         self._artist_cache_max = 1000
         logger.info("Jamendo audio format: %s", self.audio_format)
@@ -471,15 +443,11 @@ class JamendoInputModule(InputModule):
         """Human-friendly source name for section headers."""
         return "Jamendo"
 
-    # ------------------------------------------------------------------
-    # Search
-    # ------------------------------------------------------------------
-
     async def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:
         limit = min(limit, MAX_LIMIT)
-        endpoint = type.value + "s"  # track -> tracks, album -> albums, ...
+        endpoint = type.value + "s"
         params = {"namesearch": query, "offset": offset, "limit": limit}
         if type == SearchType.track:
             params["audioformat"] = self.audio_format
@@ -518,14 +486,12 @@ class JamendoInputModule(InputModule):
         if self._mood_index is None or not query.strip():
             return EmptyList(offset, limit)
 
-        # KNN over the mood index, enough to cover this page.
         hits = await self._mood_index.search(query, offset + limit)
         page = hits[offset : offset + limit]
         if not page:
             return EmptyList(offset, limit)
 
-        # Resolve metadata via the Jamendo API. The /tracks/ index is
-        # incomplete, so some ids may not resolve — keep the rest in mood order.
+        # Some ids won't resolve; keep whatever does, in mood order.
         ids = [str(tid) for tid, _ in page]
         raw = await self.client.request(
             "tracks",
@@ -558,10 +524,6 @@ class JamendoInputModule(InputModule):
             sections=tracks,
         )
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
-
-    # ------------------------------------------------------------------
-    # Browse
-    # ------------------------------------------------------------------
 
     async def browse(
         self,
@@ -663,8 +625,6 @@ class JamendoInputModule(InputModule):
             )
             items = self._albums_to_browse_items(results)
         elif endpoint == "new-releases":
-            # Bound the release-date sort to a recent window; without it the
-            # query is ~5s and times out. See NEW_RELEASES_WINDOW_DAYS.
             today = date.today()
             since = today - timedelta(days=NEW_RELEASES_WINDOW_DAYS)
             results = await self.client.request(
@@ -779,19 +739,10 @@ class JamendoInputModule(InputModule):
             items=all_items[offset : offset + limit],
         )
 
-    # ------------------------------------------------------------------
-    # Track playback
-    # ------------------------------------------------------------------
-
     async def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         if not track_ids:
             return []
 
-        # Metadata: prefer the cache (populated by the browse/search the user
-        # did to find these tracks — reliable and complete), and only query the
-        # /tracks/ metadata index for ids we haven't seen. That index is
-        # incomplete (returns nothing for many valid tracks), so it's a
-        # best-effort enrichment, not the source of truth.
         missing = [tid for tid in track_ids if tid not in self._track_cache]
         fetched: dict[str, Track] = {}
         for i in range(0, len(missing), MAX_LIMIT):
@@ -803,10 +754,7 @@ class JamendoInputModule(InputModule):
                 meta = self._track_metadata(track)
                 fetched[meta.id.id] = meta
 
-        # Playback URLs always come from /tracks/file/ (resolved lazily at play
-        # time), which handles every track by id regardless of the metadata
-        # index. Tracks with no metadata from cache or /tracks/ get a
-        # placeholder; on a queue restore the server keeps the saved metadata.
+        # A track with no metadata still plays: /tracks/file/ resolves it by id.
         infos: List[TrackInfo] = []
         without_metadata: List[str] = []
         for tid in track_ids:
@@ -863,10 +811,6 @@ class JamendoInputModule(InputModule):
             album=Album(id=album_id(""), title=""),
         )
 
-    # ------------------------------------------------------------------
-    # get(entity_id)
-    # ------------------------------------------------------------------
-
     async def get(self, entity_id: EntityId) -> BrowseItem:
         if entity_id.type == EntityType.TRACK:
             results = await self.client.request(
@@ -921,10 +865,6 @@ class JamendoInputModule(InputModule):
                 continue
         return out
 
-    # ------------------------------------------------------------------
-    # Mapping helpers
-    # ------------------------------------------------------------------
-
     def _track_metadata(self, track, album_meta: Optional[dict] = None) -> Track:
         album_meta = album_meta or {}
         aid = str(track.get("album_id") or album_meta.get("id") or "")
@@ -963,9 +903,7 @@ class JamendoInputModule(InputModule):
         result = []
         for track in tracks:
             meta = self._track_metadata(track, album_meta)
-            # Cache metadata so get_track_info can label this track even if the
-            # /tracks/ index can't resolve its id. (Playback always goes through
-            # /tracks/file/, so no URL needs caching.)
+            # Lets get_track_info label ids the /tracks/ index can't resolve.
             self._cache_track(meta)
             result.append(
                 BrowseItem(
@@ -1053,14 +991,6 @@ class JamendoInputModule(InputModule):
                 )
             )
         return result
-
-    # ------------------------------------------------------------------
-    # Unsupported capabilities — favourites, playlist mutation, genres.
-    # These need an OAuth2 user session (favourites/playlists) or have no
-    # Jamendo endpoint (genre list), so they degrade gracefully.
-    # ai_search is intentionally not overridden; the Protocol default returns
-    # an empty list until the semantic backend is wired up.
-    # ------------------------------------------------------------------
 
     async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
