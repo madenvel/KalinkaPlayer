@@ -267,11 +267,16 @@ class JamendoClient:
         doesn't return (old or freshly published). We read the redirect target
         rather than following it, since the native player streams the storage
         URL directly but does not follow redirects itself.
+
+        ``action=stream`` is what makes the target playable in a browser: the
+        download form it redirects to otherwise serves the audio as
+        ``text/html``, which an HTML ``<audio>`` element refuses.
         """
         params = {
             "client_id": self.client_id,
             "id": track_id,
             "audioformat": audioformat,
+            "action": "stream",
         }
         try:
             response = await self.session.get(
