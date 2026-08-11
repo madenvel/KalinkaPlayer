@@ -16,10 +16,12 @@ from kalinka_server.renderer_sessions import RendererBusy, SessionPool
 from kalinka_server.renderer_test_tone import (
     CHANNELS,
     TONE_DIR,
+    TONE_MOUNT_NAME,
     TONE_ROUTE,
     TonePlayer,
+    tone_channel,
+    tone_filename,
     tone_uri,
-    tone_url,
 )
 
 from tests.sim_renderer import SimRenderer
@@ -47,7 +49,8 @@ _BASE_URL = "http://10.0.0.5:8000"
 
 
 def _tone(channel: str) -> str:
-    return tone_url(_BASE_URL, channel)
+    """What the endpoint resolves and hands the player."""
+    return f"{_BASE_URL}{TONE_ROUTE}/{tone_filename(channel)}"
 
 
 def _sources(renderer: SimRenderer) -> list[str]:
@@ -87,7 +90,7 @@ async def queue(renderers, emitter):
 @pytest.fixture
 async def tones(renderers, queue):
     registry, pool, _, _ = renderers
-    player = TonePlayer(registry, pool, queue.release_renderer, lambda: _BASE_URL)
+    player = TonePlayer(registry, pool, queue.release_renderer)
     yield player
     await player.shutdown()
 
@@ -102,7 +105,7 @@ async def _play_on(queue, renderer) -> None:
 async def test_the_tone_reaches_the_named_renderer(tones, renderers):
     _registry, _pool, first, second = renderers
 
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
 
     assert _sources(second) == [_tone("left")]
     assert not _sources(first)
@@ -113,20 +116,17 @@ async def test_both_channels_share_one_session(tones, renderers):
     """left then right, two seconds apart: the second replaces the first."""
     _registry, _pool, _first, second = renderers
 
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
     session_id = second.session_id
-    await tones.play("rid-b", "right")
+    await tones.play("rid-b", "right", _tone("right"))
 
     assert _sources(second) == [_tone("left"), _tone("right")]
     assert second.session_id == session_id
 
 
-async def test_an_unknown_channel_falls_back_to_both(tones, renderers):
-    _registry, _pool, _first, second = renderers
-
-    await tones.play("rid-b", "sideways")
-
-    assert _sources(second) == [_tone("both")]
+def test_an_unknown_channel_falls_back_to_both():
+    assert tone_channel("LEFT") == "left"
+    assert tone_channel("sideways") == "both"
 
 
 async def test_playback_stops_before_the_tone_and_says_so(
@@ -138,7 +138,7 @@ async def test_playback_stops_before_the_tone_and_says_so(
     await _play_on(queue, first)
     emitter.reset_mock()
 
-    await tones.play("rid-a", "left")
+    await tones.play("rid-a", "left", _tone("left"))
     await asyncio.sleep(0.1)
 
     states = [
@@ -158,7 +158,7 @@ async def test_the_tone_does_not_advance_the_queue(tones, queue, renderers):
     await queue.play()
     await asyncio.sleep(0.2)
 
-    await tones.play("rid-a", "left")
+    await tones.play("rid-a", "left", _tone("left"))
     first.finish_current()  # the tone runs out
     await asyncio.sleep(0.2)
 
@@ -171,7 +171,7 @@ async def test_playing_elsewhere_is_left_alone(tones, queue, renderers):
     await _play_on(queue, first)
     playing = first.current
 
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
     await asyncio.sleep(0.1)
 
     assert first.current == playing
@@ -181,7 +181,7 @@ async def test_playing_elsewhere_is_left_alone(tones, queue, renderers):
 async def test_the_session_goes_when_the_tone_ends(tones, renderers):
     """So the queue can claim the renderer again straight after."""
     _registry, _pool, _first, second = renderers
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
 
     second.finish_current()
     await asyncio.sleep(0.05)
@@ -191,11 +191,9 @@ async def test_the_session_goes_when_the_tone_ends(tones, renderers):
 
 async def test_the_session_goes_even_if_the_end_is_never_reported(renderers, queue):
     registry, pool, _first, second = renderers
-    player = TonePlayer(
-        registry, pool, queue.release_renderer, lambda: _BASE_URL, hold_s=0.05
-    )
+    player = TonePlayer(registry, pool, queue.release_renderer, hold_s=0.05)
 
-    await player.play("rid-b", "left")
+    await player.play("rid-b", "left", _tone("left"))
     await asyncio.sleep(0.15)
 
     assert second.session_id is None
@@ -203,9 +201,9 @@ async def test_the_session_goes_even_if_the_end_is_never_reported(renderers, que
 
 async def test_a_tone_on_another_renderer_ends_the_first(tones, renderers):
     _registry, _pool, first, second = renderers
-    await tones.play("rid-a", "left")
+    await tones.play("rid-a", "left", _tone("left"))
 
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
 
     assert first.session_id is None
     assert second.session_id is not None
@@ -216,7 +214,7 @@ async def test_a_renderer_another_core_holds_refuses(tones, renderers):
     second.accept = False
 
     with pytest.raises(RendererBusy):
-        await tones.play("rid-b", "left")
+        await tones.play("rid-b", "left", _tone("left"))
 
 
 async def test_a_disconnected_renderer_refuses(tones, renderers):
@@ -225,14 +223,14 @@ async def test_a_disconnected_renderer_refuses(tones, renderers):
     registry.disconnect("rid-b", second, clean=False)
 
     with pytest.raises(RendererUnavailable):
-        await tones.play("rid-b", "left")
+        await tones.play("rid-b", "left", _tone("left"))
 
 
 async def test_the_queue_can_play_again_after_the_tone(tones, queue, renderers):
     _registry, _pool, first, _second = renderers
     await _play_on(queue, first)
 
-    await tones.play("rid-a", "left")
+    await tones.play("rid-a", "left", _tone("left"))
     first.finish_current()  # the tone runs out and the session is released
     await asyncio.sleep(0.1)
     await queue.play()
@@ -247,36 +245,41 @@ async def test_a_renderer_nothing_is_playing_on_keeps_its_queue(tones, queue, re
     _registry, _pool, first, _second = renderers
 
     assert await queue.release_renderer("rid-a") is False
-    await tones.play("rid-a", "left")
+    await tones.play("rid-a", "left", _tone("left"))
 
     assert first.session_id is not None
     assert _sources(first) == [_tone("left")]
 
 
-def test_the_tone_url_points_at_a_file_this_server_ships():
+def test_the_endpoint_resolves_a_tone_the_mount_serves():
     """The mount is mirrored here — standing up create_app() would need a real
     plugin scan."""
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Request
     from fastapi.testclient import TestClient
     from starlette.staticfiles import StaticFiles
 
-    assert _tone("left") == f"{_BASE_URL}{TONE_ROUTE}/left.flac"
-
     app = FastAPI()
-    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR))
-    client = TestClient(app)
+    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR), name=TONE_MOUNT_NAME)
 
+    @app.get("/resolve/{channel}")
+    def resolve(request: Request, channel: str):
+        return str(request.url_for(TONE_MOUNT_NAME, path=tone_filename(channel)))
+
+    client = TestClient(app)
     for channel in CHANNELS:
-        response = client.get(_tone(channel).removeprefix(_BASE_URL))
-        assert response.status_code == 200
-        assert response.content[:4] == b"fLaC"
+        url = client.get(f"/resolve/{channel}").json()
+        assert url == f"http://testserver{TONE_ROUTE}/{channel}.flac"
+
+        served = client.get(url)
+        assert served.status_code == 200
+        assert served.content[:4] == b"fLaC"
 
 
 async def test_the_renderer_is_told_the_source_is_flac(tones, renderers):
     """The renderer picks its decoder from the mime type."""
     _registry, _pool, _first, second = renderers
 
-    await tones.play("rid-b", "left")
+    await tones.play("rid-b", "left", _tone("left"))
 
     set_source = [c for c in second.commands if c.WhichOneof("op") == "set_source"]
     assert set_source[0].set_source.source.mime_type == "audio/flac"
@@ -284,8 +287,8 @@ async def test_the_renderer_is_told_the_source_is_flac(tones, renderers):
 
 async def test_shutdown_drops_a_sounding_tone(renderers, queue):
     registry, pool, _first, second = renderers
-    player = TonePlayer(registry, pool, queue.release_renderer, lambda: _BASE_URL)
-    await player.play("rid-b", "left")
+    player = TonePlayer(registry, pool, queue.release_renderer)
+    await player.play("rid-b", "left", _tone("left"))
 
     await player.shutdown()
 

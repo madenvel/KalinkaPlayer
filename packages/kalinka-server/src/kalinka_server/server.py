@@ -54,7 +54,6 @@ from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
 from .multisearch import calculate_fuzzy_score
-from .netutils import default_route_ip
 from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
@@ -94,7 +93,14 @@ from .renderer_sessions import (
     SessionOpenFailed,
     SessionPool,
 )
-from .renderer_test_tone import TONE_DIR, TONE_ROUTE, TonePlayer
+from .renderer_test_tone import (
+    TONE_DIR,
+    TONE_MOUNT_NAME,
+    TONE_ROUTE,
+    TonePlayer,
+    tone_channel,
+    tone_filename,
+)
 from .server_identity import get_server_id
 
 
@@ -446,12 +452,11 @@ async def create_app(
     # Every session opens with the volume policy its renderer's wiring implies.
     renderer_sessions.set_volume_policy(device_router.session_volume_policy)
     # Under /server so the browser-player mount at "/" cannot shadow it.
-    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR), name="test-tones")
+    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR), name=TONE_MOUNT_NAME)
     test_tone = TonePlayer(
         renderer_registry,
         renderer_sessions,
         lambda rid: app.state.player_context.playqueue.release_renderer(rid),
-        lambda: f"http://{default_route_ip()}:{config.server.port}",
     )
     app.state.test_tone = test_tone
 
@@ -1165,7 +1170,9 @@ async def create_app(
         return {"message": "restarting", "install_queued": accepted}
 
     @app.post("/server/test_tone")
-    async def server_test_tone(payload: Optional[Dict[str, Any]] = None):
+    async def server_test_tone(
+        request: Request, payload: Optional[Dict[str, Any]] = None
+    ):
         """Play a test tone on one channel of a renderer.
 
         Body: `{"channel": "left"|"right"|"both", "renderer_id": "<id>"}`.
@@ -1177,12 +1184,15 @@ async def create_app(
         itself, and a queue left running would be reported as playing while
         something else is audible.
 
+        The tone is resolved against this request, so the renderer fetches it
+        from the address the caller reached us on.
+
         Never answers 404 or 405. Older clients read either as "this server
         cannot play tones at all" and tell the user to upgrade, which would be
         the wrong advice for an unknown renderer.
         """
         payload = payload or {}
-        channel = str(payload.get("channel", "both")).lower()
+        channel = tone_channel(str(payload.get("channel", "both")))
         renderer_id = payload.get("renderer_id") or renderer_registry.active_id()
         if not renderer_id:
             raise HTTPException(
@@ -1192,8 +1202,9 @@ async def create_app(
             raise HTTPException(
                 status_code=409, detail="Unknown or disconnected renderer"
             )
+        source_url = str(request.url_for(TONE_MOUNT_NAME, path=tone_filename(channel)))
         try:
-            await test_tone.play(renderer_id, channel)
+            await test_tone.play(renderer_id, channel, source_url)
         except RendererBusy as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except (RendererUnavailable, SessionNotActive) as exc:
