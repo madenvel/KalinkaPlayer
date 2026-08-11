@@ -92,8 +92,8 @@ fi
 
 # Prints the tag on line 1 and the chosen asset URL on line 2. Debs are
 # platform-specific (built against one distro's sonames): prefer the exact
-# distro match, else fall back to any deb of the right arch — apt's dependency
-# check will refuse it if the sonames really don't fit.
+# distro match, then another release of the same distro, then any deb of the
+# right arch — apt's dependency check will refuse it if the sonames don't fit.
 PARSER="$(mktemp --suffix=.py)"
 TMPDIR_DL=""
 cleanup() { rm -rf "$PARSER" ${TMPDIR_DL:+"$TMPDIR_DL"}; }
@@ -118,12 +118,15 @@ if not rel:
     sys.exit(1)
 names = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
 if fmt == "deb":
-    exact = [u for n, u in names.items()
-             if n.endswith(f".{platform}.{arch}.deb")]
-    loose = [u for n, u in names.items() if n.endswith(f".{arch}.deb")]
-    choice = (exact or loose or [None])[0]
-    if choice and not exact:
-        sys.stderr.write(f"note: no deb built for {platform}; trying {choice.rsplit('/', 1)[-1]}\n")
+    debs = sorted(n for n in names if n.endswith(f".{arch}.deb"))
+    exact = [n for n in debs if n.endswith(f".{platform}.{arch}.deb")]
+    family = [n for n in debs if f".{platform.split('-')[0]}-" in n]
+    pick = next(iter(exact or family or debs), None)
+    choice = names[pick] if pick else None
+    if pick and not exact:
+        sys.stderr.write(
+            f"note: this release has no deb built for {platform}; trying {pick},\n"
+            "      which apt will refuse if its library versions differ.\n")
 else:
     choice = next((u for n, u in names.items()
                    if n.endswith(f".{arch}.rpm") and "debuginfo" not in n
@@ -151,7 +154,19 @@ download "$URL" "$TMPDIR_DL/$NAME"
 if [ "$FORMAT" = deb ]; then
   APT_OPTS=(-o DPkg::Lock::Timeout=300)
   echo ">> Installing with apt ..."
-  $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL/$NAME"
+  if ! $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL/$NAME"; then
+    case "$NAME" in
+      *".$PLATFORM.$ARCH.deb") die "apt could not install $NAME" ;;
+    esac
+    cat >&2 <<EOF
+
+error: $NAME is built for another distro, and $TAG ships no deb for $PLATFORM,
+       so apt cannot satisfy its library versions. Install the flatpak instead
+       (see packages/kalinka-renderer/flatpak/README.md), or build a package on
+       this machine with 'make renderer-deb'.
+EOF
+    exit 1
+  fi
 else
   echo ">> Installing with dnf ..."
   $SUDO dnf install -y "$TMPDIR_DL/$NAME"
