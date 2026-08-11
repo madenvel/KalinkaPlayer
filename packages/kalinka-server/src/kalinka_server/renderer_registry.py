@@ -46,6 +46,9 @@ class RendererRecord:
     platform: dict[str, str]
     connected_at: float
     last_seen: float
+    # The server (host, port) the renderer dialed to register — an address it
+    # provably reaches, which no server-side guess can promise.
+    server_addr: Optional[tuple[str, int]] = None
     # The renderer's connection while it has one; compared by identity.
     session: Optional[RendererLink] = field(default=None, repr=False)
 
@@ -100,6 +103,7 @@ class RendererRegistry:
         kind: str,
         platform: dict[str, str],
         session: RendererLink,
+        server_addr: Optional[tuple[str, int]] = None,
     ) -> RegistrationKind:
         self._cancel_reap(renderer_id)
         now = time.time()
@@ -133,6 +137,7 @@ class RendererRegistry:
             platform=platform,
             connected_at=connected_at,
             last_seen=now,
+            server_addr=server_addr,
             session=session,
         )
         logger.info(

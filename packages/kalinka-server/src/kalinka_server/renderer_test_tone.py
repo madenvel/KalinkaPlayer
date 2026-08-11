@@ -67,6 +67,15 @@ def tone_filename(channel: str) -> str:
     return f"{channel}.flac"
 
 
+def tone_url(server_addr: tuple[str, int], channel: str) -> str:
+    """Where a renderer fetches the tone; `server_addr` is the server address
+    that renderer dialed to register (RendererRecord.server_addr)."""
+    host, port = server_addr
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}{TONE_ROUTE}/{tone_filename(channel)}"
+
+
 def tone_uri(channel: str) -> str:
     """The renderer's in-process generator. Nothing sends it now; it is kept
     while renderers still accept it."""

@@ -22,6 +22,7 @@ from kalinka_server.renderer_test_tone import (
     tone_channel,
     tone_filename,
     tone_uri,
+    tone_url,
 )
 
 from tests.sim_renderer import SimRenderer
@@ -127,6 +128,17 @@ async def test_both_channels_share_one_session(tones, renderers):
 def test_an_unknown_channel_falls_back_to_both():
     assert tone_channel("LEFT") == "left"
     assert tone_channel("sideways") == "both"
+
+
+def test_the_tone_url_is_formed_from_the_dialed_address():
+    assert (
+        tone_url(("192.168.50.85", 8000), "left")
+        == "http://192.168.50.85:8000/server/tones/left.flac"
+    )
+    assert (
+        tone_url(("fe80::1", 8000), "both")
+        == "http://[fe80::1]:8000/server/tones/both.flac"
+    )
 
 
 async def test_playback_stops_before_the_tone_and_says_so(

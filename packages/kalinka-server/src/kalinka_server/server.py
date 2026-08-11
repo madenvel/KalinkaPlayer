@@ -100,6 +100,7 @@ from .renderer_test_tone import (
     TonePlayer,
     tone_channel,
     tone_filename,
+    tone_url,
 )
 from .server_identity import get_server_id
 
@@ -1189,8 +1190,9 @@ async def create_app(
         itself, and a queue left running would be reported as playing while
         something else is audible.
 
-        The tone is resolved against this request, so the renderer fetches it
-        from the address the caller reached us on.
+        The tone URL is formed from the address the renderer dialed to register:
+        the caller's own route to this server proves nothing about the
+        renderer's. The request is the fallback when that address is unknown.
 
         Never answers 404 or 405. Older clients read either as "this server
         cannot play tones at all" and tell the user to upgrade, which would be
@@ -1203,11 +1205,16 @@ async def create_app(
             raise HTTPException(
                 status_code=503, detail="No renderer is connected"
             )
-        if renderer_registry.get(renderer_id) is None:
+        record = renderer_registry.get(renderer_id)
+        if record is None:
             raise HTTPException(
                 status_code=409, detail="Unknown or disconnected renderer"
             )
-        source_url = str(request.url_for(TONE_MOUNT_NAME, path=tone_filename(channel)))
+        source_url = (
+            tone_url(record.server_addr, channel)
+            if record.server_addr is not None
+            else str(request.url_for(TONE_MOUNT_NAME, path=tone_filename(channel)))
+        )
         try:
             await test_tone.play(renderer_id, channel, source_url)
         except RendererBusy as exc:

@@ -11,7 +11,9 @@ from kalinka_server.renderer_registry import (
 )
 
 
-def _register(registry, session, instance_id="inst-1", renderer_id="rid-1"):
+def _register(
+    registry, session, instance_id="inst-1", renderer_id="rid-1", server_addr=None
+):
     return registry.register(
         renderer_id=renderer_id,
         instance_id=instance_id,
@@ -20,6 +22,7 @@ def _register(registry, session, instance_id="inst-1", renderer_id="rid-1"):
         kind="native",
         platform={"os": "linux"},
         session=session,
+        server_addr=server_addr,
     )
 
 
@@ -30,6 +33,17 @@ async def test_new_registration_listed_as_connected():
     (entry,) = registry.list()
     assert entry["renderer_id"] == "rid-1"
     assert entry["status"] == "connected"
+
+
+async def test_the_dialed_server_address_rides_each_registration():
+    """The speaker test forms URLs from it, so a renderer that comes back via
+    a different interface must overwrite the old address."""
+    registry = RendererRegistry()
+    _register(registry, object(), server_addr=("192.168.50.85", 8000))
+    assert registry.get("rid-1").server_addr == ("192.168.50.85", 8000)
+
+    _register(registry, object(), server_addr=("10.0.0.7", 8000))
+    assert registry.get("rid-1").server_addr == ("10.0.0.7", 8000)
 
 
 async def test_unclean_disconnect_goes_offline_then_reaped():

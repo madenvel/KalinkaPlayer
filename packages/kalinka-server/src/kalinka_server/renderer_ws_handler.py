@@ -210,6 +210,8 @@ async def handle_renderer_connection(
                         f"server speaks protocol version {PROTOCOL_VERSION}",
                     )
                     return
+                # The accepted socket's local address — what the renderer dialed.
+                addr = websocket.scope.get("server")
                 registry.register(
                     renderer_id=hello.renderer_id,
                     instance_id=hello.instance_id,
@@ -224,6 +226,7 @@ async def handle_renderer_connection(
                         "audio_backend": hello.platform.audio_backend,
                     },
                     session=session,
+                    server_addr=(addr[0], addr[1]) if addr and addr[1] else None,
                 )
                 registered_id = hello.renderer_id
                 await session.send_welcome(config)
