@@ -17,6 +17,7 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.staticfiles import StaticFiles
 
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
@@ -92,7 +93,15 @@ from .renderer_sessions import (
     SessionOpenFailed,
     SessionPool,
 )
-from .renderer_test_tone import TonePlayer
+from .renderer_test_tone import (
+    TONE_DIR,
+    TONE_MOUNT_NAME,
+    TONE_ROUTE,
+    TonePlayer,
+    tone_channel,
+    tone_filename,
+    tone_url,
+)
 from .server_identity import get_server_id
 
 
@@ -443,6 +452,13 @@ async def create_app(
     app.state.device_router = device_router
     # Every session opens with the volume policy its renderer's wiring implies.
     renderer_sessions.set_volume_policy(device_router.session_volume_policy)
+    # Under /server so the browser-player mount at "/" cannot shadow it, and
+    # check_dir off so a packaging slip costs the speaker test, not the boot.
+    app.mount(
+        TONE_ROUTE,
+        StaticFiles(directory=TONE_DIR, check_dir=False),
+        name=TONE_MOUNT_NAME,
+    )
     test_tone = TonePlayer(
         renderer_registry,
         renderer_sessions,
@@ -1160,7 +1176,9 @@ async def create_app(
         return {"message": "restarting", "install_queued": accepted}
 
     @app.post("/server/test_tone")
-    async def server_test_tone(payload: Optional[Dict[str, Any]] = None):
+    async def server_test_tone(
+        request: Request, payload: Optional[Dict[str, Any]] = None
+    ):
         """Play a test tone on one channel of a renderer.
 
         Body: `{"channel": "left"|"right"|"both", "renderer_id": "<id>"}`.
@@ -1172,23 +1190,33 @@ async def create_app(
         itself, and a queue left running would be reported as playing while
         something else is audible.
 
+        The tone URL is formed from the address the renderer dialed to register:
+        the caller's own route to this server proves nothing about the
+        renderer's. The request is the fallback when that address is unknown.
+
         Never answers 404 or 405. Older clients read either as "this server
         cannot play tones at all" and tell the user to upgrade, which would be
         the wrong advice for an unknown renderer.
         """
         payload = payload or {}
-        channel = str(payload.get("channel", "both")).lower()
+        channel = tone_channel(str(payload.get("channel", "both")))
         renderer_id = payload.get("renderer_id") or renderer_registry.active_id()
         if not renderer_id:
             raise HTTPException(
                 status_code=503, detail="No renderer is connected"
             )
-        if renderer_registry.get(renderer_id) is None:
+        record = renderer_registry.get(renderer_id)
+        if record is None:
             raise HTTPException(
                 status_code=409, detail="Unknown or disconnected renderer"
             )
+        source_url = (
+            tone_url(record.server_addr, channel)
+            if record.server_addr is not None
+            else str(request.url_for(TONE_MOUNT_NAME, path=tone_filename(channel)))
+        )
         try:
-            await test_tone.play(renderer_id, channel)
+            await test_tone.play(renderer_id, channel, source_url)
         except RendererBusy as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except (RendererUnavailable, SessionNotActive) as exc:
