@@ -17,6 +17,7 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.staticfiles import StaticFiles
 
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
@@ -53,6 +54,7 @@ from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
 from .multisearch import calculate_fuzzy_score
+from .netutils import default_route_ip
 from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
@@ -92,7 +94,7 @@ from .renderer_sessions import (
     SessionOpenFailed,
     SessionPool,
 )
-from .renderer_test_tone import TonePlayer
+from .renderer_test_tone import TONE_DIR, TONE_ROUTE, TonePlayer
 from .server_identity import get_server_id
 
 
@@ -443,10 +445,13 @@ async def create_app(
     app.state.device_router = device_router
     # Every session opens with the volume policy its renderer's wiring implies.
     renderer_sessions.set_volume_policy(device_router.session_volume_policy)
+    # Under /server so the browser-player mount at "/" cannot shadow it.
+    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR), name="test-tones")
     test_tone = TonePlayer(
         renderer_registry,
         renderer_sessions,
         lambda rid: app.state.player_context.playqueue.release_renderer(rid),
+        lambda: f"http://{default_route_ip()}:{config.server.port}",
     )
     app.state.test_tone = test_tone
 

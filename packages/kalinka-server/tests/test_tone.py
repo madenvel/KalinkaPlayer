@@ -13,7 +13,14 @@ from kalinka_server.playqueue import PlayQueueImpl
 from kalinka_server.renderer_proto import renderer_pb2 as pb
 from kalinka_server.renderer_registry import RendererRegistry, RendererUnavailable
 from kalinka_server.renderer_sessions import RendererBusy, SessionPool
-from kalinka_server.renderer_test_tone import TonePlayer, tone_uri
+from kalinka_server.renderer_test_tone import (
+    CHANNELS,
+    TONE_DIR,
+    TONE_ROUTE,
+    TonePlayer,
+    tone_uri,
+    tone_url,
+)
 
 from tests.sim_renderer import SimRenderer
 
@@ -34,6 +41,13 @@ def _track(track_id: str = "1") -> TrackInfo:
         ),
         link_retriever=link_retriever,
     )
+
+
+_BASE_URL = "http://10.0.0.5:8000"
+
+
+def _tone(channel: str) -> str:
+    return tone_url(_BASE_URL, channel)
 
 
 def _sources(renderer: SimRenderer) -> list[str]:
@@ -73,7 +87,7 @@ async def queue(renderers, emitter):
 @pytest.fixture
 async def tones(renderers, queue):
     registry, pool, _, _ = renderers
-    player = TonePlayer(registry, pool, queue.release_renderer)
+    player = TonePlayer(registry, pool, queue.release_renderer, lambda: _BASE_URL)
     yield player
     await player.shutdown()
 
@@ -90,7 +104,7 @@ async def test_the_tone_reaches_the_named_renderer(tones, renderers):
 
     await tones.play("rid-b", "left")
 
-    assert _sources(second) == [tone_uri("left")]
+    assert _sources(second) == [_tone("left")]
     assert not _sources(first)
     assert second.session_id is not None
 
@@ -103,7 +117,7 @@ async def test_both_channels_share_one_session(tones, renderers):
     session_id = second.session_id
     await tones.play("rid-b", "right")
 
-    assert _sources(second) == [tone_uri("left"), tone_uri("right")]
+    assert _sources(second) == [_tone("left"), _tone("right")]
     assert second.session_id == session_id
 
 
@@ -112,7 +126,7 @@ async def test_an_unknown_channel_falls_back_to_both(tones, renderers):
 
     await tones.play("rid-b", "sideways")
 
-    assert _sources(second) == [tone_uri("both")]
+    assert _sources(second) == [_tone("both")]
 
 
 async def test_playback_stops_before_the_tone_and_says_so(
@@ -133,7 +147,7 @@ async def test_playback_stops_before_the_tone_and_says_so(
         if isinstance(call.args[0], PlaybackStateChangedEvent)
     ]
     assert PlayerStateEnum.STOPPED in states
-    assert _sources(first) == [tone_uri("left")]
+    assert _sources(first) == [_tone("left")]
 
 
 async def test_the_tone_does_not_advance_the_queue(tones, queue, renderers):
@@ -149,7 +163,7 @@ async def test_the_tone_does_not_advance_the_queue(tones, queue, renderers):
     await asyncio.sleep(0.2)
 
     assert queue.current_track_id == 0
-    assert _sources(first) == [tone_uri("left")]
+    assert _sources(first) == [_tone("left")]
 
 
 async def test_playing_elsewhere_is_left_alone(tones, queue, renderers):
@@ -177,7 +191,9 @@ async def test_the_session_goes_when_the_tone_ends(tones, renderers):
 
 async def test_the_session_goes_even_if_the_end_is_never_reported(renderers, queue):
     registry, pool, _first, second = renderers
-    player = TonePlayer(registry, pool, queue.release_renderer, hold_s=0.05)
+    player = TonePlayer(
+        registry, pool, queue.release_renderer, lambda: _BASE_URL, hold_s=0.05
+    )
 
     await player.play("rid-b", "left")
     await asyncio.sleep(0.15)
@@ -234,16 +250,41 @@ async def test_a_renderer_nothing_is_playing_on_keeps_its_queue(tones, queue, re
     await tones.play("rid-a", "left")
 
     assert first.session_id is not None
-    assert _sources(first) == [tone_uri("left")]
+    assert _sources(first) == [_tone("left")]
 
 
-def test_the_tone_url_is_what_the_renderer_parses():
-    assert tone_uri("left") == "tone://left?freq=440&duration_ms=2000"
+def test_the_tone_url_points_at_a_file_this_server_ships():
+    """The mount is mirrored here — standing up create_app() would need a real
+    plugin scan."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from starlette.staticfiles import StaticFiles
+
+    assert _tone("left") == f"{_BASE_URL}{TONE_ROUTE}/left.flac"
+
+    app = FastAPI()
+    app.mount(TONE_ROUTE, StaticFiles(directory=TONE_DIR))
+    client = TestClient(app)
+
+    for channel in CHANNELS:
+        response = client.get(_tone(channel).removeprefix(_BASE_URL))
+        assert response.status_code == 200
+        assert response.content[:4] == b"fLaC"
+
+
+async def test_the_renderer_is_told_the_source_is_flac(tones, renderers):
+    """The renderer picks its decoder from the mime type."""
+    _registry, _pool, _first, second = renderers
+
+    await tones.play("rid-b", "left")
+
+    set_source = [c for c in second.commands if c.WhichOneof("op") == "set_source"]
+    assert set_source[0].set_source.source.mime_type == "audio/flac"
 
 
 async def test_shutdown_drops_a_sounding_tone(renderers, queue):
     registry, pool, _first, second = renderers
-    player = TonePlayer(registry, pool, queue.release_renderer)
+    player = TonePlayer(registry, pool, queue.release_renderer, lambda: _BASE_URL)
     await player.play("rid-b", "left")
 
     await player.shutdown()
@@ -251,8 +292,8 @@ async def test_shutdown_drops_a_sounding_tone(renderers, queue):
     assert second.session_id is None
 
 
-def test_the_renderer_accepts_the_uri_we_send():
-    """Guards the pseudo-scheme both sides agree on (AudioPlayer.cpp)."""
+def test_the_generated_tone_uri_still_matches_what_renderers_parse():
+    """Nothing sends it now, but renderers still accept it (AudioPlayer.cpp)."""
     command = pb.Command()
     command.set_source.source.uri = tone_uri("right")
-    assert command.set_source.source.uri.startswith("tone://right?")
+    assert command.set_source.source.uri == "tone://right?freq=440&duration_ms=3000"

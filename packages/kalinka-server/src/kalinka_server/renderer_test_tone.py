@@ -1,8 +1,8 @@
 """The speaker test: a short tone played through a renderer.
 
-The renderer generates the tone itself — `tone://<channel>?freq&duration_ms` is
-a source it plays like any other, with no decoder attached — so this is only
-about who holds the renderer while it sounds.
+The tone is a FLAC file the server ships and hosts under :data:`TONE_ROUTE`;
+the renderer fetches and decodes it like any other source, so this module is
+only about who holds the renderer while it sounds.
 
 The tone gets its own session rather than borrowing the play queue's. Sharing
 one would feed the tone's own SOURCE_CHANGED and FINISHED back into the queue,
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from .renderer_registry import RendererRegistry
@@ -35,9 +36,13 @@ from .tasks import detach
 logger = logging.getLogger(__name__.split(".")[-1])
 
 TONE_FREQUENCY_HZ = 440
-# Matches the two-second left/right segments the client plays.
-TONE_DURATION_MS = 2000
+# The length of the shipped files (scripts/make_test_tones.sh).
+TONE_DURATION_MS = 3000
 CHANNELS = ("left", "right", "both")
+
+TONE_DIR = Path(__file__).resolve().parent / "assets" / "tones"
+TONE_ROUTE = "/server/tones"
+TONE_MIME_TYPE = "audio/flac"
 
 # Backstop for a renderer that never reports the end of the tone; the session
 # is normally closed by the FINISHED that follows it.
@@ -50,7 +55,18 @@ _DONE_STATES = (
 )
 
 
+def tone_url(base_url: str, channel: str) -> str:
+    """Where a renderer fetches the tone for one channel.
+
+    `base_url` is this server's own `http://host:port`, formed per call — the
+    LAN address may change between plays.
+    """
+    return f"{base_url.rstrip('/')}{TONE_ROUTE}/{channel}.flac"
+
+
 def tone_uri(channel: str) -> str:
+    """The renderer's in-process generator, which nothing sends any more. Kept
+    because renderers still accept it and it needs nothing served."""
     return (
         f"tone://{channel}?freq={TONE_FREQUENCY_HZ}"
         f"&duration_ms={TONE_DURATION_MS}"
@@ -58,20 +74,26 @@ def tone_uri(channel: str) -> str:
 
 
 class TonePlayer:
-    """Plays test tones on renderers, one session at a time."""
+    """Plays test tones on renderers, one session at a time.
+
+    `release_playback` asks whoever is playing to give a renderer up and
+    returns once it has; `base_url` answers with this server's address as a
+    renderer can reach it.
+    """
 
     def __init__(
         self,
         registry: RendererRegistry,
         pool: SessionPool,
         release_playback: Callable[[str], Awaitable[Any]],
+        base_url: Callable[[], str],
         *,
         hold_s: float = _HOLD_S,
     ):
         self._registry = registry
         self._pool = pool
-        # Asks whoever is playing to give the renderer up. Returns once it has.
         self._release_playback = release_playback
+        self._base_url = base_url
         self._hold_s = hold_s
         self._session: Optional[PlaybackSession] = None
         self._release_task: Optional[asyncio.Task] = None
@@ -87,7 +109,9 @@ class TonePlayer:
             channel = "both"
         await self._release_playback(renderer_id)
         session = await self._session_for(renderer_id)
-        await session.set_source(tone_uri(channel))
+        await session.set_source(
+            tone_url(self._base_url(), channel), mime_type=TONE_MIME_TYPE
+        )
         self._arm_release()
         logger.info("Test tone (%s) on renderer %s", channel, renderer_id)
 

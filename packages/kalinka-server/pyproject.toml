@@ -82,6 +82,9 @@ kalinka-server = "kalinka_server.__main__:run"
 include-package-data = false
 zip-safe = false
 
+[tool.setuptools.package-data]
+kalinka_server = ["assets/tones/*.flac"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["kalinka_server*", "kalinka_eventbus*", "kalinka_queued*", "kalinka_serialized*"]

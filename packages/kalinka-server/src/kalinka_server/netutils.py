@@ -4,6 +4,22 @@ import struct
 import netifaces
 
 
+def default_route_ip() -> str:
+    """
+    The address of this machine another host on the LAN would reach it by.
+    Found without sending traffic — a UDP socket "connect" only selects the
+    route. Falls back to loopback when there is no route out.
+    Returns:
+        The IP address in quad-dotted notation.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
 def get_all_ip_addresses() -> list[str]:
     """
     Get all available IP addresses from all network interfaces.
