@@ -7,8 +7,9 @@ name: Renderer release
 # never marked "latest" — that slot stays pinned to `kalinka-v*` releases.
 #
 # Formats:
-#   * .deb  — arm64 on debian:trixie (Raspberry Pi OS / Debian 13),
-#             amd64 on ubuntu:24.04
+#   * .deb  — Debian 13 (Raspberry Pi OS trixie) and Ubuntu 24.04, each on
+#             arm64 and amd64; a deb links one distro's sonames, so the two
+#             are not interchangeable
 #   * .rpm  — Fedora 44, amd64 + arm64
 #   * .flatpak — freedesktop 24.08 bundle, x86_64 + aarch64 (best-effort,
 #             never blocks the release)
@@ -31,16 +32,29 @@ env:
 
 jobs:
   deb:
-    name: Deb (${{ matrix.arch }})
+    name: Deb (${{ matrix.distro }} ${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
+        # The runner only supplies the CPU; the container is what the deb is
+        # built against. Keep distro in step with the image's os-release: the
+        # deb names itself from inside the container, this only labels it.
         include:
           - arch: arm64
             runner: ubuntu-24.04-arm
+            distro: debian-13
             container: debian:trixie
           - arch: amd64
             runner: ubuntu-24.04
+            distro: debian-13
+            container: debian:trixie
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            distro: ubuntu-24.04
+            container: ubuntu:24.04
+          - arch: amd64
+            runner: ubuntu-24.04
+            distro: ubuntu-24.04
             container: ubuntu:24.04
     runs-on: ${{ matrix.runner }}
     container:
@@ -74,7 +88,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: renderer-debs-${{ matrix.arch }}
+          name: renderer-debs-${{ matrix.distro }}-${{ matrix.arch }}
           path: packages/kalinka-renderer/*.deb
           if-no-files-found: error
 
@@ -193,8 +207,11 @@ jobs:
           on Fedora — and installs it (drop the \`-s -- $VERSION\` to always get
           the latest renderer release instead).
 
-          **Manual install — Debian 13 / Raspberry Pi OS (arm64) or Ubuntu 24.04 (amd64):**
-          download the matching \`.deb\` and \`sudo apt install ./kalinka-renderer-*.deb\`.
+          **Manual install — Debian 13 / Raspberry Pi OS or Ubuntu 24.04, arm64 or amd64:**
+          download the \`.deb\` whose name carries your distro and architecture
+          (e.g. \`kalinka-renderer-$VERSION.debian-13.arm64.deb\`) and
+          \`sudo apt install ./kalinka-renderer-*.deb\`. The debs are not
+          interchangeable between distros — each links its own library versions.
 
           **Fedora:** download the matching \`.rpm\` and \`sudo dnf install ./kalinka-renderer-*.rpm\`.
 

@@ -81,13 +81,13 @@ server release. Nothing to do here when cutting a server release.
    git tag kalinka-renderer-v0.1.0
    git push origin kalinka-renderer-v0.1.0
    ```
-   The `renderer-release.yml` workflow builds the debs (arm64 Debian 13,
-   amd64 Ubuntu 24.04), the Fedora 44 RPMs (both arches) and the flatpak
-   bundles, and publishes them to the tag's own release — never marked
-   "latest" (that slot belongs to `kalinka-v*`). Users install with
-   `scripts/install-renderer.sh` (served from `main`, like
-   `install-release.sh`), which picks deb vs rpm and the right arch for
-   the machine it runs on.
+   The `renderer-release.yml` workflow builds the debs (Debian 13 and
+   Ubuntu 24.04, each on arm64 and amd64), the Fedora 44 RPMs (both
+   arches) and the flatpak bundles, and publishes them to the tag's own
+   release — never marked "latest" (that slot belongs to `kalinka-v*`).
+   Users install with `scripts/install-renderer.sh` (served from `main`,
+   like `install-release.sh`), which picks deb vs rpm and the right
+   distro and arch for the machine it runs on.
 
    Publishing this release reaches existing installs on its own:
    `install-release.sh` runs the renderer installer for the machine it is
