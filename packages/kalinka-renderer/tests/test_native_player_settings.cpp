@@ -86,7 +86,8 @@ TEST_F(NativePlayerSettingsTest, OnlyWhatAUserPicksIsOnThePageProper) {
             pb::CONFIG_IMPORTANCE_SIMPLE);
   EXPECT_EQ(field(section, "output.volume_mode")->importance(),
             pb::CONFIG_IMPORTANCE_SIMPLE);
-  EXPECT_EQ(field(section, "output.safe_start_volume_percent")->importance(),
+  EXPECT_EQ(field(section, "output.session_start_volume_ceiling_percent")
+                ->importance(),
             pb::CONFIG_IMPORTANCE_SIMPLE);
   EXPECT_EQ(field(section, "output.driver")->importance(),
             pb::CONFIG_IMPORTANCE_EXPERT);
@@ -192,37 +193,39 @@ TEST_F(NativePlayerSettingsTest, TheEdgesOfTheRangeAreAccepted) {
   EXPECT_EQ(field(output(), "output.latency_ms")->value(), "1000");
 }
 
-TEST_F(NativePlayerSettingsTest, SafeStartVolumeIsConfigurablePerRenderer) {
+TEST_F(NativePlayerSettingsTest,
+       SessionStartVolumeCeilingIsConfigurablePerRenderer) {
   const pb::ConfigSection initial = output();
-  const pb::ConfigField *safeStart =
-      field(initial, "output.safe_start_volume_percent");
-  ASSERT_NE(safeStart, nullptr);
-  EXPECT_EQ(safeStart->value(), "30");
-  EXPECT_EQ(safeStart->default_value(), "30");
-  ASSERT_TRUE(safeStart->has_range());
-  EXPECT_EQ(safeStart->range().min(), 0);
-  EXPECT_EQ(safeStart->range().max(), 100);
-  EXPECT_EQ(safeStart->apply(), pb::APPLY_COST_INSTANT);
+  const pb::ConfigField *ceiling =
+      field(initial, "output.session_start_volume_ceiling_percent");
+  ASSERT_NE(ceiling, nullptr);
+  EXPECT_EQ(ceiling->value(), "30");
+  EXPECT_EQ(ceiling->default_value(), "30");
+  ASSERT_TRUE(ceiling->has_range());
+  EXPECT_EQ(ceiling->range().min(), 0);
+  EXPECT_EQ(ceiling->range().max(), 100);
+  EXPECT_EQ(ceiling->apply(), pb::APPLY_COST_INSTANT);
 
-  ASSERT_TRUE(player_->applyConfig("output.safe_start_volume_percent", "45",
-                                   error_))
+  ASSERT_TRUE(player_->applyConfig(
+      "output.session_start_volume_ceiling_percent", "45", error_))
       << error_;
   const pb::ConfigSection updated = output();
-  EXPECT_EQ(field(updated, "output.safe_start_volume_percent")->value(), "45");
-  EXPECT_EQ(loadSettingsOverrides().at("output.safe_start_volume_percent"),
+  EXPECT_EQ(field(updated, "output.session_start_volume_ceiling_percent")
+                ->value(),
+            "45");
+  EXPECT_EQ(loadSettingsOverrides().at(
+                "output.session_start_volume_ceiling_percent"),
             "45");
 
   std::string sessionError;
-  ASSERT_TRUE(player_->beginSessionVolume(
-      SessionVolume{"", 30, false}, sessionError))
-      << sessionError;
+  ASSERT_TRUE(player_->beginSessionVolume({}, sessionError)) << sessionError;
   pb::StateSnapshot snapshot;
   player_->fillSnapshot(snapshot);
   EXPECT_EQ(snapshot.volume().current(), 45u);
   player_->endSessionVolume();
 }
 
-TEST_F(NativePlayerSettingsTest, DirectSessionCapsVolumeBeforePlayback) {
+TEST_F(NativePlayerSettingsTest, DirectSessionCapsALouderVolumeAtTheCeiling) {
   std::string error;
   ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
 
@@ -233,7 +236,7 @@ TEST_F(NativePlayerSettingsTest, DirectSessionCapsVolumeBeforePlayback) {
   player_->endSessionVolume();
 }
 
-TEST_F(NativePlayerSettingsTest, DirectSessionDoesNotRaiseAQuietVolume) {
+TEST_F(NativePlayerSettingsTest, DirectSessionDoesNotRaiseAQuieterVolume) {
   player_->setVolume(20);
   std::string error;
   ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
@@ -245,35 +248,62 @@ TEST_F(NativePlayerSettingsTest, DirectSessionDoesNotRaiseAQuietVolume) {
 }
 
 TEST_F(NativePlayerSettingsTest,
-       DirectSessionCapsVolumeLeftAtUnityByADelegatedSession) {
+       FixedOutputSessionRestoresTheRendererModeAndVolume) {
   player_->setVolume(20);
-  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "fixed", error_))
-      << error_;
   std::string error;
-  ASSERT_TRUE(player_->beginSessionVolume(
-      SessionVolume{"fixed", 100, true}, error))
+  ASSERT_TRUE(player_->beginSessionVolume(SessionVolumePolicy{true}, error))
       << error;
-  player_->endSessionVolume();
 
-  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "auto", error_))
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_FALSE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 100u);
+
+  player_->endSessionVolume();
+  player_->fillSnapshot(snapshot);
+  EXPECT_TRUE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 20u);
+}
+
+TEST_F(NativePlayerSettingsTest, AModeChangedMidFixedSessionAppliesWhenItEnds) {
+  player_->setVolume(20);
+  std::string error;
+  ASSERT_TRUE(player_->beginSessionVolume(SessionVolumePolicy{true}, error))
+      << error;
+
+  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "fixed", error_))
       << error_;
 
   pb::StateSnapshot snapshot;
   player_->fillSnapshot(snapshot);
-  EXPECT_EQ(snapshot.volume().current(), 100u);
+  EXPECT_FALSE(snapshot.volume().supported())
+      << "the session override stays in force until the session ends";
 
-  ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
-  player_->fillSnapshot(snapshot);
-  EXPECT_EQ(snapshot.volume().current(), 30u);
   player_->endSessionVolume();
+  player_->fillSnapshot(snapshot);
+  // The mid-session choice is live, and the pre-session 20% was not pushed
+  // onto it.
+  EXPECT_FALSE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 100u);
+  EXPECT_EQ(field(output(), "output.volume_mode")->value(), "fixed");
 }
 
-TEST_F(NativePlayerSettingsTest, DirectFixedOutputIsRefusedAsUnsafe) {
+TEST_F(NativePlayerSettingsTest, PersistentlyFixedOutputIsAcceptedAtUnity) {
+  ASSERT_TRUE(player_->applyConfig("output.volume_mode", "fixed", error_))
+      << error_;
   std::string error;
-  EXPECT_FALSE(player_->beginSessionVolume(
-      SessionVolume{"fixed", std::nullopt, false}, error));
-  EXPECT_EQ(error,
-            "safe starting volume cannot be enforced with fixed output");
+  ASSERT_TRUE(player_->beginSessionVolume({}, error)) << error;
+
+  pb::StateSnapshot snapshot;
+  player_->fillSnapshot(snapshot);
+  EXPECT_FALSE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 100u);
+
+  player_->setVolume(10);
+  player_->fillSnapshot(snapshot);
+  EXPECT_FALSE(snapshot.volume().supported());
+  EXPECT_EQ(snapshot.volume().current(), 100u);
+  player_->endSessionVolume();
 }
 
 TEST_F(NativePlayerSettingsTest, AnUndeclaredPathIsRefused) {

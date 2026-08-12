@@ -76,7 +76,7 @@ the default is written to `config_overrides` in the state directory.
 | `output.driver` | ALSA. The only choice today. |
 | `output.device` | ALSA PCM to open, chosen from the devices enumerated at request time. |
 | `output.volume_mode` | `auto`, `hardware` (card mixer), `software`, or `fixed` (ignore volume, play at full level — for an amp that sets the level itself). |
-| `output.safe_start_volume_percent` | Ceiling applied when a directly-controlled session starts, so a mixer left at maximum cannot blast. Bypassed when a downstream device owns volume. |
+| `output.session_start_volume_ceiling_percent` | Maximum allowed level when a renderer-controlled session starts. It lowers a louder existing level but never raises a quieter one. Fixed output bypasses it. |
 | `output.latency_ms`, `output.period_ms`, `output.format_change_delay_ms`, `output.reopen_on_format_change` | How the ALSA sink is opened and driven. |
 | `buffers.*` | How much audio is held in memory and how far ahead of the card it runs. |
 

@@ -49,7 +49,7 @@ public:
   std::shared_ptr<Session> open(const std::string &sessionId,
                                 const std::string &ownerServerId,
                                 std::string &busyOwner,
-                                const SessionVolume &volume = {},
+                                const SessionVolumePolicy &volume = {},
                                 std::string *error = nullptr);
 
   /**

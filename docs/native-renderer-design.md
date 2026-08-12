@@ -98,7 +98,7 @@ classDiagram
         +stop()
         +seek(positionMs)
         +setVolume(percent)
-        +beginSessionVolume(SessionVolume) bool
+        +beginSessionVolume(SessionVolumePolicy) bool
         +setStateSink(StateSink)
     }
     class NativePlayer
@@ -239,7 +239,7 @@ survives is reconciled at the next `Hello`.
 
 ```
 Core                          Renderer
- │  SessionOpen(id, volume)      │
+ │  SessionOpen(id, fixed?)      │
  ├──────────────────────────────►│  SessionManager::open()
  │                               │   busy?  → SessionOpenResult(BUSY, owner)
  │◄──────────────────────────────┤   ok     → SessionOpenResult(accepted)
@@ -267,10 +267,12 @@ Rules the implementation pins down:
   reinstalled — new `server_id` — cannot leave a renderer claimed forever.
 - **Closing stops playback**, however the session ended. Shutdown closes
   immediately: the grace is for owners, not for a process that is exiting.
-- **Volume policy rides on `SessionOpen`** and is never written to config. A
-  Core that fixes volume because an amp downstream owns it must not leave the
-  renderer fixed for whoever uses it next. The mode override is undone when the
-  session ends; level changes remain.
+- **One narrow volume policy rides on `SessionOpen`** and is never written to
+  config. `force_fixed_output` says that Core has routed volume to a downstream
+  device, so the renderer temporarily runs at unity and exposes no volume
+  control. The renderer restores its configured mode and previous local level
+  when the session ends. Core never copies or overrides the renderer's own
+  `output.volume_mode`.
 
 ### 3.4 Configuration
 
@@ -388,12 +390,26 @@ before relying on multi-interface discovery.
   *owner* is accepted again (same session). The same id from another Core is
   refused as busy.
 - Apply `SessionOpen`'s volume policy before running any command of that
-  session, and undo the mode when the session ends. Never persist it.
-  - `volume_mode` empty means "leave the renderer's own setting alone";
-    otherwise one of `auto`, `hardware`, `software`, `fixed`.
-  - `volume_control_delegated = true` means a downstream device owns the level:
-    honour `volume_percent` exactly and skip any local safe-start ceiling.
-  - Direct output ignores `volume_percent` and applies its own ceiling.
+  session. It has one field, `force_fixed_output`:
+  - `false` leaves `output.volume_mode` authoritative. In `auto`, `hardware`,
+    or `software` mode, lower the current level to the renderer's configured
+    `output.session_start_volume_ceiling_percent` if it is above that ceiling.
+    Never raise an already quieter level. Refuse the session if the ceiling
+    cannot be enforced.
+  - A persistently configured `fixed` mode means the listener controls volume
+    outside Kalinka, for example with an amplifier's physical knob. Set the
+    selected ALSA playback mixer to 100% when one exists, keep software gain at
+    unity, report volume as unsupported, ignore `SetVolume`, and bypass the
+    session-start ceiling.
+  - `true` applies that same fixed-unity state temporarily when Core has mapped
+    the renderer to a downstream device module. This is a mode override, not a
+    volume value: there is no session `volume_percent`. Restore the renderer's
+    configured mode and its previous local level when the session ends, and
+    never persist the override.
+- Treat the session-start ceiling as a startup guardrail, not a limiter. It
+  reduces the chance that a locally controlled output left loud surprises the
+  listener, but deliberately cannot protect a fixed output: choosing fixed
+  transfers responsibility for a safe listening level to the downstream amp.
 - After accepting, send a `StateSnapshot` unprompted. Send one again whenever a
   connection (re)attaches to a running session, and on `RequestSnapshot`.
 - On `SessionClose`, end the session, stop playback, and answer
@@ -468,9 +484,9 @@ Report, with `Envelope.session_id` set:
 - Refuse — do not clamp, do not partially apply a single setting — an unknown
   path, a read-only field, a value that does not parse as the field's type, an
   integer outside its declared range, or an enum value not among the options.
-- Two paths carry meaning to Core beyond display: `output.volume_mode`, whose
-  values are the four above, and the device field's option values, which Core
-  passes back verbatim. Everything else is yours.
+- Config paths and values are renderer-owned. Core renders and validates the
+  schema, then passes selected values back verbatim; in particular, it does not
+  interpret `output.volume_mode` when opening a session.
 
 ### 4.8 Goodbye
 

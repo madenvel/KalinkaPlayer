@@ -8,14 +8,10 @@
 #include "../config/ConfigContributor.h"
 #include "kalinka/renderer/v1/renderer.pb.h"
 
-/// Session-scoped volume policy, as carried on SessionOpen.
-struct SessionVolume {
-  /// One of the output.volume_mode values; empty leaves the configured one.
-  std::string mode;
-  /// Exact delegated-output level; ignored for direct output.
-  std::optional<uint32_t> percent;
-  /// A downstream device owns volume, so the direct-output ceiling is skipped.
-  bool delegated = false;
+/// Session-scoped output policy, as carried on SessionOpen.
+struct SessionVolumePolicy {
+  /// Core routes volume downstream, so temporarily force fixed unity output.
+  bool forceFixedOutput = false;
 };
 
 /**
@@ -134,19 +130,18 @@ public:
   /**
    * @brief Apply a volume policy before one session can play.
    *
-   * The mode override is held in memory and undone by endSessionVolume(); level
-   * changes remain as the current level. Nothing is written to the renderer's
-   * configuration: a Core that fixes volume because an amp downstream owns it
-   * must not leave this renderer fixed for whoever uses it next, and a crash
-   * mid-session must come back with the renderer's own setting. The configured
-   * value is what the config plane keeps reporting.
+   * A fixed-output override is held in memory and undone by
+   * endSessionVolume(). Nothing is written to renderer configuration: a Core
+   * that routes volume to an amp must not leave this renderer fixed for whoever
+   * uses it next. Without the override, the renderer's own mode is authoritative.
    *
    * @param volume Session policy supplied by the Core.
    * @param error  Why the safety policy could not be applied.
    * @return false when playback must not start because the policy could not be
    *         enforced.
    */
-  virtual bool beginSessionVolume(const SessionVolume &, std::string &error) {
+  virtual bool beginSessionVolume(const SessionVolumePolicy &,
+                                  std::string &error) {
     error = "player cannot enforce the session volume policy";
     return false;
   }

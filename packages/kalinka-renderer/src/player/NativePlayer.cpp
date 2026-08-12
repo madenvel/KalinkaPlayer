@@ -163,7 +163,7 @@ const std::map<std::string, std::string> &NativePlayer::defaultSettings() {
       {"output.driver", "alsa"},
       {"output.device", "default"},
       {"output.volume_mode", "auto"},
-      {"output.safe_start_volume_percent", "30"},
+      {"output.session_start_volume_ceiling_percent", "30"},
       // What the server shipped while it did the playing, rather than the
       // sink's own 100/25.
       {"output.latency_ms", "160"},
@@ -239,7 +239,13 @@ bool NativePlayer::ensurePlayer() {
   }
   try {
     player_ = std::make_unique<AudioPlayer>(graphConfig());
-    player_->configureVolume(effectiveVolumeMode(), "");
+    std::string volumeError;
+    if (!player_->configureVolume(effectiveVolumeMode(), "", &volumeError)) {
+      spdlog::error("Cannot configure volume mode '{}': {}",
+                    effectiveVolumeMode(), volumeError);
+      player_.reset();
+      return false;
+    }
     startPumps();
     return true;
   } catch (const std::exception &e) {
@@ -582,7 +588,7 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
   mode->set_type(pb::CONFIG_FIELD_TYPE_ENUM);
   mode->set_value(settings_.at("output.volume_mode"));
   mode->set_default_value("auto");
-  mode->set_apply(pb::APPLY_COST_INSTANT);
+  mode->set_apply(pb::APPLY_COST_INTERRUPTS_PLAYBACK);
   mode->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
   struct VolumeChoice {
     const char *value;
@@ -597,11 +603,12 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
        "Sets the level in the card, leaving the samples unchanged. Needs a "
        "card that has a mixer."},
       {"software", "Software",
-       "Scales the samples before sending them. Works with any card; quiet "
-       "levels lose some resolution."},
+       "Sets the card mixer to 100%, then scales samples before sending them. "
+       "Works with any card; quiet levels lose some resolution."},
       {"fixed", "Fixed output",
-       "Ignores volume commands and always plays at full level — for an "
-       "amplifier that sets the volume itself."},
+       "Sets the card mixer and software gain to 100%, ignores volume commands, "
+       "and bypasses the session-start ceiling. Use only when an amplifier or "
+       "receiver controls the listening level."},
   };
   for (const VolumeChoice &choice : choices) {
     pb::ConfigOption *option = mode->add_options();
@@ -610,23 +617,23 @@ void NativePlayer::fillConfig(pb::ConfigSection &out) const {
     option->set_description(choice.description);
   }
 
-  pb::ConfigField *safeStart = out.add_fields();
-  safeStart->set_path("output.safe_start_volume_percent");
-  safeStart->set_title("Safe starting volume");
-  safeStart->set_description(
-      "Highest volume allowed when a directly controlled playback session "
-      "starts. Lower levels are left unchanged; externally controlled output "
-      "bypasses this limit.");
-  safeStart->set_type(pb::CONFIG_FIELD_TYPE_INT);
-  safeStart->set_value(settings_.at("output.safe_start_volume_percent"));
-  safeStart->set_default_value("30");
-  safeStart->set_apply(pb::APPLY_COST_INSTANT);
-  safeStart->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
-  safeStart->set_unit("%");
-  safeStart->mutable_range()->set_min(0);
-  safeStart->mutable_range()->set_max(100);
-  safeStart->mutable_range()->set_step(1);
-  safeStart->set_widget(pb::CONFIG_WIDGET_SLIDER);
+  pb::ConfigField *startCeiling = out.add_fields();
+  startCeiling->set_path("output.session_start_volume_ceiling_percent");
+  startCeiling->set_title("Session start volume ceiling");
+  startCeiling->set_description(
+      "Maximum volume when a renderer-controlled session starts. A quieter "
+      "existing level is never raised. Fixed output bypasses this ceiling.");
+  startCeiling->set_type(pb::CONFIG_FIELD_TYPE_INT);
+  startCeiling->set_value(
+      settings_.at("output.session_start_volume_ceiling_percent"));
+  startCeiling->set_default_value("30");
+  startCeiling->set_apply(pb::APPLY_COST_INSTANT);
+  startCeiling->set_importance(pb::CONFIG_IMPORTANCE_SIMPLE);
+  startCeiling->set_unit("%");
+  startCeiling->mutable_range()->set_min(0);
+  startCeiling->mutable_range()->set_max(100);
+  startCeiling->mutable_range()->set_step(1);
+  startCeiling->set_widget(pb::CONFIG_WIDGET_SLIDER);
 
   for (const Knob &knob : kOutputKnobs) {
     declare(out, knob, settings_, defaultSettings());
@@ -655,15 +662,26 @@ bool NativePlayer::applySetting(const std::string &path,
   if (setting->second == value) {
     return true;  // nothing to do, and nothing to interrupt
   }
+
+  if (path == "output.volume_mode" && player_ && !sessionForcedFixed_) {
+    // Changing which stage owns volume can otherwise produce an abrupt level
+    // jump in audio already on air. The field declares this interruption.
+    stop();
+    std::string configureError;
+    if (!player_->configureVolume(value, "", &configureError)) {
+      error = configureError;
+      return false;
+    }
+  }
+
   setting->second = value;
   persistOverrides();
   spdlog::info("Config {} = '{}'", path, value);
   if (graphKeys().contains(path)) {
     rebuildPlayer();
   } else if (path == "output.volume_mode" && player_) {
-    // A session override outranks the configured value until it ends.
-    if (!sessionVolumeMode_) {
-      player_->configureVolume(value, "");
+    // A downstream session override outranks the configured value until it ends.
+    if (!sessionForcedFixed_) {
       emitVolume(player_->getVolume(), false);
     }
   }
@@ -671,96 +689,95 @@ bool NativePlayer::applySetting(const std::string &path,
 }
 
 const std::string &NativePlayer::effectiveVolumeMode() const {
-  return sessionVolumeMode_ ? *sessionVolumeMode_
-                            : settings_.at("output.volume_mode");
+  static const std::string fixed = "fixed";
+  return sessionForcedFixed_ ? fixed : settings_.at("output.volume_mode");
 }
 
-bool NativePlayer::beginSessionVolume(const SessionVolume &volume,
+bool NativePlayer::beginSessionVolume(const SessionVolumePolicy &policy,
                                       std::string &error) {
   error.clear();
   if (!ensurePlayer()) {
-    error = "audio output is unavailable; safe starting volume cannot be "
-            "enforced";
+    error = "audio output is unavailable; session-start volume ceiling "
+            "cannot be enforced";
     return false;
   }
 
-  const auto applyMode = [this](const std::string &mode) {
-    if (mode.empty()) {
-      return;
-    }
-    const bool changed = mode != effectiveVolumeMode();
-    sessionVolumeMode_ = mode;
-    if (changed) {
-      spdlog::info("Session volume mode: '{}' (configured '{}' is kept)", mode,
-                   settings_.at("output.volume_mode"));
-      player_->configureVolume(mode, "");
-    }
-  };
-
-  if (volume.delegated) {
-    if (volume.mode != "fixed") {
-      error = "delegated volume control requires fixed output";
+  const std::string &configuredMode = settings_.at("output.volume_mode");
+  if (policy.forceFixedOutput) {
+    const VolumeState before = player_->getVolume();
+    sessionRestoreMode_ = configuredMode;
+    sessionRestoreVolume_ = before.supported
+                                ? std::optional<int>(before.current)
+                                : std::nullopt;
+    if (!player_->configureVolume("fixed", "", &error)) {
+      sessionRestoreMode_.reset();
+      sessionRestoreVolume_.reset();
       return false;
     }
-    // Reopen a controllable backend first: the renderer may itself be
-    // configured as fixed while its hardware mixer is still attenuated.
-    player_->configureVolume("auto", "");
-    player_->setVolume(
-        static_cast<int>(std::min(volume.percent.value_or(100), 100u)));
-    sessionVolumeMode_ = "fixed";
-    player_->configureVolume("fixed", "");
+    sessionForcedFixed_ = true;
+    spdlog::info("Session fixed output at unity (configured '{}' is kept)",
+                 configuredMode);
     return true;
   }
 
-  if (volume.mode == "fixed") {
-    error = "safe starting volume cannot be enforced with fixed output";
+  if (!player_->configureVolume(configuredMode, "", &error)) {
     return false;
   }
-  applyMode(volume.mode);
+
+  // Persistent fixed mode is the explicit manual-amplifier configuration.
+  if (configuredMode == "fixed") {
+    return true;
+  }
 
   const std::string &configuredCeiling =
-      settings_.at("output.safe_start_volume_percent");
+      settings_.at("output.session_start_volume_ceiling_percent");
   uint32_t ceiling = 0;
   const char *end = configuredCeiling.data() + configuredCeiling.size();
   const auto [stop, parseError] =
       std::from_chars(configuredCeiling.data(), end, ceiling);
   if (parseError != std::errc{} || stop != end || ceiling > 100) {
-    endSessionVolume();
-    error = "safe starting volume setting is invalid";
+    error = "session-start volume ceiling setting is invalid";
     return false;
   }
   VolumeState state = player_->getVolume();
   if (!state.supported) {
-    endSessionVolume();
-    error = "volume control is unavailable; safe starting volume cannot be "
-            "enforced";
+    error = "volume control is unavailable; session-start volume ceiling "
+            "cannot be enforced";
     return false;
   }
-  if (state.current <= static_cast<int>(ceiling)) {
-    return true;
+  if (state.current > static_cast<int>(ceiling)) {
+    player_->setVolume(static_cast<int>(ceiling));
+    state = player_->getVolume();
   }
-
-  player_->setVolume(static_cast<int>(ceiling));
-  state = player_->getVolume();
+  // A coarse mixer may land below the requested level; only louder is unsafe.
   if (!state.supported || state.current > static_cast<int>(ceiling)) {
-    endSessionVolume();
-    error = "renderer failed to apply its safe starting volume";
+    error = "renderer failed to apply its session-start volume ceiling";
     return false;
   }
-  spdlog::info("Session start volume capped at {}%", state.current);
+  spdlog::info("Session starts at {}% volume (ceiling {}%)", state.current,
+               ceiling);
   return true;
 }
 
 void NativePlayer::endSessionVolume() {
-  if (!sessionVolumeMode_) {
+  if (!sessionForcedFixed_) {
     return;
   }
-  sessionVolumeMode_.reset();
-  spdlog::info("Session volume mode ended; back to '{}'",
-               settings_.at("output.volume_mode"));
+  sessionForcedFixed_ = false;
+  const std::string &configuredMode = settings_.at("output.volume_mode");
+  spdlog::info("Session fixed output ended; back to '{}'", configuredMode);
   if (player_) {
-    player_->configureVolume(settings_.at("output.volume_mode"), "");
+    std::string error;
+    if (!player_->configureVolume(configuredMode, "", &error)) {
+      spdlog::error("Cannot restore configured volume mode '{}': {}",
+                    configuredMode, error);
+    } else if (sessionRestoreMode_ == configuredMode &&
+               sessionRestoreVolume_ && configuredMode != "fixed") {
+      player_->setVolume(*sessionRestoreVolume_);
+    }
   }
+  sessionRestoreMode_.reset();
+  sessionRestoreVolume_.reset();
 }
 
 void NativePlayer::fillSnapshot(pb::StateSnapshot &out) const {

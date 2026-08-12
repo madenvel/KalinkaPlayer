@@ -151,11 +151,7 @@ void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {
   } else {
     std::string busyOwner;
     std::string openError;
-    SessionVolume volume{open.volume_mode(), std::nullopt,
-                         open.volume_control_delegated()};
-    if (open.has_volume_percent()) {
-      volume.percent = open.volume_percent();
-    }
+    SessionVolumePolicy volume{open.force_fixed_output()};
     if (auto session = services_.sessions->open(sessionId, serverId_, busyOwner,
                                                 volume, &openError)) {
       result->set_accepted(true);

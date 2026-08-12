@@ -36,7 +36,6 @@ from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 from kalinka_plugin_sdk.events import PlayQueueEventType
 from kalinka_plugin_sdk import paths
 
-from .renderer_output_device import VOLUME_STYLE_OPTIONS_PATH, volume_style_options
 from .config_model import KalinkaConfig
 from .config_overrides import save_overrides
 from .config_schema_processor import (
@@ -414,11 +413,6 @@ async def create_app(
     # network interfaces / COM ports tomorrow). Sits alongside the
     # dynamic-field registry but for *choices* rather than *values*.
     app.state.options_registry = OptionsRegistry()
-    # Static labelled/described choices for the renderer device's volume_style
-    # dropdown.
-    app.state.options_registry.register(
-        VOLUME_STYLE_OPTIONS_PATH, volume_style_options
-    )
     _initial_ok_in = {
         name: m.plugin_context.config
         for name, m in modules.prepared_input_modules.items()

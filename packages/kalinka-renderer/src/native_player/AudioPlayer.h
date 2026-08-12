@@ -68,7 +68,10 @@ public:
   // up so its settings drive the native player; can be called again to change
   // mode at runtime. Until configured, the player is in "fixed" (no volume
   // control, bit-perfect) mode.
-  void configureVolume(const std::string &mode, const std::string &mixerControl);
+  /// Select a volume mode and put every inactive gain stage at unity. Returns
+  /// false when a detected ALSA mixer cannot be set as the mode requires.
+  bool configureVolume(const std::string &mode, const std::string &mixerControl,
+                       std::string *error = nullptr);
 
   // Volume control for the currently selected ALSA output. Values are 0..100
   // percent. getVolume() reports supported=false when no backend applies (e.g.

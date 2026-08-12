@@ -13,7 +13,7 @@ std::shared_ptr<Session> Session::create(asio::io_context &ioc,
                                          std::chrono::seconds ownerGrace,
                                          std::shared_ptr<Player> player,
                                          std::function<void()> onEnded,
-                                         SessionVolume volume,
+                                         SessionVolumePolicy volume,
                                          std::string *error) {
   auto session = std::shared_ptr<Session>(
       new Session(ioc, std::move(sessionId), std::move(ownerServerId),

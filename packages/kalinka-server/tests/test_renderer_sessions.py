@@ -38,14 +38,10 @@ class FakeWs:
     async def send_session_open(
         self,
         session_id,
-        volume_mode="",
-        volume_percent=None,
-        volume_control_delegated=False,
+        force_fixed_output=False,
     ):
         self.opened.append(session_id)
-        self.volume_policies.append(
-            (volume_mode, volume_percent, volume_control_delegated)
-        )
+        self.volume_policies.append(force_fixed_output)
         if self.answer:
             self.pool.handle_open_result(
                 RENDERER_ID,
@@ -131,13 +127,11 @@ async def test_the_volume_policy_rides_session_open():
 
     assert ws.volume_policies == []
     pool.set_volume_policy(
-        lambda renderer_id: SessionVolumePolicy(
-            mode="fixed", percent=100, delegated=True
-        )
+        lambda renderer_id: SessionVolumePolicy(force_fixed_output=True)
     )
     session = await pool.open(RENDERER_ID)
 
-    assert ws.volume_policies == [("fixed", 100, True)]
+    assert ws.volume_policies == [True]
     await session.close()
 
 
@@ -147,7 +141,7 @@ async def test_no_policy_provider_sends_a_direct_session():
     register(registry, ws)
 
     session = await pool.open(RENDERER_ID)
-    assert ws.volume_policies == [("", None, False)]
+    assert ws.volume_policies == [False]
     await session.close()
 
 

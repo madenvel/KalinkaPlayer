@@ -218,23 +218,18 @@ message Welcome {
 message SessionOpen {
   string session_id = 1;
 
-  // Volume policy applied before this session can play. The mode override is
-  // undone when the session ends; level changes remain as the current level.
-  // Nothing here is written to the renderer's configuration: a Core that fixes
-  // volume because an amp downstream owns it must not leave the renderer fixed
-  // for whoever uses it next.
+  // Core routes volume to a downstream device for this session. Temporarily
+  // force the renderer to fixed unity output: its selected ALSA playback mixer
+  // at 100% when one exists, software gain at unity, renderer volume commands
+  // disabled, and no session-start ceiling.
+  // Restore the renderer's configured output.volume_mode when the session ends.
   //
-  // Empty mode = leave the renderer's own setting alone. Otherwise one of the
-  // output.volume_mode values: "auto", "hardware", "software", "fixed".
-  string volume_mode = 2;
-  // Exact level for delegated output. A current renderer ignores it for direct
-  // output and applies its local ceiling instead; Cores still send a direct
-  // value as a safe fallback for older renderers.
-  optional uint32 volume_percent = 3;
+  // False leaves output.volume_mode entirely renderer-owned. A renderer that is
+  // persistently configured as fixed therefore also supports an amplifier with
+  // only a physical volume knob; no Core-side device module is required.
+  bool force_fixed_output = 2;
 
-  // True when a downstream device owns volume. The renderer then skips its
-  // safe-start ceiling and runs the session at the requested fixed level.
-  bool volume_control_delegated = 4;
+  reserved 3, 4;
 }
 
 message SessionOpenResult {
