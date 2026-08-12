@@ -1,6 +1,10 @@
+import contextlib
 import logging
+from dataclasses import dataclass
+
 from .config_model import KalinkaConfig
 from .renderer_ws_handler import PROTOCOL_VERSION as RENDERER_PROTOCOL_VERSION
+from .server_identity import get_server_id
 from .version import get_version, get_rest_api_version
 
 from zeroconf import IPVersion, ServiceInfo
@@ -43,14 +47,18 @@ def get_interface_ip_mappings() -> dict[str, str]:
     return interface_ips
 
 
-def get_service_info(config: KalinkaConfig, ip_addresses: list[str]) -> ServiceInfo:
+def get_service_info(
+    config: KalinkaConfig, interface_name: str, ip_address: str
+) -> ServiceInfo:
     """
-    Create the single ServiceInfo announced for this server.
+    Create the ServiceInfo announced on one interface.
 
-    One instance, named exactly after the configured service name, carrying an
-    A record per address. A single responder announcing the same record set on
-    every interface cannot conflict with itself, so no per-interface suffix is
-    needed (RFC 6762 name defense only applies between independent responders).
+    One instance per interface, carrying only that interface's address, so a
+    client never learns an address from a network it cannot reach. The
+    instance name is suffixed with the interface — independent per-interface
+    responders sharing a name would trip RFC 6762 conflict defence. Clients
+    group the instances of one Core by the server_id TXT value and show
+    display_name, so the suffix stays invisible.
     """
 
     desc = {
@@ -59,23 +67,31 @@ def get_service_info(config: KalinkaConfig, ip_addresses: list[str]) -> ServiceI
         # Renderer capability: presence = /renderer/ws exists, value = protocol
         # version. Renderers skip servers without a compatible value.
         "renderer_proto": str(RENDERER_PROTOCOL_VERSION),
+        "server_id": get_server_id(),
+        "display_name": config.server.service_name,
     }
 
     return ServiceInfo(
         type_="_kalinkaplayer._tcp.local.",
-        name=f"{config.server.service_name}._kalinkaplayer._tcp.local.",
-        addresses=[socket.inet_aton(ip) for ip in ip_addresses],
+        name=f"{config.server.service_name} ({interface_name})"
+        "._kalinkaplayer._tcp.local.",
+        addresses=[socket.inet_aton(ip_address)],
         port=config.server.port,
         properties=desc,
     )
 
 
+@dataclass
+class _Announcement:
+    interface: str
+    ip_address: str
+    service_info: ServiceInfo
+    zeroconf: AsyncZeroconf | None = None
+
+
 class ServiceDiscovery:
     def __init__(self, config: KalinkaConfig):
-        self.config = config
-        self.zeroconf: AsyncZeroconf | None = None
-        self.service_info: ServiceInfo | None = None
-        self.ip_addresses: list[str] = []
+        self.announcements: list[_Announcement] = []
 
         interface_ips = get_interface_ip_mappings()
         if not interface_ips:
@@ -92,53 +108,64 @@ class ServiceDiscovery:
             )
             configured_interface = "all"
 
-        if configured_interface == "all":
-            # Deduplicate while keeping interface order
-            self.ip_addresses = list(dict.fromkeys(interface_ips.values()))
-            logger.info(
-                f"[Zeroconf] Announcing on {len(interface_ips)} interfaces: "
-                + ", ".join(f"{name} ({ip})" for name, ip in interface_ips.items())
-            )
-        else:
-            self.ip_addresses = [interface_ips[configured_interface]]
-            logger.info(
-                f"[Zeroconf] Announcing on interface {configured_interface} "
-                f"({self.ip_addresses[0]})"
-            )
+        if configured_interface != "all":
+            interface_ips = {
+                configured_interface: interface_ips[configured_interface]
+            }
 
-        self.service_info = get_service_info(config, self.ip_addresses)
+        logger.info(
+            f"[Zeroconf] Announcing on {len(interface_ips)} interface(s): "
+            + ", ".join(f"{name} ({ip})" for name, ip in interface_ips.items())
+        )
+        self.announcements = [
+            _Announcement(name, ip, get_service_info(config, name, ip))
+            for name, ip in interface_ips.items()
+        ]
 
     async def register_service(self):
-        """Register the service instance."""
-        if self.service_info is None:
-            return
-
-        try:
-            self.zeroconf = AsyncZeroconf(
-                ip_version=IPVersion.V4Only, interfaces=self.ip_addresses
-            )
-            await self.zeroconf.async_register_service(self.service_info)
-            logger.info(
-                f"[Zeroconf] Registered service: {self.service_info.name} on "
-                f"{[socket.inet_ntoa(addr) for addr in self.service_info.addresses]}"
-            )
-        except Exception as e:
-            logger.error(
-                f"[Zeroconf] Failed to register service {self.service_info.name}: {e}"
-            )
+        """Register one service instance per announced interface."""
+        for announcement in self.announcements:
+            try:
+                announcement.zeroconf = AsyncZeroconf(
+                    ip_version=IPVersion.V4Only,
+                    interfaces=[announcement.ip_address],
+                )
+                await announcement.zeroconf.async_register_service(
+                    announcement.service_info
+                )
+                logger.info(
+                    f"[Zeroconf] Registered service: "
+                    f"{announcement.service_info.name} on "
+                    f"{announcement.interface} ({announcement.ip_address})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[Zeroconf] Failed to register service "
+                    f"{announcement.service_info.name}: {e}"
+                )
+                if announcement.zeroconf is not None:
+                    with contextlib.suppress(Exception):
+                        await announcement.zeroconf.async_close()
+                    announcement.zeroconf = None
 
     async def unregister_service(self):
-        """Unregister the service instance."""
-        if self.zeroconf is None or self.service_info is None:
-            return
+        """Unregister every service instance, waiting out the goodbyes."""
+        for announcement in self.announcements:
+            if announcement.zeroconf is None:
+                continue
 
-        try:
-            logger.info(f"[Zeroconf] Unregistering service: {self.service_info.name}")
-            await self.zeroconf.async_unregister_service(self.service_info)
-            await self.zeroconf.async_close()
-        except Exception as e:
-            logger.error(
-                f"[Zeroconf] Failed to unregister service {self.service_info.name}: {e}"
-            )
-        finally:
-            self.zeroconf = None
+            try:
+                logger.info(
+                    f"[Zeroconf] Unregistering service: "
+                    f"{announcement.service_info.name}"
+                )
+                # async_close() unregisters the service and awaits the goodbye
+                # broadcasts; async_unregister_service() only schedules them.
+                await announcement.zeroconf.async_close()
+            except Exception as e:
+                logger.error(
+                    f"[Zeroconf] Failed to unregister service "
+                    f"{announcement.service_info.name}: {e}"
+                )
+            finally:
+                announcement.zeroconf = None
