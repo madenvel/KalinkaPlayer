@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <spdlog/fmt/ranges.h>
 #include <spdlog/spdlog.h>
 #include <sys/select.h>
@@ -18,6 +19,9 @@
 namespace {
 
 constexpr const char *kServiceType = "_kalinkaplayer._tcp.local.";
+// TXT keys carried by every per-interface instance of one Core.
+constexpr const char *kServerIdTxtKey = "server_id";
+constexpr const char *kDisplayNameTxtKey = "display_name";
 constexpr auto kMaxQueryInterval = std::chrono::seconds(60);
 // Floor between refresh queries, so an entry that is overdue for one cannot
 // turn the browse loop into a query flood.
@@ -43,6 +47,9 @@ struct Packet {
   // instances whose TXT record appeared, and their renderer_proto value
   std::set<std::string> txtSeen;
   std::map<std::string, int> rendererProto;
+  // instance name -> server_id / display_name TXT values, where announced
+  std::map<std::string, std::string> txtServerId;
+  std::map<std::string, std::string> txtDisplayName;
 };
 
 void noteTtl(Packet *packet, const std::string &instance, uint32_t ttl) {
@@ -115,11 +122,14 @@ int recordCallback(int /*sock*/, const struct sockaddr *from,
     const size_t count = mdns_record_parse_txt(
         data, size, record_offset, record_length, txt, std::size(txt));
     for (size_t i = 0; i < count; ++i) {
-      if (std::string(txt[i].key.str, txt[i].key.length) ==
-          kRendererProtoTxtKey) {
-        packet->rendererProto[owner] =
-            std::atoi(std::string(txt[i].value.str, txt[i].value.length)
-                          .c_str());
+      const std::string key(txt[i].key.str, txt[i].key.length);
+      const std::string value(txt[i].value.str, txt[i].value.length);
+      if (key == kRendererProtoTxtKey) {
+        packet->rendererProto[owner] = std::atoi(value.c_str());
+      } else if (key == kServerIdTxtKey) {
+        packet->txtServerId[owner] = value;
+      } else if (key == kDisplayNameTxtKey) {
+        packet->txtDisplayName[owner] = value;
       }
     }
     break;
@@ -193,40 +203,89 @@ std::string displayName(const std::string &instance) {
   return pos == std::string::npos ? instance : instance.substr(0, pos);
 }
 
+// One socket per multicast-capable interface: membership and query egress are
+// per-interface properties, and a wildcard socket gets both only on the
+// interface the kernel picks for it.
+std::vector<int> openSockets() {
+  std::vector<int> socks;
+  ifaddrs *ifaddr = nullptr;
+  if (getifaddrs(&ifaddr) == 0) {
+    for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+      if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET ||
+          (ifa->ifa_flags & IFF_LOOPBACK) || !(ifa->ifa_flags & IFF_UP) ||
+          !(ifa->ifa_flags & IFF_MULTICAST)) {
+        continue;
+      }
+      sockaddr_in saddr =
+          *reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
+      saddr.sin_port = htons(MDNS_PORT);
+      const int sock = mdns_socket_open_ipv4(&saddr);
+      char ip[INET_ADDRSTRLEN];
+      inet_ntop(AF_INET, &saddr.sin_addr, ip, sizeof(ip));
+      if (sock < 0) {
+        spdlog::warn("[Discovery] Could not open mDNS socket on {} ({}): {}",
+                     ifa->ifa_name, ip, std::strerror(errno));
+        continue;
+      }
+#ifdef IP_MULTICAST_ALL
+      // Deliver only what arrives on this socket's own interface, so one
+      // datagram is not drained once per socket.
+      const int off = 0;
+      setsockopt(sock, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof(off));
+#endif
+      spdlog::info("[Discovery] Browsing on {} ({})", ifa->ifa_name, ip);
+      socks.push_back(sock);
+    }
+    freeifaddrs(ifaddr);
+  }
+  if (socks.empty()) {
+    // No eligible interface (yet): a wildcard socket keeps things working
+    // once the network comes up, as the single socket always did.
+    sockaddr_in any{};
+    any.sin_family = AF_INET;
+    any.sin_addr.s_addr = INADDR_ANY;
+    any.sin_port = htons(MDNS_PORT);
+    const int sock = mdns_socket_open_ipv4(&any);
+    if (sock >= 0) {
+      socks.push_back(sock);
+    }
+  }
+  return socks;
+}
+
 }  // namespace
 
 MdnsDiscovery::MdnsDiscovery(AddFn onAdd, RemoveFn onRemove)
-    : onAdd_(std::move(onAdd)), onRemove_(std::move(onRemove)) {}
+    : grouper_(std::move(onAdd), std::move(onRemove)) {}
 
 MdnsDiscovery::~MdnsDiscovery() { stop(); }
 
 bool MdnsDiscovery::start() {
-  sockaddr_in saddr{};
-  saddr.sin_family = AF_INET;
-  saddr.sin_addr.s_addr = INADDR_ANY;
-  saddr.sin_port = htons(MDNS_PORT);
-  sock_ = mdns_socket_open_ipv4(&saddr);
-  if (sock_ < 0) {
-    spdlog::error("[Discovery] Could not open mDNS socket (port 5353): {}",
+  socks_ = openSockets();
+  if (socks_.empty()) {
+    spdlog::error("[Discovery] Could not open any mDNS socket (port 5353): {}",
                   std::strerror(errno));
     return false;
   }
   nextQuery_ = std::chrono::steady_clock::now();
   thread_ = std::thread([this] { run(); });
-  spdlog::info("[Discovery] Browsing for {} services", kServiceType);
+  spdlog::info("[Discovery] Browsing for {} services on {} socket(s)",
+               kServiceType, socks_.size());
   return true;
 }
 
 void MdnsDiscovery::stop() {
-  if (sock_ < 0) {
+  if (socks_.empty()) {
     return;
   }
   stopping_ = true;
   if (thread_.joinable()) {
     thread_.join();
   }
-  mdns_socket_close(sock_);
-  sock_ = -1;
+  for (const int sock : socks_) {
+    mdns_socket_close(sock);
+  }
+  socks_.clear();
 }
 
 void MdnsDiscovery::run() {
@@ -248,10 +307,17 @@ void MdnsDiscovery::run() {
     tv.tv_usec = static_cast<suseconds_t>((wait.count() % 1000) * 1000);
     fd_set readfds;
     FD_ZERO(&readfds);
-    FD_SET(sock_, &readfds);
-    if (select(sock_ + 1, &readfds, nullptr, nullptr, &tv) > 0 &&
-        FD_ISSET(sock_, &readfds)) {
-      drainSocket();
+    int maxfd = -1;
+    for (const int sock : socks_) {
+      FD_SET(sock, &readfds);
+      maxfd = std::max(maxfd, sock);
+    }
+    if (select(maxfd + 1, &readfds, nullptr, nullptr, &tv) > 0) {
+      for (const int sock : socks_) {
+        if (FD_ISSET(sock, &readfds)) {
+          drainSocket(sock);
+        }
+      }
     }
     expireStale();
   }
@@ -260,19 +326,21 @@ void MdnsDiscovery::run() {
 void MdnsDiscovery::sendQuery() {
   lastQuery_ = std::chrono::steady_clock::now();
   std::vector<char> buffer(kBufferSize);
-  if (mdns_query_send(sock_, MDNS_RECORDTYPE_PTR, kServiceType,
-                      std::strlen(kServiceType), buffer.data(), buffer.size(),
-                      0) < 0) {
-    spdlog::warn("[Discovery] Query send failed: {}", std::strerror(errno));
+  for (const int sock : socks_) {
+    if (mdns_query_send(sock, MDNS_RECORDTYPE_PTR, kServiceType,
+                        std::strlen(kServiceType), buffer.data(), buffer.size(),
+                        0) < 0) {
+      spdlog::warn("[Discovery] Query send failed: {}", std::strerror(errno));
+    }
   }
 }
 
-void MdnsDiscovery::drainSocket() {
+void MdnsDiscovery::drainSocket(int sock) {
   std::vector<char> buffer(kBufferSize);
   for (;;) {
     Packet packet;
     // query_id 0: accept all responses, including unsolicited announcements.
-    if (mdns_query_recv(sock_, buffer.data(), buffer.size(), recordCallback,
+    if (mdns_query_recv(sock, buffer.data(), buffer.size(), recordCallback,
                         &packet, 0) == 0) {
       break;  // would block — no more datagrams
     }
@@ -287,7 +355,7 @@ void MdnsDiscovery::drainSocket() {
           spdlog::info("[Discovery] Service '{}' disappeared",
                        displayName(instance));
           if (*announced) {
-            onRemove_(instance);
+            grouper_.remove(instance);
           }
         }
         continue;
@@ -306,16 +374,16 @@ void MdnsDiscovery::drainSocket() {
       const bool capable = proto != packet.rendererProto.end() &&
                            rendererProtocolSupported(proto->second);
       const auto announced = cache_.announced(instance);
-      if (announced.has_value() && *announced == capable) {
-        continue;  // no change; the lifetime above is what this message added
-      }
       if (!capable) {
+        if (announced.has_value() && !*announced) {
+          continue;  // no change; the lifetime above is what this message added
+        }
         const bool wasCapable = announced.value_or(false);
         cache_.keep(instance, false, ttl, now);
         if (wasCapable) {
           spdlog::warn("[Discovery] '{}' lost renderer support; disconnecting",
                        displayName(instance));
-          onRemove_(instance);
+          grouper_.remove(instance);
         } else {
           spdlog::info(
               "[Discovery] '{}' has no renderer support (renderer_proto "
@@ -333,13 +401,23 @@ void MdnsDiscovery::drainSocket() {
       if (addr == packet.addresses.end() || addr->second.empty()) {
         continue;
       }
-      cache_.keep(instance, true, ttl, now);
-      CoreEndpoint endpoint{instance,
-                            pickAddress(addr->second, packet.sourceIp),
-                            srv->second.second, displayName(instance)};
-      spdlog::info("[Discovery] Found '{}' at {}:{}", endpoint.name,
-                   endpoint.host, endpoint.port);
-      onAdd_(std::move(endpoint));
+      const auto txtName = packet.txtDisplayName.find(instance);
+      const auto serverId = packet.txtServerId.find(instance);
+      CoreEndpoint endpoint{
+          instance, pickAddress(addr->second, packet.sourceIp),
+          srv->second.second,
+          txtName != packet.txtDisplayName.end() && !txtName->second.empty()
+              ? txtName->second
+              : displayName(instance),
+          serverId != packet.txtServerId.end() ? serverId->second : ""};
+      if (!announced.value_or(false)) {
+        cache_.keep(instance, true, ttl, now);
+        spdlog::info("[Discovery] Found '{}' at {}:{}", displayName(instance),
+                     endpoint.host, endpoint.port);
+      }
+      // Announced instances resolve again on every refresh: a changed address
+      // must reach the grouper, which suppresses the no-ops.
+      grouper_.add(instance, std::move(endpoint));
     }
   }
 }
@@ -350,7 +428,7 @@ void MdnsDiscovery::expireStale() {
     spdlog::info("[Discovery] '{}' stopped answering; forgetting it",
                  displayName(gone.instance));
     if (gone.announced) {
-      onRemove_(gone.instance);
+      grouper_.remove(gone.instance);
     }
   }
   // Ask again before anything we hold runs out, so a live Core is refreshed

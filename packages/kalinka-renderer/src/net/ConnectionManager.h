@@ -26,8 +26,7 @@ public:
   /**
    * @brief Connect to a Core, if it is not already connected.
    *
-   * Duplicate records for one instance are expected — a Core resolved on
-   * several interfaces — and are ignored.
+   * An endpoint whose key is already connected is ignored.
    */
   void add(CoreEndpoint endpoint);
 

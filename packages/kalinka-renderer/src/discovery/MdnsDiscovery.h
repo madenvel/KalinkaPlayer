@@ -2,20 +2,25 @@
 
 #include <atomic>
 #include <chrono>
-#include <functional>
-#include <map>
-#include <string>
 #include <thread>
+#include <vector>
 
-#include "Discovery.h"
+#include "CoreGrouper.h"
 #include "DiscoveryCache.h"
 
 /**
  * @brief Self-contained DNS-SD browser for _kalinkaplayer._tcp.
  *
- * Vendored mdns.h, so no avahi or Bonjour daemon is required. A socket on 5353
- * hears announcements and goodbyes, and answers to the periodic PTR queries
- * (doubling 1s -> 60s).
+ * Vendored mdns.h, so no avahi or Bonjour daemon is required. One socket per
+ * multicast-capable interface — group membership and query egress are
+ * per-interface, so a wildcard socket would browse only the interface the
+ * kernel happens to pick — hears announcements and goodbyes, and answers to
+ * the periodic PTR queries (doubling 1s -> 60s).
+ *
+ * What the callbacks report are Cores, not instances: a Core announces one
+ * instance per interface and the CoreGrouper folds them into one endpoint by
+ * their server_id TXT value, failing over between interface addresses as they
+ * come and go.
  *
  * Servers whose "renderer_proto" TXT value falls outside the range this binary
  * speaks are never reported; a TXT change — a server upgrade re-announcing,
@@ -32,8 +37,8 @@
  */
 class MdnsDiscovery {
 public:
-  using AddFn = std::function<void(CoreEndpoint)>;
-  using RemoveFn = std::function<void(std::string key)>;
+  using AddFn = CoreGrouper::AddFn;
+  using RemoveFn = CoreGrouper::RemoveFn;
 
   MdnsDiscovery(AddFn onAdd, RemoveFn onRemove);
   ~MdnsDiscovery();
@@ -42,8 +47,13 @@ public:
   MdnsDiscovery &operator=(const MdnsDiscovery &) = delete;
 
   /**
-   * @brief Open the multicast socket and start the browse thread.
-   * @return false when the socket could not be opened, leaving nothing running.
+   * @brief Open the multicast sockets and start the browse thread.
+   *
+   * One socket per eligible interface at this moment; an interface appearing
+   * later is not browsed until a restart. With no eligible interface a
+   * wildcard socket is opened instead.
+   *
+   * @return false when no socket could be opened, leaving nothing running.
    */
   bool start();
 
@@ -53,14 +63,13 @@ public:
 private:
   void run();
   void sendQuery();
-  void drainSocket();
+  void drainSocket(int sock);
   /// Report every service whose lifetime ran out, and bring the next query
   /// forward if one is due for refreshing before then.
   void expireStale();
 
-  AddFn onAdd_;
-  RemoveFn onRemove_;
-  int sock_ = -1;
+  CoreGrouper grouper_;
+  std::vector<int> socks_;
   std::thread thread_;
   std::atomic<bool> stopping_{false};
   DiscoveryCache cache_;

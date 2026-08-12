@@ -13,8 +13,6 @@ ConnectionManager::ConnectionManager(
 void ConnectionManager::add(CoreEndpoint endpoint) {
   asio::post(ioc_, [this, endpoint = std::move(endpoint)]() mutable {
     if (stopped_ || connections_.contains(endpoint.key)) {
-      // Duplicate records for one instance (multiple interfaces) are expected;
-      // one connection per Core.
       return;
     }
     auto key = endpoint.key;

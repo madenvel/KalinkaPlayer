@@ -116,6 +116,7 @@ add_executable(kalinka-renderer
   src/Identity.cpp
   src/config/RendererName.cpp
   src/config/SettingsPersistence.cpp
+  src/discovery/CoreGrouper.cpp
   src/discovery/DiscoveryCache.cpp
   src/discovery/MdnsDiscovery.cpp
   src/net/ConnectionManager.cpp
@@ -146,6 +147,7 @@ if(GTest_FOUND)
   add_executable(kalinka-renderer-tests
     src/config/RendererName.cpp
     src/config/SettingsPersistence.cpp
+    src/discovery/CoreGrouper.cpp
     src/discovery/DiscoveryCache.cpp
     src/net/WsTransport.cpp
     src/player/NativePlayer.cpp
@@ -153,6 +155,7 @@ if(GTest_FOUND)
     tests/test_alsa_device_naming.cpp
     tests/test_audio_player.cpp
     tests/test_config_service.cpp
+    tests/test_core_grouper.cpp
     tests/test_decoder_start_offset.cpp
     tests/test_discovery_cache.cpp
     tests/test_native_player_settings.cpp
