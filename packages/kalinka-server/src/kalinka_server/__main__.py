@@ -110,7 +110,7 @@ async def main():
         host = get_ip_address(config.server.interface)
         port = config.server.port
         logger.info(f"Starting server on {host}:{port}")
-        app = await create_app(args.config, config, overrides)
+        app = await create_app(args.config, config, overrides, bind_host=host)
         uvicorn_config = uvicorn.Config(
             app,
             host=host,

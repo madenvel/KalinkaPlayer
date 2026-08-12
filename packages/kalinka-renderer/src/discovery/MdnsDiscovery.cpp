@@ -208,12 +208,14 @@ std::string displayName(const std::string &instance) {
 // interface the kernel picks for it.
 std::vector<int> openSockets() {
   std::vector<int> socks;
+  std::set<std::string> openedInterfaces;
   ifaddrs *ifaddr = nullptr;
   if (getifaddrs(&ifaddr) == 0) {
     for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
       if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET ||
           (ifa->ifa_flags & IFF_LOOPBACK) || !(ifa->ifa_flags & IFF_UP) ||
-          !(ifa->ifa_flags & IFF_MULTICAST)) {
+          !(ifa->ifa_flags & IFF_MULTICAST) ||
+          openedInterfaces.contains(ifa->ifa_name)) {
         continue;
       }
       sockaddr_in saddr =
@@ -235,6 +237,9 @@ std::vector<int> openSockets() {
 #endif
       spdlog::info("[Discovery] Browsing on {} ({})", ifa->ifa_name, ip);
       socks.push_back(sock);
+      // Insert only after success: if this address cannot be used, another
+      // IPv4 address on the same interface still gets a chance.
+      openedInterfaces.emplace(ifa->ifa_name);
     }
     freeifaddrs(ifaddr);
   }
@@ -255,8 +260,10 @@ std::vector<int> openSockets() {
 
 }  // namespace
 
-MdnsDiscovery::MdnsDiscovery(AddFn onAdd, RemoveFn onRemove)
-    : grouper_(std::move(onAdd), std::move(onRemove)) {}
+MdnsDiscovery::MdnsDiscovery(AddFn onAdd, ReplaceFn onReplace,
+                             RemoveFn onRemove)
+    : grouper_(std::move(onAdd), std::move(onReplace),
+               std::move(onRemove)) {}
 
 MdnsDiscovery::~MdnsDiscovery() { stop(); }
 

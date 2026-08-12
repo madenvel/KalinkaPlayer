@@ -30,6 +30,9 @@ public:
    */
   void add(CoreEndpoint endpoint);
 
+  /** Replace a Core's route without sending a renderer-shutdown Goodbye. */
+  void replace(CoreEndpoint endpoint);
+
   /// Stop and forget one Core. Unknown keys are ignored.
   void remove(std::string key);
 
@@ -37,6 +40,8 @@ public:
   void stop();
 
 private:
+  void connect(CoreEndpoint endpoint);
+
   boost::asio::io_context &ioc_;
   Identity identity_;
   std::string friendlyName_;

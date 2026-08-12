@@ -33,3 +33,5 @@ CoreConnection::CoreConnection(boost::asio::io_context &ioc,
 void CoreConnection::start() { transport_->start(); }
 
 void CoreConnection::stop() { transport_->stop(protocol_->shutdownFrame()); }
+
+void CoreConnection::retire() { transport_->stop({}); }

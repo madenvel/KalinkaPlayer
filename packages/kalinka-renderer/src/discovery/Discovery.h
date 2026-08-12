@@ -8,8 +8,8 @@
  *
  * @note `key` identifies the Core for dedupe and removal: the stable
  *       server_id when the Core advertises one in TXT, else the mDNS instance
- *       name. A Core announcing one instance per interface is therefore a
- *       single endpoint downstream, whichever instance resolved it.
+ *       name. A Core announcing one instance per address is therefore a single
+ *       endpoint downstream, whichever instance resolved it.
  */
 struct CoreEndpoint {
   std::string key;

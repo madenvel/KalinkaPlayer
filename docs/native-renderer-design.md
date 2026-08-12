@@ -321,6 +321,29 @@ speak — the reference renderer matches it against the range it offers in
 `Hello`, so a Core that moves ahead of it stops being dialled rather than being
 dialled and rejected.
 
+With `server.interface=all`, a multi-homed Core announces one DNS-SD instance
+for every IPv4 address. For a specifically selected interface, Uvicorn's exact
+resolved bind address is passed to discovery and only that address is
+announced. Each instance contains only its own A record, so an answer received
+on one network never offers an unrelated address from another network. The
+instances have different transport-level names but carry the same stable
+`server_id` TXT value and the same user-facing `display_name` TXT value. A
+discovery client must therefore:
+
+- key the logical Core by `server_id`, falling back to the instance name only
+  for older Cores which do not advertise an id;
+- show `display_name`, not the suffixed instance name;
+- retain the resolved endpoint of every instance as a candidate, without
+  merging their A records; and
+- replace the active route when its instance disappears, while treating the
+  Core as removed only when its last instance disappears.
+
+Route replacement is not renderer shutdown. It must close the superseded link
+without a `Goodbye(REASON_SHUTDOWN)`, allowing an active playback session to be
+reconciled on the replacement link. Clients which do not implement this
+grouping will show or open one Core per server address and must be upgraded
+before relying on multi-interface discovery.
+
 ### 4.3 Handshake
 
 1. On every link-up, send `Hello` **first**, before anything else. A second
