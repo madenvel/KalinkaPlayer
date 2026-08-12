@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(kalinka-renderer VERSION 0.1.0 LANGUAGES CXX)
+project(kalinka-renderer VERSION 0.2.0 LANGUAGES CXX)
 
 # What the binary announces to a Core and logs at startup. The packaging
 # scripts pass the version the package carries, so a build off a release says
