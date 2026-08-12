@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 
 #include <utility>
+#include <vector>
 
 CoreGrouper::CoreGrouper(AddFn onAdd, ReplaceFn onReplace, RemoveFn onRemove)
     : onAdd_(std::move(onAdd)), onReplace_(std::move(onReplace)),
@@ -20,6 +21,27 @@ void CoreGrouper::add(const std::string &instance, CoreEndpoint endpoint) {
     remove(instance);
   }
   groupOf_[instance] = key;
+
+  // Two Cores cannot share one listener: the same host:port under another
+  // key is this Core's stale pre-restart record, whose reconnect loop would
+  // otherwise fight this one over the renderer_id.
+  std::vector<std::string> superseded;
+  for (const auto &[otherKey, otherGroup] : groups_) {
+    if (otherKey == key) {
+      continue;
+    }
+    for (const auto &[member, held] : otherGroup.members) {
+      if (held.host == endpoint.host && held.port == endpoint.port) {
+        superseded.push_back(member);
+      }
+    }
+  }
+  for (const auto &member : superseded) {
+    spdlog::info("[Discovery] {}:{} now answers as '{}'; dropping the stale "
+                 "record '{}'",
+                 endpoint.host, endpoint.port, instance, member);
+    remove(member);
+  }
 
   auto &group = groups_[key];
   if (group.members.empty()) {
