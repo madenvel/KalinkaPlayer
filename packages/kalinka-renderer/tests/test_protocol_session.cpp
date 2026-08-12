@@ -137,7 +137,7 @@ TEST_F(ProtocolSessionTest, SessionOpenAnswersResultThenSnapshot) {
   EXPECT_EQ(wire.sent[1].session_id(), "sid-1");
 }
 
-TEST_F(ProtocolSessionTest, DelegatedVolumeControlReachesThePlayer) {
+TEST_F(ProtocolSessionTest, FixedOutputOverrideReachesThePlayer) {
   FakeWire wire;
   auto protocol = makeProtocol(wire);
   welcome(*protocol, "server-a");
@@ -145,13 +145,11 @@ TEST_F(ProtocolSessionTest, DelegatedVolumeControlReachesThePlayer) {
   pb::Envelope env;
   pb::SessionOpen *open = env.mutable_session_open();
   open->set_session_id("sid-1");
-  open->set_volume_mode("fixed");
-  open->set_volume_percent(100);
-  open->set_volume_control_delegated(true);
+  open->set_force_fixed_output(true);
   feed(*protocol, env);
 
   ASSERT_EQ(player->sessionVolumes.size(), 1u);
-  EXPECT_TRUE(player->sessionVolumes[0].delegated);
+  EXPECT_TRUE(player->sessionVolumes[0].forceFixedOutput);
 }
 
 TEST_F(ProtocolSessionTest, FailedVolumeSafetyRefusesTheSession) {

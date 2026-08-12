@@ -13,7 +13,7 @@ concrete class.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from .renderer_proto import renderer_pb2 as pb
 
@@ -31,9 +31,7 @@ class RendererLink(Protocol):
     async def send_session_open(
         self,
         session_id: str,
-        volume_mode: str = "",
-        volume_percent: Optional[int] = None,
-        volume_control_delegated: bool = False,
+        force_fixed_output: bool = False,
     ) -> None: ...
 
     async def send_command(self, session_id: str, command: pb.Command) -> None: ...

@@ -199,11 +199,9 @@ TEST_F(SessionTest, UnknownConnectionClosingChangesNothing) {
 TEST_F(SessionTest, SessionVolumePolicyIsAppliedAtOpenAndUndoneAtClose) {
   auto session = Session::create(ioc, "sid-1", "owner-1", 60s, player,
                                  [this] { ++ended; },
-                                 SessionVolume{"fixed", 100, true});
+                                 SessionVolumePolicy{true});
   ASSERT_EQ(player->sessionVolumes.size(), 1u);
-  EXPECT_EQ(player->sessionVolumes[0].mode, "fixed");
-  EXPECT_EQ(player->sessionVolumes[0].percent, 100);
-  EXPECT_TRUE(player->sessionVolumes[0].delegated);
+  EXPECT_TRUE(player->sessionVolumes[0].forceFixedOutput);
 
   session->close("done");
   EXPECT_EQ(player->sessionVolumeEnds, 1);
@@ -212,6 +210,6 @@ TEST_F(SessionTest, SessionVolumePolicyIsAppliedAtOpenAndUndoneAtClose) {
 TEST_F(SessionTest, DirectSessionAppliesTheRendererSafetyPolicy) {
   auto session = makeSession();
   ASSERT_EQ(player->sessionVolumes.size(), 1u);
-  EXPECT_FALSE(player->sessionVolumes[0].delegated);
+  EXPECT_FALSE(player->sessionVolumes[0].forceFixedOutput);
   session->close("done");
 }

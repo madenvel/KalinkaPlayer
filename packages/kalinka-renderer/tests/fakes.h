@@ -21,7 +21,7 @@ class FakePlayer : public Player {
 public:
   StateSink sink;
   std::vector<std::string> calls;
-  std::vector<SessionVolume> sessionVolumes;
+  std::vector<SessionVolumePolicy> sessionVolumes;
   int sessionVolumeEnds = 0;
   std::string sessionVolumeError;
 
@@ -56,7 +56,7 @@ public:
   void setVolume(uint32_t percent) override {
     calls.push_back("set_volume:" + std::to_string(percent));
   }
-  bool beginSessionVolume(const SessionVolume &volume,
+  bool beginSessionVolume(const SessionVolumePolicy &volume,
                           std::string &error) override {
     sessionVolumes.push_back(volume);
     error = sessionVolumeError;

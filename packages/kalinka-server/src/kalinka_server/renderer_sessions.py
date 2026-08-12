@@ -106,9 +106,7 @@ class _OpenOutcome:
 
 @dataclass(frozen=True)
 class SessionVolumePolicy:
-    mode: str = ""
-    percent: Optional[int] = None
-    delegated: bool = False
+    force_fixed_output: bool = False
 
 
 def _fill_source(
@@ -379,9 +377,8 @@ class SessionPool:
     ) -> None:
         """Install what decides the volume policy carried on SessionOpen.
 
-        The renderer restores a temporary volume mode when the session ends, so
-        a renderer fixed because an amp owns its volume is not left fixed for
-        whoever uses it next. A safe-start level remains the current level.
+        A downstream device mapping temporarily fixes the renderer at unity;
+        the renderer restores its own configured mode when the session ends.
         """
         self._volume_policy = provider
 
@@ -424,9 +421,7 @@ class SessionPool:
         try:
             await ws.send_session_open(
                 session.session_id,
-                volume_mode=volume.mode,
-                volume_percent=volume.percent,
-                volume_control_delegated=volume.delegated,
+                force_fixed_output=volume.force_fixed_output,
             )
             outcome = await asyncio.wait_for(
                 session._open_future, self._timeout_s

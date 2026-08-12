@@ -6,19 +6,15 @@ device bridges that gap: it caches the last volume the renderer reported, so
 clients always have numbers to show, and a level set while idle is kept pending
 and pushed when the next session opens — pre-setting volume before play works.
 
-The ``volume_style`` setting decides the renderer's volume mode while this
-Core plays through it. "Renderer choice" leaves whatever the renderer is
-configured with; any other style rides SessionOpen as a session-scoped policy
-(see ``OutputDeviceRouter.session_volume_policy``), so it is in effect before
-the first playback command and undone when the session ends. It is never
-written to the renderer's configuration — a renderer this Core fixed must not
-stay fixed for whoever uses it next.
+The renderer owns its normal volume mode. When Core maps it to a downstream
+device module, SessionOpen temporarily forces fixed unity output before the
+first playback command and the renderer restores its configured mode when the
+session ends.
 """
 
 from __future__ import annotations
 
 import logging
-from enum import Enum
 from typing import ClassVar, Optional
 
 from pydantic import Field
@@ -43,73 +39,9 @@ from .renderer_sessions import (
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-
-class RendererVolumeStyle(str, Enum):
-    renderer = "renderer"
-    automatic = "automatic"
-    driver = "driver"
-    software = "software"
-    fixed = "fixed"
-
-
-# RendererVolumeStyle → renderer output.volume_mode value. "renderer" is
-# absent: the renderer's own setting stays untouched.
-_STYLE_TO_WIRE = {
-    RendererVolumeStyle.automatic: "auto",
-    RendererVolumeStyle.driver: "hardware",
-    RendererVolumeStyle.software: "software",
-    RendererVolumeStyle.fixed: "fixed",
-}
-
-# Dotted config path of the volume_style field on the built-in device.
-VOLUME_STYLE_OPTIONS_PATH = "devices.kalinka-renderer.volume_style"
-
-# Deliberately not full scale: a renderer whose mixer was left at maximum
-# would otherwise blast on the first track this server plays through it.
-DEFAULT_VOLUME = 30
-
-
-def wire_volume_mode(style: RendererVolumeStyle) -> str:
-    """The renderer's ``output.volume_mode`` value for a style. Empty for
-    "renderer choice", which leaves the renderer's own setting alone."""
-    return _STYLE_TO_WIRE.get(style, "")
-
-
-def volume_style_options() -> list[dict]:
-    """Labelled + described choices for the volume_style dropdown, served
-    through the OptionsRegistry so the settings UI shows more than the bare
-    enum values."""
-    return [
-        {
-            "value": RendererVolumeStyle.renderer.value,
-            "label": "Renderer choice",
-            "description": "Whatever the renderer is set to.",
-        },
-        {
-            "value": RendererVolumeStyle.automatic.value,
-            "label": "Automatic",
-            "description": "Hardware mixer if there is one, software gain "
-            "otherwise.",
-        },
-        {
-            "value": RendererVolumeStyle.driver.value,
-            "label": "Driver",
-            "description": "Always the hardware mixer.",
-        },
-        {
-            "value": RendererVolumeStyle.software.value,
-            "label": "Software",
-            "description": "Gain applied in the player. Bit-perfect only at "
-            "full volume.",
-        },
-        {
-            "value": RendererVolumeStyle.fixed.value,
-            "label": "Fixed",
-            "description": "Full-level output for a mapped downstream "
-            "volume device. Direct playback is refused because its safe "
-            "starting level cannot be enforced.",
-        },
-    ]
+# Deliberately not full scale: before the first snapshot, a conservative UI
+# placeholder is safer to show than 100%.
+UNKNOWN_VOLUME_PLACEHOLDER = 30
 
 
 class RendererOutputConfig(ModuleConfig):
@@ -124,33 +56,6 @@ class RendererOutputConfig(ModuleConfig):
         frozen=True,
         exclude=True,
     )
-    volume_style: RendererVolumeStyle = Field(
-        default=RendererVolumeStyle.renderer,
-        title="Volume control",
-        json_schema_extra={
-            "help": (
-                "How volume is applied on renderers this server plays "
-                "through. Set only while playing; the renderer keeps its own "
-                "setting the rest of the time."
-            ),
-            "widget": "enum_dropdown",
-            "importance": "simple",
-        },
-    )
-    default_volume: int = Field(
-        default=DEFAULT_VOLUME,
-        ge=0,
-        le=100,
-        title="Default volume",
-        json_schema_extra={
-            "help": (
-                "Level shown until a renderer reports its current volume, "
-                "and the safe fallback for older renderers. New renderers "
-                "use their own per-renderer safe-start setting."
-            ),
-            "importance": "simple",
-        },
-    )
 
 
 class RendererVolumeDevice(ExternalOutputDevice):
@@ -159,28 +64,26 @@ class RendererVolumeDevice(ExternalOutputDevice):
         registry: RendererRegistry,
         pool: SessionPool,
         event_emitter,
-        default_volume: int = DEFAULT_VOLUME,
     ):
         self._registry = registry
         self._pool = pool
         self._event_emitter = event_emitter
-        self._default_volume = default_volume
         self._session: Optional[PlaybackSession] = None
         # Last volume each renderer reported, and levels set while one was
         # idle. Both keyed by renderer: selecting another renderer must show
         # and drive that one's volume, not the previous one's.
         self._volumes: dict[str, DeviceVolume] = {}
         self._pending: dict[str, int] = {}
-        self._last_sent: Optional[DeviceVolume] = None
+        self._last_sent: Optional[tuple[Optional[str], DeviceVolume]] = None
 
     def _volume_for(self, renderer_id: Optional[str]) -> DeviceVolume:
-        """A renderer nothing is known about reads as the default level — what
-        it will be set to on first play, and a safer guess than full scale."""
+        """A renderer nothing is known about reads as a conservative UI
+        placeholder. Its actual session-start level is renderer-owned."""
         if renderer_id is not None and renderer_id in self._volumes:
             return self._volumes[renderer_id]
         return DeviceVolume(
             max_volume=100,
-            current_volume=self._default_volume,
+            current_volume=UNKNOWN_VOLUME_PLACEHOLDER,
             volume_gain=0,
             supported=True,
         )
@@ -249,9 +152,15 @@ class RendererVolumeDevice(ExternalOutputDevice):
         self._session = session
         session.on_state(self._on_session_state)
         session.on_closed(self._on_session_closed)
-        # The volume mode rides SessionOpen itself (see
-        # OutputDeviceRouter.session_volume_policy), so it is already in
-        # effect here and nothing was written to the renderer's config.
+        # SessionOpenResult and the renderer's unsolicited StateSnapshot are
+        # separate frames. The snapshot may already have reached the session
+        # before this open hook adopts it (especially during a renderer
+        # switch), in which case on_state() cannot replay it. Seed the cache
+        # from the session's merged state; if the snapshot arrives later, the
+        # callback above handles it normally.
+        self._update_volume(session, session.snapshot)
+        # A downstream mapping's fixed-output override rides SessionOpen, so it
+        # is already in effect here. The renderer's own mode was never written.
         await self._apply_pending(session)
 
     async def _apply_pending(self, session: PlaybackSession) -> None:
@@ -270,6 +179,17 @@ class RendererVolumeDevice(ExternalOutputDevice):
             return
         if change not in (StateChange.VOLUME, StateChange.SNAPSHOT):
             return
+        self._update_volume(session, snapshot)
+        # A resumed session never re-runs the open hook; settle a level set
+        # while the renderer was away.
+        if (
+            session.renderer_id in self._pending
+            and session.state is SessionState.ACTIVE
+        ):
+            await self._apply_pending(session)
+
+    def _update_volume(self, session: PlaybackSession, snapshot: dict) -> None:
+        """Cache and publish the volume in a session's merged state, if any."""
         volume = snapshot.get("volume")
         if volume is None:
             return
@@ -280,13 +200,6 @@ class RendererVolumeDevice(ExternalOutputDevice):
             supported=volume["supported"],
         )
         self._dispatch()
-        # A resumed session never re-runs the open hook; settle a level set
-        # while the renderer was away.
-        if (
-            session.renderer_id in self._pending
-            and session.state is SessionState.ACTIVE
-        ):
-            await self._apply_pending(session)
 
     def _on_session_closed(self, session: PlaybackSession, reason) -> None:
         if session is self._session:
@@ -295,11 +208,14 @@ class RendererVolumeDevice(ExternalOutputDevice):
     def _dispatch(self) -> None:
         """Put the active renderer's cached volume on the device bus, skipping
         exact repeats (a snapshot restating the level must not re-notify every
-        client)."""
-        volume = self._volume_for(self._registry.active_id())
-        if volume == self._last_sent:
+        client). Repeats are per renderer: a newly active renderer reporting
+        the level its predecessor last dispatched is news, not a repeat — the
+        switch re-authored the bus state behind this dedup's back."""
+        renderer_id = self._registry.active_id()
+        volume = self._volume_for(renderer_id)
+        if (renderer_id, volume) == self._last_sent:
             return
-        self._last_sent = volume
+        self._last_sent = (renderer_id, volume)
         self._event_emitter.dispatch(
             VolumeChangedEvent.model_construct(
                 event_type=ExtDeviceEventType.VolumeChanged,
@@ -339,7 +255,6 @@ class RendererOutputPlugin(OutputDevicePlugin):
             self._registry,
             self._pool,
             context.emitter,
-            getattr(context.config, "default_volume", DEFAULT_VOLUME),
         )
         await self._device.start()
 

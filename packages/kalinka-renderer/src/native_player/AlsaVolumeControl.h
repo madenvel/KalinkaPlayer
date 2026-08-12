@@ -17,7 +17,7 @@
 /// whether external-change monitoring is meaningful (hardware only).
 enum class VolumeBackend { None = 0, Hardware = 1, Software = 2 };
 
-/// User-selected policy, from `output.alsa.volume_mode`.
+/// User-selected policy, from `output.volume_mode`.
 enum class VolumeMode { Auto, Hardware, Software, Fixed };
 
 VolumeMode parseVolumeMode(const std::string &mode);
@@ -84,8 +84,8 @@ public:
   /// Current volume in 0..100, or -1 when unavailable.
   int getVolume();
 
-  /// Set volume, clamped to 0..100. No-op when unavailable.
-  void setVolume(int percent);
+  /// Set volume, clamped to 0..100. False when unavailable or the write fails.
+  bool setVolume(int percent);
 
 private:
   bool openMixer(const std::string &deviceName, const std::string &controlName);

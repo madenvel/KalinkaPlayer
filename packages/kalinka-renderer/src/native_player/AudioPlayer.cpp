@@ -189,20 +189,36 @@ AudioPlayer::AudioPlayer(const Config &config)
   // device's module config, not in the global config read here.
 }
 
-void AudioPlayer::configureVolume(const std::string &mode,
-                                  const std::string &mixerControl) {
+bool AudioPlayer::configureVolume(const std::string &mode,
+                                  const std::string &mixerControl,
+                                  std::string *error) {
   std::lock_guard<std::mutex> lock(volumeMutex_);
-  volumeMode = parseVolumeMode(mode);
-  // A hardware mixer handle is only needed for hardware/auto; software and
-  // fixed don't touch it.
-  if (volumeMode == VolumeMode::Hardware || volumeMode == VolumeMode::Auto) {
-    volumeControl = std::make_unique<AlsaVolumeControl>(
-        value_or(config, "output.alsa.device", std::string("default")),
-        mixerControl,
-        [events = volumeEvents](int percent) { events->publish(percent); });
-  } else {
-    volumeControl.reset();
+  const VolumeMode requested = parseVolumeMode(mode);
+  auto mixer = std::make_unique<AlsaVolumeControl>(
+      value_or(config, "output.alsa.device", std::string("default")),
+      mixerControl,
+      [events = volumeEvents](int percent) { events->publish(percent); });
+
+  // Software attenuation and fixed output both require the card-side stage at
+  // unity. Without this, software mode attenuates twice and fixed does not mean
+  // bit-perfect output when an ALSA mixer was previously left below 100%.
+  if ((requested == VolumeMode::Software || requested == VolumeMode::Fixed) &&
+      mixer->available()) {
+    if (!mixer->setVolume(100) || mixer->getVolume() != 100) {
+      if (error != nullptr) {
+        *error = "ALSA mixer could not be set to 100%";
+      }
+      return false;
+    }
   }
+
+  volumeMode = requested;
+  // Only an active hardware backend needs to stay open and report external
+  // changes. Software/fixed used the mixer above solely to establish unity.
+  volumeControl =
+      (requested == VolumeMode::Hardware || requested == VolumeMode::Auto)
+          ? std::move(mixer)
+          : nullptr;
   // Keep the emitter's software gain consistent with the active backend so a
   // mode switch (or Auto resolving to hardware) can't leave stale attenuation
   // behind: only the software backend applies gain; everything else must stay
@@ -213,6 +229,7 @@ void AudioPlayer::configureVolume(const std::string &mode,
   spdlog::info("AudioPlayer volume configured: mode={}, hardware mixer {}", mode,
                (volumeControl && volumeControl->available()) ? "available"
                                                              : "unavailable");
+  return true;
 }
 
 AudioPlayer::~AudioPlayer() { stop(); }
@@ -301,6 +318,7 @@ VolumeState AudioPlayer::getVolume() {
   case VolumeBackend::None:
   default:
     state.supported = false;
+    state.current = volumeMode == VolumeMode::Fixed ? 100 : 0;
     state.backend = static_cast<int>(VolumeBackend::None);
     break;
   }

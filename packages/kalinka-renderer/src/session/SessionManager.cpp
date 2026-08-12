@@ -10,7 +10,7 @@ SessionManager::SessionManager(boost::asio::io_context &ioc,
 std::shared_ptr<Session> SessionManager::open(const std::string &sessionId,
                                               const std::string &ownerServerId,
                                               std::string &busyOwner,
-                                              const SessionVolume &volume,
+                                              const SessionVolumePolicy &volume,
                                               std::string *error) {
   busyOwner.clear();
   if (error) {

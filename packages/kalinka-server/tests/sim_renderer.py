@@ -58,7 +58,7 @@ class SimRenderer:
         self.volume = 40
         self.volume_supported = True
         self.config_updates: list[dict] = []
-        self.volume_policies: list[tuple[str, object]] = []
+        self.volume_policies: list[bool] = []
         # Set accept=False to play a renderer another Core already holds.
         self.accept = True
         self.busy_owner = "another-core"
@@ -84,13 +84,9 @@ class SimRenderer:
     async def send_session_open(
         self,
         session_id: str,
-        volume_mode: str = "",
-        volume_percent=None,
-        volume_control_delegated: bool = False,
+        force_fixed_output: bool = False,
     ) -> None:
-        self.volume_policies.append(
-            (volume_mode, volume_percent, volume_control_delegated)
-        )
+        self.volume_policies.append(force_fixed_output)
         if not self.accept:
             self.pool.handle_open_result(
                 self.RENDERER_ID,

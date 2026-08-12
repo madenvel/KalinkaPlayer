@@ -60,7 +60,7 @@ public:
   void resume() override;
   void stop() override;
   void setVolume(uint32_t percent) override;
-  bool beginSessionVolume(const SessionVolume &volume,
+  bool beginSessionVolume(const SessionVolumePolicy &policy,
                           std::string &error) override;
   void endSessionVolume() override;
   void seek(uint64_t positionMs) override;
@@ -113,7 +113,7 @@ private:
                     std::string &error);
   /// The settings the graph is built with, under the keys it reads them by.
   Config graphConfig() const;
-  /// What the graph should run: the session override, else the configured one.
+  /// What the graph should run: fixed for a downstream session, else configured.
   const std::string &effectiveVolumeMode() const;
 
   boost::asio::io_context &ioc_;
@@ -121,7 +121,9 @@ private:
   std::map<std::string, std::string> settings_ = defaultSettings();
   // Never merged into settings_: that is the configured value, which the
   // config plane reports and persistOverrides() writes.
-  std::optional<std::string> sessionVolumeMode_;
+  bool sessionForcedFixed_ = false;
+  std::optional<std::string> sessionRestoreMode_;
+  std::optional<int> sessionRestoreVolume_;
 
   std::unique_ptr<AudioPlayer> player_;
   // shared_ptr: each pump thread keeps its monitor alive; stop() is what

@@ -239,21 +239,22 @@ int AlsaVolumeControl::getVolume() {
   return readPercentLocked();
 }
 
-void AlsaVolumeControl::setVolume(int percent) {
+bool AlsaVolumeControl::setVolume(int percent) {
   std::lock_guard<std::mutex> lock(mixerMutex_);
   if (!available_ || !elem_) {
-    return;
+    return false;
   }
   const long raw = percentToRaw(percent);
   int err = snd_mixer_selem_set_playback_volume_all(elem_, raw);
   if (err < 0) {
     spdlog::warn("ALSA volume: set_playback_volume_all failed: {}",
                  snd_strerror(err));
-    return;
+    return false;
   }
   // Record our own change so the monitor thread doesn't echo it back as if it
   // were external.
   lastNotified_ = std::clamp(percent, 0, 100);
+  return true;
 }
 
 void AlsaVolumeControl::notify(int percent) {

@@ -1,7 +1,6 @@
 """Delegating a renderer's volume to another device module."""
 
 import asyncio
-from types import SimpleNamespace
 
 from kalinka_eventbus import EventBus
 from kalinka_plugin_sdk.datamodel import DeviceVolume
@@ -18,7 +17,6 @@ from kalinka_server.player_setup import (
     volume_control_modules,
 )
 from kalinka_server.output_device_router import OutputDeviceRouter
-from kalinka_server.renderer_output_device import RendererVolumeStyle
 from kalinka_server.renderer_prefs import RendererPreferences
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionVolumePolicy
@@ -146,86 +144,42 @@ async def test_router_defaults_to_the_renderer_device_with_no_renderers():
     assert router.current() is renderer_device
 
 
-class _Prepared:
-    """A prepared renderer device carrying just the volume_style config the
-    policy reads."""
-
-    def __init__(self, style: RendererVolumeStyle, default_volume: int = 30):
-        self.health_state = ModuleHealthState.READY
-        self.interface = _Device(SupportedFunction.SET_VOLUME)
-        self.plugin_context = SimpleNamespace(
-            config=SimpleNamespace(
-                volume_style=style, default_volume=default_volume
-            )
-        )
-
-
-async def test_delegated_renderers_are_fixed_at_unity():
+async def test_mapped_renderers_request_fixed_unity():
     """Attenuating in the renderer *and* the amp would stack up, costing
     headroom and, in software mode, resolution."""
+    registry, prefs = _registry_with("rid-a")
+    prefs.set_volume_control("rid-a", "musiccast")
+    router = OutputDeviceRouter(registry, prefs, lambda: {})
+    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
+        force_fixed_output=True
+    )
+    await registry.shutdown()
+
+
+async def test_unmapped_renderers_keep_their_own_volume_mode():
+    registry, prefs = _registry_with("rid-a")
+    router = OutputDeviceRouter(registry, prefs, lambda: {})
+    assert router.session_volume_policy("rid-a") == SessionVolumePolicy()
+    await registry.shutdown()
+
+
+async def test_an_unavailable_mapped_module_still_requests_fixed_unity():
+    """The physical wiring does not change when its control plugin is down."""
     registry, prefs = _registry_with("rid-a")
     prefs.set_volume_control("rid-a", "musiccast")
     router = OutputDeviceRouter(
         registry,
         prefs,
-        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.software)},
+        lambda: {
+            "musiccast": _prepared(
+                _Device(SupportedFunction.SET_VOLUME),
+                health=ModuleHealthState.ERROR,
+            )
+        },
     )
     assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
-        mode="fixed", percent=100, delegated=True
+        force_fixed_output=True
     )
-    await registry.shutdown()
-
-
-async def test_renderer_choice_is_direct_and_leaves_the_mode_alone():
-    registry, prefs = _registry_with("rid-a")
-    router = OutputDeviceRouter(
-        registry,
-        prefs,
-        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
-    )
-    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(percent=30)
-    await registry.shutdown()
-
-
-async def test_every_direct_session_uses_the_renderer_safety_policy():
-    registry, prefs = _registry_with("rid-a")
-    router = OutputDeviceRouter(
-        registry,
-        prefs,
-        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.renderer)},
-    )
-    expected = SessionVolumePolicy(percent=30)
-    assert router.session_volume_policy("rid-a") == expected
-    assert router.session_volume_policy("rid-a") == expected
-    await registry.shutdown()
-
-
-async def test_fixed_style_is_not_mistaken_for_delegated_output():
-    registry, prefs = _registry_with("rid-a")
-    router = OutputDeviceRouter(
-        registry,
-        prefs,
-        lambda: {"kalinka-renderer": _Prepared(RendererVolumeStyle.fixed)},
-    )
-    assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
-        mode="fixed", percent=30
-    )
-    await registry.shutdown()
-
-
-async def test_volume_style_maps_onto_the_wire_value():
-    registry, prefs = _registry_with("rid-a")
-    for style, wire in [
-        (RendererVolumeStyle.automatic, "auto"),
-        (RendererVolumeStyle.driver, "hardware"),
-        (RendererVolumeStyle.software, "software"),
-    ]:
-        router = OutputDeviceRouter(
-            registry, prefs, lambda s=style: {"kalinka-renderer": _Prepared(s)}
-        )
-        assert router.session_volume_policy("rid-a") == SessionVolumePolicy(
-            mode=wire, percent=30
-        )
     await registry.shutdown()
 
 

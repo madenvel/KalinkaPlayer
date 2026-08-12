@@ -53,7 +53,7 @@ public:
                                          std::chrono::seconds ownerGrace,
                                          std::shared_ptr<Player> player,
                                          std::function<void()> onEnded,
-                                         SessionVolume volume = {},
+                                         SessionVolumePolicy volume = {},
                                          std::string *error = nullptr);
 
   const std::string &sessionId() const override { return sessionId_; }
