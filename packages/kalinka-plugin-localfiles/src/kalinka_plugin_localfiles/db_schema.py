@@ -422,6 +422,14 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # get_embedding_coverage()'s MAX-per-stage subquery is O(n²) without this.
+        await cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_jobs_stage_version
+                ON embedding_jobs(stage, model_version)
+            """
+        )
+
         # ---------------------------------------------------------------
         # Model version registry
         # ---------------------------------------------------------------

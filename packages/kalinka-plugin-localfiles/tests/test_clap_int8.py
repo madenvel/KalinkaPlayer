@@ -13,6 +13,7 @@ instead of raw float32. These tests cover:
 
 import os
 import tempfile
+import time
 
 import aiosqlite
 import numpy as np
@@ -230,3 +231,44 @@ async def test_coverage_counts_only_latest_version():
         assert audio["total"] == 3  # not 6 — only the latest version is counted
         assert audio["done"] == 2 and audio["pending"] == 1
         assert audio["coverage_pct"] == pytest.approx(66.7, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_coverage_stays_fast_on_a_large_job_table():
+    """The MAX-per-stage subquery must stay indexed, or coverage goes O(n²)
+    and every get_indexer_status call stalls for ~40s on a 16k library."""
+    with tempfile.TemporaryDirectory() as d:
+        db = os.path.join(d, "cov_large.db")
+        await init_db(db)
+        n = 10_000
+        async with aiosqlite.connect(db) as conn:
+            cur = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='embedding_jobs'"
+            )
+            indexes = {r[0] for r in await cur.fetchall()}
+            assert "idx_jobs_stage_version" in indexes
+
+            await conn.executemany(
+                "INSERT INTO tracks (id, title, file_path, format, enriched) "
+                "VALUES (?, ?, ?, 'mp3', 1)",
+                ((f"t{i}", f"Song {i}", f"f{i}") for i in range(n)),
+            )
+            await conn.executemany(
+                "INSERT INTO embedding_jobs (entity_type, entity_id, stage, "
+                "status, model_version) VALUES ('track', ?, ?, 'pending', 1)",
+                (
+                    (f"t{i}", stage)
+                    for stage in ("clap_audio", "clap_text")
+                    for i in range(n)
+                ),
+            )
+            await conn.commit()
+
+        start = time.monotonic()
+        cov = await AsyncEmbedderDb(_config(db)).get_embedding_coverage()
+        elapsed = time.monotonic() - start
+        assert cov["clap_audio"]["pending"] == n
+        assert cov["clap_text"]["pending"] == n
+        # ~20ms when indexed; seconds-to-minutes when quadratic.
+        assert elapsed < 2.0, f"coverage query took {elapsed:.1f}s"
