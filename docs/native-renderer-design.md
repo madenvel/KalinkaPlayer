@@ -334,9 +334,18 @@ discovery client must therefore:
   for older Cores which do not advertise an id;
 - show `display_name`, not the suffixed instance name;
 - retain the resolved endpoint of every instance as a candidate, without
-  merging their A records; and
+  merging their A records;
 - replace the active route when its instance disappears, while treating the
-  Core as removed only when its last instance disappears.
+  Core as removed only when its last instance disappears; and
+- treat a record of the same host:port held under a different identity as
+  superseded by the newly resolved instance. Two Cores cannot share one
+  listener, so that record is the same Core's earlier announcement, orphaned
+  by an unclean restart across an identity change (an upgrade to
+  `server_id`-aware announcements, a wiped state directory). Kept alive, its
+  reconnect loop and the new one would register the same `renderer_id` twice
+  and the Core would displace one of them. Only the matching endpoint is
+  superseded, never its whole group: after a DHCP reassignment the address may
+  genuinely belong to a different Core whose other addresses are still live.
 
 Route replacement is not renderer shutdown. It must close the superseded link
 without a `Goodbye(REASON_SHUTDOWN)`, allowing an active playback session to be

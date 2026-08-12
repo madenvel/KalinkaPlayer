@@ -11,6 +11,9 @@ namespace {
 const std::string kEth = "My Kalinka Service (eth0)._kalinkaplayer._tcp.local.";
 const std::string kWlan =
     "My Kalinka Service (wlan0)._kalinkaplayer._tcp.local.";
+// What a Core announced before it advertised server_id: one unsuffixed
+// instance.
+const std::string kLegacy = "My Kalinka Service._kalinkaplayer._tcp.local.";
 const std::string kServerId = "9f1c9f2e-1111-2222-3333-444455556666";
 
 CoreEndpoint endpoint(const std::string &host, const std::string &serverId) {
@@ -196,6 +199,64 @@ TEST(CoreGrouper, AnInstanceReturningAfterFailoverBecomesAnAlternate) {
   EXPECT_EQ(f.added.size(), 1u);
   ASSERT_EQ(f.replaced.size(), 2u) << "and eth0 is there to fail over to";
   EXPECT_EQ(f.replaced[1].host, "192.168.1.20");
+}
+
+// A legacy Core killed uncleanly, restarted advertising server_id: same
+// listener, different key. The stale record must go before its reconnect
+// loop and the new connection fight over the renderer_id.
+TEST(CoreGrouper, TheSameEndpointUnderANewIdentitySupersedesTheStaleRecord) {
+  Forwarded f;
+  f.grouper.add(kLegacy, endpoint("192.168.50.85", ""));
+
+  f.grouper.add(kEth, endpoint("192.168.50.85", kServerId));
+
+  ASSERT_EQ(f.removed.size(), 1u);
+  EXPECT_EQ(f.removed[0], kLegacy);
+  ASSERT_EQ(f.added.size(), 2u);
+  EXPECT_EQ(f.added[1].key, kServerId);
+  EXPECT_TRUE(f.replaced.empty());
+}
+
+TEST(CoreGrouper, AnUncleanDowngradeSupersedesTheServerIdRecord) {
+  Forwarded f;
+  f.grouper.add(kEth, endpoint("192.168.50.85", kServerId));
+
+  f.grouper.add(kLegacy, endpoint("192.168.50.85", ""));
+
+  ASSERT_EQ(f.removed.size(), 1u);
+  EXPECT_EQ(f.removed[0], kServerId);
+  ASSERT_EQ(f.added.size(), 2u);
+  EXPECT_EQ(f.added[1].key, kLegacy);
+}
+
+TEST(CoreGrouper, AnotherPortOnTheSameHostIsAnotherCore) {
+  Forwarded f;
+  f.grouper.add(kLegacy, endpoint("192.168.50.85", ""));
+
+  auto second = endpoint("192.168.50.85", kServerId);
+  second.port = 9000;
+  f.grouper.add(kEth, std::move(second));
+
+  EXPECT_TRUE(f.removed.empty());
+  EXPECT_EQ(f.added.size(), 2u);
+}
+
+// After a DHCP reassignment the address may belong to a different Core whose
+// other addresses are still live: only the matching record goes, and its
+// group falls back to what it still has.
+TEST(CoreGrouper, OnlyTheMatchingMemberOfAnotherGroupIsSuperseded) {
+  Forwarded f;
+  f.grouper.add(kEth, endpoint("192.168.1.20", "other-core"));
+  f.grouper.add(kWlan, endpoint("10.20.0.15", "other-core"));
+
+  f.grouper.add(kLegacy, endpoint("192.168.1.20", ""));
+
+  EXPECT_TRUE(f.removed.empty());
+  ASSERT_EQ(f.replaced.size(), 1u) << "other-core fell back to its alternate";
+  EXPECT_EQ(f.replaced[0].key, "other-core");
+  EXPECT_EQ(f.replaced[0].host, "10.20.0.15");
+  ASSERT_EQ(f.added.size(), 2u);
+  EXPECT_EQ(f.added[1].key, kLegacy);
 }
 
 TEST(CoreGrouper, RemovingAnUnknownInstanceIsIgnored) {

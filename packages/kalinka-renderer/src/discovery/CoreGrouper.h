@@ -37,6 +37,8 @@ public:
    * A host or port change on the member behind the forwarded endpoint is
    * replaced so the connection follows a Core that moved address without
    * treating the renderer as shut down; everything else is recorded silently.
+   * The same host:port held under another key is withdrawn as this Core's
+   * stale pre-restart record — two Cores cannot share a listener.
    * @p endpoint.key is overwritten with the group key; @p instance is the
    * handle remove() is called with.
    */
