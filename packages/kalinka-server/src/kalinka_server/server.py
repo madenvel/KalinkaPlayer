@@ -109,7 +109,7 @@ from .server_identity import get_server_id
 async def lifespan(app: FastAPI):
     sd = None
     try:
-        sd = ServiceDiscovery(app.state.config)
+        sd = ServiceDiscovery(app.state.config, bind_host=app.state.bind_host)
         await sd.register_service()
 
         # Initialize internal modules (device automation, etc.)
@@ -285,9 +285,12 @@ async def create_app(
     overrides_file: str,
     config: KalinkaConfig,
     overrides: Dict[str, Any],
+    *,
+    bind_host: str | None = None,
 ):
     app = FastAPI(lifespan=lifespan)
     app.state.config = config
+    app.state.bind_host = bind_host
     app.state.overrides_file = overrides_file
     app.state.overrides = dict(overrides)
     # Renderer services exist before the play queue: playback runs through a

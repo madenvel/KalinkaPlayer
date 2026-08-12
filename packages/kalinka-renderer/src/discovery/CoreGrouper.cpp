@@ -4,8 +4,9 @@
 
 #include <utility>
 
-CoreGrouper::CoreGrouper(AddFn onAdd, RemoveFn onRemove)
-    : onAdd_(std::move(onAdd)), onRemove_(std::move(onRemove)) {}
+CoreGrouper::CoreGrouper(AddFn onAdd, ReplaceFn onReplace, RemoveFn onRemove)
+    : onAdd_(std::move(onAdd)), onReplace_(std::move(onReplace)),
+      onRemove_(std::move(onRemove)) {}
 
 void CoreGrouper::add(const std::string &instance, CoreEndpoint endpoint) {
   const std::string key =
@@ -38,8 +39,7 @@ void CoreGrouper::add(const std::string &instance, CoreEndpoint endpoint) {
     const CoreEndpoint &fresh = group.members.at(instance);
     spdlog::info("[Discovery] '{}' moved to {}:{}; reconnecting", fresh.name,
                  fresh.host, fresh.port);
-    onRemove_(key);
-    onAdd_(fresh);
+    onReplace_(fresh);
   }
 }
 
@@ -65,6 +65,5 @@ void CoreGrouper::remove(const std::string &instance) {
   const CoreEndpoint fallback = group.members.at(group.active);
   spdlog::info("[Discovery] '{}' lost its endpoint; failing over to {}:{}",
                fallback.name, fallback.host, fallback.port);
-  onRemove_(key);
-  onAdd_(fallback);
+  onReplace_(fallback);
 }

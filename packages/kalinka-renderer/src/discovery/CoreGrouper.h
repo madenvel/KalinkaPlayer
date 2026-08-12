@@ -7,15 +7,15 @@
 #include "Discovery.h"
 
 /**
- * @brief Groups per-interface service instances into Cores by server_id.
+ * @brief Groups per-address service instances into Cores by server_id.
  *
- * A Core announces one single-address instance per interface, every one
+ * A Core announces one single-address instance per interface address, every one
  * carrying the same server_id TXT value. The first instance to resolve is
  * forwarded as the Core's endpoint; further ones are held as alternates. A
  * removal is forwarded only when the last instance is gone, and losing the
  * instance behind the forwarded endpoint while an alternate remains fails
- * over instead — a removal, then the alternate — moving the connection to an
- * address whose announcements still arrive.
+ * over through the replacement callback, moving the connection without a
+ * renderer-shutdown Goodbye to an address whose announcements still arrive.
  *
  * An instance without a server_id (a Core predating the TXT value) forms its
  * own group, keyed by instance name.
@@ -25,17 +25,18 @@
 class CoreGrouper {
 public:
   using AddFn = std::function<void(CoreEndpoint)>;
+  using ReplaceFn = std::function<void(CoreEndpoint)>;
   using RemoveFn = std::function<void(std::string key)>;
 
-  CoreGrouper(AddFn onAdd, RemoveFn onRemove);
+  CoreGrouper(AddFn onAdd, ReplaceFn onReplace, RemoveFn onRemove);
 
   /**
    * @brief Take a resolved instance; duplicates are expected and cheap.
    *
    * Forwards the endpoint, keyed by its Core, when it is the Core's first.
    * A host or port change on the member behind the forwarded endpoint is
-   * re-forwarded (a removal, then the new endpoint) so the connection follows
-   * a Core that moved address; everything else is recorded silently.
+   * replaced so the connection follows a Core that moved address without
+   * treating the renderer as shut down; everything else is recorded silently.
    * @p endpoint.key is overwritten with the group key; @p instance is the
    * handle remove() is called with.
    */
@@ -51,6 +52,7 @@ private:
   };
 
   AddFn onAdd_;
+  ReplaceFn onReplace_;
   RemoveFn onRemove_;
   std::map<std::string, Group> groups_;         // key: server_id or instance
   std::map<std::string, std::string> groupOf_;  // instance -> group key

@@ -18,9 +18,11 @@
  * the periodic PTR queries (doubling 1s -> 60s).
  *
  * What the callbacks report are Cores, not instances: a Core announces one
- * instance per interface and the CoreGrouper folds them into one endpoint by
- * their server_id TXT value, failing over between interface addresses as they
- * come and go.
+ * instance per interface address and the CoreGrouper folds them into one
+ * endpoint by their server_id TXT value, failing over between addresses as
+ * they come and go. Endpoint changes use a replacement callback, distinct
+ * from permanent removal, so a route change does not say the renderer shut
+ * down and discard an active session.
  *
  * Servers whose "renderer_proto" TXT value falls outside the range this binary
  * speaks are never reported; a TXT change — a server upgrade re-announcing,
@@ -38,9 +40,10 @@
 class MdnsDiscovery {
 public:
   using AddFn = CoreGrouper::AddFn;
+  using ReplaceFn = CoreGrouper::ReplaceFn;
   using RemoveFn = CoreGrouper::RemoveFn;
 
-  MdnsDiscovery(AddFn onAdd, RemoveFn onRemove);
+  MdnsDiscovery(AddFn onAdd, ReplaceFn onReplace, RemoveFn onRemove);
   ~MdnsDiscovery();
 
   MdnsDiscovery(const MdnsDiscovery &) = delete;

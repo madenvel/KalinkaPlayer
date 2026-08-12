@@ -15,11 +15,21 @@ void ConnectionManager::add(CoreEndpoint endpoint) {
     if (stopped_ || connections_.contains(endpoint.key)) {
       return;
     }
-    auto key = endpoint.key;
-    auto connection = std::make_shared<CoreConnection>(
-        ioc_, std::move(endpoint), identity_, friendlyName_, services_);
-    connections_.emplace(std::move(key), connection);
-    connection->start();
+    connect(std::move(endpoint));
+  });
+}
+
+void ConnectionManager::replace(CoreEndpoint endpoint) {
+  asio::post(ioc_, [this, endpoint = std::move(endpoint)]() mutable {
+    if (stopped_) {
+      return;
+    }
+    if (const auto it = connections_.find(endpoint.key);
+        it != connections_.end()) {
+      it->second->retire();
+      connections_.erase(it);
+    }
+    connect(std::move(endpoint));
   });
 }
 
@@ -42,4 +52,12 @@ void ConnectionManager::stop() {
     }
     connections_.clear();
   });
+}
+
+void ConnectionManager::connect(CoreEndpoint endpoint) {
+  auto key = endpoint.key;
+  auto connection = std::make_shared<CoreConnection>(
+      ioc_, std::move(endpoint), identity_, friendlyName_, services_);
+  connections_.emplace(std::move(key), connection);
+  connection->start();
 }

@@ -214,3 +214,18 @@ TEST_F(WsTransportTest, StopFlushesTheFinalFrame) {
   ioc.run_for(100ms);
   EXPECT_EQ(ups, 1);  // stopped means stopped
 }
+
+TEST_F(WsTransportTest, StopWithoutAFinalFrameSendsNoShutdownMessage) {
+  auto transport = makeTransport();
+  transport->start();
+  ASSERT_TRUE(runUntil([&] { return ups == 1; }));
+
+  // Endpoint replacement deliberately looks like a dropped route to the Core:
+  // it must preserve a playback session for the replacement link to reclaim.
+  transport->stop({});
+
+  EXPECT_EQ(downs, 1);
+  ioc.run_for(100ms);
+  EXPECT_TRUE(server.received.empty());
+  EXPECT_EQ(ups, 1);
+}

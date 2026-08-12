@@ -171,6 +171,7 @@ int main(int argc, char **argv) {
   if (opts.staticServers.empty()) {
     discovery = std::make_unique<MdnsDiscovery>(
         [&manager](CoreEndpoint ep) { manager.add(std::move(ep)); },
+        [&manager](CoreEndpoint ep) { manager.replace(std::move(ep)); },
         [&manager](std::string key) { manager.remove(std::move(key)); });
     if (!discovery->start()) {
       spdlog::error("Discovery unavailable and no --server given; exiting");

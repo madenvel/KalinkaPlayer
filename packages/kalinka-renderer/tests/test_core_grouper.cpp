@@ -19,9 +19,11 @@ CoreEndpoint endpoint(const std::string &host, const std::string &serverId) {
 
 struct Forwarded {
   std::vector<CoreEndpoint> added;
+  std::vector<CoreEndpoint> replaced;
   std::vector<std::string> removed;
   CoreGrouper grouper{
       [this](CoreEndpoint ep) { added.push_back(std::move(ep)); },
+      [this](CoreEndpoint ep) { replaced.push_back(std::move(ep)); },
       [this](std::string key) { removed.push_back(std::move(key)); }};
 };
 
@@ -33,6 +35,7 @@ TEST(CoreGrouper, InstancesSharingAServerIdAreOneCore) {
   ASSERT_EQ(f.added.size(), 1u);
   EXPECT_EQ(f.added[0].key, kServerId);
   EXPECT_EQ(f.added[0].host, "192.168.1.20");
+  EXPECT_TRUE(f.replaced.empty());
   EXPECT_TRUE(f.removed.empty());
 }
 
@@ -44,6 +47,7 @@ TEST(CoreGrouper, LosingAnAlternateLeavesTheForwardedEndpointStanding) {
   f.grouper.remove(kWlan);
 
   EXPECT_EQ(f.added.size(), 1u);
+  EXPECT_TRUE(f.replaced.empty());
   EXPECT_TRUE(f.removed.empty());
 }
 
@@ -54,11 +58,11 @@ TEST(CoreGrouper, LosingTheForwardedEndpointFailsOverToTheAlternate) {
 
   f.grouper.remove(kEth);
 
-  ASSERT_EQ(f.removed.size(), 1u);
-  EXPECT_EQ(f.removed[0], kServerId);
-  ASSERT_EQ(f.added.size(), 2u);
-  EXPECT_EQ(f.added[1].key, kServerId);
-  EXPECT_EQ(f.added[1].host, "10.20.0.15");
+  EXPECT_TRUE(f.removed.empty());
+  ASSERT_EQ(f.replaced.size(), 1u);
+  EXPECT_EQ(f.replaced[0].key, kServerId);
+  EXPECT_EQ(f.replaced[0].host, "10.20.0.15");
+  EXPECT_EQ(f.added.size(), 1u);
 }
 
 TEST(CoreGrouper, LosingTheLastInstanceWithdrawsTheCore) {
@@ -69,9 +73,10 @@ TEST(CoreGrouper, LosingTheLastInstanceWithdrawsTheCore) {
   f.grouper.remove(kEth);
   f.grouper.remove(kWlan);
 
-  ASSERT_EQ(f.removed.size(), 2u);
-  EXPECT_EQ(f.removed[1], kServerId);
-  EXPECT_EQ(f.added.size(), 2u) << "nothing left to fail over to";
+  ASSERT_EQ(f.removed.size(), 1u);
+  EXPECT_EQ(f.removed[0], kServerId);
+  EXPECT_EQ(f.added.size(), 1u) << "nothing new was added during failover";
+  EXPECT_EQ(f.replaced.size(), 1u) << "the first removal used the alternate";
 }
 
 TEST(CoreGrouper, ACoreWithoutAServerIdIsKeyedByItsInstance) {
@@ -80,6 +85,7 @@ TEST(CoreGrouper, ACoreWithoutAServerIdIsKeyedByItsInstance) {
 
   ASSERT_EQ(f.added.size(), 1u);
   EXPECT_EQ(f.added[0].key, kEth);
+  EXPECT_TRUE(f.replaced.empty());
 
   f.grouper.remove(kEth);
   ASSERT_EQ(f.removed.size(), 1u);
@@ -94,6 +100,7 @@ TEST(CoreGrouper, DistinctServerIdsAreDistinctCores) {
   ASSERT_EQ(f.added.size(), 2u);
   EXPECT_EQ(f.added[0].key, "core-a");
   EXPECT_EQ(f.added[1].key, "core-b");
+  EXPECT_TRUE(f.replaced.empty());
 }
 
 TEST(CoreGrouper, AnInstanceGainingAServerIdMovesToItsCoreGroup) {
@@ -106,6 +113,7 @@ TEST(CoreGrouper, AnInstanceGainingAServerIdMovesToItsCoreGroup) {
   EXPECT_EQ(f.removed[0], kEth) << "the instance-keyed endpoint is withdrawn";
   ASSERT_EQ(f.added.size(), 2u);
   EXPECT_EQ(f.added[1].key, kServerId);
+  EXPECT_TRUE(f.replaced.empty());
 }
 
 TEST(CoreGrouper, ReResolvingAnInstanceForwardsNothingNew) {
@@ -114,6 +122,7 @@ TEST(CoreGrouper, ReResolvingAnInstanceForwardsNothingNew) {
   f.grouper.add(kEth, endpoint("192.168.1.20", kServerId));
 
   EXPECT_EQ(f.added.size(), 1u);
+  EXPECT_TRUE(f.replaced.empty());
   EXPECT_TRUE(f.removed.empty());
 }
 
@@ -124,11 +133,11 @@ TEST(CoreGrouper, TheActiveInstanceChangingAddressIsReForwarded) {
 
   f.grouper.add(kEth, endpoint("192.168.1.99", kServerId));
 
-  ASSERT_EQ(f.removed.size(), 1u);
-  EXPECT_EQ(f.removed[0], kServerId);
-  ASSERT_EQ(f.added.size(), 2u);
-  EXPECT_EQ(f.added[1].key, kServerId);
-  EXPECT_EQ(f.added[1].host, "192.168.1.99");
+  EXPECT_TRUE(f.removed.empty());
+  ASSERT_EQ(f.replaced.size(), 1u);
+  EXPECT_EQ(f.replaced[0].key, kServerId);
+  EXPECT_EQ(f.replaced[0].host, "192.168.1.99");
+  EXPECT_EQ(f.added.size(), 1u);
 }
 
 TEST(CoreGrouper, AChangedPortOnTheActiveInstanceIsReForwarded) {
@@ -139,8 +148,9 @@ TEST(CoreGrouper, AChangedPortOnTheActiveInstanceIsReForwarded) {
   moved.port = 9000;
   f.grouper.add(kEth, std::move(moved));
 
-  ASSERT_EQ(f.added.size(), 2u);
-  EXPECT_EQ(f.added[1].port, 9000);
+  EXPECT_EQ(f.added.size(), 1u);
+  ASSERT_EQ(f.replaced.size(), 1u);
+  EXPECT_EQ(f.replaced[0].port, 9000);
 }
 
 TEST(CoreGrouper, ANameOnlyChangeIsRecordedSilently) {
@@ -152,6 +162,7 @@ TEST(CoreGrouper, ANameOnlyChangeIsRecordedSilently) {
   f.grouper.add(kEth, std::move(renamed));
 
   EXPECT_EQ(f.added.size(), 1u);
+  EXPECT_TRUE(f.replaced.empty());
   EXPECT_TRUE(f.removed.empty());
 }
 
@@ -162,10 +173,12 @@ TEST(CoreGrouper, AnAlternateChangingAddressIsHeldForTheNextFailover) {
 
   f.grouper.add(kWlan, endpoint("10.20.0.99", kServerId));
   EXPECT_EQ(f.added.size(), 1u) << "the active connection stands";
+  EXPECT_TRUE(f.replaced.empty());
 
   f.grouper.remove(kEth);
-  ASSERT_EQ(f.added.size(), 2u);
-  EXPECT_EQ(f.added[1].host, "10.20.0.99");
+  EXPECT_EQ(f.added.size(), 1u);
+  ASSERT_EQ(f.replaced.size(), 1u);
+  EXPECT_EQ(f.replaced[0].host, "10.20.0.99");
 }
 
 TEST(CoreGrouper, AnInstanceReturningAfterFailoverBecomesAnAlternate) {
@@ -176,11 +189,13 @@ TEST(CoreGrouper, AnInstanceReturningAfterFailoverBecomesAnAlternate) {
 
   f.grouper.add(kEth, endpoint("192.168.1.20", kServerId));
 
-  EXPECT_EQ(f.added.size(), 2u) << "the wlan0 connection stands";
+  EXPECT_EQ(f.added.size(), 1u) << "the wlan0 connection stands";
+  ASSERT_EQ(f.replaced.size(), 1u);
 
   f.grouper.remove(kWlan);
-  ASSERT_EQ(f.added.size(), 3u) << "and eth0 is there to fail over to";
-  EXPECT_EQ(f.added[2].host, "192.168.1.20");
+  EXPECT_EQ(f.added.size(), 1u);
+  ASSERT_EQ(f.replaced.size(), 2u) << "and eth0 is there to fail over to";
+  EXPECT_EQ(f.replaced[1].host, "192.168.1.20");
 }
 
 TEST(CoreGrouper, RemovingAnUnknownInstanceIsIgnored) {
@@ -188,6 +203,7 @@ TEST(CoreGrouper, RemovingAnUnknownInstanceIsIgnored) {
   f.grouper.remove(kEth);
 
   EXPECT_TRUE(f.added.empty());
+  EXPECT_TRUE(f.replaced.empty());
   EXPECT_TRUE(f.removed.empty());
 }
 

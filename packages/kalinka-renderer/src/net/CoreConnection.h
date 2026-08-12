@@ -40,6 +40,14 @@ public:
    */
   void stop();
 
+  /**
+   * @brief Retire this route without saying the renderer shut down.
+   *
+   * Used when another address of the same Core takes over. The unclean link
+   * loss lets both sides preserve and reattach an active playback session.
+   */
+  void retire();
+
 private:
   std::shared_ptr<ProtocolSession> protocol_;
   std::shared_ptr<WsTransport> transport_;
