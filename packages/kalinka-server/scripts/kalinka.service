@@ -1,6 +1,9 @@
 [Unit]
 Description=Kalinka Server
-After=network.target
+# network-online, not network: modules log into remote services during
+# setup, and network.target says nothing about connectivity.
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
