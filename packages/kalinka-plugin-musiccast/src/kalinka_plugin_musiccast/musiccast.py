@@ -404,8 +404,12 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
 
         for iface_name, iface_ip in interfaces:
             logger.debug(f"Running discovery on interface {iface_name} ({iface_ip})")
-            device_info = discover_musiccast_devices(
-                iface=iface_name, timeout_seconds=self.config.discovery_timeout
+            # Blocking SSDP + sync HTTP; off the loop or every retry cycle
+            # freezes the whole server for discovery_timeout seconds.
+            device_info = await asyncio.to_thread(
+                discover_musiccast_devices,
+                iface=iface_name,
+                timeout_seconds=self.config.discovery_timeout,
             )
             if device_info:
                 logger.debug(f"Device control URL: {device_info['api_base_url']}")
