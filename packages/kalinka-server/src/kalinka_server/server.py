@@ -325,9 +325,8 @@ async def create_app(
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
 
-    # Renderer topology rides the queue event bus: the replay reports it with
-    # the queue state and the two events keep every client current without
-    # polling /renderer/list.
+    # Renderer topology rides the queue event bus, so clients stop polling
+    # /renderer/list to notice a renderer coming or going.
     renderer_registry.set_on_changed(
         renderers=lambda rows: player_context.playqueue_eventbus.dispatch(
             RenderersChangedEvent(renderers=rows)
@@ -338,7 +337,6 @@ async def create_app(
             )
         ),
     )
-    renderer_registry.publish_state()
 
     # Catalog routing table (query -> browse shelves). Built in the background
     # — the first embed provisions/loads the model, which must not hold up
