@@ -119,6 +119,7 @@ add_executable(kalinka-renderer
   src/discovery/CoreGrouper.cpp
   src/discovery/DiscoveryCache.cpp
   src/discovery/MdnsDiscovery.cpp
+  src/discovery/SocketPlan.cpp
   src/net/ConnectionManager.cpp
   src/net/CoreConnection.cpp
   src/net/WsTransport.cpp
@@ -149,6 +150,7 @@ if(GTest_FOUND)
     src/config/SettingsPersistence.cpp
     src/discovery/CoreGrouper.cpp
     src/discovery/DiscoveryCache.cpp
+    src/discovery/SocketPlan.cpp
     src/net/WsTransport.cpp
     src/player/NativePlayer.cpp
     src/player/StateTranslator.cpp
@@ -163,6 +165,7 @@ if(GTest_FOUND)
     tests/test_renderer_name.cpp
     tests/test_session.cpp
     tests/test_session_manager.cpp
+    tests/test_socket_plan.cpp
     tests/test_state_translator.cpp
     tests/test_stream_identity.cpp
     tests/test_switcher_concurrency.cpp

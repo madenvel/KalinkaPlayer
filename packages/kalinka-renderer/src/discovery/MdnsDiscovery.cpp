@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../Protocol.h"
+#include "SocketPlan.h"
 #include "mdns.h"
 
 namespace {
@@ -26,6 +27,8 @@ constexpr auto kMaxQueryInterval = std::chrono::seconds(60);
 // Floor between refresh queries, so an entry that is overdue for one cannot
 // turn the browse loop into a query flood.
 constexpr auto kMinQueryGap = std::chrono::seconds(10);
+// How soon an interface that appeared or lost its address is acted on.
+constexpr auto kInterfaceRescanInterval = std::chrono::seconds(10);
 constexpr size_t kBufferSize = 8192;
 
 // Records of one received mDNS message, keyed by owner name, so a
@@ -203,59 +206,58 @@ std::string displayName(const std::string &instance) {
   return pos == std::string::npos ? instance : instance.substr(0, pos);
 }
 
-// One socket per multicast-capable interface: membership and query egress are
-// per-interface properties, and a wildcard socket gets both only on the
-// interface the kernel picks for it.
-std::vector<int> openSockets() {
-  std::vector<int> socks;
-  std::set<std::string> openedInterfaces;
+// Interfaces worth a browse socket right now, every IPv4 address of each.
+std::vector<socket_plan::Candidate> eligibleInterfaces() {
+  std::vector<socket_plan::Candidate> out;
   ifaddrs *ifaddr = nullptr;
-  if (getifaddrs(&ifaddr) == 0) {
-    for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
-      if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET ||
-          (ifa->ifa_flags & IFF_LOOPBACK) || !(ifa->ifa_flags & IFF_UP) ||
-          !(ifa->ifa_flags & IFF_MULTICAST) ||
-          openedInterfaces.contains(ifa->ifa_name)) {
-        continue;
-      }
-      sockaddr_in saddr =
-          *reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
-      saddr.sin_port = htons(MDNS_PORT);
-      const int sock = mdns_socket_open_ipv4(&saddr);
-      char ip[INET_ADDRSTRLEN];
-      inet_ntop(AF_INET, &saddr.sin_addr, ip, sizeof(ip));
-      if (sock < 0) {
-        spdlog::warn("[Discovery] Could not open mDNS socket on {} ({}): {}",
-                     ifa->ifa_name, ip, std::strerror(errno));
-        continue;
-      }
+  if (getifaddrs(&ifaddr) != 0) {
+    return out;
+  }
+  for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET ||
+        (ifa->ifa_flags & IFF_LOOPBACK) || !(ifa->ifa_flags & IFF_UP) ||
+        !(ifa->ifa_flags & IFF_MULTICAST)) {
+      continue;
+    }
+    char ip[INET_ADDRSTRLEN];
+    const auto *sin = reinterpret_cast<const sockaddr_in *>(ifa->ifa_addr);
+    if (!inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) {
+      continue;
+    }
+    auto candidate = std::find_if(
+        out.begin(), out.end(), [&](const socket_plan::Candidate &c) {
+          return c.interface == ifa->ifa_name;
+        });
+    if (candidate == out.end()) {
+      out.push_back({ifa->ifa_name, {ip}});
+    } else if (std::find(candidate->addresses.begin(),
+                         candidate->addresses.end(),
+                         ip) == candidate->addresses.end()) {
+      candidate->addresses.emplace_back(ip);
+    }
+  }
+  freeifaddrs(ifaddr);
+  return out;
+}
+
+int openSocketOn(const std::string &ip) {
+  sockaddr_in saddr{};
+  saddr.sin_family = AF_INET;
+  saddr.sin_port = htons(MDNS_PORT);
+  if (inet_pton(AF_INET, ip.c_str(), &saddr.sin_addr) != 1) {
+    return -1;
+  }
+  const int sock = mdns_socket_open_ipv4(&saddr);
+  if (sock < 0) {
+    return -1;
+  }
 #ifdef IP_MULTICAST_ALL
-      // Deliver only what arrives on this socket's own interface, so one
-      // datagram is not drained once per socket.
-      const int off = 0;
-      setsockopt(sock, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof(off));
+  // Deliver only what arrives on this socket's own interface, so one
+  // datagram is not drained once per socket.
+  const int off = 0;
+  setsockopt(sock, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof(off));
 #endif
-      spdlog::info("[Discovery] Browsing on {} ({})", ifa->ifa_name, ip);
-      socks.push_back(sock);
-      // Insert only after success: if this address cannot be used, another
-      // IPv4 address on the same interface still gets a chance.
-      openedInterfaces.emplace(ifa->ifa_name);
-    }
-    freeifaddrs(ifaddr);
-  }
-  if (socks.empty()) {
-    // No eligible interface (yet): a wildcard socket keeps things working
-    // once the network comes up, as the single socket always did.
-    sockaddr_in any{};
-    any.sin_family = AF_INET;
-    any.sin_addr.s_addr = INADDR_ANY;
-    any.sin_port = htons(MDNS_PORT);
-    const int sock = mdns_socket_open_ipv4(&any);
-    if (sock >= 0) {
-      socks.push_back(sock);
-    }
-  }
-  return socks;
+  return sock;
 }
 
 }  // namespace
@@ -268,13 +270,15 @@ MdnsDiscovery::MdnsDiscovery(AddFn onAdd, ReplaceFn onReplace,
 MdnsDiscovery::~MdnsDiscovery() { stop(); }
 
 bool MdnsDiscovery::start() {
-  socks_ = openSockets();
+  reconcileSockets();
   if (socks_.empty()) {
     spdlog::error("[Discovery] Could not open any mDNS socket (port 5353): {}",
                   std::strerror(errno));
     return false;
   }
-  nextQuery_ = std::chrono::steady_clock::now();
+  const auto now = std::chrono::steady_clock::now();
+  nextQuery_ = now;
+  nextRescan_ = now + kInterfaceRescanInterval;
   thread_ = std::thread([this] { run(); });
   spdlog::info("[Discovery] Browsing for {} services on {} socket(s)",
                kServiceType, socks_.size());
@@ -282,22 +286,84 @@ bool MdnsDiscovery::start() {
 }
 
 void MdnsDiscovery::stop() {
-  if (socks_.empty()) {
+  if (!thread_.joinable() && socks_.empty()) {
     return;
   }
   stopping_ = true;
   if (thread_.joinable()) {
     thread_.join();
   }
-  for (const int sock : socks_) {
-    mdns_socket_close(sock);
+  for (const auto &s : socks_) {
+    mdns_socket_close(s.sock);
   }
   socks_.clear();
+}
+
+bool MdnsDiscovery::reconcileSockets() {
+  const auto desired = eligibleInterfaces();
+  std::vector<socket_plan::Held> held;
+  held.reserve(socks_.size());
+  for (const auto &s : socks_) {
+    held.push_back({s.interface, s.ip});
+  }
+  const auto plan = socket_plan::plan(held, desired);
+  // An empty plan with no sockets still needs the wildcard fallback below —
+  // the networkless-start case this rescan exists for.
+  if (plan.close.empty() && plan.open.empty() && !socks_.empty()) {
+    return false;
+  }
+
+  for (auto it = plan.close.rbegin(); it != plan.close.rend(); ++it) {
+    const auto &s = socks_[*it];
+    if (s.interface.empty()) {
+      spdlog::info("[Discovery] Interface available; dropping wildcard socket");
+    } else {
+      spdlog::info("[Discovery] Stopped browsing on {} ({})", s.interface,
+                   s.ip);
+    }
+    mdns_socket_close(s.sock);
+    socks_.erase(socks_.begin() + *it);
+  }
+  for (const auto &candidate : plan.open) {
+    for (const auto &ip : candidate.addresses) {
+      const int sock = openSocketOn(ip);
+      if (sock < 0) {
+        // Another address on the same interface still gets a chance.
+        spdlog::warn("[Discovery] Could not open mDNS socket on {} ({}): {}",
+                     candidate.interface, ip, std::strerror(errno));
+        continue;
+      }
+      spdlog::info("[Discovery] Browsing on {} ({})", candidate.interface, ip);
+      socks_.push_back({candidate.interface, ip, sock});
+      break;
+    }
+  }
+  if (socks_.empty()) {
+    // No eligible interface (yet): a wildcard socket keeps things working
+    // once the network comes up, as the single socket always did.
+    sockaddr_in any{};
+    any.sin_family = AF_INET;
+    any.sin_addr.s_addr = INADDR_ANY;
+    any.sin_port = htons(MDNS_PORT);
+    const int sock = mdns_socket_open_ipv4(&any);
+    if (sock >= 0) {
+      socks_.push_back({"", "", sock});
+    }
+  }
+  return true;
 }
 
 void MdnsDiscovery::run() {
   while (!stopping_) {
     const auto now = std::chrono::steady_clock::now();
+    if (now >= nextRescan_) {
+      nextRescan_ = now + kInterfaceRescanInterval;
+      if (reconcileSockets()) {
+        // Query right away so a newly joined network is browsed now, not at
+        // the backed-off schedule's leisure.
+        nextQuery_ = now;
+      }
+    }
     if (now >= nextQuery_) {
       sendQuery();
       nextQuery_ = now + queryInterval_;
@@ -315,14 +381,14 @@ void MdnsDiscovery::run() {
     fd_set readfds;
     FD_ZERO(&readfds);
     int maxfd = -1;
-    for (const int sock : socks_) {
-      FD_SET(sock, &readfds);
-      maxfd = std::max(maxfd, sock);
+    for (const auto &s : socks_) {
+      FD_SET(s.sock, &readfds);
+      maxfd = std::max(maxfd, s.sock);
     }
     if (select(maxfd + 1, &readfds, nullptr, nullptr, &tv) > 0) {
-      for (const int sock : socks_) {
-        if (FD_ISSET(sock, &readfds)) {
-          drainSocket(sock);
+      for (const auto &s : socks_) {
+        if (FD_ISSET(s.sock, &readfds)) {
+          drainSocket(s.sock);
         }
       }
     }
@@ -333,8 +399,8 @@ void MdnsDiscovery::run() {
 void MdnsDiscovery::sendQuery() {
   lastQuery_ = std::chrono::steady_clock::now();
   std::vector<char> buffer(kBufferSize);
-  for (const int sock : socks_) {
-    if (mdns_query_send(sock, MDNS_RECORDTYPE_PTR, kServiceType,
+  for (const auto &s : socks_) {
+    if (mdns_query_send(s.sock, MDNS_RECORDTYPE_PTR, kServiceType,
                         std::strlen(kServiceType), buffer.data(), buffer.size(),
                         0) < 0) {
       spdlog::warn("[Discovery] Query send failed: {}", std::strerror(errno));
