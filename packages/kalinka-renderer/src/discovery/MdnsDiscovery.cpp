@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -207,11 +208,13 @@ std::string displayName(const std::string &instance) {
 }
 
 // Interfaces worth a browse socket right now, every IPv4 address of each.
-std::vector<socket_plan::Candidate> eligibleInterfaces() {
+std::optional<std::vector<socket_plan::Candidate>> eligibleInterfaces() {
   std::vector<socket_plan::Candidate> out;
   ifaddrs *ifaddr = nullptr;
   if (getifaddrs(&ifaddr) != 0) {
-    return out;
+    spdlog::warn("[Discovery] Could not enumerate interfaces: {}",
+                 std::strerror(errno));
+    return std::nullopt;
   }
   for (const ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
     if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET ||
@@ -301,12 +304,15 @@ void MdnsDiscovery::stop() {
 
 bool MdnsDiscovery::reconcileSockets() {
   const auto desired = eligibleInterfaces();
+  if (!desired.has_value()) {
+    return false;
+  }
   std::vector<socket_plan::Held> held;
   held.reserve(socks_.size());
   for (const auto &s : socks_) {
     held.push_back({s.interface, s.ip});
   }
-  const auto plan = socket_plan::plan(held, desired);
+  const auto plan = socket_plan::plan(held, *desired);
   // An empty plan with no sockets still needs the wildcard fallback below —
   // the networkless-start case this rescan exists for.
   if (plan.close.empty() && plan.open.empty() && !socks_.empty()) {

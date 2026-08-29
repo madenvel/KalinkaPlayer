@@ -417,3 +417,38 @@ async def test_register_starts_watcher_and_unregister_stops_it(
     await discovery.unregister_service()
     assert discovery._watcher is None
     assert watcher.cancelled()
+
+
+async def test_unregister_waits_out_cancelled_reconcile_cleanup(
+    mutable_interfaces, monkeypatch
+):
+    created, _ = install_fake_zeroconf(monkeypatch)
+    discovery = ServiceDiscovery(KalinkaConfig())
+    await discovery.register_service()
+
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    stale = created[1]
+    original_close = stale.async_close
+
+    async def blocked_close():
+        close_started.set()
+        await release_close.wait()
+        await original_close()
+
+    stale.async_close = blocked_close
+    del mutable_interfaces["wlan0"]
+    mutable_interfaces["usb0"] = ["172.16.0.8"]
+
+    reconcile = asyncio.create_task(discovery._reconcile())
+    discovery._watcher = reconcile
+    await close_started.wait()
+
+    unregister = asyncio.create_task(discovery.unregister_service())
+    await asyncio.sleep(0)
+    assert not unregister.done()
+
+    release_close.set()
+    await unregister
+
+    assert all(fake.closed for fake in created)
