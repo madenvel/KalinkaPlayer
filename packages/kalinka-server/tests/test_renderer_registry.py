@@ -183,3 +183,87 @@ async def test_two_renderers_are_independent():
     await asyncio.sleep(0.1)
     ids = [e["renderer_id"] for e in registry.list()]
     assert ids == ["rid-b"]
+
+
+def _wire(registry):
+    events = []
+    registry.set_on_changed(
+        renderers=lambda rows: events.append(("renderers", rows)),
+        current=lambda active, selected: events.append(
+            ("current", active, selected)
+        ),
+    )
+    return events
+
+
+async def test_register_emits_rows_and_current():
+    registry = RendererRegistry()
+    events = _wire(registry)
+    _register(registry, object())
+
+    kinds = [e[0] for e in events]
+    assert kinds == ["renderers", "current"]
+    (row,) = events[0][1]
+    assert row.renderer_id == "rid-1"
+    assert row.status == "connected"
+    assert events[1][1:] == ("rid-1", None)
+
+
+async def test_select_emits_current_only():
+    registry = RendererRegistry()
+    _register(registry, object())
+    events = _wire(registry)
+
+    registry.select("rid-1")
+
+    assert events == [("current", "rid-1", "rid-1")]
+
+
+async def test_unclean_disconnect_flips_row_and_moves_current():
+    registry = RendererRegistry(offline_timeout_s=60)
+    a, b = object(), object()
+    _register(registry, a, renderer_id="rid-a")
+    _register(registry, b, renderer_id="rid-b")
+    events = _wire(registry)
+
+    registry.disconnect("rid-a", a, clean=False)
+
+    rows = dict((r.renderer_id, r.status) for r in events[0][1])
+    assert rows == {"rid-a": "offline", "rid-b": "connected"}
+    assert ("current", "rid-b", None) in events
+    await registry.shutdown()
+
+
+async def test_reap_emits_removal():
+    registry = RendererRegistry(offline_timeout_s=0.05)
+    session = object()
+    _register(registry, session)
+    registry.disconnect("rid-1", session, clean=False)
+    events = _wire(registry)
+
+    await asyncio.sleep(0.1)
+
+    # Current moved when the renderer went offline; the reap only drops the row.
+    assert events == [("renderers", [])]
+
+
+async def test_descriptor_rows_carry_no_selection_flags():
+    """Which renderer is current is CurrentRendererChanged's fact alone; rows
+    repeating it would let the two events contradict each other."""
+    registry = RendererRegistry()
+    events = _wire(registry)
+    _register(registry, object())
+
+    (row,) = events[0][1]
+    assert "active" not in row.model_dump()
+    assert "selected" not in row.model_dump()
+
+
+async def test_publish_state_seeds_a_fresh_listener():
+    registry = RendererRegistry()
+    registry.select("rid-later")  # restored-from-prefs selection, nothing connected
+    events = _wire(registry)
+
+    registry.publish_state()
+
+    assert events == [("renderers", []), ("current", None, "rid-later")]

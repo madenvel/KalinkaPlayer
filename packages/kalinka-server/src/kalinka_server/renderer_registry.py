@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Awaitable, Callable, Optional
 
+from kalinka_plugin_sdk.events import RendererDescriptor
+
 from .renderer_link import RendererLink
 from .renderer_prefs import RendererPreferences
 
@@ -61,18 +63,21 @@ class RendererRecord:
             else RendererStatus.OFFLINE
         )
 
+    def descriptor(self) -> RendererDescriptor:
+        return RendererDescriptor(
+            renderer_id=self.renderer_id,
+            instance_id=self.instance_id,
+            friendly_name=self.friendly_name,
+            software_version=self.software_version,
+            kind=self.kind,
+            status=self.status.value,
+            platform=self.platform,
+            connected_at=self.connected_at,
+            last_seen=self.last_seen,
+        )
+
     def to_dict(self) -> dict:
-        return {
-            "renderer_id": self.renderer_id,
-            "instance_id": self.instance_id,
-            "friendly_name": self.friendly_name,
-            "software_version": self.software_version,
-            "kind": self.kind,
-            "status": self.status.value,
-            "platform": self.platform,
-            "connected_at": self.connected_at,
-            "last_seen": self.last_seen,
-        }
+        return self.descriptor().model_dump()
 
 
 class RendererRegistry:
@@ -85,6 +90,13 @@ class RendererRegistry:
         self.offline_timeout_s = offline_timeout_s
         self._replace_session = replace_session
         self._on_removed: Optional[Callable[[str, bool], None]] = None
+        self._on_renderers_changed: Optional[
+            Callable[[list[RendererDescriptor]], None]
+        ] = None
+        self._on_current_changed: Optional[
+            Callable[[Optional[str], Optional[str]], None]
+        ] = None
+        self._last_current: tuple[Optional[str], Optional[str]] = (None, None)
         self._renderers: dict[str, RendererRecord] = {}
         self._reap_tasks: dict[str, asyncio.Task] = {}
         self._replace_tasks: set[asyncio.Task] = set()
@@ -147,6 +159,7 @@ class RendererRegistry:
             kind,
             renderer_id,
         )
+        self._emit(rows_changed=True)
         return registration
 
     def disconnect(self, renderer_id: str, session: RendererLink, clean: bool) -> None:
@@ -164,6 +177,7 @@ class RendererRegistry:
                 renderer_id,
             )
             self._notify_removed(renderer_id, clean=True)
+            self._emit(rows_changed=True)
             return
         logger.info(
             "Renderer '%s' (id=%s) offline; keeping for %.0fs",
@@ -172,6 +186,7 @@ class RendererRegistry:
             self.offline_timeout_s,
         )
         self._schedule_reap(renderer_id)
+        self._emit(rows_changed=True)
 
     def set_on_removed(self, callback: Callable[[str, bool], None]) -> None:
         """Set the removal hook after construction (the session pool needs the
@@ -181,6 +196,46 @@ class RendererRegistry:
     def _notify_removed(self, renderer_id: str, clean: bool) -> None:
         if self._on_removed is not None:
             self._on_removed(renderer_id, clean)
+
+    def set_on_changed(
+        self,
+        *,
+        renderers: Callable[[list[RendererDescriptor]], None],
+        current: Callable[[Optional[str], Optional[str]], None],
+    ) -> None:
+        """Change hooks: ``renderers`` gets the full descriptor snapshot on any
+        membership or status change; ``current`` gets (active, selected) when
+        that pair changes — a disconnect can move playback without any
+        selection having been touched."""
+        self._on_renderers_changed = renderers
+        self._on_current_changed = current
+
+    def publish_state(self) -> None:
+        """Fire both hooks with the current picture, change or not. Seeds a
+        freshly wired listener — the selection restored from prefs must reach
+        clients before any renderer connects."""
+        if self._on_renderers_changed is not None:
+            self._on_renderers_changed(self._descriptors())
+        self._last_current = (self.active_id(), self.selected_id)
+        if self._on_current_changed is not None:
+            self._on_current_changed(*self._last_current)
+
+    def _descriptors(self) -> list[RendererDescriptor]:
+        return [
+            record.descriptor()
+            for record in sorted(
+                self._renderers.values(), key=lambda r: r.friendly_name
+            )
+        ]
+
+    def _emit(self, rows_changed: bool) -> None:
+        if rows_changed and self._on_renderers_changed is not None:
+            self._on_renderers_changed(self._descriptors())
+        current = (self.active_id(), self.selected_id)
+        if current != self._last_current:
+            self._last_current = current
+            if self._on_current_changed is not None:
+                self._on_current_changed(*current)
 
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
@@ -211,6 +266,7 @@ class RendererRegistry:
         logger.info(
             "Renderer selection: %s", renderer_id if renderer_id else "automatic"
         )
+        self._emit(rows_changed=False)
 
     @property
     def selected_id(self) -> Optional[str]:
@@ -283,6 +339,7 @@ class RendererRegistry:
                 self.offline_timeout_s,
             )
             self._notify_removed(renderer_id, clean=False)
+            self._emit(rows_changed=True)
 
     async def shutdown(self) -> None:
         pending = [*self._reap_tasks.values(), *self._replace_tasks]
