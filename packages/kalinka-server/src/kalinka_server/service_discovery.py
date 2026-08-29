@@ -141,9 +141,18 @@ class ServiceDiscovery:
         self._bind_host = bind_host
         self._watcher: asyncio.Task | None = None
         self.announcements: list[_Announcement] = [
-            _Announcement(name, ip, get_service_info(config, endpoint_name, ip))
+            self._make_announcement(name, ip, endpoint_name)
             for name, ip, endpoint_name in self._select_endpoints(verbose=True)
         ]
+
+    def _make_announcement(
+        self, interface: str, ip_address: str, endpoint_name: str
+    ) -> _Announcement:
+        return _Announcement(
+            interface,
+            ip_address,
+            get_service_info(self._config, endpoint_name, ip_address),
+        )
 
     def _select_endpoints(
         self, *, verbose: bool = False
@@ -270,9 +279,7 @@ class ServiceDiscovery:
             target.append(a)
         current = {(a.interface, a.ip_address) for a in kept}
         added = [
-            _Announcement(
-                name, ip, get_service_info(self._config, endpoint_name, ip)
-            )
+            self._make_announcement(name, ip, endpoint_name)
             for (name, ip), endpoint_name in desired.items()
             if (name, ip) not in current
         ]
