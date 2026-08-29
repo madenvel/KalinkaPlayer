@@ -33,7 +33,11 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.ext_device import DeviceVolume
 from kalinka_plugin_sdk.ext_device_events import ExtDeviceEventType
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
-from kalinka_plugin_sdk.events import PlayQueueEventType
+from kalinka_plugin_sdk.events import (
+    CurrentRendererChangedEvent,
+    PlayQueueEventType,
+    RenderersChangedEvent,
+)
 from kalinka_plugin_sdk import paths
 
 from .config_model import KalinkaConfig
@@ -320,6 +324,21 @@ async def create_app(
     )
     logger.info("Input modules found: %s", list(modules.prepared_input_modules.keys()))
     app.state.player_context = player_context
+
+    # Renderer topology rides the queue event bus: the replay reports it with
+    # the queue state and the two events keep every client current without
+    # polling /renderer/list.
+    renderer_registry.set_on_changed(
+        renderers=lambda rows: player_context.playqueue_eventbus.dispatch(
+            RenderersChangedEvent(renderers=rows)
+        ),
+        current=lambda active, selected: player_context.playqueue_eventbus.dispatch(
+            CurrentRendererChangedEvent(
+                renderer_id=active, selected_renderer_id=selected
+            )
+        ),
+    )
+    renderer_registry.publish_state()
 
     # Catalog routing table (query -> browse shelves). Built in the background
     # — the first embed provisions/loads the model, which must not hold up

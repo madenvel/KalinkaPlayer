@@ -1,5 +1,7 @@
 from enum import Enum
-from typing import Any, List
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from .api import BaseEvent, BaseState
 
@@ -19,6 +21,27 @@ class PlayQueueEventType(Enum):
     TrackUnavailable = "track_unavailable"
     PlaybackError = "playback_error"
     PlaybackModeChanged = "playback_mode_changed"
+    RenderersChanged = "renderers_changed"
+    CurrentRendererChanged = "current_renderer_changed"
+
+
+class RendererDescriptor(BaseModel):
+    """One playback endpoint as the Core knows it.
+
+    Deliberately carries no active/selected marker: which renderer is current
+    is a separate axis of state (``CurrentRendererChangedEvent``), so one
+    fact never rides two events.
+    """
+
+    renderer_id: str
+    instance_id: str = ""
+    friendly_name: str = ""
+    software_version: str = ""
+    kind: str = ""
+    status: str = "offline"
+    platform: Dict[str, str] = Field(default_factory=dict)
+    connected_at: float = 0.0
+    last_seen: float = 0.0
 
 
 class PlayQueueEvent(BaseEvent[PlayQueueEventType]):
@@ -33,6 +56,9 @@ class PlayQueueState(BaseState[PlayQueueEvent]):
     playback_state: PlaybackState
     track_list: List[Track]
     playback_mode: PlaybackMode
+    renderers: List[RendererDescriptor] = Field(default_factory=list)
+    current_renderer_id: Optional[str] = None
+    selected_renderer_id: Optional[str] = None
 
     def apply(self, event: PlayQueueEvent) -> "PlayQueueState":
         """Apply event and return a new state (immutable pattern)."""
@@ -70,6 +96,11 @@ class PlayQueueState(BaseState[PlayQueueEvent]):
             updates["track_list"] = track_list
         elif isinstance(event, PlaybackModeChangedEvent):
             updates["playback_mode"] = event.mode
+        elif isinstance(event, RenderersChangedEvent):
+            updates["renderers"] = event.renderers
+        elif isinstance(event, CurrentRendererChangedEvent):
+            updates["current_renderer_id"] = event.renderer_id
+            updates["selected_renderer_id"] = event.selected_renderer_id
         else:
             return self
 
@@ -118,3 +149,20 @@ class TrackUnavailableEvent(PlayQueueEvent):
 class PlaybackErrorEvent(PlayQueueEvent):
     event_type: PlayQueueEventType = PlayQueueEventType.PlaybackError
     message: str
+
+
+class RenderersChangedEvent(PlayQueueEvent):
+    """Full snapshot of the known renderers; idempotent by construction, so a
+    duplicate or missed event never leaves a client wrong for long."""
+
+    event_type: PlayQueueEventType = PlayQueueEventType.RenderersChanged
+    renderers: List[RendererDescriptor]
+
+
+class CurrentRendererChangedEvent(PlayQueueEvent):
+    """Which renderer playback runs on: ``renderer_id`` is the effective one,
+    ``selected_renderer_id`` the client's pin (None = automatic)."""
+
+    event_type: PlayQueueEventType = PlayQueueEventType.CurrentRendererChanged
+    renderer_id: Optional[str] = None
+    selected_renderer_id: Optional[str] = None
