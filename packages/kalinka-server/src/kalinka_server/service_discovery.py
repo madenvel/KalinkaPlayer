@@ -293,11 +293,17 @@ class ServiceDiscovery:
             for a in group
         ]
         logger.info(f"[Zeroconf] Network change: {', '.join(changes)}")
+        try:
+            await asyncio.gather(
+                *(self._close_announcement(a) for a in stale),
+                *(self._register_announcement(a) for a in added + retried),
+            )
+        except asyncio.CancelledError:
+            await asyncio.gather(
+                *(self._close_announcement(a, log=False) for a in added)
+            )
+            raise
         self.announcements = kept + added
-        await asyncio.gather(
-            *(self._close_announcement(a) for a in stale),
-            *(self._register_announcement(a) for a in added + retried),
-        )
 
     async def _register_announcement(self, announcement: _Announcement):
         try:
@@ -336,9 +342,12 @@ class ServiceDiscovery:
                     f"[Zeroconf] Unregistering service: "
                     f"{announcement.service_info.name}"
                 )
-            # async_close() unregisters the service and awaits the goodbye
-            # broadcasts; async_unregister_service() only schedules them.
-            await zeroconf.async_close()
+            close = asyncio.create_task(zeroconf.async_close())
+            try:
+                await asyncio.shield(close)
+            except asyncio.CancelledError:
+                await asyncio.shield(close)
+                raise
         except asyncio.CancelledError:
             raise
         except Exception as e:
