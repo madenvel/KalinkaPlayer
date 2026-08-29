@@ -281,6 +281,8 @@ async def test_register_binds_one_responder_per_address(
     assert all(len(f.registered) == 1 for f in created)
     assert tracker["register_max"] == 2
 
+    await discovery.unregister_service()
+
 
 async def test_registration_failure_closes_its_responder_and_spares_the_rest(
     two_interfaces, monkeypatch
@@ -297,6 +299,8 @@ async def test_registration_failure_closes_its_responder_and_spares_the_rest(
     assert discovery.announcements[1].zeroconf is created[1]
     assert not created[1].closed
 
+    await discovery.unregister_service()
+
 
 async def test_unregister_closes_every_responder(two_interfaces, monkeypatch):
     created, tracker = install_fake_zeroconf(monkeypatch)
@@ -308,3 +312,108 @@ async def test_unregister_closes_every_responder(two_interfaces, monkeypatch):
     assert all(f.closed for f in created)
     assert all(a.zeroconf is None for a in discovery.announcements)
     assert tracker["close_max"] == 2
+
+
+@pytest.fixture
+def mutable_interfaces(monkeypatch):
+    mapping = {"eth0": ["192.168.1.20"], "wlan0": ["10.20.0.15"]}
+    monkeypatch.setattr(
+        service_discovery,
+        "get_interface_ip_mappings",
+        lambda: dict(mapping),
+    )
+    return mapping
+
+
+async def test_reconcile_announces_addresses_that_appear_later(
+    mutable_interfaces, monkeypatch
+):
+    created, _ = install_fake_zeroconf(monkeypatch)
+    saved = dict(mutable_interfaces)
+    mutable_interfaces.clear()
+    discovery = ServiceDiscovery(KalinkaConfig())
+
+    await discovery.register_service()
+    assert discovery.announcements == []
+
+    mutable_interfaces.update(saved)
+    await discovery._reconcile()
+
+    assert [a.ip_address for a in discovery.announcements] == [
+        "192.168.1.20",
+        "10.20.0.15",
+    ]
+    assert all(a.zeroconf is not None for a in discovery.announcements)
+
+    await discovery.unregister_service()
+
+
+async def test_reconcile_spares_live_responders_on_surviving_addresses(
+    mutable_interfaces, monkeypatch
+):
+    created, _ = install_fake_zeroconf(monkeypatch)
+    discovery = ServiceDiscovery(KalinkaConfig())
+    await discovery.register_service()
+    survivor = discovery.announcements[0].zeroconf
+
+    del mutable_interfaces["wlan0"]
+    await discovery._reconcile()
+
+    assert [a.interface for a in discovery.announcements] == ["eth0"]
+    # The surviving responder is the same live object: no goodbye, no
+    # re-registration.
+    assert discovery.announcements[0].zeroconf is survivor
+    assert not created[0].closed
+    assert len(created[0].registered) == 1
+    assert created[1].closed
+
+    await discovery.unregister_service()
+
+
+async def test_reconcile_is_a_noop_while_nothing_changes(
+    mutable_interfaces, monkeypatch
+):
+    created, _ = install_fake_zeroconf(monkeypatch)
+    discovery = ServiceDiscovery(KalinkaConfig())
+    await discovery.register_service()
+
+    await discovery._reconcile()
+
+    assert len(created) == 2
+    assert all(len(f.registered) == 1 for f in created)
+    assert not any(f.closed for f in created)
+
+    await discovery.unregister_service()
+
+
+async def test_reconcile_retries_failed_registration_on_present_address(
+    mutable_interfaces, monkeypatch
+):
+    failing = {"192.168.1.20"}
+    created, _ = install_fake_zeroconf(monkeypatch, fail_register=failing)
+    discovery = ServiceDiscovery(KalinkaConfig())
+    await discovery.register_service()
+    assert discovery.announcements[0].zeroconf is None
+
+    failing.clear()
+    await discovery._reconcile()
+
+    assert discovery.announcements[0].zeroconf is created[-1]
+    assert len(created[-1].registered) == 1
+
+    await discovery.unregister_service()
+
+
+async def test_register_starts_watcher_and_unregister_stops_it(
+    mutable_interfaces, monkeypatch
+):
+    install_fake_zeroconf(monkeypatch)
+    discovery = ServiceDiscovery(KalinkaConfig())
+
+    await discovery.register_service()
+    watcher = discovery._watcher
+    assert watcher is not None and not watcher.done()
+
+    await discovery.unregister_service()
+    assert discovery._watcher is None
+    assert watcher.cancelled()

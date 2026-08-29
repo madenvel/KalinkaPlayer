@@ -130,17 +130,37 @@ class _Announcement:
 
 
 class ServiceDiscovery:
+    # Reaction time to address changes; the scan itself is a cheap
+    # netifaces call, no sockets are touched unless something changed.
+    RESCAN_INTERVAL_S = 10.0
+
     def __init__(
         self, config: KalinkaConfig, *, bind_host: str | None = None
     ):
-        self.announcements: list[_Announcement] = []
+        self._config = config
+        self._bind_host = bind_host
+        self._watcher: asyncio.Task | None = None
+        self.announcements: list[_Announcement] = [
+            _Announcement(name, ip, get_service_info(config, endpoint_name, ip))
+            for name, ip, endpoint_name in self._select_endpoints(verbose=True)
+        ]
 
+    def _select_endpoints(
+        self, *, verbose: bool = False
+    ) -> list[tuple[str, str, str]]:
+        """Compute the (interface, address, endpoint_name) triples to announce.
+
+        ``verbose`` narrates the selection; the network watcher re-runs this
+        every rescan and stays quiet, logging only actual changes.
+        """
+        log = logger.warning if verbose else logger.debug
         interface_ips = get_interface_ip_mappings()
         if not interface_ips:
-            logger.warning("[Zeroconf] No network interfaces found, skip")
-            return
+            log("[Zeroconf] No network interfaces found, skip")
+            return []
 
-        configured_interface = config.server.interface
+        configured_interface = self._config.server.interface
+        bind_host = self._bind_host
         if bind_host is not None and bind_host != "0.0.0.0":
             candidates = (
                 interface_ips
@@ -156,11 +176,11 @@ class ServiceDiscovery:
                 None,
             )
             if bound_interface is None:
-                logger.warning(
+                log(
                     f"[Zeroconf] Uvicorn bind address '{bind_host}' is not "
                     "assigned to a current interface, skip"
                 )
-                return
+                return []
             # This is the authoritative listener selected by __main__. Avoid
             # relying on netifaces address ordering when an interface owns
             # several addresses.
@@ -171,7 +191,7 @@ class ServiceDiscovery:
             configured_interface != "all"
             and configured_interface not in interface_ips
         ):
-            logger.warning(
+            log(
                 f"[Zeroconf] Configured interface '{configured_interface}' not found, falling back to all interfaces"
             )
             configured_interface = "all"
@@ -191,26 +211,85 @@ class ServiceDiscovery:
             for name, addresses in interface_ips.items()
             for ip in addresses
         ]
-        logger.info(
-            f"[Zeroconf] Announcing {len(endpoints)} instance(s) on "
-            f"{len(interface_ips)} interface(s): "
-            + ", ".join(f"{name} ({ip})" for name, ip, _ in endpoints)
-        )
-        self.announcements = [
-            _Announcement(name, ip, get_service_info(config, endpoint_name, ip))
-            for name, ip, endpoint_name in endpoints
-        ]
+        if verbose:
+            logger.info(
+                f"[Zeroconf] Announcing {len(endpoints)} instance(s) on "
+                f"{len(interface_ips)} interface(s): "
+                + ", ".join(f"{name} ({ip})" for name, ip, _ in endpoints)
+            )
+        return endpoints
 
     async def register_service(self):
-        """Register one service instance per announced address."""
+        """Register one service instance per announced address and keep the
+        set reconciled as addresses come and go."""
         await asyncio.gather(
             *(self._register_announcement(a) for a in self.announcements)
         )
+        self._watcher = asyncio.create_task(self._watch_network())
 
     async def unregister_service(self):
         """Unregister every service instance, waiting out the goodbyes."""
+        if self._watcher is not None:
+            self._watcher.cancel()
+            try:
+                await self._watcher
+            except asyncio.CancelledError:
+                pass
+            self._watcher = None
         await asyncio.gather(
             *(self._close_announcement(a) for a in self.announcements)
+        )
+
+    async def _watch_network(self):
+        while True:
+            await asyncio.sleep(self.RESCAN_INTERVAL_S)
+            try:
+                await self._reconcile()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[Zeroconf] Network rescan failed: {e}")
+
+    async def _reconcile(self):
+        """Bring the announcements in line with the current addresses.
+
+        An announcement whose address is still present keeps its live
+        responder untouched — no goodbye/re-register churn for instances
+        clients may be using. Only gone addresses are closed, new ones
+        registered, and failed registrations on still-present addresses
+        retried.
+        """
+        desired = {
+            (name, ip): endpoint_name
+            for name, ip, endpoint_name in self._select_endpoints()
+        }
+        kept: list[_Announcement] = []
+        stale: list[_Announcement] = []
+        for a in self.announcements:
+            target = kept if (a.interface, a.ip_address) in desired else stale
+            target.append(a)
+        current = {(a.interface, a.ip_address) for a in kept}
+        added = [
+            _Announcement(
+                name, ip, get_service_info(self._config, endpoint_name, ip)
+            )
+            for (name, ip), endpoint_name in desired.items()
+            if (name, ip) not in current
+        ]
+        retried = [a for a in kept if a.zeroconf is None]
+        if not (stale or added or retried):
+            return
+
+        changes = [
+            f"{sign}{a.interface} ({a.ip_address})"
+            for sign, group in (("+", added), ("-", stale), ("~", retried))
+            for a in group
+        ]
+        logger.info(f"[Zeroconf] Network change: {', '.join(changes)}")
+        self.announcements = kept + added
+        await asyncio.gather(
+            *(self._close_announcement(a) for a in stale),
+            *(self._register_announcement(a) for a in added + retried),
         )
 
     async def _register_announcement(self, announcement: _Announcement):
