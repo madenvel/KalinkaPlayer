@@ -76,9 +76,6 @@ class RendererRecord:
             last_seen=self.last_seen,
         )
 
-    def to_dict(self) -> dict:
-        return self.descriptor().model_dump()
-
 
 class RendererRegistry:
     def __init__(
@@ -96,7 +93,8 @@ class RendererRegistry:
         self._on_current_changed: Optional[
             Callable[[Optional[str], Optional[str]], None]
         ] = None
-        self._last_current: tuple[Optional[str], Optional[str]] = (None, None)
+        # None until the first report, so subscribing always states the pair.
+        self._last_current: Optional[tuple[Optional[str], Optional[str]]] = None
         self._renderers: dict[str, RendererRecord] = {}
         self._reap_tasks: dict[str, asyncio.Task] = {}
         self._replace_tasks: set[asyncio.Task] = set()
@@ -159,7 +157,7 @@ class RendererRegistry:
             kind,
             renderer_id,
         )
-        self._emit(rows_changed=True)
+        self._publish_topology()
         return registration
 
     def disconnect(self, renderer_id: str, session: RendererLink, clean: bool) -> None:
@@ -177,7 +175,7 @@ class RendererRegistry:
                 renderer_id,
             )
             self._notify_removed(renderer_id, clean=True)
-            self._emit(rows_changed=True)
+            self._publish_topology()
             return
         logger.info(
             "Renderer '%s' (id=%s) offline; keeping for %.0fs",
@@ -186,7 +184,7 @@ class RendererRegistry:
             self.offline_timeout_s,
         )
         self._schedule_reap(renderer_id)
-        self._emit(rows_changed=True)
+        self._publish_topology()
 
     def set_on_removed(self, callback: Callable[[str, bool], None]) -> None:
         """Set the removal hook after construction (the session pool needs the
@@ -203,22 +201,18 @@ class RendererRegistry:
         renderers: Callable[[list[RendererDescriptor]], None],
         current: Callable[[Optional[str], Optional[str]], None],
     ) -> None:
-        """Change hooks: ``renderers`` gets the full descriptor snapshot on any
-        membership or status change; ``current`` gets (active, selected) when
-        that pair changes — a disconnect can move playback without any
-        selection having been touched."""
+        """Subscribe to topology changes, and report the picture at once.
+
+        ``renderers`` takes the full descriptor snapshot whenever membership or
+        status moves; ``current`` takes (active, selected) when that pair moves
+        — a renderer going offline shifts playback with no selection touched.
+        Both fire here as well, so a subscriber starts from the truth instead of
+        from its first change: a selection restored from prefs has to reach
+        clients before any renderer connects.
+        """
         self._on_renderers_changed = renderers
         self._on_current_changed = current
-
-    def publish_state(self) -> None:
-        """Fire both hooks with the current picture, change or not. Seeds a
-        freshly wired listener — the selection restored from prefs must reach
-        clients before any renderer connects."""
-        if self._on_renderers_changed is not None:
-            self._on_renderers_changed(self._descriptors())
-        self._last_current = (self.active_id(), self.selected_id)
-        if self._on_current_changed is not None:
-            self._on_current_changed(*self._last_current)
+        self._publish_topology()
 
     def _descriptors(self) -> list[RendererDescriptor]:
         return [
@@ -228,14 +222,25 @@ class RendererRegistry:
             )
         ]
 
-    def _emit(self, rows_changed: bool) -> None:
-        if rows_changed and self._on_renderers_changed is not None:
+    def _publish_topology(self) -> None:
+        """Membership or status moved, which can move the current pair too."""
+        self._publish_renderers()
+        self._publish_current()
+
+    def _publish_renderers(self) -> None:
+        if self._on_renderers_changed is not None:
             self._on_renderers_changed(self._descriptors())
+
+    def _publish_current(self) -> None:
+        # Nothing is recorded without a subscriber, so the first report after
+        # one arrives is never mistaken for a repeat.
+        if self._on_current_changed is None:
+            return
         current = (self.active_id(), self.selected_id)
-        if current != self._last_current:
-            self._last_current = current
-            if self._on_current_changed is not None:
-                self._on_current_changed(*current)
+        if current == self._last_current:
+            return
+        self._last_current = current
+        self._on_current_changed(*current)
 
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
@@ -266,7 +271,7 @@ class RendererRegistry:
         logger.info(
             "Renderer selection: %s", renderer_id if renderer_id else "automatic"
         )
-        self._emit(rows_changed=False)
+        self._publish_current()
 
     @property
     def selected_id(self) -> Optional[str]:
@@ -287,16 +292,14 @@ class RendererRegistry:
 
     def list(self) -> list[dict]:
         active = self.active_id()
-        selected = self._prefs.selected_renderer_id
+        selected = self.selected_id
         return [
-            record.to_dict()
+            descriptor.model_dump()
             | {
-                "active": record.renderer_id == active,
-                "selected": record.renderer_id == selected,
+                "active": descriptor.renderer_id == active,
+                "selected": descriptor.renderer_id == selected,
             }
-            for record in sorted(
-                self._renderers.values(), key=lambda r: r.friendly_name
-            )
+            for descriptor in self._descriptors()
         ]
 
     def _spawn_replace(self, session: RendererLink) -> None:
@@ -339,7 +342,7 @@ class RendererRegistry:
                 self.offline_timeout_s,
             )
             self._notify_removed(renderer_id, clean=False)
-            self._emit(rows_changed=True)
+            self._publish_topology()
 
     async def shutdown(self) -> None:
         pending = [*self._reap_tasks.values(), *self._replace_tasks]

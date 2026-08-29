@@ -186,6 +186,13 @@ async def test_two_renderers_are_independent():
 
 
 def _wire(registry):
+    """Subscribe and drop the seed report, leaving only what follows."""
+    events = _subscribe(registry)
+    events.clear()
+    return events
+
+
+def _subscribe(registry):
     events = []
     registry.set_on_changed(
         renderers=lambda rows: events.append(("renderers", rows)),
@@ -259,11 +266,10 @@ async def test_descriptor_rows_carry_no_selection_flags():
     assert "selected" not in row.model_dump()
 
 
-async def test_publish_state_seeds_a_fresh_listener():
+async def test_subscribing_reports_the_picture_at_once():
     registry = RendererRegistry()
-    registry.select("rid-later")  # restored-from-prefs selection, nothing connected
-    events = _wire(registry)
+    registry.select("rid-later")  # restored-from-prefs pin, nothing connected
 
-    registry.publish_state()
+    events = _subscribe(registry)
 
     assert events == [("renderers", []), ("current", None, "rid-later")]
