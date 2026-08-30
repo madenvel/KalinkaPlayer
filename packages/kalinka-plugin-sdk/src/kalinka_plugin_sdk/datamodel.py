@@ -2,7 +2,6 @@ from typing import Optional, List
 from pydantic import (
     BaseModel,
     NonNegativeInt,
-    PositiveInt,
     model_serializer,
     field_validator,
     model_validator,
