@@ -47,9 +47,9 @@ dependencies = [
     # Renderer protocol (renderer_ws_handler.py). The committed generated
     # bindings (renderer_proto/) pin the runtime floor; `make proto` regenerates.
     "protobuf>=7.35,<8",
-    # >=1.3.1: the server resolves Related Artists via InputModule.get_all
-    # (SDK 1.3) and serves the browser player from paths.web_ui_dir() (1.3.1).
-    "kalinka-plugin-sdk>=1.3.1,<2",
+    # >=1.4.0: the server publishes the renderer topology with the queue events
+    # and RendererDescriptor added there.
+    "kalinka-plugin-sdk>=1.4.0,<2",
 ]
 dynamic = ["version"]
 

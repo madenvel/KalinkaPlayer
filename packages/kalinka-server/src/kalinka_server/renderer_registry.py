@@ -212,6 +212,9 @@ class RendererRegistry:
         """
         self._on_renderers_changed = renderers
         self._on_current_changed = current
+        # What the previous subscriber was told is nothing to this one, and
+        # without forgetting it an unchanged pair would skip the report below.
+        self._last_current = None
         self._publish_topology()
 
     def _descriptors(self) -> list[RendererDescriptor]:
@@ -232,15 +235,12 @@ class RendererRegistry:
             self._on_renderers_changed(self._descriptors())
 
     def _publish_current(self) -> None:
-        # Nothing is recorded without a subscriber, so the first report after
-        # one arrives is never mistaken for a repeat.
-        if self._on_current_changed is None:
-            return
         current = (self.active_id(), self.selected_id)
         if current == self._last_current:
             return
         self._last_current = current
-        self._on_current_changed(*current)
+        if self._on_current_changed is not None:
+            self._on_current_changed(*current)
 
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)

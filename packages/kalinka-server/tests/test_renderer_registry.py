@@ -266,6 +266,18 @@ async def test_descriptor_rows_carry_no_selection_flags():
     assert "selected" not in row.model_dump()
 
 
+async def test_resubscribing_reports_to_the_new_callback_too():
+    """A replacement subscriber knows nothing of what the last one was told,
+    so an unchanged pair must still be reported to it."""
+    registry = RendererRegistry()
+    _register(registry, object())
+    _subscribe(registry)
+
+    events = _subscribe(registry)
+
+    assert events == [("renderers", events[0][1]), ("current", "rid-1", None)]
+
+
 async def test_subscribing_reports_the_picture_at_once():
     registry = RendererRegistry()
     registry.select("rid-later")  # restored-from-prefs pin, nothing connected

@@ -37,7 +37,9 @@ def get_version() -> str:
 # kalinka_plugin_sdk.API_VERSION (the server<->plugin SDK contract).
 # 0.2: playback moved to renderers — output selection lives behind /renderer/*,
 # and the built-in local-alsa device is gone.
-REST_API_VERSION = "0.2"
+# 0.3: /queue/ws reports the renderer topology — renderers_changed and
+# current_renderer_changed events, and the matching replay state fields.
+REST_API_VERSION = "0.3"
 
 
 def get_rest_api_version() -> str:

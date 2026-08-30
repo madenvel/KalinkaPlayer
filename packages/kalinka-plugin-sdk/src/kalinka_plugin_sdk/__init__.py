@@ -25,6 +25,9 @@ from .events import (
     TrackUnavailableEvent,
     PlaybackModeChangedEvent,
     PlaybackErrorEvent,
+    RenderersChangedEvent,
+    CurrentRendererChangedEvent,
+    RendererDescriptor,
 )
 
 from .datamodel import (
@@ -75,6 +78,9 @@ __all__ = [
     "TrackUnavailableEvent",
     "PlaybackModeChangedEvent",
     "PlaybackErrorEvent",
+    "RenderersChangedEvent",
+    "CurrentRendererChangedEvent",
+    "RendererDescriptor",
     # Data Models
     "EntityType",
     "EntityId",
