@@ -134,11 +134,10 @@ void setupLogging(const Options &opts) {
   } else {
     spdlog::set_default_logger(spdlog::stdout_color_mt("renderer"));
   }
-  // JOURNAL_STREAM means systemd owns stdout — journald stamps time and
-  // priority itself, so the full pattern would only burn SD-card bytes.
-  const bool journal =
-      logFile.empty() && std::getenv("JOURNAL_STREAM") != nullptr;
-  applyLogPattern(*spdlog::default_logger(), journal);
+  // journald stamps time and priority itself, so the full pattern would only
+  // burn SD-card bytes there.
+  applyLogPattern(*spdlog::default_logger(),
+                  logFile.empty() && streamIsJournal(STDOUT_FILENO));
   spdlog::set_level(spdlog::level::info);
   spdlog::flush_on(spdlog::level::info);
 }

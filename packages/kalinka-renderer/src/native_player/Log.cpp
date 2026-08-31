@@ -4,6 +4,11 @@
 #include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
 
 // Custom log level formatter to convert log level to uppercase
 class CustomLogLevelFormatter : public spdlog::custom_flag_formatter {
@@ -77,6 +82,24 @@ public:
     return spdlog::details::make_unique<SyslogPriorityFormatter>();
   }
 };
+
+bool streamIsJournal(int fd) {
+  const char *spec = std::getenv("JOURNAL_STREAM");
+  if (spec == nullptr) {
+    return false;
+  }
+  unsigned long long dev = 0;
+  unsigned long long ino = 0;
+  if (std::sscanf(spec, "%llu:%llu", &dev, &ino) != 2) {
+    return false;
+  }
+  struct stat st {};
+  if (fstat(fd, &st) != 0) {
+    return false;
+  }
+  return static_cast<unsigned long long>(st.st_dev) == dev &&
+         static_cast<unsigned long long>(st.st_ino) == ino;
+}
 
 void applyLogPattern(spdlog::logger &logger, bool journal) {
   auto formatter = std::make_unique<spdlog::pattern_formatter>();

@@ -37,7 +37,7 @@ from .logging_setup import make_formatter
 
 logger = logging.getLogger("install_pending")
 _handler = logging.StreamHandler()
-_handler.setFormatter(make_formatter())
+_handler.setFormatter(make_formatter(_handler.stream))
 logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 

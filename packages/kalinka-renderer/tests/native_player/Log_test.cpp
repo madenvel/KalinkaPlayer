@@ -2,9 +2,14 @@
 
 #include <gtest/gtest.h>
 #include <spdlog/sinks/ostream_sink.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <regex>
 #include <sstream>
+#include <string>
 
 namespace {
 
@@ -34,4 +39,45 @@ TEST(LogPattern, FullPatternCarriesTimestampLevelThreadAndName) {
       logOne(false, spdlog::level::warn),
       std::regex(R"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} )"
                  R"(WARN \d+ renderer: hello\n)")));
+}
+
+namespace {
+
+class JournalStreamEnv : public ::testing::Test {
+protected:
+  void TearDown() override { unsetenv("JOURNAL_STREAM"); }
+
+  static std::string identityOf(int fd) {
+    struct stat st {};
+    EXPECT_EQ(fstat(fd, &st), 0);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%llu:%llu",
+                  static_cast<unsigned long long>(st.st_dev),
+                  static_cast<unsigned long long>(st.st_ino));
+    return buf;
+  }
+};
+
+}  // namespace
+
+TEST_F(JournalStreamEnv, UnsetIsNotJournal) {
+  unsetenv("JOURNAL_STREAM");
+  EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
+}
+
+TEST_F(JournalStreamEnv, InheritedValueForAnotherStreamIsNotJournal) {
+  // What a shell inside a systemd user session hands us: the variable is set,
+  // but it names a stream that is not ours.
+  setenv("JOURNAL_STREAM", "999:999999", 1);
+  EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
+}
+
+TEST_F(JournalStreamEnv, MatchingDeviceAndInodeIsJournal) {
+  setenv("JOURNAL_STREAM", identityOf(STDOUT_FILENO).c_str(), 1);
+  EXPECT_TRUE(streamIsJournal(STDOUT_FILENO));
+}
+
+TEST_F(JournalStreamEnv, MalformedValueIsNotJournal) {
+  setenv("JOURNAL_STREAM", "not-a-stream", 1);
+  EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
 }
