@@ -466,6 +466,14 @@ Report, with `Envelope.session_id` set:
   rather than merging: absent means nothing is decoded — a source not yet read,
   a stopped or failed graph — never that the format is unchanged. A source
   change clears it.
+- `device_format` is what the output device was opened at, against which
+  `format` is what came out of the decoder. Comparing the two is how a Core
+  tells whether playback is bit-perfect: a device may resample or widen the
+  sample format, and only the pair shows it. Either may be absent on its own —
+  a browser renderer knows what its own output runs at and never what it
+  decoded, and a renderer that cannot ask its device reports only `format`.
+- `duration_ms` belongs to the stream rather than to either format, so a
+  renderer that cannot name a format can still say how long the source runs.
 - State is fire-and-forget: if no route to the owner exists, drop it. A fresh
   snapshot goes out when the owner reattaches, so stale state has no value.
 

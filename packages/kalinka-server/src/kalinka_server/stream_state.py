@@ -49,6 +49,8 @@ class AudioFormatInfo:
 @dataclass
 class StreamInfo:
     format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
+    # What the device is open at; differs from `format` when it resamples.
+    device_format: Optional[AudioFormatInfo] = None
     # None, never 0, when the renderer cannot tell: 0 reads as "already ended".
     duration_ms: Optional[int] = None
 
@@ -95,16 +97,28 @@ _ERROR_SOURCES = {
 }
 
 
-def to_stream_info(fmt: Optional[dict]) -> Optional[StreamInfo]:
+def to_audio_format(fmt: Optional[dict]) -> Optional[AudioFormatInfo]:
     if not fmt:
         return None
+    return AudioFormatInfo(
+        sample_rate=fmt.get("sample_rate_hz", 0),
+        channels=fmt.get("channels", 0),
+        bits_per_sample=fmt.get("bits_per_sample", 0),
+    )
+
+
+def to_stream_info(snapshot: dict) -> Optional[StreamInfo]:
+    """A renderer may know the decoded format, the device's, or only the
+    length, so any one of the three is enough to report something."""
+    decoded = to_audio_format(snapshot.get("format"))
+    device = to_audio_format(snapshot.get("device_format"))
+    duration_ms = snapshot.get("duration_ms")
+    if decoded is None and device is None and duration_ms is None:
+        return None
     return StreamInfo(
-        format=AudioFormatInfo(
-            sample_rate=fmt.get("sample_rate_hz", 0),
-            channels=fmt.get("channels", 0),
-            bits_per_sample=fmt.get("bits_per_sample", 0),
-        ),
-        duration_ms=fmt.get("duration_ms"),
+        format=decoded or AudioFormatInfo(),
+        device_format=device,
+        duration_ms=duration_ms,
     )
 
 
@@ -137,7 +151,7 @@ def from_snapshot(snapshot: dict) -> Optional[StreamState]:
         position=snapshot.get("position_ms", 0),
         timestamp=time.monotonic_ns(),
         error=to_error(snapshot.get("error")),
-        stream_info=to_stream_info(snapshot.get("format")),
+        stream_info=to_stream_info(snapshot),
         stream_id=to_stream_id(snapshot.get("source_token")),
     )
 

@@ -48,6 +48,8 @@ def empty_state() -> dict:
         "source_token": None,
         "current_source": None,
         "format": None,
+        "device_format": None,
+        "duration_ms": None,
         "position_ms": 0,
         "position_valid": False,
         "volume": None,
@@ -76,7 +78,6 @@ def audio_format_to_dict(fmt) -> dict:
         "channels": fmt.channels,
         "bits_per_sample": fmt.bits_per_sample,
         "sample_format": fmt.sample_format,
-        "duration_ms": fmt.duration_ms if fmt.HasField("duration_ms") else None,
     }
 
 
@@ -113,6 +114,14 @@ def snapshot_to_dict(snapshot) -> dict:
             audio_format_to_dict(snapshot.format)
             if snapshot.HasField("format")
             else None
+        ),
+        "device_format": (
+            audio_format_to_dict(snapshot.device_format)
+            if snapshot.HasField("device_format")
+            else None
+        ),
+        "duration_ms": (
+            snapshot.duration_ms if snapshot.HasField("duration_ms") else None
         ),
         "position_ms": snapshot.position_ms,
         "position_valid": snapshot.position_valid,
@@ -151,11 +160,20 @@ def apply(state: dict, change: StateChange, message) -> dict:
             if message.HasField("format")
             else None
         )
+        state["device_format"] = (
+            audio_format_to_dict(message.device_format)
+            if message.HasField("device_format")
+            else None
+        )
+        state["duration_ms"] = (
+            message.duration_ms if message.HasField("duration_ms") else None
+        )
         state["updated_at_unix_ms"] = message.at_unix_ms
     elif change is StateChange.SOURCE:
         _set_source_token(state, message.source_token)
         # Nothing decoded for the new source yet; the old one's is not its.
         state["format"] = None
+        state["duration_ms"] = None
         state["updated_at_unix_ms"] = message.at_unix_ms
     elif change is StateChange.VOLUME:
         state["volume"] = volume_to_dict(message.volume)

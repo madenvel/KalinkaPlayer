@@ -54,6 +54,9 @@ struct StreamState {
   AudioGraphNodeState state;
   long position;
   std::optional<StreamInfo> streamInfo;
+  /// What the output device is open at, when the emitter knows. Not the
+  /// decoded format: a device may widen the sample format or resample.
+  std::optional<StreamAudioFormat> deviceFormat;
   std::optional<StreamError> error;
   std::optional<StreamId> streamId;
   unsigned long long timestamp;
@@ -85,6 +88,9 @@ struct StreamState {
            ", position=" + std::to_string(position) + ", error=" + errorStr +
            ", streamInfo=" +
            (streamInfo.has_value() ? streamInfo.value().toString() : "null") +
+           ", deviceFormat=" +
+           (deviceFormat.has_value() ? deviceFormat.value().toString()
+                                     : "null") +
            ", streamId=" +
            (streamId.has_value() ? std::to_string(*streamId) : "null") +
            ", timestamp=" + std::to_string(timestamp) + ">";

@@ -258,13 +258,14 @@ class SimRenderer:
         out.channels = CHANNELS
         out.bits_per_sample = BITS_PER_SAMPLE
         out.sample_format = "S16_LE"
-        out.duration_ms = DURATION_MS
 
     def _emit_state(self, state_value, token: Optional[str]) -> None:
         state = pb.PlaybackStateChanged()
         state.state = state_value
         if self.format_known:
             self._fill_format(state.format)
+            self._fill_format(state.device_format)
+            state.duration_ms = DURATION_MS
         state.position_ms = self.position_ms
         state.position_valid = state_value in (
             pb.PLAYBACK_STATE_PLAYING,
@@ -288,6 +289,8 @@ class SimRenderer:
         snapshot.captured_at_unix_ms = _NOW_UNIX_MS
         if self.format_known:
             self._fill_format(snapshot.format)
+            self._fill_format(snapshot.device_format)
+            snapshot.duration_ms = DURATION_MS
         self._fill_volume(snapshot.volume)
         return snapshot
 
