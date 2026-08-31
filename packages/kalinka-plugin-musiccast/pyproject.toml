@@ -24,9 +24,9 @@ classifiers = [
 ]
 
 dependencies = [
-    # >=1.5: the amplifier names the VolumeBackend it applies its volume by,
-    # which DeviceVolume gained in SDK 1.5.
-    "kalinka-plugin-sdk>=1.5,<2",
+    # >=2: nothing here names a track's source, but REQUIRES_SDK gates the
+    # major at load; the VolumeBackend the amplifier reports arrived in 1.5.
+    "kalinka-plugin-sdk>=2,<3",
     "ssdpy>=0.4.0",
 ]
 

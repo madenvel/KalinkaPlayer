@@ -241,7 +241,7 @@ class RendererOutputPlugin(OutputDevicePlugin):
     it participates in the device registry and settings page.
     """
 
-    REQUIRES_SDK = ">=1.0,<2"
+    REQUIRES_SDK = ">=2,<3"
     PLUGIN_ID = "kalinka-renderer"
     CONFIG_MODEL = RendererOutputConfig
 
