@@ -25,7 +25,12 @@ from kalinka_plugin_sdk import (
 )
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
-from kalinka_server.stream_state import AudioGraphNodeState, StreamErrorSource
+from kalinka_server.stream_state import (
+    AudioFormatInfo,
+    AudioGraphNodeState,
+    StreamErrorSource,
+    StreamInfo,
+)
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
 
@@ -1767,3 +1772,34 @@ def test_playqueue_state_apply_track_unavailable():
         TrackUnavailableEvent(index=99, unavailable=True, seq=3)
     )
     assert unchanged is cleared
+
+
+def _streaming_with_duration(duration_ms):
+    return SimpleNamespace(
+        state=AudioGraphNodeState.STREAMING,
+        error=None,
+        position=0,
+        timestamp=time.monotonic_ns(),
+        stream_info=StreamInfo(
+            format=AudioFormatInfo(sample_rate=44100, channels=2, bits_per_sample=16),
+            duration_ms=duration_ms,
+        ),
+        stream_id=1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stream_of_unknown_length_schedules_no_prefetch(playqueue):
+    """Timing off an unknown length would put the prefetch moment in the past
+    and advance the queue the instant playback started."""
+    playqueue._setup_prefetch_timer(_streaming_with_duration(None))
+
+    assert playqueue._prefetch_task is None
+
+
+@pytest.mark.asyncio
+async def test_a_known_length_still_schedules_a_prefetch(playqueue):
+    playqueue._setup_prefetch_timer(_streaming_with_duration(204_000))
+
+    assert playqueue._prefetch_task is not None
+    playqueue._cancel_prefetch_timer()

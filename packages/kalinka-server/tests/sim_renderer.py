@@ -258,8 +258,7 @@ class SimRenderer:
         out.channels = CHANNELS
         out.bits_per_sample = BITS_PER_SAMPLE
         out.sample_format = "S16_LE"
-        out.stream_kind = pb.STREAM_KIND_FRAMES
-        out.stream_size_units = DURATION_MS * SAMPLE_RATE // 1000
+        out.duration_ms = DURATION_MS
 
     def _emit_state(self, state_value, token: Optional[str]) -> None:
         state = pb.PlaybackStateChanged()

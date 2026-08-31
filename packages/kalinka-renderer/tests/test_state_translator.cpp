@@ -98,8 +98,33 @@ TEST(StateTranslator, FormatCarriesEveryField) {
   EXPECT_EQ(out.bits_per_sample(), 16u);
   EXPECT_EQ(out.sample_format(),
             sampleFormatToString(AudioSampleFormat::PCM16_LE));
-  EXPECT_EQ(out.stream_kind(), pb::STREAM_KIND_FRAMES);
-  EXPECT_EQ(out.stream_size_units(), 9876543u);
+  ASSERT_TRUE(out.has_duration_ms());
+  EXPECT_EQ(out.duration_ms(), 223957u);  // 9876543 frames at 44100 Hz
+}
+
+TEST(StateTranslator, ByteSizedStreamsDivideOutTheFrameSize) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
+  info.streamType = StreamType::BYTES;
+  info.streamSize = 9876543 * 4;  // four bytes to the frame at 2ch/16bit
+
+  pb::AudioFormat out;
+  fillFormat(info, out);
+
+  ASSERT_TRUE(out.has_duration_ms());
+  EXPECT_EQ(out.duration_ms(), 223957u);
+}
+
+TEST(StateTranslator, AStreamOfUnknownLengthReportsNoDuration) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
+  info.streamType = StreamType::FRAMES;
+  info.streamSize = 0;
+
+  pb::AudioFormat out;
+  fillFormat(info, out);
+
+  EXPECT_FALSE(out.has_duration_ms());
 }
 
 TEST(StateTranslator, VolumeCarriesEveryField) {

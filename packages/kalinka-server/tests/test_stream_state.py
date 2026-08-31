@@ -5,7 +5,6 @@ from kalinka_server.stream_state import (
     StreamState,
     AudioGraphNodeState,
     StreamErrorSource,
-    StreamType,
     from_snapshot,
     to_stream_id,
 )
@@ -21,8 +20,7 @@ def test_a_playing_snapshot_carries_position_and_format():
                 "sample_rate_hz": 44100,
                 "channels": 2,
                 "bits_per_sample": 24,
-                "stream_kind": "frames",
-                "stream_size_units": 9_000_000,
+                "duration_ms": 204_000,
             },
         }
     )
@@ -33,8 +31,7 @@ def test_a_playing_snapshot_carries_position_and_format():
     assert state.timestamp > 0  # local receipt time, not the renderer's clock
     assert state.stream_info is not None
     assert state.stream_info.format.sample_rate == 44100
-    assert state.stream_info.stream_type is StreamType.FRAMES
-    assert state.stream_info.stream_size == 9_000_000
+    assert state.stream_info.duration_ms == 204_000
 
 
 def test_a_renderer_that_has_not_reported_yet_translates_to_nothing():
@@ -76,16 +73,17 @@ def test_a_token_from_elsewhere_names_no_stream_of_ours():
     assert to_stream_id("f3a1-not-ours") is None
 
 
-def test_a_byte_stream_is_not_reported_as_frames():
+def test_a_stream_of_unknown_length_has_no_duration():
+    """Absent, not zero — a length nobody knows is not a track that has ended."""
     state = from_snapshot(
         renderer_state.empty_state()
-        | {"playback_state": "paused", "format": {"stream_kind": "bytes"}}
+        | {"playback_state": "paused", "format": {"sample_rate_hz": 44100}}
     )
 
     assert state is not None
     assert state.state is AudioGraphNodeState.PAUSED
     assert state.stream_info is not None
-    assert state.stream_info.stream_type is StreamType.BYTES
+    assert state.stream_info.duration_ms is None
 
 
 def _at(state_name: AudioGraphNodeState, position: int, age_ms: int) -> int:

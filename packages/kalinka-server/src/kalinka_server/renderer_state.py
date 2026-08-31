@@ -73,8 +73,7 @@ def audio_format_to_dict(fmt) -> dict:
         "channels": fmt.channels,
         "bits_per_sample": fmt.bits_per_sample,
         "sample_format": fmt.sample_format,
-        "stream_kind": enum_name(pb.StreamKind, fmt.stream_kind, "STREAM_KIND_"),
-        "stream_size_units": fmt.stream_size_units,
+        "duration_ms": fmt.duration_ms if fmt.HasField("duration_ms") else None,
     }
 
 

@@ -3,6 +3,8 @@
 
 #include "AudioSampleFormat.h"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 /// @brief Defines the type of the stream.
@@ -60,6 +62,25 @@ struct StreamInfo {
 
   bool operator==(const StreamInfo &other) const = default;
   bool operator!=(const StreamInfo &other) const = default;
+
+  /// @brief How long the stream runs, or nullopt when its length is not known.
+  /// @note streamSize stays 0 when the container states no length. That is
+  /// "unknown", never "empty", so it must not collapse to a duration of 0.
+  std::optional<uint64_t> durationMs() const {
+    if (streamSize == 0 || format.sampleRate == 0) {
+      return std::nullopt;
+    }
+    unsigned long frames = streamSize;
+    if (streamType == BYTES) {
+      const unsigned int bytesPerFrame =
+          format.channels * format.bitsPerSample / 8;
+      if (bytesPerFrame == 0) {
+        return std::nullopt;
+      }
+      frames /= bytesPerFrame;
+    }
+    return static_cast<uint64_t>(frames) * 1000 / format.sampleRate;
+  }
 
   std::string toString() const {
     return "<StreamInfo format=" + format.toString() +

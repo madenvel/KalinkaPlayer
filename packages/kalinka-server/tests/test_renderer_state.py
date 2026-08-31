@@ -13,8 +13,7 @@ def full_snapshot():
     snapshot.format.channels = 2
     snapshot.format.bits_per_sample = 24
     snapshot.format.sample_format = "S24_LE"
-    snapshot.format.stream_kind = pb.STREAM_KIND_FRAMES
-    snapshot.format.stream_size_units = 9_000_000
+    snapshot.format.duration_ms = 204_000
     snapshot.position_ms = 1000
     snapshot.position_valid = True
     snapshot.captured_at_unix_ms = 1700000000000
@@ -36,7 +35,7 @@ def test_snapshot_replaces_the_whole_state():
     assert state["current_source"]["uri"] == "http://core/stream/1"
     assert state["source_token"] == "track-1"
     assert state["format"]["sample_format"] == "S24_LE"
-    assert state["format"]["stream_kind"] == "frames"
+    assert state["format"]["duration_ms"] == 204_000
     assert state["volume"]["backend"] == "software"
     assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"
     assert state["queued_source_tokens"] == ["track-2"]
