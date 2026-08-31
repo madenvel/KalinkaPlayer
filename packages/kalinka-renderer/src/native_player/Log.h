@@ -25,10 +25,13 @@ void applyLogPattern(spdlog::logger &logger, bool journal);
  */
 bool streamIsJournal(int fd);
 
-/// What KALINKA_LOG_FORMAT asks for; Auto (the default) means detect.
-enum class LogFormat { Auto, Journal, Full };
-
-/// Reads KALINKA_LOG_FORMAT; anything but "journal" or "full" means Auto.
-LogFormat configuredLogFormat();
+/**
+ * @brief Whether this process should log in the journal's format.
+ *
+ * KALINKA_LOG_FORMAT settles it outright when set to "journal" or "full";
+ * otherwise the format follows @p fd, and a run logging to a file never takes
+ * the journal's — there is no journald behind it to consume the prefixes.
+ */
+bool useJournalFormat(bool writingToFile, int fd);
 
 #endif // LOG_H

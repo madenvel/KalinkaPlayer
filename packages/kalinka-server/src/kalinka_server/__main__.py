@@ -19,13 +19,16 @@ from .server import create_app
 from .state_keeper import set_state_file
 
 
+# The formatter is picked from the stream it writes to, so both must name it.
+_UVICORN_STREAM = "ext://sys.stdout"
+
 uvicorn_log_config = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "default": {
             "()": "kalinka_server.logging_setup.make_formatter",
-            "stream": "ext://sys.stdout",
+            "stream": _UVICORN_STREAM,
         }
     },
     "handlers": {
@@ -33,7 +36,7 @@ uvicorn_log_config = {
             "level": "INFO",
             "formatter": "default",
             "class": "logging.StreamHandler",
-            "stream": "ext://sys.stdout",
+            "stream": _UVICORN_STREAM,
         }
     },
     "loggers": {

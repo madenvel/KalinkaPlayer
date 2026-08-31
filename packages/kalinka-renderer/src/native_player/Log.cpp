@@ -13,7 +13,7 @@
 #include <cstdlib>
 #include <string>
 
-// Custom log level formatter to convert log level to uppercase
+/// Renders the level name uppercase; spdlog's own %l is lower case.
 class CustomLogLevelFormatter : public spdlog::custom_flag_formatter {
 public:
   void format(const spdlog::details::log_msg &msg, const std::tm &tm_time,
@@ -104,6 +104,10 @@ bool streamIsJournal(int fd) {
          static_cast<unsigned long long>(st.st_ino) == ino;
 }
 
+namespace {
+
+enum class LogFormat { Auto, Journal, Full };
+
 LogFormat configuredLogFormat() {
   const char *mode = std::getenv("KALINKA_LOG_FORMAT");
   if (mode == nullptr) {
@@ -119,6 +123,20 @@ LogFormat configuredLogFormat() {
     return LogFormat::Full;
   }
   return LogFormat::Auto;
+}
+
+}  // namespace
+
+bool useJournalFormat(bool writingToFile, int fd) {
+  switch (configuredLogFormat()) {
+  case LogFormat::Journal:
+    return true;
+  case LogFormat::Full:
+    return false;
+  case LogFormat::Auto:
+    break;
+  }
+  return !writingToFile && streamIsJournal(fd);
 }
 
 void applyLogPattern(spdlog::logger &logger, bool journal) {

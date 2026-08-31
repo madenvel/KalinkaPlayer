@@ -50,18 +50,17 @@ class JournalFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         prefix = f"<{_syslog_priority(record.levelno)}>"
-        # journald parses each stream line on its own; prefix continuation
-        # lines (tracebacks) so they keep the record's priority.
+        # journald reads line by line, so a traceback's lines each need one.
         return prefix + super().format(record).replace("\n", "\n" + prefix)
 
 
 def make_formatter(stream: Optional[IO] = None) -> logging.Formatter:
     """The formatter for `stream` (default stderr, as logging.StreamHandler).
 
-    KALINKA_LOG_FORMAT forces the choice — "journal" or "full"; anything else,
-    including unset, detects whether systemd owns the stream. The override is
-    what lets `make dev-run` show the journal format, where the server's stdout
-    is a pipe to tee rather than the journal.
+    KALINKA_LOG_FORMAT settles it outright when set to "journal" or "full";
+    anything else, including unset, follows the stream. The override exists for
+    runs whose output systemd never sees, such as `make dev-run` piping through
+    tee.
     """
     mode = os.environ.get("KALINKA_LOG_FORMAT", "").strip().lower()
     if mode not in ("journal", "full"):
