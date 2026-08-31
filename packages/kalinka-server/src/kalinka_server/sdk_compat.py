@@ -1,7 +1,7 @@
 """Startup guard: refuse to run with an incompatible kalinka-plugin-sdk.
 
 Compatibility is declared in exactly one place — this server's
-``kalinka-plugin-sdk`` dependency in ``pyproject.toml`` (``>=1,<2``). We read
+``kalinka-plugin-sdk`` dependency in ``pyproject.toml`` (``>=2,<3``). We read
 that requirement back from installed package metadata and check the installed
 SDK against it, so there is no second copy of the supported range to keep in
 sync.
