@@ -6,7 +6,7 @@ These stub JamendoClient.request so no network or client_id is needed.
 import pytest
 
 from kalinka_plugin_sdk.datamodel import EntityType
-from kalinka_plugin_sdk.inputmodule import SearchType, TrackUrl
+from kalinka_plugin_sdk.inputmodule import DirectUrl, SearchType, TrackSource
 
 from kalinka_plugin_jamendo.config_model import JamendoConfig, JamendoAudioFormat
 from kalinka_plugin_jamendo import jamendo as jm
@@ -210,11 +210,11 @@ async def test_get_track_info_preserves_order_and_url():
     m = make_module([TRACK, t2])
     infos = await m.get_track_info(["200", "100"])
     assert [i.id.id for i in infos] == ["200", "100"]
-    url = await infos[0].link_retriever()
-    assert isinstance(url, TrackUrl)
-    assert url.format == "audio/flac"
-    # URL is resolved via the file endpoint (the fake returns a files.test URL).
-    assert url.url == "https://files.test/200.flac"
+    source = await infos[0].source_retriever()
+    assert isinstance(source, TrackSource)
+    assert source.format == "audio/flac"
+    # Jamendo serves its own files, so the renderer fetches them directly.
+    assert source.source == DirectUrl(url="https://files.test/200.flac")
 
 
 @pytest.mark.asyncio
@@ -231,8 +231,8 @@ async def test_get_track_info_metadata_from_cache_then_index():
     # but still playable via the file endpoint.
     cold = await m.get_track_info(["100"])
     assert cold[0].metadata.title == ""
-    cold_url = await cold[0].link_retriever()
-    assert cold_url.url == "https://files.test/100.mp32"
+    cold_source = await cold[0].source_retriever()
+    assert cold_source.source.url == "https://files.test/100.mp32"
 
     # After browsing the album, metadata comes from the cache.
     await m.browse(jm.album_id("5"), 0, 50)
@@ -252,14 +252,14 @@ async def test_link_resolves_via_file_endpoint_honoring_format():
     client = PathClient({"tracks": []})
     m = jm.JamendoInputModule(config, client)
     infos = await m.get_track_info(["999"])
-    url = await infos[0].link_retriever()
-    assert url.url == "https://files.test/999.flac"
-    assert url.format == "audio/flac"
+    source = await infos[0].source_retriever()
+    assert source.source.url == "https://files.test/999.flac"
+    assert source.format == "audio/flac"
 
 
 @pytest.mark.asyncio
 async def test_link_raises_when_url_unresolved():
-    # If the file endpoint can't resolve a URL, link_retriever must raise so the
+    # If the file endpoint can't resolve a URL, source_retriever must raise so the
     # server marks the track unavailable instead of trying to play "".
     class NoUrlClient(PathClient):
         async def resolve_audio_url(self, track_id, audioformat):
@@ -269,7 +269,7 @@ async def test_link_raises_when_url_unresolved():
     m = jm.JamendoInputModule(config, NoUrlClient({"tracks": []}))
     infos = await m.get_track_info(["999"])
     with pytest.raises(RuntimeError):
-        await infos[0].link_retriever()
+        await infos[0].source_retriever()
 
 
 @pytest.mark.asyncio

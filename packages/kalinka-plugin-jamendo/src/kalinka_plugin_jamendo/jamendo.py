@@ -31,10 +31,11 @@ from kalinka_plugin_sdk.datamodel import (
     Track,
 )
 from kalinka_plugin_sdk.inputmodule import (
+    DirectUrl,
     InputModule,
     SearchType,
     TrackInfo,
-    TrackUrl,
+    TrackSource,
 )
 
 from .config_model import JamendoConfig
@@ -786,7 +787,7 @@ class JamendoInputModule(InputModule):
     def _make_track_info(self, tid: str, metadata: Track) -> TrackInfo:
         """Build a TrackInfo whose link resolves via /tracks/file/ at play time."""
 
-        async def link_retriever() -> TrackUrl:
+        async def source_retriever() -> TrackSource:
             url = await self.client.resolve_audio_url(tid, self.audio_format)
             if not url:
                 # Raise rather than return an empty URL: the server treats any
@@ -795,11 +796,11 @@ class JamendoInputModule(InputModule):
                 raise RuntimeError(
                     f"Could not resolve audio URL for Jamendo track {tid}"
                 )
-            return TrackUrl(url=url, format=self.audio_mime)
+            return TrackSource(source=DirectUrl(url=url), format=self.audio_mime)
 
         return TrackInfo(
             id=track_id(tid),
-            link_retriever=link_retriever,
+            source_retriever=source_retriever,
             metadata=metadata,
         )
 

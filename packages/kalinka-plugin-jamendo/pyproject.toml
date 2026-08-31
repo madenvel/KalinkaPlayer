@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     # >=1.2: ai_search encodes queries with the server's shared text
     # embedder (context.embedder), added in SDK 1.2.
-    "kalinka-plugin-sdk>=1.2,<2",
+    "kalinka-plugin-sdk>=2,<3",
     "httpx>=0.24",
     # ai_search (mood/semantic): sqlite-vec KNN over the shipped index.
     # Imported lazily; ai_search disables itself if these are unavailable.
