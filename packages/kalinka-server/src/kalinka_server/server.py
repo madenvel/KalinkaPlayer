@@ -51,6 +51,7 @@ from .config_schema_processor import (
 )
 from .ai_search import assemble_ai_search
 from .catalog_art_service import CatalogArtService
+from .content_route import register_content_route
 from .query_router import CatalogRouter
 from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
@@ -1453,6 +1454,8 @@ async def create_app(
         mime_type, _ = mimetypes.guess_type(str(file_path))
 
         return FileResponse(resolved_path, media_type=mime_type)
+
+    register_content_route(app, input_module)
 
     @app.websocket("/queue/ws")
     async def queue_websocket_endpoint(websocket: WebSocket):

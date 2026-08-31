@@ -33,6 +33,15 @@ def get_all_ip_addresses() -> list[str]:
     return ip_addresses
 
 
+def server_base_url(server_addr: tuple[str, int]) -> str:
+    """``http://host:port`` for one of this server's own addresses, with an
+    IPv6 host bracketed."""
+    host, port = server_addr
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
 def get_ip_address(interface: str) -> str:
     """
     Uses the Linux SIOCGIFADDR ioctl to find the IP address associated

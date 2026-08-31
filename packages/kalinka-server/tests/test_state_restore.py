@@ -13,7 +13,7 @@ from kalinka_plugin_sdk.datamodel import (
     Track,
 )
 from kalinka_plugin_sdk.events import PlayQueueState
-from kalinka_plugin_sdk.inputmodule import TrackInfo, TrackUrl
+from kalinka_plugin_sdk.inputmodule import DirectUrl, TrackInfo, TrackSource
 from kalinka_serialized import ResolutionSlot
 from kalinka_server import state_keeper
 from kalinka_server.playqueue import PlayQueueImpl
@@ -37,15 +37,16 @@ def _make_track(track_id: str, source: str) -> Track:
 
 
 def _make_track_info(track_id: str, source: str) -> TrackInfo:
-    async def _link_retriever() -> TrackUrl:
-        return TrackUrl(
-            url=f"https://example.invalid/{track_id}.mp3", format="audio/mpeg"
+    async def _source_retriever() -> TrackSource:
+        return TrackSource(
+            source=DirectUrl(url=f"https://example.invalid/{track_id}.mp3"),
+            format="audio/mpeg",
         )
 
     return TrackInfo(
         id=_track_entity(track_id, source),
         metadata=_make_track(track_id, source),
-        link_retriever=_link_retriever,
+        source_retriever=_source_retriever,
     )
 
 
@@ -109,7 +110,7 @@ async def test_restore_state_batches_track_info_requests(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_restore_prefers_saved_metadata_over_module():
     """On restore the saved snapshot is authoritative for metadata; the module's
-    TrackInfo is used only for its playback link_retriever.
+    TrackInfo is used only for its playback source_retriever.
 
     This is what lets queue entries survive a restart even when a module can
     only re-resolve a playback URL but not the title/artist/album (e.g. Jamendo
@@ -128,7 +129,10 @@ async def test_restore_prefers_saved_metadata_over_module():
     # The module returns *placeholder* metadata (empty title) — simulating a
     # track it can only resolve a URL for, not real metadata.
     async def _placeholder_link():
-        return TrackUrl(url="https://example.invalid/fallback.mp3", format="audio/mpeg")
+        return TrackSource(
+            source=DirectUrl(url="https://example.invalid/fallback.mp3"),
+            format="audio/mpeg",
+        )
 
     def _retriever_factory(tid):
         async def _retrieve(entity_id):
@@ -142,7 +146,7 @@ async def test_restore_prefers_saved_metadata_over_module():
                         id=_album_entity("", "jamendo"), title=""
                     ),
                 ),
-                link_retriever=_placeholder_link,
+                source_retriever=_placeholder_link,
             )
 
         return _retrieve
@@ -172,8 +176,10 @@ async def test_restore_prefers_saved_metadata_over_module():
 
     assert [ti.metadata.title for ti in added] == ["track-a1", "track-a2"]
     # The playback link comes from the module's TrackInfo, not the saved Track.
-    urls = [await ti.link_retriever() for ti in added]
-    assert all(u.url == "https://example.invalid/fallback.mp3" for u in urls)
+    sources = [await ti.source_retriever() for ti in added]
+    assert all(
+        s.source.url == "https://example.invalid/fallback.mp3" for s in sources
+    )
 
 
 def test_restore_from_state_is_not_queue_wrapped():

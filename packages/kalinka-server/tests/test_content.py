@@ -1,0 +1,141 @@
+"""The content endpoint and the URLs pointing at it.
+
+The renderer is the demanding client here: it fetches in bounded ranges, reads
+the stream size out of ``Content-Range`` on the first of them, and refuses to
+seek at all unless ``Accept-Ranges`` says it may. These are the guarantees the
+old in-plugin media server made and this endpoint inherits.
+"""
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+from kalinka_plugin_sdk.inputmodule import ContentInfo
+
+from kalinka_server.content_route import register_content_route
+from kalinka_server.content_urls import CONTENT_ROUTE, content_url
+
+AUDIO = bytes(range(256)) * 8  # 2048 bytes
+
+
+class _FakeModule:
+    def __init__(self, assets: dict[str, ContentInfo]):
+        self._assets = assets
+
+    async def get_content_info(self, asset_id):
+        return self._assets.get(asset_id)
+
+
+@pytest.fixture
+def client(tmp_path):
+    path = tmp_path / "song.flac"
+    path.write_bytes(AUDIO)
+
+    modules = {
+        "localfiles": _FakeModule(
+            {
+                "track_1": ContentInfo(
+                    mime_type="audio/flac", local_path=str(path), cacheable=True
+                ),
+                # A module may know the asset and still refuse to serve it.
+                "unservable": ContentInfo(mime_type="audio/flac"),
+            }
+        )
+    }
+
+    def resolve_module(name):
+        if name not in modules:
+            raise HTTPException(status_code=404, detail="Input module not found")
+        return modules[name]
+
+    app = FastAPI()
+    register_content_route(app, resolve_module)
+    return TestClient(app)
+
+
+def _url(module="localfiles", asset="track_1"):
+    return f"{CONTENT_ROUTE}/{module}/{asset}"
+
+
+def test_serves_the_whole_asset(client):
+    r = client.get(_url())
+    assert r.status_code == 200
+    assert r.content == AUDIO
+    assert r.headers["content-type"] == "audio/flac"
+
+
+def test_advertises_range_support(client):
+    """Without this the renderer refuses every seek."""
+    assert client.get(_url()).headers["accept-ranges"] == "bytes"
+
+
+def test_bounded_range_reports_the_total_size(client):
+    """The renderer's first request is a bounded range, and it learns the
+    stream size from nothing but this header."""
+    r = client.get(_url(), headers={"Range": "bytes=0-511"})
+    assert r.status_code == 206
+    assert r.headers["content-range"] == f"bytes 0-511/{len(AUDIO)}"
+    assert r.content == AUDIO[:512]
+
+
+def test_open_ended_range_serves_to_the_end(client):
+    r = client.get(_url(), headers={"Range": "bytes=2000-"})
+    assert r.status_code == 206
+    assert r.headers["content-range"] == f"bytes 2000-2047/{len(AUDIO)}"
+    assert r.content == AUDIO[2000:]
+
+
+def test_suffix_range_serves_the_tail(client):
+    r = client.get(_url(), headers={"Range": "bytes=-48"})
+    assert r.status_code == 206
+    assert r.content == AUDIO[-48:]
+
+
+def test_unsatisfiable_range_is_refused(client):
+    r = client.get(_url(), headers={"Range": f"bytes={len(AUDIO) + 10}-"})
+    assert r.status_code == 416
+
+
+def test_head_answers_without_a_body(client):
+    r = client.head(_url())
+    assert r.status_code == 200
+    assert r.headers["content-length"] == str(len(AUDIO))
+    assert r.content == b""
+
+
+def test_unknown_asset_is_absent(client):
+    assert client.get(_url(asset="no_such_track")).status_code == 404
+
+
+def test_asset_the_module_will_not_serve_is_absent(client):
+    """A module reporting no servable file is a 404, never a 500."""
+    assert client.get(_url(asset="unservable")).status_code == 404
+
+
+def test_unknown_module_is_absent(client):
+    assert client.get(_url(module="no_such_module")).status_code == 404
+
+
+def test_a_file_that_went_away_is_absent(client, tmp_path):
+    """Between the module's answer and the read — a 404, not a 500."""
+    (tmp_path / "song.flac").unlink()
+    assert client.get(_url()).status_code == 404
+
+
+def test_content_url_is_built_on_the_address_the_fetcher_reached():
+    assert (
+        content_url(("192.168.1.10", 8000), "localfiles", "track_1")
+        == "http://192.168.1.10:8000/content/localfiles/track_1"
+    )
+
+
+def test_content_url_brackets_an_ipv6_host():
+    assert content_url(("fe80::1", 8000), "localfiles", "t1").startswith(
+        "http://[fe80::1]:8000/"
+    )
+
+
+def test_content_url_escapes_the_asset_id():
+    """Ids are opaque — a module may mint one holding a slash or a space."""
+    url = content_url(("10.0.0.1", 8000), "localfiles", "a b/c")
+    assert url == "http://10.0.0.1:8000/content/localfiles/a%20b%2Fc"

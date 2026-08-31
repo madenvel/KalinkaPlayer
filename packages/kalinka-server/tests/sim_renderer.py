@@ -69,6 +69,9 @@ class SimRenderer:
         # updates are recorded but never acknowledged (the caller times out).
         self.configs = None
         self._message_id = 0
+        # The address this renderer reached the server on, as the ws handler
+        # records it; content URLs are minted against it.
+        self.server_addr: Optional[tuple[str, int]] = ("192.0.2.10", 8000)
 
     def connect(self, compatible: bool = True) -> None:
         self.registry.register(
@@ -80,6 +83,7 @@ class SimRenderer:
             platform={},
             session=self,
             compatible=compatible,
+            server_addr=self.server_addr,
         )
 
     # ------------------------------------------------------------------

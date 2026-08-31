@@ -31,6 +31,10 @@ dependencies = [
     "asyncio>=4.0.0",
     "pydantic>=2.0.0",
     "fastapi>=0.100.0",
+    # >=0.39: FileResponse answers Range requests. The content endpoint needs
+    # it — a renderer seeks by asking for byte ranges, and reads the stream
+    # size out of Content-Range.
+    "starlette>=0.39",
     "uvicorn[standard]>=0.20.0",
     "zeroconf>=0.47.0",
     "httpx[http2]>=0.24.0",
@@ -47,9 +51,9 @@ dependencies = [
     # Renderer protocol (renderer_ws_handler.py). The committed generated
     # bindings (renderer_proto/) pin the runtime floor; `make proto` regenerates.
     "protobuf>=7.35,<8",
-    # >=1.5.0: the playback state carries the output device (OutputInfo) and
-    # DeviceVolume names the VolumeBackend applying it, both added in SDK 1.5.
-    "kalinka-plugin-sdk>=1.5.0,<2",
+    # >=2.0.0: a track names a TrackSource — a module-owned asset this server
+    # serves, or a direct URL — where it used to carry a URL of its own.
+    "kalinka-plugin-sdk>=2.0.0,<3",
 ]
 dynamic = ["version"]
 
