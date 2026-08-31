@@ -115,6 +115,32 @@ TEST(StateTranslator, AStreamOfUnknownLengthReportsNoDuration) {
   EXPECT_FALSE(out.has_duration_ms());
 }
 
+TEST(StateTranslator, AStateCarriesTheFormatItWasReportedWith) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
+  info.streamType = StreamType::FRAMES;
+  info.streamSize = 9876543;
+
+  // A pause carries the format forward, so it is not a playing-only field.
+  StreamState state(AudioGraphNodeState::PAUSED, 1000, info);
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, "tok-7", 1234, out);
+
+  ASSERT_TRUE(out.has_format());
+  EXPECT_EQ(out.format().sample_rate_hz(), 44100u);
+  EXPECT_EQ(out.format().duration_ms(), info.durationMs());
+}
+
+TEST(StateTranslator, AStateWithNoFormatSaysSoRatherThanSendingAnEmptyOne) {
+  StreamState state(AudioGraphNodeState::STOPPED);
+  ASSERT_FALSE(state.streamInfo.has_value());
+
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, std::nullopt, 1234, out);
+
+  EXPECT_FALSE(out.has_format());
+}
+
 TEST(StateTranslator, VolumeCarriesEveryField) {
   VolumeState volume;
   volume.supported = true;

@@ -7,10 +7,10 @@ through the real SessionPool, so tests exercise the whole server-side path
 (pool routing, snapshot merging, RendererPlayer translation, play queue).
 
 The simulated graph mirrors the native one's observable behaviour: enqueueing
-onto an idle player starts it (SourceChanged -> preparing -> format ->
-playing), removing the current source hands over to the next queued one or
-finishes, clearing finishes. Playback never advances on its own — a test moves
-it with finish_current().
+onto an idle player starts it (SourceChanged -> preparing -> playing, the
+format riding on every state once the decoder knows it), removing the current
+source hands over to the next queued one or finishes, clearing finishes.
+Playback never advances on its own — a test moves it with finish_current().
 """
 
 from __future__ import annotations
@@ -48,6 +48,8 @@ class SimRenderer:
         self.current: Optional[str] = None  # source token
         # The graph rests in FINISHED after a source runs out, not STOPPED.
         self.finished = False
+        # The graph carries a format into later states; a new source has none.
+        self.format_known = False
         # Clear it to play a dropped link: the graph runs on, but state has
         # nowhere to go and the renderer drops it rather than queueing it.
         self.linked = True
@@ -246,11 +248,9 @@ class SimRenderer:
             changed.previous_source_token = previous
         changed.at_unix_ms = _NOW_UNIX_MS
         self._send(StateChange.SOURCE, changed)
+        self.format_known = False
         self._emit_state(pb.PLAYBACK_STATE_PREPARING, token)
-        fmt = pb.AudioFormatChanged()
-        fmt.source_token = token
-        self._fill_format(fmt.format)
-        self._send(StateChange.FORMAT, fmt)
+        self.format_known = True
         self._emit_state(pb.PLAYBACK_STATE_PLAYING, token)
 
     def _fill_format(self, out: pb.AudioFormat) -> None:
@@ -263,6 +263,8 @@ class SimRenderer:
     def _emit_state(self, state_value, token: Optional[str]) -> None:
         state = pb.PlaybackStateChanged()
         state.state = state_value
+        if self.format_known:
+            self._fill_format(state.format)
         state.position_ms = self.position_ms
         state.position_valid = state_value in (
             pb.PLAYBACK_STATE_PLAYING,
@@ -284,6 +286,8 @@ class SimRenderer:
         snapshot.position_ms = self.position_ms
         snapshot.position_valid = self.current is not None
         snapshot.captured_at_unix_ms = _NOW_UNIX_MS
+        if self.format_known:
+            self._fill_format(snapshot.format)
         self._fill_volume(snapshot.volume)
         return snapshot
 

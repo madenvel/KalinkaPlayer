@@ -83,6 +83,9 @@ void fillPlaybackStateChanged(const StreamState &state,
     out.set_source_token(*sourceToken);
   }
   out.set_at_unix_ms(atUnixMs);
+  if (state.streamInfo) {
+    fillFormat(*state.streamInfo, *out.mutable_format());
+  }
   if (state.error) {
     pb::ErrorInfo *error = out.mutable_error();
     error->set_source(toProto(state.error->source));

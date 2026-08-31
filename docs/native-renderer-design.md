@@ -452,9 +452,8 @@ Report, with `Envelope.session_id` set:
 | Message | When |
 |---|---|
 | `StateSnapshot` | on attach, and on `RequestSnapshot` |
-| `PlaybackStateChanged` | every playback-state transition |
+| `PlaybackStateChanged` | every playback-state transition, carrying the format the state is about |
 | `SourceChanged` | the gapless crossover to the next source |
-| `AudioFormatChanged` | the stream's format is known or changes |
 | `VolumeChanged` | the level changed, `external = true` when something other than a command did it |
 | `PlaybackError` | a failure with no state transition to carry it. Core accepts it; the reference renderer never sends one, because every failure it has reaches a state — `PLAYBACK_STATE_ERROR` with `error` set |
 
@@ -463,6 +462,10 @@ Report, with `Envelope.session_id` set:
   value must not go on the wire.
 - `PlaybackStateChanged.source_token` absent means the graph holds no current
   source — that is how "the track ended" differs from "playback was torn down".
+- `PlaybackStateChanged.format` is restated every time, so a Core replaces it
+  rather than merging: absent means nothing is decoded — a source not yet read,
+  a stopped or failed graph — never that the format is unchanged. A source
+  change clears it.
 - State is fire-and-forget: if no route to the owner exists, drop it. A fresh
   snapshot goes out when the owner reattaches, so stale state has no value.
 

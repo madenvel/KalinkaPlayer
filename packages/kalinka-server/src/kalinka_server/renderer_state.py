@@ -5,6 +5,10 @@ a session opens or is asked for one, then discrete changes. Both land in one
 dict per session, so a caller never has to reassemble the two shapes. Enum
 values become their lowercase names ("stopped", "http_stream") — the ordinals
 are protocol constants and are not meaningful outside the wire.
+
+Playback state is replaced, not merged: PlaybackStateChanged restates the
+format every time. What still accumulates is what no playback state speaks
+for — volume, the selected device, the current source and the queued tokens.
 """
 
 from __future__ import annotations
@@ -26,7 +30,6 @@ class StateChange(str, Enum):
     SNAPSHOT = "state_snapshot"
     PLAYBACK = "playback_state_changed"
     SOURCE = "source_changed"
-    FORMAT = "audio_format_changed"
     VOLUME = "volume_changed"
     ERROR = "playback_error"
 
@@ -143,12 +146,17 @@ def apply(state: dict, change: StateChange, message) -> dict:
         state["error"] = (
             error_to_dict(message.error) if message.HasField("error") else None
         )
+        state["format"] = (
+            audio_format_to_dict(message.format)
+            if message.HasField("format")
+            else None
+        )
         state["updated_at_unix_ms"] = message.at_unix_ms
     elif change is StateChange.SOURCE:
         _set_source_token(state, message.source_token)
+        # Nothing decoded for the new source yet; the old one's is not its.
+        state["format"] = None
         state["updated_at_unix_ms"] = message.at_unix_ms
-    elif change is StateChange.FORMAT:
-        state["format"] = audio_format_to_dict(message.format)
     elif change is StateChange.VOLUME:
         state["volume"] = volume_to_dict(message.volume)
     elif change is StateChange.ERROR:
