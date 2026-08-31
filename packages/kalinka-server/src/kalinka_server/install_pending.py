@@ -32,13 +32,11 @@ import sys
 import time
 from pathlib import Path
 
-from .logging_setup import make_formatter
+from .logging_setup import make_handler
 
 
 logger = logging.getLogger("install_pending")
-_handler = logging.StreamHandler()
-_handler.setFormatter(make_formatter(_handler.stream))
-logging.basicConfig(level=logging.INFO, handlers=[_handler])
+logging.basicConfig(level=logging.INFO, handlers=[make_handler()])
 
 
 def _load_manifests(manifests_dir: Path) -> dict[str, dict]:

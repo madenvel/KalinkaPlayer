@@ -9,7 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <string>
 
@@ -30,7 +30,7 @@ public:
       level_name = "INFO";
       break;
     case spdlog::level::warn:
-      level_name = "WARN";
+      level_name = "WARNING";
       break;
     case spdlog::level::err:
       level_name = "ERROR";
@@ -53,36 +53,46 @@ public:
   }
 };
 
-/// Emits the sd-daemon "<N>" syslog priority for the message's level.
-class SyslogPriorityFormatter : public spdlog::custom_flag_formatter {
+char syslogPriority(spdlog::level::level_enum level) {
+  switch (level) {
+  case spdlog::level::critical:
+    return '2';
+  case spdlog::level::err:
+    return '3';
+  case spdlog::level::warn:
+    return '4';
+  case spdlog::level::info:
+    return '6';
+  default:
+    return '7';
+  }
+}
+
+/// Emits the message behind an sd-daemon "<N>" priority on every line of it:
+/// journald reads its stream line by line and prices each one on its own.
+class JournalMessageFormatter : public spdlog::custom_flag_formatter {
 public:
   void format(const spdlog::details::log_msg &msg, const std::tm &,
               spdlog::memory_buf_t &dest) override {
-    char priority;
-    switch (msg.level) {
-    case spdlog::level::critical:
-      priority = '2';
-      break;
-    case spdlog::level::err:
-      priority = '3';
-      break;
-    case spdlog::level::warn:
-      priority = '4';
-      break;
-    case spdlog::level::info:
-      priority = '6';
-      break;
-    default:
-      priority = '7';
-      break;
+    const char prefix[] = {'<', syslogPriority(msg.level), '>'};
+    const char *const begin = msg.payload.data();
+    size_t size = msg.payload.size();
+    // A trailing newline would leave a prefix alone on an empty line.
+    while (size > 0 && begin[size - 1] == '\n') {
+      --size;
     }
-    dest.push_back('<');
-    dest.push_back(priority);
-    dest.push_back('>');
+
+    dest.append(prefix, prefix + sizeof(prefix));
+    for (size_t i = 0; i < size; ++i) {
+      dest.push_back(begin[i]);
+      if (begin[i] == '\n') {
+        dest.append(prefix, prefix + sizeof(prefix));
+      }
+    }
   }
 
   std::unique_ptr<spdlog::custom_flag_formatter> clone() const override {
-    return spdlog::details::make_unique<SyslogPriorityFormatter>();
+    return spdlog::details::make_unique<JournalMessageFormatter>();
   }
 };
 
@@ -91,9 +101,16 @@ bool streamIsJournal(int fd) {
   if (spec == nullptr) {
     return false;
   }
-  unsigned long long dev = 0;
-  unsigned long long ino = 0;
-  if (std::sscanf(spec, "%llu:%llu", &dev, &ino) != 2) {
+  char *end = nullptr;
+  errno = 0;
+  const unsigned long long dev = std::strtoull(spec, &end, 10);
+  if (errno != 0 || end == spec || *end != ':') {
+    return false;
+  }
+  const char *const inode = end + 1;
+  errno = 0;
+  const unsigned long long ino = std::strtoull(inode, &end, 10);
+  if (errno != 0 || end == inode || *end != '\0') {
     return false;
   }
   struct stat st {};
@@ -142,7 +159,7 @@ bool useJournalFormat(bool writingToFile, int fd) {
 void applyLogPattern(spdlog::logger &logger, bool journal) {
   auto formatter = std::make_unique<spdlog::pattern_formatter>();
   if (journal) {
-    formatter->add_flag<SyslogPriorityFormatter>('P').set_pattern("%P%v");
+    formatter->add_flag<JournalMessageFormatter>('P').set_pattern("%P");
   } else {
     formatter->add_flag<CustomLogLevelFormatter>('L').set_pattern(
         "%Y-%m-%d %H:%M:%S.%e %L %t %n: %v");
@@ -153,7 +170,7 @@ void applyLogPattern(spdlog::logger &logger, bool journal) {
 void initLogger(const std::string &logLevel) {
   auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
   auto logger = std::make_shared<spdlog::logger>("native", console_sink);
-  applyLogPattern(*logger, false);
+  applyLogPattern(*logger, useJournalFormat(false, STDOUT_FILENO));
   spdlog::set_default_logger(logger);
   spdlog::set_level(spdlog::level::from_str(logLevel));
 }

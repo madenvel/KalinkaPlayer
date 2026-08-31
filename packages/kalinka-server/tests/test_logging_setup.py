@@ -9,6 +9,7 @@ import pytest
 from kalinka_server.logging_setup import (
     JournalFormatter,
     make_formatter,
+    make_handler,
     stream_is_journal,
 )
 
@@ -35,6 +36,16 @@ def test_journal_formatter_prefixes_priority():
     assert fmt.format(_record(logging.WARNING, "w")) == "<4>mod: w"
     assert fmt.format(_record(logging.ERROR, "e")) == "<3>mod: e"
     assert fmt.format(_record(logging.CRITICAL, "c")) == "<2>mod: c"
+
+
+def test_journal_formatter_prefixes_every_line_of_the_message():
+    line = JournalFormatter().format(_record(logging.ERROR, "first\nsecond"))
+    assert line == "<3>mod: first\n<3>second"
+
+
+def test_journal_formatter_leaves_no_prefix_on_a_trailing_blank_line():
+    line = JournalFormatter().format(_record(logging.ERROR, "body\n"))
+    assert line == "<3>mod: body"
 
 
 def test_journal_formatter_prefixes_every_traceback_line():
@@ -110,3 +121,15 @@ def test_unknown_log_format_falls_back_to_detection(monkeypatch, stream):
     monkeypatch.setenv("JOURNAL_STREAM", _identity(stream))
     monkeypatch.setenv("KALINKA_LOG_FORMAT", "syslog")
     assert isinstance(make_formatter(stream), JournalFormatter)
+
+
+def test_make_handler_formats_for_its_own_stream(monkeypatch, stream):
+    monkeypatch.setenv("JOURNAL_STREAM", _identity(stream))
+    assert isinstance(make_handler(stream).formatter, JournalFormatter)
+
+
+def test_make_handler_defaults_to_stderr(monkeypatch):
+    monkeypatch.setenv("JOURNAL_STREAM", "999:999999")
+    handler = make_handler()
+    assert handler.stream is sys.stderr
+    assert not isinstance(handler.formatter, JournalFormatter)
