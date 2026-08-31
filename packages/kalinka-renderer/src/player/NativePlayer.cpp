@@ -260,7 +260,6 @@ void NativePlayer::rebuildPlayer() {
   stopPumps();
   sources_.clear();
   currentId_.reset();
-  lastFormat_.reset();
   player_.reset();
   ensurePlayer();
   // Whatever was playing is gone, as APPLY_COST_INTERRUPTS_PLAYBACK declared.
@@ -409,7 +408,6 @@ void NativePlayer::stop() {
   player_->stop();
   sources_.clear();
   currentId_.reset();
-  lastFormat_.reset();
 }
 
 void NativePlayer::setVolume(uint32_t percent) {
@@ -485,21 +483,10 @@ void NativePlayer::onStreamState(const StreamState &state) {
     return;
   }
 
-  const std::optional<std::string> token = tokenFor(state.streamId);
-  if (state.streamInfo && (!lastFormat_ || *state.streamInfo != *lastFormat_)) {
-    lastFormat_ = state.streamInfo;
-    pb::Envelope env;
-    pb::AudioFormatChanged *changed = env.mutable_audio_format_changed();
-    if (token) {
-      changed->set_source_token(*token);
-    }
-    state_translator::fillFormat(*state.streamInfo, *changed->mutable_format());
-    emit(env);
-  }
-
   pb::Envelope env;
   state_translator::fillPlaybackStateChanged(
-      state, token, nowUnixMs(), *env.mutable_playback_state_changed());
+      state, tokenFor(state.streamId), nowUnixMs(),
+      *env.mutable_playback_state_changed());
   emit(env);
 }
 
@@ -810,8 +797,8 @@ void NativePlayer::fillSnapshot(pb::StateSnapshot &out) const {
   if (const pb::Source *source = sourceFor(onAir)) {
     *out.mutable_current_source() = *source;
   }
-  if (state.streamInfo) {
-    state_translator::fillFormat(*state.streamInfo, *out.mutable_format());
+  if (translated.has_format()) {
+    *out.mutable_format() = translated.format();
   }
   state_translator::fillVolume(player_->getVolume(), *out.mutable_volume());
   for (const TrackedSource &tracked : sources_) {

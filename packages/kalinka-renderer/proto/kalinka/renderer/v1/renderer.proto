@@ -32,7 +32,6 @@ message Envelope {
     StateSnapshot state_snapshot = 1001;
     PlaybackStateChanged playback_state_changed = 1002;
     SourceChanged source_changed = 1003;
-    AudioFormatChanged audio_format_changed = 1004;
     VolumeChanged volume_changed = 1005;
     PlaybackError playback_error = 1008;
     CommandRejected command_rejected = 1009;
@@ -51,13 +50,15 @@ message Envelope {
     Goodbye goodbye = 3000;
   }
 
+  // 1004 was audio_format_changed: a format only ever accompanied a state,
+  // so it rides on PlaybackStateChanged instead.
   // 1010 / 1011 stay held for capabilities_changed / ownership_changed.
   // 1006 / 1007 were output_devices_changed / selected_device_changed: the
   // device list is configuration, not state, and lives in ConfigSnapshot now.
   // They stay held in case hot-plug ever needs to be pushed.
   // 1013 / 2002 were considered for an application-level Pong / Ping and must
   // not be reused.
-  reserved 1006, 1007, 1013, 2002;
+  reserved 1004, 1006, 1007, 1013, 2002;
 }
 
 message ProtocolVersionRange {
@@ -365,6 +366,10 @@ message PlaybackStateChanged {
   optional string source_token = 4;
   int64 at_unix_ms = 5;
   optional ErrorInfo error = 6;  // set when state == PLAYBACK_STATE_ERROR
+
+  // Restated every time, so a Core replaces rather than merges: absent means
+  // nothing is decoded, never that the format is unchanged.
+  optional AudioFormat format = 7;
 }
 
 // Emitted on AudioGraphNodeState::SOURCE_CHANGED — the gapless crossover.
@@ -372,11 +377,6 @@ message SourceChanged {
   string source_token = 1;
   optional string previous_source_token = 2;
   int64 at_unix_ms = 3;
-}
-
-message AudioFormatChanged {
-  string source_token = 1;
-  AudioFormat format = 2;
 }
 
 message VolumeChanged {

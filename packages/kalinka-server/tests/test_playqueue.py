@@ -438,14 +438,7 @@ async def test_switch_track(event_emitter, playqueue):
                     index=1,
                     position=0,
                     current_track=track2.metadata,
-                    # The format outlives the track: it only changes when the
-                    # renderer reports a new one.
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    # Nothing decoded for this source yet, so no format.
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -557,12 +550,7 @@ async def test_play_next(event_emitter, playqueue):
                     index=2,
                     position=0,
                     current_track=track3.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    # Nothing decoded for this source yet, so no format.
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )

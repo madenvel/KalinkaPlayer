@@ -137,5 +137,4 @@ private:
   // Every stream the graph still knows about, in append (= switch) order.
   std::vector<TrackedSource> sources_;
   std::optional<StreamId> currentId_;
-  std::optional<StreamInfo> lastFormat_;
 };

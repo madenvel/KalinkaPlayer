@@ -70,6 +70,8 @@ def test_a_new_source_drops_the_descriptor_of_the_old_one():
     assert state["source_token"] == "track-2"
     assert state["current_source"] is None
     assert state["playback_state"] == "playing"  # untouched by this message
+    # The old track's format must not be read as the new source's.
+    assert state["format"] is None
 
 
 def test_changes_patch_only_their_own_fields():
@@ -85,11 +87,6 @@ def test_changes_patch_only_their_own_fields():
     volume.external = True
     state = renderer_state.apply(state, StateChange.VOLUME, volume)
 
-    fmt = pb.AudioFormatChanged()
-    fmt.source_token = "track-1"
-    fmt.format.sample_rate_hz = 96000
-    state = renderer_state.apply(state, StateChange.FORMAT, fmt)
-
     assert state["volume"] == {
         "supported": True,
         "current": 70,
@@ -97,7 +94,7 @@ def test_changes_patch_only_their_own_fields():
         "backend": "hardware",
     }
     assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"  # untouched
-    assert state["format"]["sample_rate_hz"] == 96000
+    assert state["format"]["sample_rate_hz"] == 44100  # untouched
     assert state["current_source"]["source_token"] == "track-1"  # still held
 
 
@@ -132,3 +129,22 @@ def test_errors_arrive_both_ways():
     state = renderer_state.apply(state, StateChange.PLAYBACK, recovered)
 
     assert state["error"] is None
+
+
+def test_a_playback_state_replaces_the_format_rather_than_merging_it():
+    """A state that names no format has none: nothing here remembers one."""
+    state = renderer_state.apply(
+        renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
+    )
+    assert state["format"]["sample_rate_hz"] == 44100
+
+    playing = pb.PlaybackStateChanged()
+    playing.state = pb.PLAYBACK_STATE_PLAYING
+    playing.format.sample_rate_hz = 96000
+    state = renderer_state.apply(state, StateChange.PLAYBACK, playing)
+    assert state["format"]["sample_rate_hz"] == 96000
+
+    stopped = pb.PlaybackStateChanged()
+    stopped.state = pb.PLAYBACK_STATE_STOPPED
+    state = renderer_state.apply(state, StateChange.PLAYBACK, stopped)
+    assert state["format"] is None
