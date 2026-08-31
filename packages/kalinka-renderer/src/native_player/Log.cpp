@@ -7,8 +7,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 // Custom log level formatter to convert log level to uppercase
 class CustomLogLevelFormatter : public spdlog::custom_flag_formatter {
@@ -99,6 +102,23 @@ bool streamIsJournal(int fd) {
   }
   return static_cast<unsigned long long>(st.st_dev) == dev &&
          static_cast<unsigned long long>(st.st_ino) == ino;
+}
+
+LogFormat configuredLogFormat() {
+  const char *mode = std::getenv("KALINKA_LOG_FORMAT");
+  if (mode == nullptr) {
+    return LogFormat::Auto;
+  }
+  std::string value(mode);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (value == "journal") {
+    return LogFormat::Journal;
+  }
+  if (value == "full") {
+    return LogFormat::Full;
+  }
+  return LogFormat::Auto;
 }
 
 void applyLogPattern(spdlog::logger &logger, bool journal) {

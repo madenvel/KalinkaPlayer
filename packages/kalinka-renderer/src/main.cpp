@@ -136,8 +136,12 @@ void setupLogging(const Options &opts) {
   }
   // journald stamps time and priority itself, so the full pattern would only
   // burn SD-card bytes there.
-  applyLogPattern(*spdlog::default_logger(),
-                  logFile.empty() && streamIsJournal(STDOUT_FILENO));
+  const LogFormat requested = configuredLogFormat();
+  const bool journal =
+      requested == LogFormat::Journal ||
+      (requested == LogFormat::Auto && logFile.empty() &&
+       streamIsJournal(STDOUT_FILENO));
+  applyLogPattern(*spdlog::default_logger(), journal);
   spdlog::set_level(spdlog::level::info);
   spdlog::flush_on(spdlog::level::info);
 }

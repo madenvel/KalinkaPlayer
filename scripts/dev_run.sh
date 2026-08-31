@@ -20,6 +20,10 @@
 #   ln -sfn <app-repo>/build/web "$KALINKA_PREFIX/usr/share/kalinka-web"
 #
 # Stop with Ctrl-C. Extra args (e.g. --debug) are forwarded to the server.
+#
+# Output here carries the full timestamped log format. Set KALINKA_LOG_FORMAT
+# to "journal" to see the terser format systemd gets: stdout below is a pipe to
+# tee, so the journal format is never detected on its own.
 
 set -uo pipefail
 

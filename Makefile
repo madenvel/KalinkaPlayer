@@ -92,6 +92,10 @@ dev-setup: venv-env
 
 ## Run the server in the foreground against the fakeroot (Ctrl-C to stop).
 ## Forward args via ARGS, e.g.  make dev-run ARGS=--debug
+##
+## Logs use the full timestamped format here; KALINKA_LOG_FORMAT=journal shows
+## the terser one systemd gets instead (dev-run pipes stdout through tee, so
+## that format is never auto-detected).
 dev-run:
 	@KALINKA_PREFIX=$(KALINKA_PREFIX) VENV=$(abspath $(VENV)) scripts/dev_run.sh $(ARGS)
 

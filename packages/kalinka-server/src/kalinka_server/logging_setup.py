@@ -56,9 +56,17 @@ class JournalFormatter(logging.Formatter):
 
 
 def make_formatter(stream: Optional[IO] = None) -> logging.Formatter:
-    """The formatter for `stream` (default stderr, as logging.StreamHandler):
-    journal-native when systemd owns it, the full timestamped Kalinka format
-    otherwise."""
-    if stream_is_journal(stream if stream is not None else sys.stderr):
+    """The formatter for `stream` (default stderr, as logging.StreamHandler).
+
+    KALINKA_LOG_FORMAT forces the choice — "journal" or "full"; anything else,
+    including unset, detects whether systemd owns the stream. The override is
+    what lets `make dev-run` show the journal format, where the server's stdout
+    is a pipe to tee rather than the journal.
+    """
+    mode = os.environ.get("KALINKA_LOG_FORMAT", "").strip().lower()
+    if mode not in ("journal", "full"):
+        journal = stream_is_journal(stream if stream is not None else sys.stderr)
+        mode = "journal" if journal else "full"
+    if mode == "journal":
         return JournalFormatter()
     return logging.Formatter(LOG_FORMAT, DATE_FORMAT)
