@@ -15,4 +15,14 @@ extern void initLogger(const std::string &logLevel);
  */
 void applyLogPattern(spdlog::logger &logger, bool journal);
 
+/**
+ * @brief Whether @p fd is the stream systemd connected to the journal.
+ *
+ * JOURNAL_STREAM is inherited by every descendant of a unit — a shell in a
+ * systemd-managed desktop session carries it too — so its presence alone
+ * proves nothing. It holds the device:inode of the journal stream, which this
+ * compares against the fd we actually write to.
+ */
+bool streamIsJournal(int fd);
+
 #endif // LOG_H

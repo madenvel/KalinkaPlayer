@@ -23,7 +23,10 @@ uvicorn_log_config = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "default": {"()": "kalinka_server.logging_setup.make_formatter"}
+        "default": {
+            "()": "kalinka_server.logging_setup.make_formatter",
+            "stream": "ext://sys.stdout",
+        }
     },
     "handlers": {
         "default": {
@@ -82,7 +85,7 @@ async def main():
     """Main entry point for the Kalinka server."""
     args = parse_args()
     handler = logging.StreamHandler()
-    handler.setFormatter(make_formatter())
+    handler.setFormatter(make_formatter(handler.stream))
     logging.basicConfig(
         level=logging.DEBUG if args.debug is True else logging.INFO,
         handlers=[handler],

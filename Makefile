@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean test help kalinka-server-deb kalinka-server-rpm kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run renderer-build renderer-clean renderer-deb renderer-rpm proto
+.PHONY: clean test help venv-env kalinka-server-deb kalinka-server-rpm kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run renderer-build renderer-clean renderer-deb renderer-rpm proto
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -22,16 +22,17 @@ PYTHON ?= python3
 ## (whose pip refuses installs on PEP 668 "externally managed" distros).
 VENV_BIN := $(abspath $(VENV))/bin
 
-## Ensure the venv exists and carries the wheel-building toolchain (pip,
-## build, setuptools-scm). Light shared prerequisite: the deb targets need
-## nothing more — wheels build in pip's isolated PEP-517 env — while
-## dev-setup layers the server, plugins, native build and fakeroot on top.
-##
-## The SDK is also installed here: the plugin deb builds run a manifest-export
-## step that imports kalinka_plugin_sdk (which pulls pydantic/pyyaml), so the
-## SDK and its deps must be importable in the venv. Installing it editable lets
-## pip track those deps — no hardcoded list to drift.
-build-env:
+## Every editable package in the workspace, SDK first. dev-setup installs them
+## in a single pip run so the resolver sees one consistent set: installing the
+## SDK alone leaves the previously-installed server and plugins pinned to the
+## SDK major they were built against, and pip reports that as a conflict.
+DEV_PACKAGES := packages/kalinka-plugin-sdk packages/kalinka-server \
+	$(filter-out packages/kalinka-plugin-sdk,$(wildcard packages/kalinka-plugin-*))
+
+## Create the venv (if missing) and give it the wheel-building toolchain (pip,
+## build, setuptools-scm). Shared prerequisite of build-env and dev-setup,
+## which differ only in what they install into it.
+venv-env:
 	@if [ -n "$(VIRTUAL_ENV)" ]; then \
 		echo "Reusing active venv: $(VIRTUAL_ENV)"; \
 	elif [ -d $(VENV) ]; then \
@@ -52,6 +53,12 @@ build-env:
 	fi
 	@echo "Using $$($(PY) --version)"
 	@$(PIP) install --upgrade --quiet pip build setuptools-scm
+
+## venv-env plus the SDK, which the plugin deb builds need importable: their
+## manifest-export step imports kalinka_plugin_sdk (pulling pydantic/pyyaml).
+## Installing it editable lets pip track those deps — no hardcoded list to
+## drift.
+build-env: venv-env
 	@echo "Installing kalinka-plugin-sdk (editable)..."
 	@$(PIP) install --quiet -e packages/kalinka-plugin-sdk
 
@@ -59,15 +66,9 @@ build-env:
 ## server + all plugins (editable), and seed the fakeroot directory tree +
 ## config. The server is pure Python — audio output lives in the renderer
 ## (make renderer-build).
-dev-setup: build-env
-	@echo "Installing kalinka-server (editable)..."
-	@$(PIP) install -e packages/kalinka-server
-	@echo "Installing plugins (editable)..."
-	@for dir in packages/kalinka-plugin-*; do \
-		[ "$$dir" = "packages/kalinka-plugin-sdk" ] && continue; \
-		echo "  - $$dir"; \
-		$(PIP) install -e "$$dir" || exit 1; \
-	done
+dev-setup: venv-env
+	@echo "Installing sdk, server and plugins (editable)..."
+	@$(PIP) install $(addprefix -e ,$(DEV_PACKAGES))
 	@echo "Verifying the server imports (catches missing runtime deps)..."
 	@$(PY) -c "import kalinka_server.__main__" || { \
 		echo "ERROR: kalinka_server failed to import after install — likely an"; \

@@ -2,6 +2,8 @@
 
 import logging
 import os
+import sys
+from typing import IO, Optional
 
 
 LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s"
@@ -20,6 +22,25 @@ def _syslog_priority(levelno: int) -> int:
     return 7
 
 
+def stream_is_journal(stream: IO) -> bool:
+    """Whether this stream is the one systemd connected to the journal.
+
+    JOURNAL_STREAM is inherited by every descendant of a systemd unit — a shell
+    in a systemd-managed desktop session has it set too — so its presence alone
+    proves nothing. systemd's contract is that it carries the device:inode of
+    the journal stream, to be compared against the stream we actually write to.
+    """
+    spec = os.environ.get("JOURNAL_STREAM")
+    if not spec:
+        return False
+    try:
+        dev, _, ino = spec.partition(":")
+        st = os.fstat(stream.fileno())
+        return st.st_dev == int(dev) and st.st_ino == int(ino)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 class JournalFormatter(logging.Formatter):
     """Formats for the systemd journal: an sd-daemon "<N>" priority prefix and
     no timestamp or level text of our own — journald records both itself."""
@@ -34,9 +55,10 @@ class JournalFormatter(logging.Formatter):
         return prefix + super().format(record).replace("\n", "\n" + prefix)
 
 
-def make_formatter() -> logging.Formatter:
-    """The formatter for this process: journal-native under systemd, the full
-    timestamped Kalinka format everywhere else."""
-    if os.environ.get("JOURNAL_STREAM"):
+def make_formatter(stream: Optional[IO] = None) -> logging.Formatter:
+    """The formatter for `stream` (default stderr, as logging.StreamHandler):
+    journal-native when systemd owns it, the full timestamped Kalinka format
+    otherwise."""
+    if stream_is_journal(stream if stream is not None else sys.stderr):
         return JournalFormatter()
     return logging.Formatter(LOG_FORMAT, DATE_FORMAT)
