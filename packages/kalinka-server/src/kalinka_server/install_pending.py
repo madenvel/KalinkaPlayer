@@ -32,13 +32,13 @@ import sys
 import time
 from pathlib import Path
 
+from .logging_setup import make_formatter
+
 
 logger = logging.getLogger("install_pending")
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s.%(msecs)03d %(levelname)s install_pending: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+_handler = logging.StreamHandler()
+_handler.setFormatter(make_formatter())
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 
 
 def _load_manifests(manifests_dir: Path) -> dict[str, dict]:

@@ -7,6 +7,7 @@
 // threads).
 
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <unistd.h>
 
@@ -24,6 +25,7 @@
 #include "config/ConfigService.h"
 #include "config/RendererName.h"
 #include "discovery/MdnsDiscovery.h"
+#include "native_player/Log.h"
 #include "net/ConnectionManager.h"
 #include "player/NativePlayer.h"
 #include "session/SessionManager.h"
@@ -129,7 +131,14 @@ void setupLogging(const Options &opts) {
       std::fprintf(stderr, "Could not open log file %s: %s\n", logFile.c_str(),
                    e.what());
     }
+  } else {
+    spdlog::set_default_logger(spdlog::stdout_color_mt("renderer"));
   }
+  // JOURNAL_STREAM means systemd owns stdout — journald stamps time and
+  // priority itself, so the full pattern would only burn SD-card bytes.
+  const bool journal =
+      logFile.empty() && std::getenv("JOURNAL_STREAM") != nullptr;
+  applyLogPattern(*spdlog::default_logger(), journal);
   spdlog::set_level(spdlog::level::info);
   spdlog::flush_on(spdlog::level::info);
 }
