@@ -84,26 +84,44 @@ TEST_F(JournalStreamEnv, MalformedValueIsNotJournal) {
 
 namespace {
 
-class LogFormatEnv : public ::testing::Test {
+class UseJournalFormat : public JournalStreamEnv {
 protected:
-  void TearDown() override { unsetenv("KALINKA_LOG_FORMAT"); }
+  void TearDown() override {
+    unsetenv("KALINKA_LOG_FORMAT");
+    JournalStreamEnv::TearDown();
+  }
+
+  static constexpr bool kToFile = true;
+  static constexpr bool kToStdout = false;
 };
 
 }  // namespace
 
-TEST_F(LogFormatEnv, UnsetIsAuto) {
-  unsetenv("KALINKA_LOG_FORMAT");
-  EXPECT_EQ(configuredLogFormat(), LogFormat::Auto);
+TEST_F(UseJournalFormat, FollowsTheStreamWhenNothingIsForced) {
+  setenv("JOURNAL_STREAM", identityOf(STDOUT_FILENO).c_str(), 1);
+  EXPECT_TRUE(useJournalFormat(kToStdout, STDOUT_FILENO));
+
+  setenv("JOURNAL_STREAM", "999:999999", 1);
+  EXPECT_FALSE(useJournalFormat(kToStdout, STDOUT_FILENO));
 }
 
-TEST_F(LogFormatEnv, RecognisesBothModesRegardlessOfCase) {
+TEST_F(UseJournalFormat, ALogFileNeverTakesTheJournalFormatByDetection) {
+  setenv("JOURNAL_STREAM", identityOf(STDOUT_FILENO).c_str(), 1);
+  EXPECT_FALSE(useJournalFormat(kToFile, STDOUT_FILENO));
+}
+
+TEST_F(UseJournalFormat, TheOverrideWinsOverDetectionBothWays) {
   setenv("KALINKA_LOG_FORMAT", "journal", 1);
-  EXPECT_EQ(configuredLogFormat(), LogFormat::Journal);
+  unsetenv("JOURNAL_STREAM");
+  EXPECT_TRUE(useJournalFormat(kToFile, STDOUT_FILENO));
+
   setenv("KALINKA_LOG_FORMAT", "Full", 1);
-  EXPECT_EQ(configuredLogFormat(), LogFormat::Full);
+  setenv("JOURNAL_STREAM", identityOf(STDOUT_FILENO).c_str(), 1);
+  EXPECT_FALSE(useJournalFormat(kToStdout, STDOUT_FILENO));
 }
 
-TEST_F(LogFormatEnv, UnknownValueFallsBackToAuto) {
+TEST_F(UseJournalFormat, AnUnknownOverrideLeavesDetectionInCharge) {
   setenv("KALINKA_LOG_FORMAT", "syslog", 1);
-  EXPECT_EQ(configuredLogFormat(), LogFormat::Auto);
+  setenv("JOURNAL_STREAM", identityOf(STDOUT_FILENO).c_str(), 1);
+  EXPECT_TRUE(useJournalFormat(kToStdout, STDOUT_FILENO));
 }
