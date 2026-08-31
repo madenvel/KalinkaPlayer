@@ -9,7 +9,14 @@ import mimetypes
 
 from fastapi import HTTPException
 from .config_model import LocalFilesConfig
-from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo, TrackUrl
+from kalinka_plugin_sdk.inputmodule import (
+    ContentInfo,
+    InputModule,
+    ModuleAsset,
+    SearchType,
+    TrackInfo,
+    TrackSource,
+)
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
@@ -34,7 +41,6 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
-from .media_http import MediaHttpServer
 from .utils.name_utils import expand_music_folders, path_within_roots
 from .input_module_db import LocalFilesInputModuleDb
 
@@ -82,14 +88,10 @@ class LocalFilesInputModule(InputModule):
         db_manager: LocalFilesInputModuleDb,
         search_request_queue: Optional[multiprocessing.Queue] = None,
         search_response_queue: Optional[multiprocessing.Queue] = None,
-        media_server: Optional[MediaHttpServer] = None,
     ):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.config = config
         self.db_manager = db_manager
-        # MediaHttpServer minting the track URLs renderers fetch. None (tests
-        # only) falls back to file:// links, which resolve in-process only.
-        self._media_server = media_server
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
         # Access boundary: only files under a configured music folder may be
         # served / played. Captured once here, so it is fixed for the lifetime
@@ -602,39 +604,26 @@ class LocalFilesInputModule(InputModule):
                 track = track_dict[track_id_str]
                 track_metadata = self._create_track_metadata(track)
 
-                # Create a link retriever function for this track. It validates
-                # access at play time: the file must still be inside a
-                # configured music folder and readable. Otherwise it raises, and
-                # the play queue surfaces the track as unavailable rather than
-                # handing the player a dead/forbidden path. This guards the
-                # window between a folder-config change and the next index scan.
-                def create_link_retriever(track_db_id, track_path, track_format):
-                    async def link_retriever():
-                        if not path_within_roots(track_path, self._music_folders):
-                            raise PermissionError(
-                                f"Track path is outside the configured music "
-                                f"folders: {track_path}"
-                            )
-                        if not os.path.exists(track_path):
-                            raise FileNotFoundError(
-                                f"Track file no longer exists: {track_path}"
-                            )
-                        if not os.access(track_path, os.R_OK):
-                            raise PermissionError(
-                                f"Track file is not readable: {track_path}"
-                            )
-                        if self._media_server is not None:
-                            url = self._media_server.url_for(track_db_id)
-                        else:
-                            url = f"file://{track_path}"
-                        return TrackUrl(url=url, format=track_format)
+                # Validating at play time guards the window between a
+                # folder-config change and the next index scan: raising here
+                # surfaces the track as unavailable instead of queueing a
+                # dead source.
+                def create_source_retriever(track_db_id, track_path, track_format):
+                    async def source_retriever():
+                        self._require_readable(track_path)
+                        return TrackSource(
+                            source=ModuleAsset(
+                                module=self.module_name(), asset_id=track_db_id
+                            ),
+                            format=track_format,
+                        )
 
-                    return link_retriever
+                    return source_retriever
 
                 result.append(
                     TrackInfo(
                         id=track_id(track["id"]),
-                        link_retriever=create_link_retriever(
+                        source_retriever=create_source_retriever(
                             track["id"], track["file_path"], track["format"]
                         ),
                         metadata=track_metadata,
@@ -642,6 +631,46 @@ class LocalFilesInputModule(InputModule):
                 )
 
         return result
+
+    def _require_readable(self, track_path: str) -> None:
+        """Raise unless the file may still be served: inside a configured music
+        folder, present, and readable."""
+        if not path_within_roots(track_path, self._music_folders):
+            raise PermissionError(
+                f"Track path is outside the configured music folders: {track_path}"
+            )
+        if not os.path.exists(track_path):
+            raise FileNotFoundError(f"Track file no longer exists: {track_path}")
+        if not os.access(track_path, os.R_OK):
+            raise PermissionError(f"Track file is not readable: {track_path}")
+
+    async def get_content_info(self, asset_id: str) -> Optional[ContentInfo]:
+        """Resolve a track id to the file the server serves for it.
+
+        Re-runs the access check the source retriever made, because a folder
+        can leave the configuration between the two. A file outside the
+        boundary is reported as absent, never as forbidden.
+        """
+        if not self.db_manager.is_good():
+            logger.warning("Database is not initialized or corrupted")
+            return None
+
+        track = self.db_manager.get_track_by_id(asset_id)
+        track_path = (track or {}).get("file_path")
+        if not track_path:
+            return None
+        try:
+            self._require_readable(track_path)
+        except OSError as e:
+            logger.warning("Refusing content for track %s: %s", asset_id, e)
+            return None
+
+        return ContentInfo(
+            mime_type=mimetypes.guess_type(track_path)[0]
+            or "application/octet-stream",
+            local_path=track_path,
+            cacheable=True,
+        )
 
     async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
