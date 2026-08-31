@@ -40,6 +40,18 @@ pb::ErrorSource toProto(StreamErrorSource source) {
   return pb::ERROR_SOURCE_UNSPECIFIED;
 }
 
+pb::DeviceAccess toProto(DeviceAccess access) {
+  switch (access) {
+  case DeviceAccess::Exclusive:
+    return pb::DEVICE_ACCESS_EXCLUSIVE;
+  case DeviceAccess::Shared:
+    return pb::DEVICE_ACCESS_SHARED;
+  case DeviceAccess::Unknown:
+    break;
+  }
+  return pb::DEVICE_ACCESS_UNSPECIFIED;
+}
+
 pb::VolumeBackend toProto(VolumeBackend backend) {
   switch (backend) {
   case VolumeBackend::None:
@@ -57,6 +69,11 @@ void fillAudioFormat(const StreamAudioFormat &format, pb::AudioFormat &out) {
   out.set_channels(format.channels);
   out.set_bits_per_sample(format.bitsPerSample);
   out.set_sample_format(sampleFormatToString(format.sampleFormat));
+}
+
+void fillDeviceInfo(const DeviceInfo &device, pb::DeviceInfo &out) {
+  fillAudioFormat(device.format, *out.mutable_format());
+  out.set_access(toProto(device.access));
 }
 
 void fillVolume(const VolumeState &volume, pb::VolumeState &out) {
@@ -86,8 +103,8 @@ void fillPlaybackStateChanged(const StreamState &state,
       out.set_duration_ms(*duration);
     }
   }
-  if (state.deviceFormat) {
-    fillAudioFormat(*state.deviceFormat, *out.mutable_device_format());
+  if (state.deviceInfo) {
+    fillDeviceInfo(*state.deviceInfo, *out.mutable_device_info());
   }
   if (state.error) {
     pb::ErrorInfo *error = out.mutable_error();

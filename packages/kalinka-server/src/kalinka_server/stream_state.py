@@ -39,6 +39,15 @@ class StreamErrorSource(Enum):
     DECODER = 3
 
 
+class DeviceAccess(Enum):
+    """How the renderer holds the output device. SHARED is not proof that
+    anything alters the samples, only that nothing rules it out."""
+
+    UNKNOWN = 0
+    EXCLUSIVE = 1
+    SHARED = 2
+
+
 @dataclass
 class AudioFormatInfo:
     sample_rate: int = 0
@@ -47,10 +56,17 @@ class AudioFormatInfo:
 
 
 @dataclass
+class DeviceInfo:
+    format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
+    access: DeviceAccess = DeviceAccess.UNKNOWN
+
+
+@dataclass
 class StreamInfo:
     format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
-    # What the device is open at; differs from `format` when it resamples.
-    device_format: Optional[AudioFormatInfo] = None
+    # The output side; differs from `format` when the device resamples or
+    # widens the sample format.
+    device: Optional[DeviceInfo] = None
     # None, never 0, when the renderer cannot tell: 0 reads as "already ended".
     duration_ms: Optional[int] = None
 
@@ -89,6 +105,11 @@ _STATE_NAMES = {
     "error": AudioGraphNodeState.ERROR,
 }
 
+_DEVICE_ACCESS = {
+    "exclusive": DeviceAccess.EXCLUSIVE,
+    "shared": DeviceAccess.SHARED,
+}
+
 _ERROR_SOURCES = {
     "none": StreamErrorSource.NONE,
     "http_stream": StreamErrorSource.HTTP_STREAM,
@@ -107,17 +128,26 @@ def to_audio_format(fmt: Optional[dict]) -> Optional[AudioFormatInfo]:
     )
 
 
+def to_device_info(info: Optional[dict]) -> Optional[DeviceInfo]:
+    if not info:
+        return None
+    return DeviceInfo(
+        format=to_audio_format(info.get("format")) or AudioFormatInfo(),
+        access=_DEVICE_ACCESS.get(info.get("access") or "", DeviceAccess.UNKNOWN),
+    )
+
+
 def to_stream_info(snapshot: dict) -> Optional[StreamInfo]:
     """A renderer may know the decoded format, the device's, or only the
     length, so any one of the three is enough to report something."""
     decoded = to_audio_format(snapshot.get("format"))
-    device = to_audio_format(snapshot.get("device_format"))
+    device = to_device_info(snapshot.get("device_info"))
     duration_ms = snapshot.get("duration_ms")
     if decoded is None and device is None and duration_ms is None:
         return None
     return StreamInfo(
         format=decoded or AudioFormatInfo(),
-        device_format=device,
+        device=device,
         duration_ms=duration_ms,
     )
 

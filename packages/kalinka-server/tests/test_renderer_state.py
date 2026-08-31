@@ -14,9 +14,10 @@ def full_snapshot():
     snapshot.format.bits_per_sample = 24
     snapshot.format.sample_format = "S24_LE"
     snapshot.duration_ms = 204_000
-    snapshot.device_format.sample_rate_hz = 44100
-    snapshot.device_format.bits_per_sample = 24
-    snapshot.device_format.sample_format = "S32_LE"
+    snapshot.device_info.format.sample_rate_hz = 44100
+    snapshot.device_info.format.bits_per_sample = 24
+    snapshot.device_info.format.sample_format = "S32_LE"
+    snapshot.device_info.access = pb.DEVICE_ACCESS_EXCLUSIVE
     snapshot.position_ms = 1000
     snapshot.position_valid = True
     snapshot.captured_at_unix_ms = 1700000000000
@@ -39,7 +40,8 @@ def test_snapshot_replaces_the_whole_state():
     assert state["source_token"] == "track-1"
     assert state["format"]["sample_format"] == "S24_LE"
     assert state["duration_ms"] == 204_000
-    assert state["device_format"]["sample_format"] == "S32_LE"
+    assert state["device_info"]["format"]["sample_format"] == "S32_LE"
+    assert state["device_info"]["access"] == "exclusive"
     assert state["volume"]["backend"] == "software"
     assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"
     assert state["queued_source_tokens"] == ["track-2"]
@@ -155,32 +157,34 @@ def test_a_playback_state_replaces_the_format_rather_than_merging_it():
     assert state["format"] is None
 
 
-def test_the_device_format_is_reported_apart_from_the_decoded_one():
+def test_the_device_is_reported_apart_from_the_decoded_format():
     """What the stream is and what the device took are separate facts: a
     device may widen the sample format, and only the pair shows it."""
     playing = pb.PlaybackStateChanged()
     playing.state = pb.PLAYBACK_STATE_PLAYING
     playing.format.sample_rate_hz = 44100
     playing.format.sample_format = "S24_LE"
-    playing.device_format.sample_rate_hz = 44100
-    playing.device_format.sample_format = "S32_LE"
+    playing.device_info.format.sample_rate_hz = 44100
+    playing.device_info.format.sample_format = "S32_LE"
+    playing.device_info.access = pb.DEVICE_ACCESS_SHARED
 
     state = renderer_state.apply(
         renderer_state.empty_state(), StateChange.PLAYBACK, playing
     )
 
     assert state["format"]["sample_format"] == "S24_LE"
-    assert state["device_format"]["sample_format"] == "S32_LE"
+    assert state["device_info"]["format"]["sample_format"] == "S32_LE"
+    assert state["device_info"]["access"] == "shared"
 
 
-def test_a_closed_device_reports_no_format():
+def test_a_closed_device_reports_nothing():
     state = renderer_state.apply(
         renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
     )
-    assert state["device_format"] is not None
+    assert state["device_info"] is not None
 
     stopped = pb.PlaybackStateChanged()
     stopped.state = pb.PLAYBACK_STATE_STOPPED
     state = renderer_state.apply(state, StateChange.PLAYBACK, stopped)
 
-    assert state["device_format"] is None
+    assert state["device_info"] is None

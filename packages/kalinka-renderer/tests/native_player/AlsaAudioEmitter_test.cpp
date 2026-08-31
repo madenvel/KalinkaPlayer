@@ -98,16 +98,24 @@ TEST_F(AlsaAudioEmitterTest, a_playing_state_names_what_the_device_opened) {
   const auto state =
       waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
   ASSERT_TRUE(state.streamInfo.has_value());
-  ASSERT_TRUE(state.deviceFormat.has_value());
+  ASSERT_TRUE(state.deviceInfo.has_value());
   // The null device takes whatever it is handed, so the two agree here. The
   // field earns its place on a device that substitutes, which this is not.
-  EXPECT_EQ(state.deviceFormat->sampleRate, state.streamInfo->format.sampleRate);
-  EXPECT_EQ(state.deviceFormat->bitsPerSample,
+  EXPECT_EQ(state.deviceInfo->format.sampleRate,
+            state.streamInfo->format.sampleRate);
+  EXPECT_EQ(state.deviceInfo->format.bitsPerSample,
             state.streamInfo->format.bitsPerSample);
-  EXPECT_EQ(state.deviceFormat->channels, 2u);
+  EXPECT_EQ(state.deviceInfo->format.channels, 2u);
+  if (testDevice() == "null") {
+    // SND_PCM_TYPE_NULL, like every type but HW, sits between us and a card.
+    // Exclusive needs real hardware: set KALINKA_TEST_ALSA_DEVICE.
+    EXPECT_EQ(state.deviceInfo->access, DeviceAccess::Shared);
+  } else {
+    EXPECT_NE(state.deviceInfo->access, DeviceAccess::Unknown);
+  }
 
   alsaAudioEmitter->disconnect(outputNode);
-  EXPECT_FALSE(alsaAudioEmitter->getState().deviceFormat.has_value())
+  EXPECT_FALSE(alsaAudioEmitter->getState().deviceInfo.has_value())
       << "a closed device is open at nothing";
 }
 
