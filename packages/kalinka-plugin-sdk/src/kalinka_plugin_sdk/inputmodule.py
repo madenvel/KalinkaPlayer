@@ -16,36 +16,94 @@ from .datamodel import (
 )
 
 
-class TrackUrl(BaseModel):
+class ModuleAsset(BaseModel):
     """
-    Represents a track's streaming URL and format information.
+    Content the server fetches from the module and serves on its behalf.
+
+    The module names an asset; the server owns the URL clients and renderers
+    are given, and binds it to an address the fetcher can actually reach. A
+    module must never build that URL itself — it cannot know which of the
+    server's interfaces the fetcher is on.
+
+    The module must be able to resolve ``asset_id`` through
+    :meth:`InputModule.get_content_info`.
 
     Attributes:
-        url (str): The streaming URL for the track
-        format (str): The audio format/codec (e.g., "mp3", "flac", "aac")
+        module (str): The owning module's :meth:`InputModule.module_name`
+        asset_id (str): Module-minted id, opaque to the server and usable as a
+                        single URL path segment
+    """
+
+    module: str
+    asset_id: str
+
+
+class DirectUrl(BaseModel):
+    """
+    An absolute URL the fetcher retrieves for itself, untouched by the server.
+
+    For content already served somewhere reachable — a CDN, a public stream.
+    The URL must be absolute and Range-capable, since a renderer seeks by
+    asking for byte ranges.
+
+    Attributes:
+        url (str): The absolute streaming URL
     """
 
     url: str
+
+
+class TrackSource(BaseModel):
+    """
+    Where a track's audio comes from, and in what format.
+
+    Attributes:
+        source (ModuleAsset | DirectUrl): Server-proxied asset, or an absolute URL
+        format (str): The audio format/codec (e.g., "mp3", "flac", "aac")
+    """
+
+    source: ModuleAsset | DirectUrl
     format: str
+
+
+class ContentInfo(BaseModel):
+    """
+    What the server needs to serve one asset of a module's content.
+
+    Attributes:
+        mime_type (str): Content-Type to serve the asset as
+        local_path (Optional[str]): A file the server may read directly. Serving
+            a file is the only way to answer a fetch today — an asset the module
+            can only stream itself is not servable yet.
+        size (Optional[int]): Byte length where the module knows it. The server
+            measures a local file for itself, so this is for content it cannot
+            stat.
+        cacheable (bool): Whether the server may hold on to these bytes.
+    """
+
+    mime_type: str
+    local_path: Optional[str] = None
+    size: Optional[int] = None
+    cacheable: bool = False
 
 
 class TrackInfo(BaseModel):
     """
-    Complete track information including metadata and URL retrieval.
+    Complete track information including metadata and source retrieval.
 
     This class provides all the information needed to play a track, including
-    a callable that can retrieve the actual streaming URL when needed.
+    a callable that can retrieve the actual audio source when needed.
 
     Attributes:
         id (EntityId): Unique identifier for the track
-        link_retriever: Callable[[], Awaitable[TrackUrl]]: Function that returns the track's streaming URL
+        source_retriever: Callable[[], Awaitable[TrackSource]]: Function that returns the track's audio source
         metadata (Optional[Track]): Track metadata (title, artist, album, etc.)
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: EntityId
-    link_retriever: Callable[[], Awaitable[TrackUrl]]
+    source_retriever: Callable[[], Awaitable[TrackSource]]
     metadata: Optional[Track]
 
 
@@ -79,7 +137,7 @@ class InputModule(Protocol):
     - Browsing and searching audio content
     - Managing user favorites
     - Handling playlists
-    - Providing track metadata and playback URLs
+    - Providing track metadata and playback sources
     - Managing genres and categorization
 
     Latency contract: every call into this interface serves a real-time
@@ -178,22 +236,45 @@ class InputModule(Protocol):
 
     async def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         """
-        Retrieve detailed track information including playback URLs.
+        Retrieve detailed track information including playback sources.
 
         This method is called when the player needs to actually play tracks,
-        providing both metadata and a callable to get the streaming URL.
+        providing both metadata and a callable to get the audio source.
 
         Args:
             track_ids (List[str]): List of track IDs to get information for
 
         Returns:
             List[TrackInfo]: List of track information objects containing
-                     metadata and URL retrievers for each requested track, suitable to insert into the play queue.
+                     metadata and source retrievers for each requested track, suitable to insert into the play queue.
 
         Must complete within the server's per-call timeout (see the
         class docstring's latency contract).
         """
         ...
+
+    async def get_content_info(self, asset_id: str) -> Optional[ContentInfo]:
+        """
+        Resolve an asset this module asked the server to serve for it.
+
+        Called on every fetch of a :class:`ModuleAsset` this module named — so
+        this is where access is granted or refused, not only where the source
+        was first handed out. Return None for an id that is unknown, gone, or
+        no longer permitted; the server answers 404 and never learns why.
+
+        Modules that hand out only :class:`DirectUrl` need not implement this.
+
+        Args:
+            asset_id (str): The id from the ModuleAsset
+
+        Returns:
+            Optional[ContentInfo]: How to serve the asset, or None
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract) — it answers metadata, while
+        the bytes are served by the server afterwards.
+        """
+        return None
 
     async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50

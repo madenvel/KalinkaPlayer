@@ -8,8 +8,6 @@ from pydantic import BaseModel, ConfigDict
 from .datamodel import EntityId, PlaybackMode, PlaybackState, Track, TrackList
 from .inputmodule import TrackInfo
 
-API_VERSION = "1.0"
-
 
 class PlayQueueController(Protocol):
     """

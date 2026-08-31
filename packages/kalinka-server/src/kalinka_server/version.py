@@ -10,8 +10,8 @@ Two distinct, unrelated versions live here:
   version. It is hardcoded and bumped by hand when that API changes — it is not
   derived from git or the package version. It is exposed via ``/server/version``
   and mDNS discovery so clients (e.g. the frontend app) can check compatibility.
-  (Distinct from ``kalinka_plugin_sdk.API_VERSION``, which is the server↔plugin
-  SDK contract.)
+  (Distinct from ``kalinka_plugin_sdk.__version__``, which the plugins'
+  ``REQUIRES_SDK`` specifiers gate the server↔plugin contract on.)
 """
 
 # Written by setuptools_scm at build time; absent only in an unbuilt source tree.
@@ -34,7 +34,7 @@ def get_version() -> str:
 
 # Client-facing REST/WebSocket API contract version. Bump deliberately when the
 # client API changes; independent of the package version above. Distinct from
-# kalinka_plugin_sdk.API_VERSION (the server<->plugin SDK contract).
+# kalinka_plugin_sdk.__version__ (the server<->plugin SDK contract).
 # 0.2: playback moved to renderers — output selection lives behind /renderer/*,
 # and the built-in local-alsa device is gone.
 # 0.3: /queue/ws reports the renderer topology — renderers_changed and

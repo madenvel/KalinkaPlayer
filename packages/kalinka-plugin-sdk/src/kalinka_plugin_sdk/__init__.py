@@ -11,7 +11,6 @@ from .api import (
     EventEmitter,
     EventListener,
     LoggerAPI,
-    API_VERSION,
 )
 from .events import (
     PlayQueueEventType,
@@ -38,7 +37,10 @@ from .datamodel import (
 )
 from .inputmodule import (
     InputModule,
-    TrackUrl,
+    ContentInfo,
+    DirectUrl,
+    ModuleAsset,
+    TrackSource,
     TrackInfo,
     SearchType,
 )
@@ -57,7 +59,6 @@ from .dynamic_fields import DynamicFieldDecl
 from .optional_packages import OptionalPackageSpec
 
 __all__ = [
-    "API_VERSION",
     "__version__",
     # APIs
     "PlayQueueController",
@@ -87,7 +88,10 @@ __all__ = [
     "EntityId",
     "DeviceVolume",
     "VolumeBackend",
-    "TrackUrl",
+    "ContentInfo",
+    "DirectUrl",
+    "ModuleAsset",
+    "TrackSource",
     "TrackInfo",
     "SearchType",
     # Base Classes
