@@ -152,16 +152,24 @@ Removed or changed an existing public API (a protocol change):
 2. Widen **every consumer pin** from `<2` to `<3`, i.e. `kalinka-plugin-sdk>=2,<3`:
    - `packages/kalinka-server/pyproject.toml`
    - `packages/kalinka-plugin-localfiles/pyproject.toml`
+   - `packages/kalinka-plugin-jamendo/pyproject.toml`
    - `packages/kalinka-plugin-musiccast/pyproject.toml`
    - `packages/kalinka-plugin-dummydevice/pyproject.toml`
-3. Update the plugins/server to the new API and confirm they build & run.
-4. Cut a new `kalinka-vX.Y.Z` app release — a protocol break is a server change,
+3. Raise each plugin's `REQUIRES_SDK` floor to the new major. This is a
+   *second* gate, checked when the plugin is loaded rather than installed: a
+   plugin left at `>=1.0,<2` is skipped at startup even though its package pin
+   resolved. The built-in renderer output device declares one too.
+4. Update the plugins/server to the new API and confirm they build & run.
+5. Release any out-of-tree plugin against the new major — `kalinka-plugin-qobuz`
+   lives in its own repo and is not covered by the greps below.
+6. Cut a new `kalinka-vX.Y.Z` app release — a protocol break is a server change,
    so the **server version moves with it**. Third-party plugins built for the old
    major won't install against the new server (their `<2` excludes SDK `2.x`).
 
 Find the spots to touch:
 ```bash
-grep -rn 'kalinka-plugin-sdk *[>=<]' packages/*/pyproject.toml   # the 4 consumer pins
+grep -rn 'kalinka-plugin-sdk *[>=<]' packages/*/pyproject.toml   # the 5 consumer pins
+grep -rn 'REQUIRES_SDK' packages/*/src --include='*.py'          # the load-time floors
 grep -n  '__version__' packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py  # the 1 SDK source
 ```
 
