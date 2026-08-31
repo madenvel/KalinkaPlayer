@@ -47,7 +47,7 @@ T = TypeVar("T", InputModule, ExternalOutputDevice, None)
 class PluginContextBase:
     logger: LoggerAPI
     plugin_id: str
-    sdk_version: str  # equals API_VERSION
+    sdk_version: str  # the SDK distribution version, kalinka_plugin_sdk.__version__
     config: ModuleConfig
     listener: EventListener[PlayQueueEventType, PlayQueueEvent, PlayQueueState]
     # Server-owned shared text embedder (SDK 1.2+). One model instance serves

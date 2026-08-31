@@ -7,7 +7,8 @@ from importlib.metadata import entry_points
 from typing import Any, Generator, Mapping, MutableMapping
 
 from kalinka_eventbus import EventBus
-from kalinka_plugin_sdk import API_VERSION, DeviceVolume, ModuleHealthState, paths
+from kalinka_plugin_sdk import DeviceVolume, ModuleHealthState, paths
+from kalinka_plugin_sdk import __version__ as SDK_VERSION
 from kalinka_plugin_sdk.datamodel import PlaybackMode, PlaybackState
 from kalinka_plugin_sdk.events import (
     PlayQueueState,
@@ -564,7 +565,7 @@ class PreparedModuleCollection:
                     listener=self.player_context.playqueue_eventbus,  # type: ignore[arg-type]
                     logger=logging.getLogger(name),
                     plugin_id=name,
-                    sdk_version=API_VERSION,
+                    sdk_version=SDK_VERSION,
                     config=config,
                     embedder=self.player_context.embedder,
                 )
@@ -581,7 +582,7 @@ class PreparedModuleCollection:
                     emitter=emitter or self.player_context.ext_device_eventbus,  # type: ignore[arg-type]
                     logger=logging.getLogger(name),
                     plugin_id=name,
-                    sdk_version=API_VERSION,
+                    sdk_version=SDK_VERSION,
                     config=config,
                     embedder=self.player_context.embedder,
                 )
@@ -589,16 +590,6 @@ class PreparedModuleCollection:
                 raise ValueError(
                     f"Unsupported plugin type: {plugin_class.PLUGIN_TYPE}"
                 )
-
-        return PluginContext(
-            playqueue=self.player_context.playqueue,
-            listener=self.player_context.playqueue_eventbus,
-            logger=logging.getLogger(name),
-            plugin_id=name,
-            sdk_version=API_VERSION,
-            capabilities=set(),
-            config=config,
-        )
 
     async def _setup_renderer_output_device(
         self,

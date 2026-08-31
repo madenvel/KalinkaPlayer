@@ -320,7 +320,7 @@ class Track(BaseModel):
         replaygain_peak (Optional[float]): ReplayGain peak value for audio normalization
         replaygain_gain (Optional[float]): ReplayGain gain value for audio normalization
         playlist_track_id (Optional[str]): ID specific to playlist membership
-        unavailable (bool): True when the track's stream URL could not be retrieved and playback skipped it
+        unavailable (bool): True when the track's source could not be retrieved and playback skipped it
     """
 
     id: EntityId
@@ -332,7 +332,7 @@ class Track(BaseModel):
     replaygain_peak: Optional[float] = None
     replaygain_gain: Optional[float] = None
     playlist_track_id: Optional[str] = None
-    # True when the track's stream URL could not be retrieved and playback
+    # True when the track's source could not be retrieved and playback
     # skipped it. Surfaced to clients so they can flag the track in the queue.
     unavailable: bool = False
 
