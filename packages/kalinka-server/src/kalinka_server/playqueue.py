@@ -47,7 +47,6 @@ from .stream_state import (
     StreamErrorSource,
     StreamInfo,
     StreamState,
-    StreamType,
 )
 from .renderer_registry import RendererRegistry, RendererUnavailable
 from .renderer_sessions import SessionPool
@@ -79,18 +78,6 @@ def _remap_index(idx: int, from_index: int, to_index: int) -> int:
     return idx
 
 
-def get_duration_ms(stream_info: StreamInfo) -> int:
-    sample_rate = stream_info.format.sample_rate
-    if sample_rate == 0:
-        return 0
-    if stream_info.stream_type == StreamType.BYTES:
-        bytes_per_frame = stream_info.format.channels * stream_info.format.bits_per_sample // 8
-        if bytes_per_frame == 0:
-            return 0
-        return int(stream_info.stream_size / bytes_per_frame / sample_rate * 1000)
-    return int(stream_info.stream_size / sample_rate * 1000)
-
-
 def to_audio_info(stream_info: StreamInfo):
     if stream_info is None:
         return None
@@ -98,7 +85,8 @@ def to_audio_info(stream_info: StreamInfo):
         sample_rate=stream_info.format.sample_rate,
         channels=stream_info.format.channels,
         bits_per_sample=stream_info.format.bits_per_sample,
-        duration_ms=get_duration_ms(stream_info),
+        # The REST AudioInfo has no absent; clients have always read 0 there.
+        duration_ms=stream_info.duration_ms or 0,
     )
 
 
@@ -1106,11 +1094,12 @@ class PlayQueueImpl(PlayQueueController):
         self._cancel_prefetch_timer()
 
         stream_info = state.stream_info
-        if not stream_info:
+        # Unknown length names no moment to prefetch at; FINISHED ends the track.
+        if not stream_info or stream_info.duration_ms is None:
             return
 
         time_to_prefetch_s = (
-            get_duration_ms(stream_info) - state.position - PREFETCH_TIME_MS
+            stream_info.duration_ms - state.position - PREFETCH_TIME_MS
         ) / 1000
 
         if time_to_prefetch_s <= 0:

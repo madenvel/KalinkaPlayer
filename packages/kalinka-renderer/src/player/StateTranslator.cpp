@@ -57,10 +57,9 @@ void fillFormat(const StreamInfo &info, pb::AudioFormat &out) {
   out.set_channels(info.format.channels);
   out.set_bits_per_sample(info.format.bitsPerSample);
   out.set_sample_format(sampleFormatToString(info.format.sampleFormat));
-  out.set_stream_kind(info.streamType == StreamType::FRAMES
-                          ? pb::STREAM_KIND_FRAMES
-                          : pb::STREAM_KIND_BYTES);
-  out.set_stream_size_units(info.streamSize);
+  if (const auto duration = info.durationMs()) {
+    out.set_duration_ms(*duration);
+  }
 }
 
 void fillVolume(const VolumeState &volume, pb::VolumeState &out) {

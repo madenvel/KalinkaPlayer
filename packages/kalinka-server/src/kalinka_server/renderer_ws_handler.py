@@ -24,7 +24,7 @@ from .version import get_rest_api_version, get_version
 logger = logging.getLogger(__name__.split(".")[-1])
 
 # Renderer protocol version this Core speaks; independent of REST_API_VERSION.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 INBOX_SIZE = 256
 

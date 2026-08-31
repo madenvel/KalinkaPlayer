@@ -1,4 +1,4 @@
-// Kalinka renderer protocol, version 1.
+// Kalinka renderer protocol, version 2.
 //
 // One Envelope per binary WebSocket message on ws://<core>/renderer/ws.
 // This file carries the registration handshake (Hello -> Welcome), the
@@ -94,12 +94,6 @@ enum ErrorSource {
   ERROR_SOURCE_RENDERER_INTERNAL = 5;  // no native analogue
 }
 
-enum StreamKind {  // native StreamType
-  STREAM_KIND_UNSPECIFIED = 0;
-  STREAM_KIND_BYTES = 1;
-  STREAM_KIND_FRAMES = 2;
-}
-
 enum VolumeBackend {  // native VolumeBackend
   VOLUME_BACKEND_UNSPECIFIED = 0;
   VOLUME_BACKEND_NONE = 1;
@@ -125,8 +119,13 @@ message AudioFormat {
   uint32 channels = 2;
   uint32 bits_per_sample = 3;
   string sample_format = 4;  // sampleFormatToString(), e.g. "S24_LE"
-  StreamKind stream_kind = 5;
-  uint64 stream_size_units = 6;  // bytes or frames, per stream_kind
+
+  // Absent when the renderer cannot tell — an MP3 with no Xing header, a live
+  // stream. Absent is not zero: unknown length is not a track that has ended.
+  optional uint64 duration_ms = 7;
+
+  reserved 5, 6;
+  reserved "stream_kind", "stream_size_units";
 }
 
 message Source {

@@ -39,11 +39,6 @@ class StreamErrorSource(Enum):
     DECODER = 3
 
 
-class StreamType(Enum):
-    BYTES = 0
-    FRAMES = 1
-
-
 @dataclass
 class AudioFormatInfo:
     sample_rate: int = 0
@@ -54,8 +49,8 @@ class AudioFormatInfo:
 @dataclass
 class StreamInfo:
     format: AudioFormatInfo = field(default_factory=AudioFormatInfo)
-    stream_type: StreamType = StreamType.FRAMES
-    stream_size: int = 0
+    # None, never 0, when the renderer cannot tell: 0 reads as "already ended".
+    duration_ms: Optional[int] = None
 
 
 @dataclass
@@ -109,12 +104,7 @@ def to_stream_info(fmt: Optional[dict]) -> Optional[StreamInfo]:
             channels=fmt.get("channels", 0),
             bits_per_sample=fmt.get("bits_per_sample", 0),
         ),
-        stream_type=(
-            StreamType.FRAMES
-            if fmt.get("stream_kind") == "frames"
-            else StreamType.BYTES
-        ),
-        stream_size=fmt.get("stream_size_units", 0),
+        duration_ms=fmt.get("duration_ms"),
     )
 
 
