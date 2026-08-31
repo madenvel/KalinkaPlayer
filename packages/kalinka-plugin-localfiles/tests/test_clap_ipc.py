@@ -156,16 +156,12 @@ class TestSearchQueueWiring:
         )
         captured = {}
 
-        def fake_module(cfg, db, req=None, resp=None, media_server=None):
+        def fake_module(cfg, db, req=None, resp=None):
             captured["queues"] = (req, resp)
             return Mock()
 
-        media_server = Mock()
-        media_server.start = _async_noop
-
         with patch.object(module_setup, "LocalFilesInputModule", fake_module), \
                 patch.object(module_setup, "init_db", _async_noop), \
-                patch.object(module_setup, "MediaHttpServer", lambda *a: media_server), \
                 patch.object(module_setup.multiprocessing, "Process", Mock()), \
                 patch.object(
                     module_setup.KalinkaPluginLocalFiles,
