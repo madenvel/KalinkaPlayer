@@ -12,6 +12,7 @@ from kalinka_plugin_sdk import paths
 
 from .config_model import KalinkaConfig
 from .config_overrides import apply_overrides_with_prefix, load_overrides
+from .logging_setup import make_formatter
 from .netutils import get_ip_address
 from .sdk_compat import IncompatibleSDKError, check_sdk_compatibility
 from .server import create_app
@@ -22,10 +23,7 @@ uvicorn_log_config = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "default": {
-            "format": "%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
-            "datefmt": "%Y-%m-%d %H:%M:%S",
-        }
+        "default": {"()": "kalinka_server.logging_setup.make_formatter"}
     },
     "handlers": {
         "default": {
@@ -83,10 +81,11 @@ def parse_args():
 async def main():
     """Main entry point for the Kalinka server."""
     args = parse_args()
+    handler = logging.StreamHandler()
+    handler.setFormatter(make_formatter())
     logging.basicConfig(
         level=logging.DEBUG if args.debug is True else logging.INFO,
-        format="%(asctime)s.%(msecs)03d %(levelname)s %(thread)d %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[handler],
     )
 
     # Reduce logging level for httpx - it's too verbose

@@ -45,16 +45,54 @@ public:
   }
 };
 
-// Function to initialize the logger with a custom format
+/// Emits the sd-daemon "<N>" syslog priority for the message's level.
+class SyslogPriorityFormatter : public spdlog::custom_flag_formatter {
+public:
+  void format(const spdlog::details::log_msg &msg, const std::tm &,
+              spdlog::memory_buf_t &dest) override {
+    char priority;
+    switch (msg.level) {
+    case spdlog::level::critical:
+      priority = '2';
+      break;
+    case spdlog::level::err:
+      priority = '3';
+      break;
+    case spdlog::level::warn:
+      priority = '4';
+      break;
+    case spdlog::level::info:
+      priority = '6';
+      break;
+    default:
+      priority = '7';
+      break;
+    }
+    dest.push_back('<');
+    dest.push_back(priority);
+    dest.push_back('>');
+  }
+
+  std::unique_ptr<spdlog::custom_flag_formatter> clone() const override {
+    return spdlog::details::make_unique<SyslogPriorityFormatter>();
+  }
+};
+
+void applyLogPattern(spdlog::logger &logger, bool journal) {
+  auto formatter = std::make_unique<spdlog::pattern_formatter>();
+  if (journal) {
+    formatter->add_flag<SyslogPriorityFormatter>('P').set_pattern("%P%v");
+  } else {
+    formatter->add_flag<CustomLogLevelFormatter>('L').set_pattern(
+        "%Y-%m-%d %H:%M:%S.%e %L %t %n: %v");
+  }
+  logger.set_formatter(std::move(formatter));
+}
+
 void initLogger(const std::string &logLevel) {
   auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-  auto formatter = std::make_unique<spdlog::pattern_formatter>();
-  formatter->add_flag<CustomLogLevelFormatter>('L').set_pattern(
-      "%Y-%m-%d %H:%M:%S.%e %L %t %n: %v");
-
-  console_sink->set_formatter(std::move(formatter));
-
   auto logger = std::make_shared<spdlog::logger>("native", console_sink);
+  applyLogPattern(*logger, false);
   spdlog::set_default_logger(logger);
   spdlog::set_level(spdlog::level::from_str(logLevel));
 }
