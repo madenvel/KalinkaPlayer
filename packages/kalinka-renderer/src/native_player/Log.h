@@ -25,4 +25,10 @@ void applyLogPattern(spdlog::logger &logger, bool journal);
  */
 bool streamIsJournal(int fd);
 
+/// What KALINKA_LOG_FORMAT asks for; Auto (the default) means detect.
+enum class LogFormat { Auto, Journal, Full };
+
+/// Reads KALINKA_LOG_FORMAT; anything but "journal" or "full" means Auto.
+LogFormat configuredLogFormat();
+
 #endif // LOG_H

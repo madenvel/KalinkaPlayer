@@ -81,3 +81,29 @@ TEST_F(JournalStreamEnv, MalformedValueIsNotJournal) {
   setenv("JOURNAL_STREAM", "not-a-stream", 1);
   EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
 }
+
+namespace {
+
+class LogFormatEnv : public ::testing::Test {
+protected:
+  void TearDown() override { unsetenv("KALINKA_LOG_FORMAT"); }
+};
+
+}  // namespace
+
+TEST_F(LogFormatEnv, UnsetIsAuto) {
+  unsetenv("KALINKA_LOG_FORMAT");
+  EXPECT_EQ(configuredLogFormat(), LogFormat::Auto);
+}
+
+TEST_F(LogFormatEnv, RecognisesBothModesRegardlessOfCase) {
+  setenv("KALINKA_LOG_FORMAT", "journal", 1);
+  EXPECT_EQ(configuredLogFormat(), LogFormat::Journal);
+  setenv("KALINKA_LOG_FORMAT", "Full", 1);
+  EXPECT_EQ(configuredLogFormat(), LogFormat::Full);
+}
+
+TEST_F(LogFormatEnv, UnknownValueFallsBackToAuto) {
+  setenv("KALINKA_LOG_FORMAT", "syslog", 1);
+  EXPECT_EQ(configuredLogFormat(), LogFormat::Auto);
+}

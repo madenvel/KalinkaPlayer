@@ -92,3 +92,21 @@ def test_make_formatter_uses_full_format_elsewhere(monkeypatch, stream):
 def test_make_formatter_defaults_to_stderr(monkeypatch):
     monkeypatch.setenv("JOURNAL_STREAM", _identity(sys.stderr))
     assert isinstance(make_formatter(), JournalFormatter)
+
+
+def test_log_format_journal_overrides_detection(monkeypatch, stream):
+    monkeypatch.delenv("JOURNAL_STREAM", raising=False)
+    monkeypatch.setenv("KALINKA_LOG_FORMAT", "journal")
+    assert isinstance(make_formatter(stream), JournalFormatter)
+
+
+def test_log_format_full_overrides_detection(monkeypatch, stream):
+    monkeypatch.setenv("JOURNAL_STREAM", _identity(stream))
+    monkeypatch.setenv("KALINKA_LOG_FORMAT", "FULL")
+    assert not isinstance(make_formatter(stream), JournalFormatter)
+
+
+def test_unknown_log_format_falls_back_to_detection(monkeypatch, stream):
+    monkeypatch.setenv("JOURNAL_STREAM", _identity(stream))
+    monkeypatch.setenv("KALINKA_LOG_FORMAT", "syslog")
+    assert isinstance(make_formatter(stream), JournalFormatter)

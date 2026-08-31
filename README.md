@@ -251,6 +251,8 @@ make dev-run
    - music drop-off: `~/kalinka/srv/kalinka/music`
 
    Forward server flags with `ARGS` (e.g. `make dev-run ARGS=--debug`), and relocate the whole tree with `make dev-run KALINKA_PREFIX=/path/to/root`.
+
+   Logs here carry the full `date time LEVEL thread name: message` format. Under systemd both the server and the renderer switch to the terser format journald expects — no timestamp or level of their own, since journald records those itself — and `KALINKA_LOG_FORMAT=journal make dev-run` shows you that format from a source checkout (`full` forces the other direction). It is not auto-detected here because `dev-run` pipes output through `tee`.
 4. **Restart to pick up changes.** Python edits go live on restart — either click **Restart** in the app (this works without systemd: `dev-run` watches the restart trigger in the fakeroot and relaunches) or Ctrl-C and re-run `make dev-run`. After editing renderer C++, rebuild with `make renderer-build` and restart the renderer binary.
    Enabling an optional feature (Smart Search) in **Settings** and hitting **Restart** also just works: `dev-run` installs the requested optional packages into the venv before relaunching — the same flow `kalinka.service` runs at boot in production.
 5. In the Kalinka Music App, go to **Settings → Connection**; the service should appear under the name you configured. Pick it and tap **Connect**.
