@@ -99,20 +99,8 @@ TEST(StateTranslator, FormatCarriesEveryField) {
   EXPECT_EQ(out.sample_format(),
             sampleFormatToString(AudioSampleFormat::PCM16_LE));
   ASSERT_TRUE(out.has_duration_ms());
-  EXPECT_EQ(out.duration_ms(), 223957u);  // 9876543 frames at 44100 Hz
-}
-
-TEST(StateTranslator, ByteSizedStreamsDivideOutTheFrameSize) {
-  StreamInfo info;
-  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
-  info.streamType = StreamType::BYTES;
-  info.streamSize = 9876543 * 4;  // four bytes to the frame at 2ch/16bit
-
-  pb::AudioFormat out;
-  fillFormat(info, out);
-
-  ASSERT_TRUE(out.has_duration_ms());
-  EXPECT_EQ(out.duration_ms(), 223957u);
+  // What the duration is belongs to AudioInfo_test; this pins that it survives.
+  EXPECT_EQ(out.duration_ms(), info.durationMs());
 }
 
 TEST(StateTranslator, AStreamOfUnknownLengthReportsNoDuration) {

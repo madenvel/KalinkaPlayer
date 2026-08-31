@@ -173,6 +173,7 @@ if(GTest_FOUND)
     tests/test_ws_transport.cpp
     tests/native_player/AlsaAudioEmitter_test.cpp
     tests/native_player/AudioGraphHttpStream_test.cpp
+    tests/native_player/AudioInfo_test.cpp
     tests/native_player/AudioPlayer_test.cpp
     tests/native_player/AudioSampleFormat_test.cpp
     tests/native_player/AudioStreamSwitcher_test.cpp
