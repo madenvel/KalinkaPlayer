@@ -17,7 +17,7 @@ class KalinkaPluginJamendo(InputModulePlugin):
     # 1.2 introduced the shared text embedder (context.embedder) that
     # ai_search's query encoding depends on. Keep in sync with pyproject's
     # kalinka-plugin-sdk pin.
-    REQUIRES_SDK = ">=1.2,<2"
+    REQUIRES_SDK = ">=2,<3"
     PLUGIN_ID = "jamendo"
     CONFIG_MODEL = JamendoConfig
 
