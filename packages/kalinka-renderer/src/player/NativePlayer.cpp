@@ -800,8 +800,8 @@ void NativePlayer::fillSnapshot(pb::StateSnapshot &out) const {
   if (translated.has_format()) {
     *out.mutable_format() = translated.format();
   }
-  if (translated.has_device_format()) {
-    *out.mutable_device_format() = translated.device_format();
+  if (translated.has_device_info()) {
+    *out.mutable_device_info() = translated.device_info();
   }
   if (translated.has_duration_ms()) {
     out.set_duration_ms(translated.duration_ms());

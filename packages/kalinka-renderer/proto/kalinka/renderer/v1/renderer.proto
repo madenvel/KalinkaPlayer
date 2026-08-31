@@ -95,6 +95,15 @@ enum ErrorSource {
   ERROR_SOURCE_RENDERER_INTERNAL = 5;  // no native analogue
 }
 
+// How the renderer holds the output device. A renderer can only say what it
+// opened: SHARED is not proof that anything alters the samples, only that
+// nothing rules it out.
+enum DeviceAccess {
+  DEVICE_ACCESS_UNSPECIFIED = 0;  // the renderer cannot tell
+  DEVICE_ACCESS_EXCLUSIVE = 1;    // the device itself, nothing in between
+  DEVICE_ACCESS_SHARED = 2;       // mixed, resampled or converted below us
+}
+
 enum VolumeBackend {  // native VolumeBackend
   VOLUME_BACKEND_UNSPECIFIED = 0;
   VOLUME_BACKEND_NONE = 1;
@@ -123,6 +132,12 @@ message AudioFormat {
 
   reserved 5, 6, 7;
   reserved "stream_kind", "stream_size_units", "duration_ms";
+}
+
+// The output side of playback: what the device runs at, and how it is held.
+message DeviceInfo {
+  AudioFormat format = 1;
+  DeviceAccess access = 2;
 }
 
 message Source {
@@ -170,8 +185,8 @@ message StateSnapshot {
   // Prefetched sources not yet playing, in switch order.
   repeated string queued_source_tokens = 11;
 
-  // What the output device is open at; see PlaybackStateChanged.device_format.
-  optional AudioFormat device_format = 13;
+  // The output side; see PlaybackStateChanged.device_info.
+  optional DeviceInfo device_info = 13;
 
   // See PlaybackStateChanged.duration_ms.
   optional uint64 duration_ms = 14;
@@ -374,11 +389,10 @@ message PlaybackStateChanged {
   // that the format is unchanged.
   optional AudioFormat format = 7;
 
-  // What the output device was opened at, against `format` above for what
-  // came out of the decoder. Comparing the two is how a Core tells whether
-  // playback is bit-perfect: a device may resample or widen the sample
-  // format. Absent when none is open, or on a renderer that cannot ask.
-  optional AudioFormat device_format = 8;
+  // The output side, against `format` above for what the decoder produced.
+  // Answering "is this bit-perfect" takes both of them and the volume state;
+  // no one of the three settles it. Absent when no device is open.
+  optional DeviceInfo device_info = 8;
 
   // How long the stream runs. On the state rather than in a format, so a
   // renderer that can name neither format still reports it. Absent when

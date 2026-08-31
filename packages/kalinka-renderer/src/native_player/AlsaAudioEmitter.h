@@ -78,7 +78,7 @@ private:
 
   StreamAudioFormat currentStreamAudioFormat;
   // What the open device took, which is not always what was asked for.
-  std::optional<StreamAudioFormat> deviceFormat;
+  std::optional<DeviceInfo> deviceInfo;
   PlayedFramesCounter playedFramesCounter;
   // Absolute in the source's timeline, which need not begin at zero, and
   // ahead of what has been heard by whatever ALSA still has queued.
@@ -100,6 +100,8 @@ private:
 
   void openDevice();
   void closeDevice();
+  /// Whether the open device is ours alone, as ALSA reports its PCM type.
+  DeviceAccess deviceAccess() const;
 
   void initHwParams(unsigned int &rate, AudioSampleFormat format);
   void setSampleFormat(AudioSampleFormat requestedFormat,
@@ -130,9 +132,8 @@ private:
   void start();
   void stop();
 
-  /// Stamps the open device's format onto every state this node reports.
+  /// Stamps the open device onto every state this node reports.
   void setState(const StreamState &newState) override;
 };
-;
 
 #endif

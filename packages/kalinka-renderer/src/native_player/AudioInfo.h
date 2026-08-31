@@ -47,6 +47,36 @@ struct StreamAudioFormat {
   }
 };
 
+/// @brief How the renderer holds the output device.
+/// @note Shared is not proof that anything alters the samples, only that
+/// nothing rules it out — the most a renderer can say about a path it shares.
+enum class DeviceAccess { Unknown, Exclusive, Shared };
+
+inline std::string deviceAccessToString(DeviceAccess access) {
+  switch (access) {
+  case DeviceAccess::Exclusive:
+    return "exclusive";
+  case DeviceAccess::Shared:
+    return "shared";
+  default:
+    return "unknown";
+  }
+}
+
+/// @brief What the output device runs at, and how it is held.
+struct DeviceInfo {
+  StreamAudioFormat format;
+  DeviceAccess access = DeviceAccess::Unknown;
+
+  bool operator==(const DeviceInfo &other) const = default;
+  bool operator!=(const DeviceInfo &other) const = default;
+
+  std::string toString() const {
+    return "<DeviceInfo format=" + format.toString() +
+           ", access=" + deviceAccessToString(access) + ">";
+  }
+};
+
 /// @brief Defines the information about the stream.
 struct StreamInfo {
   // The format of the audio frames in the stream.

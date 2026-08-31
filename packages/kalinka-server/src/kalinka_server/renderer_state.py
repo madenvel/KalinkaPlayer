@@ -48,7 +48,7 @@ def empty_state() -> dict:
         "source_token": None,
         "current_source": None,
         "format": None,
-        "device_format": None,
+        "device_info": None,
         "duration_ms": None,
         "position_ms": 0,
         "position_valid": False,
@@ -78,6 +78,13 @@ def audio_format_to_dict(fmt) -> dict:
         "channels": fmt.channels,
         "bits_per_sample": fmt.bits_per_sample,
         "sample_format": fmt.sample_format,
+    }
+
+
+def device_info_to_dict(info) -> dict:
+    return {
+        "format": audio_format_to_dict(info.format),
+        "access": enum_name(pb.DeviceAccess, info.access, "DEVICE_ACCESS_"),
     }
 
 
@@ -115,9 +122,9 @@ def snapshot_to_dict(snapshot) -> dict:
             if snapshot.HasField("format")
             else None
         ),
-        "device_format": (
-            audio_format_to_dict(snapshot.device_format)
-            if snapshot.HasField("device_format")
+        "device_info": (
+            device_info_to_dict(snapshot.device_info)
+            if snapshot.HasField("device_info")
             else None
         ),
         "duration_ms": (
@@ -160,9 +167,9 @@ def apply(state: dict, change: StateChange, message) -> dict:
             if message.HasField("format")
             else None
         )
-        state["device_format"] = (
-            audio_format_to_dict(message.device_format)
-            if message.HasField("device_format")
+        state["device_info"] = (
+            device_info_to_dict(message.device_info)
+            if message.HasField("device_info")
             else None
         )
         state["duration_ms"] = (

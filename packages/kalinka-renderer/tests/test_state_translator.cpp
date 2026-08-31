@@ -35,6 +35,12 @@ TEST(StateTranslator, EveryErrorSourceMaps) {
   EXPECT_EQ(toProto(StreamErrorSource::DECODER), pb::ERROR_SOURCE_DECODER);
 }
 
+TEST(StateTranslator, EveryDeviceAccessMaps) {
+  EXPECT_EQ(toProto(DeviceAccess::Unknown), pb::DEVICE_ACCESS_UNSPECIFIED);
+  EXPECT_EQ(toProto(DeviceAccess::Exclusive), pb::DEVICE_ACCESS_EXCLUSIVE);
+  EXPECT_EQ(toProto(DeviceAccess::Shared), pb::DEVICE_ACCESS_SHARED);
+}
+
 TEST(StateTranslator, EveryVolumeBackendMaps) {
   EXPECT_EQ(toProto(VolumeBackend::None), pb::VOLUME_BACKEND_NONE);
   EXPECT_EQ(toProto(VolumeBackend::Hardware), pb::VOLUME_BACKEND_HARDWARE);
@@ -158,19 +164,21 @@ TEST(StateTranslator, TheDeviceFormatRidesAlongsideTheDecodedOne) {
   info.streamSize = 9876543;
 
   StreamState state(AudioGraphNodeState::STREAMING, 0, info);
-  // What a device that cannot take 24-bit substitutes.
-  state.deviceFormat =
-      StreamAudioFormat{44100, 2, 24, AudioSampleFormat::PCM32_LE};
+  // What a device that cannot take 24-bit substitutes, held exclusively.
+  state.deviceInfo = DeviceInfo{
+      StreamAudioFormat{44100, 2, 24, AudioSampleFormat::PCM32_LE},
+      DeviceAccess::Exclusive};
 
   pb::PlaybackStateChanged out;
   fillPlaybackStateChanged(state, "tok-7", 1234, out);
 
   ASSERT_TRUE(out.has_format());
-  ASSERT_TRUE(out.has_device_format());
+  ASSERT_TRUE(out.has_device_info());
   EXPECT_EQ(out.format().sample_format(),
             sampleFormatToString(AudioSampleFormat::PCM24_LE));
-  EXPECT_EQ(out.device_format().sample_format(),
+  EXPECT_EQ(out.device_info().format().sample_format(),
             sampleFormatToString(AudioSampleFormat::PCM32_LE));
+  EXPECT_EQ(out.device_info().access(), pb::DEVICE_ACCESS_EXCLUSIVE);
 }
 
 TEST(StateTranslator, ADeviceThatIsNotOpenReportsNoFormat) {
@@ -180,13 +188,13 @@ TEST(StateTranslator, ADeviceThatIsNotOpenReportsNoFormat) {
   info.streamSize = 9876543;
 
   StreamState state(AudioGraphNodeState::STREAMING, 0, info);
-  ASSERT_FALSE(state.deviceFormat.has_value());
+  ASSERT_FALSE(state.deviceInfo.has_value());
 
   pb::PlaybackStateChanged out;
   fillPlaybackStateChanged(state, "tok-7", 1234, out);
 
   EXPECT_TRUE(out.has_format());
-  EXPECT_FALSE(out.has_device_format());
+  EXPECT_FALSE(out.has_device_info());
 }
 
 TEST(StateTranslator, VolumeCarriesEveryField) {

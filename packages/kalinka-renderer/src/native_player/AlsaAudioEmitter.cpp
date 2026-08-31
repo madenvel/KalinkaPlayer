@@ -29,7 +29,7 @@ inline int log_on_error_impl(int err, const std::string &message) {
   return err;
 }
 
-// The graph mixes to stereo before the sink, so the device is opened for it.
+// Every device is opened for stereo; nothing in the graph converts channels.
 constexpr unsigned int kDeviceChannels = 2;
 
 std::unordered_map<AudioSampleFormat, snd_pcm_format_t> ALSA_FORMAT_MAP = {
@@ -155,9 +155,19 @@ void AlsaAudioEmitter::stop() {
   }
 }
 
+DeviceAccess AlsaAudioEmitter::deviceAccess() const {
+  if (pcmHandle == nullptr) {
+    return DeviceAccess::Unknown;
+  }
+  // Only a raw hw handle rules out a mixer, a resampler or a sound server:
+  // every other PCM type has something of its own between us and the card.
+  return snd_pcm_type(pcmHandle) == SND_PCM_TYPE_HW ? DeviceAccess::Exclusive
+                                                    : DeviceAccess::Shared;
+}
+
 void AlsaAudioEmitter::setState(const StreamState &newState) {
   StreamState stamped = newState;
-  stamped.deviceFormat = deviceFormat;
+  stamped.deviceInfo = deviceInfo;
   AudioGraphNode::setState(stamped);
 }
 
@@ -307,7 +317,7 @@ void AlsaAudioEmitter::closeDevice() {
     log_on_error(snd_pcm_close(pcmHandle));
     pcmHandle = nullptr;
     currentStreamAudioFormat = StreamAudioFormat();
-    deviceFormat.reset();
+    deviceInfo.reset();
   }
 }
 
@@ -671,10 +681,11 @@ void AlsaAudioEmitter::setupAudioFormat(
       sampleSubstitute.count(streamAudioFormat.sampleFormat)
           ? sampleSubstitute[streamAudioFormat.sampleFormat]
           : streamAudioFormat.sampleFormat;
-  deviceFormat = StreamAudioFormat{
+  const StreamAudioFormat opened{
       sampleRate, kDeviceChannels,
       static_cast<unsigned int>(sampleBits(deviceSampleFormat)),
       deviceSampleFormat};
+  deviceInfo = DeviceInfo{opened, deviceAccess()};
 
   int count = throw_on_error(snd_pcm_poll_descriptors_count(pcmHandle));
   ufds.resize(count);
