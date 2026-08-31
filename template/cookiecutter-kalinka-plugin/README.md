@@ -192,7 +192,7 @@ Edit `src/your_plugin/module_setup.py` to add any initialization logic:
 
 ```python
 class KalinkaPluginYourPlugin(InputModulePlugin):  # or OutputDevicePlugin
-    REQUIRES_SDK = ">=1.0,<2"
+    REQUIRES_SDK = ">=2.0,<3"
     PLUGIN_ID = "your_plugin"
     CONFIG_MODEL = YourPluginConfig
 

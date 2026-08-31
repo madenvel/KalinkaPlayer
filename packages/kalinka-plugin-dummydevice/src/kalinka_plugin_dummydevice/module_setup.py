@@ -10,7 +10,7 @@ from .dummydevice import DummyDevice
 
 
 class KalinkaPluginDummydevice(OutputDevicePlugin):
-    REQUIRES_SDK = ">=1.0,<2"
+    REQUIRES_SDK = ">=2,<3"
     PLUGIN_ID = "dummydevice"
     CONFIG_MODEL = DummydeviceConfig
 

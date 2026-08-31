@@ -11,7 +11,7 @@ from .musiccast import KalinkaPluginMusiccastDevice
 
 
 class KalinkaPluginMusiccast(OutputDevicePlugin):
-    REQUIRES_SDK = ">=1.0,<2"
+    REQUIRES_SDK = ">=2,<3"
     PLUGIN_ID = "musiccast"
     CONFIG_MODEL = KalinkaPluginMusiccastConfig
 
