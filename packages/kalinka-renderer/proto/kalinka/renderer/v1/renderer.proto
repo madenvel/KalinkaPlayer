@@ -121,12 +121,8 @@ message AudioFormat {
   uint32 bits_per_sample = 3;
   string sample_format = 4;  // sampleFormatToString(), e.g. "S24_LE"
 
-  // Absent when the renderer cannot tell — an MP3 with no Xing header, a live
-  // stream. Absent is not zero: unknown length is not a track that has ended.
-  optional uint64 duration_ms = 7;
-
-  reserved 5, 6;
-  reserved "stream_kind", "stream_size_units";
+  reserved 5, 6, 7;
+  reserved "stream_kind", "stream_size_units", "duration_ms";
 }
 
 message Source {
@@ -173,6 +169,12 @@ message StateSnapshot {
 
   // Prefetched sources not yet playing, in switch order.
   repeated string queued_source_tokens = 11;
+
+  // What the output device is open at; see PlaybackStateChanged.device_format.
+  optional AudioFormat device_format = 13;
+
+  // See PlaybackStateChanged.duration_ms.
+  optional uint64 duration_ms = 14;
 
   reserved 8;   // output_devices; the list is configuration
   reserved 12;  // ownership; superseded by playback sessions (design §3.3)
@@ -367,9 +369,21 @@ message PlaybackStateChanged {
   int64 at_unix_ms = 5;
   optional ErrorInfo error = 6;  // set when state == PLAYBACK_STATE_ERROR
 
-  // Restated every time, so a Core replaces rather than merges: absent means
-  // nothing is decoded, never that the format is unchanged.
+  // What the renderer decoded out of the stream. Restated every time, so a
+  // Core replaces rather than merges: absent means nothing is decoded, never
+  // that the format is unchanged.
   optional AudioFormat format = 7;
+
+  // What the output device was opened at, against `format` above for what
+  // came out of the decoder. Comparing the two is how a Core tells whether
+  // playback is bit-perfect: a device may resample or widen the sample
+  // format. Absent when none is open, or on a renderer that cannot ask.
+  optional AudioFormat device_format = 8;
+
+  // How long the stream runs. On the state rather than in a format, so a
+  // renderer that can name neither format still reports it. Absent when
+  // unknown, which is not zero: unknown length is not a track that ended.
+  optional uint64 duration_ms = 9;
 }
 
 // Emitted on AudioGraphNodeState::SOURCE_CHANGED — the gapless crossover.

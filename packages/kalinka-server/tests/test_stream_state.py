@@ -20,8 +20,8 @@ def test_a_playing_snapshot_carries_position_and_format():
                 "sample_rate_hz": 44100,
                 "channels": 2,
                 "bits_per_sample": 24,
-                "duration_ms": 204_000,
             },
+            "duration_ms": 204_000,
         }
     )
 

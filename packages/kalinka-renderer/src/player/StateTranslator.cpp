@@ -52,14 +52,11 @@ pb::VolumeBackend toProto(VolumeBackend backend) {
   return pb::VOLUME_BACKEND_UNSPECIFIED;
 }
 
-void fillFormat(const StreamInfo &info, pb::AudioFormat &out) {
-  out.set_sample_rate_hz(info.format.sampleRate);
-  out.set_channels(info.format.channels);
-  out.set_bits_per_sample(info.format.bitsPerSample);
-  out.set_sample_format(sampleFormatToString(info.format.sampleFormat));
-  if (const auto duration = info.durationMs()) {
-    out.set_duration_ms(*duration);
-  }
+void fillAudioFormat(const StreamAudioFormat &format, pb::AudioFormat &out) {
+  out.set_sample_rate_hz(format.sampleRate);
+  out.set_channels(format.channels);
+  out.set_bits_per_sample(format.bitsPerSample);
+  out.set_sample_format(sampleFormatToString(format.sampleFormat));
 }
 
 void fillVolume(const VolumeState &volume, pb::VolumeState &out) {
@@ -84,7 +81,13 @@ void fillPlaybackStateChanged(const StreamState &state,
   }
   out.set_at_unix_ms(atUnixMs);
   if (state.streamInfo) {
-    fillFormat(*state.streamInfo, *out.mutable_format());
+    fillAudioFormat(state.streamInfo->format, *out.mutable_format());
+    if (const auto duration = state.streamInfo->durationMs()) {
+      out.set_duration_ms(*duration);
+    }
+  }
+  if (state.deviceFormat) {
+    fillAudioFormat(*state.deviceFormat, *out.mutable_device_format());
   }
   if (state.error) {
     pb::ErrorInfo *error = out.mutable_error();

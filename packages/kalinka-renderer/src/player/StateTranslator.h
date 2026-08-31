@@ -26,8 +26,8 @@ kalinka::renderer::v1::ErrorSource toProto(StreamErrorSource source);
 
 kalinka::renderer::v1::VolumeBackend toProto(VolumeBackend backend);
 
-void fillFormat(const StreamInfo &info,
-                kalinka::renderer::v1::AudioFormat &out);
+void fillAudioFormat(const StreamAudioFormat &format,
+                     kalinka::renderer::v1::AudioFormat &out);
 
 void fillVolume(const VolumeState &volume,
                 kalinka::renderer::v1::VolumeState &out);

@@ -13,7 +13,10 @@ def full_snapshot():
     snapshot.format.channels = 2
     snapshot.format.bits_per_sample = 24
     snapshot.format.sample_format = "S24_LE"
-    snapshot.format.duration_ms = 204_000
+    snapshot.duration_ms = 204_000
+    snapshot.device_format.sample_rate_hz = 44100
+    snapshot.device_format.bits_per_sample = 24
+    snapshot.device_format.sample_format = "S32_LE"
     snapshot.position_ms = 1000
     snapshot.position_valid = True
     snapshot.captured_at_unix_ms = 1700000000000
@@ -35,7 +38,8 @@ def test_snapshot_replaces_the_whole_state():
     assert state["current_source"]["uri"] == "http://core/stream/1"
     assert state["source_token"] == "track-1"
     assert state["format"]["sample_format"] == "S24_LE"
-    assert state["format"]["duration_ms"] == 204_000
+    assert state["duration_ms"] == 204_000
+    assert state["device_format"]["sample_format"] == "S32_LE"
     assert state["volume"]["backend"] == "software"
     assert state["selected_device_id"] == "hw:CARD=sofhdadsp,DEV=0"
     assert state["queued_source_tokens"] == ["track-2"]
@@ -70,8 +74,9 @@ def test_a_new_source_drops_the_descriptor_of_the_old_one():
     assert state["source_token"] == "track-2"
     assert state["current_source"] is None
     assert state["playback_state"] == "playing"  # untouched by this message
-    # The old track's format must not be read as the new source's.
+    # The old track's format and length must not be read as the new source's.
     assert state["format"] is None
+    assert state["duration_ms"] is None
 
 
 def test_changes_patch_only_their_own_fields():
@@ -148,3 +153,34 @@ def test_a_playback_state_replaces_the_format_rather_than_merging_it():
     stopped.state = pb.PLAYBACK_STATE_STOPPED
     state = renderer_state.apply(state, StateChange.PLAYBACK, stopped)
     assert state["format"] is None
+
+
+def test_the_device_format_is_reported_apart_from_the_decoded_one():
+    """What the stream is and what the device took are separate facts: a
+    device may widen the sample format, and only the pair shows it."""
+    playing = pb.PlaybackStateChanged()
+    playing.state = pb.PLAYBACK_STATE_PLAYING
+    playing.format.sample_rate_hz = 44100
+    playing.format.sample_format = "S24_LE"
+    playing.device_format.sample_rate_hz = 44100
+    playing.device_format.sample_format = "S32_LE"
+
+    state = renderer_state.apply(
+        renderer_state.empty_state(), StateChange.PLAYBACK, playing
+    )
+
+    assert state["format"]["sample_format"] == "S24_LE"
+    assert state["device_format"]["sample_format"] == "S32_LE"
+
+
+def test_a_closed_device_reports_no_format():
+    state = renderer_state.apply(
+        renderer_state.empty_state(), StateChange.SNAPSHOT, full_snapshot()
+    )
+    assert state["device_format"] is not None
+
+    stopped = pb.PlaybackStateChanged()
+    stopped.state = pb.PLAYBACK_STATE_STOPPED
+    state = renderer_state.apply(state, StateChange.PLAYBACK, stopped)
+
+    assert state["device_format"] is None

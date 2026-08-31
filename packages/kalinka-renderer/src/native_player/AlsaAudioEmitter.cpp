@@ -29,6 +29,9 @@ inline int log_on_error_impl(int err, const std::string &message) {
   return err;
 }
 
+// The graph mixes to stereo before the sink, so the device is opened for it.
+constexpr unsigned int kDeviceChannels = 2;
+
 std::unordered_map<AudioSampleFormat, snd_pcm_format_t> ALSA_FORMAT_MAP = {
     {AudioSampleFormat::PCM16_LE, SND_PCM_FORMAT_S16_LE},
     {AudioSampleFormat::PCM24_LE, SND_PCM_FORMAT_S24_LE},
@@ -152,13 +155,11 @@ void AlsaAudioEmitter::stop() {
   }
 }
 
-#if 0
 void AlsaAudioEmitter::setState(const StreamState &newState) {
-  spdlog::info("Setting state to {}", stateToString(newState.state));
-
-  AudioGraphNode::setState(newState);
+  StreamState stamped = newState;
+  stamped.deviceFormat = deviceFormat;
+  AudioGraphNode::setState(stamped);
 }
-#endif
 
 snd_pcm_sframes_t AlsaAudioEmitter::queuedFrames() {
   // Only a running stream is holding anything: a drop or a drain leaves it in
@@ -306,6 +307,7 @@ void AlsaAudioEmitter::closeDevice() {
     log_on_error(snd_pcm_close(pcmHandle));
     pcmHandle = nullptr;
     currentStreamAudioFormat = StreamAudioFormat();
+    deviceFormat.reset();
   }
 }
 
@@ -664,6 +666,15 @@ void AlsaAudioEmitter::setupAudioFormat(
   setSwParams();
 
   currentStreamAudioFormat = streamAudioFormat;
+  // initHwParams settles the rate; setSampleFormat any substitution.
+  const AudioSampleFormat deviceSampleFormat =
+      sampleSubstitute.count(streamAudioFormat.sampleFormat)
+          ? sampleSubstitute[streamAudioFormat.sampleFormat]
+          : streamAudioFormat.sampleFormat;
+  deviceFormat = StreamAudioFormat{
+      sampleRate, kDeviceChannels,
+      static_cast<unsigned int>(sampleBits(deviceSampleFormat)),
+      deviceSampleFormat};
 
   int count = throw_on_error(snd_pcm_poll_descriptors_count(pcmHandle));
   ufds.resize(count);
@@ -779,7 +790,8 @@ void AlsaAudioEmitter::initHwParams(unsigned int &rate,
         pcmHandle, params, SND_PCM_ACCESS_MMAP_INTERLEAVED));
 
     /* set the count of channels */
-    throw_on_error(snd_pcm_hw_params_set_channels(pcmHandle, params, 2));
+    throw_on_error(
+        snd_pcm_hw_params_set_channels(pcmHandle, params, kDeviceChannels));
 
     setSampleFormat(format, params);
 

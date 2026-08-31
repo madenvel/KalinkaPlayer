@@ -91,6 +91,26 @@ TEST_F(AlsaAudioEmitterTest, pause) {
       AudioGraphNodeState::FINISHED);
 }
 
+TEST_F(AlsaAudioEmitterTest, a_playing_state_names_what_the_device_opened) {
+  auto outputNode = std::make_shared<SineWaveNode>(1, 440, 1000);
+  alsaAudioEmitter->connectTo(outputNode);
+
+  const auto state =
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::STREAMING);
+  ASSERT_TRUE(state.streamInfo.has_value());
+  ASSERT_TRUE(state.deviceFormat.has_value());
+  // The null device takes whatever it is handed, so the two agree here. The
+  // field earns its place on a device that substitutes, which this is not.
+  EXPECT_EQ(state.deviceFormat->sampleRate, state.streamInfo->format.sampleRate);
+  EXPECT_EQ(state.deviceFormat->bitsPerSample,
+            state.streamInfo->format.bitsPerSample);
+  EXPECT_EQ(state.deviceFormat->channels, 2u);
+
+  alsaAudioEmitter->disconnect(outputNode);
+  EXPECT_FALSE(alsaAudioEmitter->getState().deviceFormat.has_value())
+      << "a closed device is open at nothing";
+}
+
 TEST_F(AlsaAudioEmitterTest, stream_error) {
   auto outputNode = std::make_shared<ErrorFakeNode>();
   alsaAudioEmitter->connectTo(outputNode);

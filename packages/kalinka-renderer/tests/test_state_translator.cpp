@@ -6,7 +6,7 @@
 #include "player/StateTranslator.h"
 
 namespace pb = kalinka::renderer::v1;
-using state_translator::fillFormat;
+using state_translator::fillAudioFormat;
 using state_translator::fillPlaybackStateChanged;
 using state_translator::fillVolume;
 using state_translator::toProto;
@@ -85,19 +85,27 @@ TEST(StateTranslator, NegativePositionIsClampedNotWrapped) {
 }
 
 TEST(StateTranslator, FormatCarriesEveryField) {
-  StreamInfo info;
-  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
-  info.streamType = StreamType::FRAMES;
-  info.streamSize = 9876543;
-
   pb::AudioFormat out;
-  fillFormat(info, out);
+  fillAudioFormat(StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE},
+                  out);
 
   EXPECT_EQ(out.sample_rate_hz(), 44100u);
   EXPECT_EQ(out.channels(), 2u);
   EXPECT_EQ(out.bits_per_sample(), 16u);
   EXPECT_EQ(out.sample_format(),
             sampleFormatToString(AudioSampleFormat::PCM16_LE));
+}
+
+TEST(StateTranslator, TheDurationIsTheStreamsNotTheFormats) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
+  info.streamType = StreamType::FRAMES;
+  info.streamSize = 9876543;
+
+  StreamState state(AudioGraphNodeState::STREAMING, 0, info);
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, "tok-7", 1234, out);
+
   ASSERT_TRUE(out.has_duration_ms());
   // What the duration is belongs to AudioInfo_test; this pins that it survives.
   EXPECT_EQ(out.duration_ms(), info.durationMs());
@@ -109,9 +117,11 @@ TEST(StateTranslator, AStreamOfUnknownLengthReportsNoDuration) {
   info.streamType = StreamType::FRAMES;
   info.streamSize = 0;
 
-  pb::AudioFormat out;
-  fillFormat(info, out);
+  StreamState state(AudioGraphNodeState::STREAMING, 0, info);
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, "tok-7", 1234, out);
 
+  EXPECT_TRUE(out.has_format());
   EXPECT_FALSE(out.has_duration_ms());
 }
 
@@ -128,7 +138,7 @@ TEST(StateTranslator, AStateCarriesTheFormatItWasReportedWith) {
 
   ASSERT_TRUE(out.has_format());
   EXPECT_EQ(out.format().sample_rate_hz(), 44100u);
-  EXPECT_EQ(out.format().duration_ms(), info.durationMs());
+  EXPECT_EQ(out.duration_ms(), info.durationMs());
 }
 
 TEST(StateTranslator, AStateWithNoFormatSaysSoRatherThanSendingAnEmptyOne) {
@@ -139,6 +149,44 @@ TEST(StateTranslator, AStateWithNoFormatSaysSoRatherThanSendingAnEmptyOne) {
   fillPlaybackStateChanged(state, std::nullopt, 1234, out);
 
   EXPECT_FALSE(out.has_format());
+}
+
+TEST(StateTranslator, TheDeviceFormatRidesAlongsideTheDecodedOne) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 24, AudioSampleFormat::PCM24_LE};
+  info.streamType = StreamType::FRAMES;
+  info.streamSize = 9876543;
+
+  StreamState state(AudioGraphNodeState::STREAMING, 0, info);
+  // What a device that cannot take 24-bit substitutes.
+  state.deviceFormat =
+      StreamAudioFormat{44100, 2, 24, AudioSampleFormat::PCM32_LE};
+
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, "tok-7", 1234, out);
+
+  ASSERT_TRUE(out.has_format());
+  ASSERT_TRUE(out.has_device_format());
+  EXPECT_EQ(out.format().sample_format(),
+            sampleFormatToString(AudioSampleFormat::PCM24_LE));
+  EXPECT_EQ(out.device_format().sample_format(),
+            sampleFormatToString(AudioSampleFormat::PCM32_LE));
+}
+
+TEST(StateTranslator, ADeviceThatIsNotOpenReportsNoFormat) {
+  StreamInfo info;
+  info.format = StreamAudioFormat{44100, 2, 16, AudioSampleFormat::PCM16_LE};
+  info.streamType = StreamType::FRAMES;
+  info.streamSize = 9876543;
+
+  StreamState state(AudioGraphNodeState::STREAMING, 0, info);
+  ASSERT_FALSE(state.deviceFormat.has_value());
+
+  pb::PlaybackStateChanged out;
+  fillPlaybackStateChanged(state, "tok-7", 1234, out);
+
+  EXPECT_TRUE(out.has_format());
+  EXPECT_FALSE(out.has_device_format());
 }
 
 TEST(StateTranslator, VolumeCarriesEveryField) {

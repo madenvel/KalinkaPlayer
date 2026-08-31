@@ -77,6 +77,8 @@ private:
   std::atomic<float> softwareGain = 1.0f;
 
   StreamAudioFormat currentStreamAudioFormat;
+  // What the open device took, which is not always what was asked for.
+  std::optional<StreamAudioFormat> deviceFormat;
   PlayedFramesCounter playedFramesCounter;
   // Absolute in the source's timeline, which need not begin at zero, and
   // ahead of what has been heard by whatever ALSA still has queued.
@@ -128,9 +130,8 @@ private:
   void start();
   void stop();
 
-#if 0
-  void setState(const StreamState &newState);
-#endif
+  /// Stamps the open device's format onto every state this node reports.
+  void setState(const StreamState &newState) override;
 };
 ;
 

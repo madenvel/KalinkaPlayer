@@ -41,8 +41,9 @@ public:
   std::optional<StreamId> streamId();
 
 protected:
-  // To be used by the derived classes to set the state.
-  void setState(const StreamState &newState);
+  // To be used by the derived classes to set the state. Virtual so a node can
+  // stamp on what only it knows — the sink, the device it opened.
+  virtual void setState(const StreamState &newState);
 
   // Renderer delta: for the switcher and the sink only. A state that already
   // names a stream keeps it, so forwarding passes the original through.
