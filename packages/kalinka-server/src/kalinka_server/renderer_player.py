@@ -29,7 +29,10 @@ import time
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
+from kalinka_plugin_sdk.inputmodule import DirectUrl, TrackSource
+
 from .config_model import KalinkaConfig
+from .content_urls import content_url
 from .renderer_registry import RendererRegistry, RendererUnavailable
 from .renderer_sessions import (
     CloseReason,
@@ -112,10 +115,10 @@ class RendererPlayer:
         self._interrupted = callback
 
     def append(
-        self, stream_id: int, url: str, mime_type: str, start_offset_ms: int = 0
+        self, stream_id: int, source: TrackSource, start_offset_ms: int = 0
     ) -> None:
         """start_offset_ms starts the source partway in, without a seek."""
-        self._submit("append", stream_id, url, mime_type, start_offset_ms)
+        self._submit("append", stream_id, source, start_offset_ms)
 
     def remove(self, stream_id: int) -> None:
         self._submit("remove", stream_id)
@@ -188,11 +191,11 @@ class RendererPlayer:
 
     async def _dispatch(self, op: str, *args) -> None:
         if op == "append":
-            stream_id, url, mime_type, start_offset_ms = args
+            stream_id, source, start_offset_ms = args
             session = await self._ensure_session()
             await session.enqueue_source(
-                url,
-                mime_type=mime_type or "",
+                self._resolve_uri(source, session.renderer_id),
+                mime_type=source.format or "",
                 source_token=str(stream_id),
                 start_offset_ms=start_offset_ms,
             )
@@ -215,6 +218,25 @@ class RendererPlayer:
             await session.resume()
         elif op == "seek":
             await session.seek(args[0])
+
+    def _resolve_uri(self, source: TrackSource, renderer_id: str) -> str:
+        """The URI this renderer should fetch the source from.
+
+        A ModuleAsset is served by us, so it is addressed at the very address
+        this renderer dialed to register — the one address it is known to
+        reach. A DirectUrl is the module's own and goes out untouched.
+        """
+        if isinstance(source.source, DirectUrl):
+            return source.source.url
+
+        record = self._registry.get(renderer_id)
+        if record is None or record.server_addr is None:
+            raise RendererUnavailable(
+                f"renderer {renderer_id} has no server address to serve content on"
+            )
+        return content_url(
+            record.server_addr, source.source.module, source.source.asset_id
+        )
 
     # ------------------------------------------------------------------
     # Session lifecycle

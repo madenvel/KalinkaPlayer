@@ -14,7 +14,7 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
 )
-from kalinka_plugin_sdk.inputmodule import TrackInfo, Track, TrackUrl
+from kalinka_plugin_sdk.inputmodule import DirectUrl, TrackInfo, Track, TrackSource
 from kalinka_plugin_sdk import (
     PlayQueueEventType,
     PlaybackStateChangedEvent,
@@ -78,22 +78,22 @@ def create_track(id: str):
 
 
 async def url1():
-    return TrackUrl(
-        url="https://getsamplefiles.com/download/flac/sample-3.flac",
+    return TrackSource(
+        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-3.flac"),
         format="FLAC",
     )
 
 
 async def url2():
-    return TrackUrl(
-        url="https://getsamplefiles.com/download/flac/sample-4.flac",
+    return TrackSource(
+        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-4.flac"),
         format="FLAC",
     )
 
 
 async def url3():
-    return TrackUrl(
-        url="https://getsamplefiles.com/download/flac/sample-2.flac",
+    return TrackSource(
+        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-2.flac"),
         format="FLAC",
     )
 
@@ -279,7 +279,7 @@ def assert_has_calls(event_emitter, expected_calls):
 @pytest.mark.asyncio
 async def test_add_remove_track(event_emitter, playqueue):
     track = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     await playqueue.add([track])
     await playqueue.remove([0])
@@ -317,7 +317,7 @@ async def test_add_remove_track(event_emitter, playqueue):
 @pytest.mark.asyncio
 async def test_play(event_emitter, playqueue):
     track = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     await playqueue.add([track])
     await playqueue.play()
@@ -377,10 +377,10 @@ async def test_play(event_emitter, playqueue):
 @pytest.mark.asyncio
 async def test_switch_track(event_emitter, playqueue):
     track1 = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     track2 = TrackInfo(
-        id=to_track_id("2"), metadata=create_track("2"), link_retriever=url2
+        id=to_track_id("2"), metadata=create_track("2"), source_retriever=url2
     )
     await playqueue.add([track1, track2])
     await playqueue.play(0)
@@ -471,13 +471,13 @@ async def test_switch_track(event_emitter, playqueue):
 @pytest.mark.asyncio
 async def test_play_next(event_emitter, playqueue):
     track1 = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     track2 = TrackInfo(
-        id=to_track_id("2"), metadata=create_track("2"), link_retriever=url2
+        id=to_track_id("2"), metadata=create_track("2"), source_retriever=url2
     )
     track3 = TrackInfo(
-        id=to_track_id("3"), metadata=create_track("3"), link_retriever=url3
+        id=to_track_id("3"), metadata=create_track("3"), source_retriever=url3
     )
     await playqueue.add([track1, track2, track3])
     await playqueue.play(0)
@@ -573,7 +573,7 @@ async def test_play_next(event_emitter, playqueue):
 @pytest.mark.asyncio
 async def test_play_pause_stop_play(event_emitter, playqueue):
     track = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     await asyncio.sleep(0.2)
     await playqueue.add([track])
@@ -692,7 +692,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
 @pytest.mark.asyncio
 async def test_seek(event_emitter, playqueue):
     track = TrackInfo(
-        id=to_track_id("1"), metadata=create_track("1"), link_retriever=url1
+        id=to_track_id("1"), metadata=create_track("1"), source_retriever=url1
     )
     await asyncio.sleep(0.2)
     await playqueue.add([track])
@@ -788,7 +788,7 @@ def make_tracks(n: int) -> list[TrackInfo]:
         TrackInfo(
             id=to_track_id(str(i)),
             metadata=create_track(str(i)),
-            link_retriever=url1,
+            source_retriever=url1,
         )
         for i in range(1, n + 1)
     ]
@@ -947,7 +947,7 @@ def _source_changed(stream_id=None):
 
 def _prepare(playqueue, index, stream_id):
     playqueue.prepared_tracks[index] = (
-        TrackUrl(url=f"http://example.com/t{index}.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url=f"http://example.com/t{index}.flac"), format="FLAC"),
         stream_id,
     )
 
@@ -1102,11 +1102,11 @@ async def test_move_invalidates_prefetched_next_track(event_emitter, playqueue):
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
     playqueue.prepared_tracks[1] = (
-        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t1.flac"), format="FLAC"),
         0,
     )
     playqueue.prepared_tracks[2] = (
-        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t2.flac"), format="FLAC"),
         1,
     )
     event_emitter.reset_mock()
@@ -1135,11 +1135,11 @@ async def test_move_keeps_valid_prefetched_next_track(event_emitter, playqueue):
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
     playqueue.prepared_tracks[1] = (
-        TrackUrl(url="http://example.com/t1.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t1.flac"), format="FLAC"),
         0,
     )
     playqueue.prepared_tracks[2] = (
-        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t2.flac"), format="FLAC"),
         1,
     )
     event_emitter.reset_mock()
@@ -1222,7 +1222,7 @@ async def test_add_insert_at_next_slot_invalidates_prefetch(event_emitter, playq
     playqueue.current_track_id = 1
     # Simulate a prefetched next track at index 2
     playqueue.prepared_tracks[2] = (
-        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t2.flac"), format="FLAC"),
         42,
     )
     event_emitter.reset_mock()
@@ -1332,7 +1332,7 @@ async def test_add_insert_preserves_valid_prefetch(event_emitter, playqueue):
     await asyncio.sleep(0)
     playqueue.current_track_id = 1
     playqueue.prepared_tracks[2] = (
-        TrackUrl(url="http://example.com/t2.flac", format="FLAC"),
+        TrackSource(source=DirectUrl(url="http://example.com/t2.flac"), format="FLAC"),
         7,
     )
     event_emitter.reset_mock()
@@ -1360,7 +1360,7 @@ def make_tracks_with_failures(n: int, failing: set[int]) -> list[TrackInfo]:
         TrackInfo(
             id=to_track_id(str(i + 1)),
             metadata=create_track(str(i + 1)),
-            link_retriever=failing_url if i in failing else url1,
+            source_retriever=failing_url if i in failing else url1,
         )
         for i in range(n)
     ]
@@ -1538,14 +1538,14 @@ async def test_play_next_out_of_range_index_is_noop(event_emitter, playqueue):
 # ── Off-lane URL resolution semantics ───────────────────────────────────────────
 #
 # These verify the *wiring* between PlayQueueImpl and its ResolutionSlot. They use
-# a never-resolving link_retriever so resolution stays in flight and nothing ever
+# a never-resolving source_retriever so resolution stays in flight and nothing ever
 # commits to the player. The slot mechanics themselves are unit-tested in
 # test_resolution_slot.py; end-to-end playback (commit → renderer enqueue) is
 # covered by the streaming tests above.
 
 
 async def _never_resolves():
-    """A link_retriever that blocks until its resolution task is cancelled."""
+    """A source_retriever that blocks until its resolution task is cancelled."""
     await asyncio.Event().wait()
 
 
@@ -1557,7 +1557,7 @@ async def test_play_does_not_block_on_url_resolution(playqueue):
         TrackInfo(
             id=to_track_id("1"),
             metadata=create_track("1"),
-            link_retriever=_never_resolves,
+            source_retriever=_never_resolves,
         )
     ]
 
@@ -1594,12 +1594,12 @@ async def test_superseded_play_suppresses_unavailable_event(event_emitter, playq
         TrackInfo(
             id=to_track_id("1"),
             metadata=create_track("1"),
-            link_retriever=_never_resolves,
+            source_retriever=_never_resolves,
         ),
         TrackInfo(
             id=to_track_id("2"),
             metadata=create_track("2"),
-            link_retriever=_never_resolves,
+            source_retriever=_never_resolves,
         ),
     ]
     event_emitter.reset_mock()
@@ -1624,7 +1624,7 @@ async def test_structural_mutation_on_target_cancels_resolution(event_emitter, p
     tracks[2] = TrackInfo(
         id=to_track_id("slow"),
         metadata=create_track("slow"),
-        link_retriever=_never_resolves,
+        source_retriever=_never_resolves,
     )
     playqueue.track_list = tracks
     event_emitter.reset_mock()
@@ -1649,7 +1649,7 @@ async def test_structural_mutation_after_target_keeps_resolution(playqueue):
     tracks[0] = TrackInfo(
         id=to_track_id("slow"),
         metadata=create_track("slow"),
-        link_retriever=_never_resolves,
+        source_retriever=_never_resolves,
     )
     playqueue.track_list = tracks
 
@@ -1673,7 +1673,7 @@ async def test_accept_scan_rejects_shifted_index(playqueue):
     async def _record_gen(gen):
         captured["gen"] = gen
 
-    url = TrackUrl(url="http://x/1.flac", format="FLAC")
+    url = TrackSource(source=DirectUrl(url="http://x/1.flac"), format="FLAC")
     tracks = make_tracks(3)
     playqueue.track_list = list(tracks)
     resolved_ref = tracks[1]  # the track whose link produced `url`

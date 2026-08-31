@@ -38,7 +38,7 @@ from kalinka_plugin_sdk.events import (
     TrackMovedEvent,
     TrackUnavailableEvent,
 )
-from kalinka_plugin_sdk.inputmodule import TrackInfo
+from kalinka_plugin_sdk.inputmodule import TrackInfo, TrackSource
 
 from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 
@@ -59,10 +59,10 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 PREFETCH_TIME_MS = 5000
 
-# Upper bound for a single link_retriever() call. Plugins set their own (smaller)
+# Upper bound for a single source_retriever() call. Plugins set their own (smaller)
 # HTTP timeouts; this is a backstop so a misbehaving plugin can never pin the
 # resolution slot indefinitely. Generous enough to allow one in-plugin retry.
-LINK_RETRIEVAL_TIMEOUT_S = 8
+SOURCE_RETRIEVAL_TIMEOUT_S = 8
 
 
 def _remap_index(idx: int, from_index: int, to_index: int) -> int:
@@ -172,12 +172,12 @@ class PlayQueueImpl(PlayQueueController):
         self._retry_attempted: bool = False
         # Set to True when SOURCE_CHANGED is expected from a retry, to avoid resetting _retry_attempted
         self._retry_pending: bool = False
-        # Indices of tracks whose URL could not be retrieved. Mirrors the
+        # Indices of tracks whose source could not be retrieved. Mirrors the
         # `unavailable` flag clients see; used to emit TrackUnavailableEvent only
         # on real state changes. Kept in sync with track_list across mutations.
         self._unavailable_indices: set[int] = set()
 
-        # Single in-flight URL resolution; see "Off-lane URL resolution" below.
+        # Single in-flight source resolution; see "Off-lane source resolution" below.
         self._resolution = ResolutionSlot()
 
         self._state_update_task = None
@@ -244,7 +244,7 @@ class PlayQueueImpl(PlayQueueController):
                 self._retry_attempted = True
                 failed_position_ms = new_state.position
                 logger.info(
-                    "HTTP stream error at %d ms, retrying with fresh URL",
+                    "HTTP stream error at %d ms, retrying with fresh source",
                     failed_position_ms,
                 )
                 await self._retry_current_track_async(failed_position_ms)
@@ -352,14 +352,14 @@ class PlayQueueImpl(PlayQueueController):
         )
 
     # ------------------------------------------------------------------
-    # Off-lane URL resolution
+    # Off-lane source resolution
     #
-    # link_retriever() is the only slow (network) operation in the playqueue.
+    # source_retriever() is the only slow (network) operation in the playqueue.
     # Running it inside the serial executor would freeze every other command and
     # the state-update interrupt lane while a streaming plugin times out. So each
     # command splits in two: a serialised entry point that kicks off the (slow)
     # ``resolve`` off the lane, and a serialised ``next_step`` that applies the
-    # result back on the lane once the URL is in hand. Only one resolution runs
+    # result back on the lane once the source is in hand. Only one resolution runs
     # at a time; a new one cancels the previous, which then returns silently
     # (no TrackUnavailableEvent).
     # ------------------------------------------------------------------
@@ -373,7 +373,7 @@ class PlayQueueImpl(PlayQueueController):
     ) -> None:
         """Cancel any in-flight resolution and start a new one. Returns at once.
 
-        ``resolve`` runs the URL fetch off the serial lane; ``next_step`` is a
+        ``resolve`` runs the source fetch off the serial lane; ``next_step`` is a
         serialised method invoked with ``(gen, result)`` to apply it. Must be
         called from the serial (or interrupt) lane so the cancel + swap of the
         single resolution slot is atomic with respect to other commands.
@@ -397,21 +397,21 @@ class PlayQueueImpl(PlayQueueController):
         except Exception:
             # CancelledError (a superseding command or affecting mutation) is a
             # BaseException and propagates silently; only real errors are logged.
-            logger.exception("URL resolution task failed")
+            logger.exception("Source resolution task failed")
 
     def _accept_scan(self, gen: int, result):
         """Fence a scan result, flag the failed indices, return the playable
-        ``(index, track_info)`` to apply — or None if superseded / nothing
+        ``(index, track_source)`` to apply — or None if superseded / nothing
         playable. Runs on the lane (called from a serialised next_step)."""
         if not self._resolution.is_current(gen):
             return None
         self._resolution.finish(gen)
-        index, track_info, track_ref, failed = result
+        index, track_source, track_ref, failed = result
         # Flag failures only now, on the lane, so the marks (and their dedup
         # state) stay consistent with mutations that remap _unavailable_indices.
         for i in failed:
             self._set_track_unavailable(i, True)
-        if track_info is None or index is None:
+        if track_source is None or index is None:
             return None
         # A multi-step scan can resolve an index *past* the start target, and a
         # structural edit in the (target, index] band isn't covered by
@@ -421,7 +421,7 @@ class PlayQueueImpl(PlayQueueController):
         if index >= len(self.track_list) or self.track_list[index] is not track_ref:
             return None
         self._set_track_unavailable(index, False)
-        return index, track_info
+        return index, track_source
 
     @serialised
     async def _play_resolved(self, gen, result) -> None:
@@ -462,9 +462,9 @@ class PlayQueueImpl(PlayQueueController):
                 break
         if entry is None:
             return
-        track_info, self.current_stream_id = entry
+        track_source, self.current_stream_id = entry
         self.current_track_id = index
-        self.current_format = track_info.format
+        self.current_format = track_source.format
         self._request_more_tracks()
 
     def _prepared_index_of(self, stream_id: Optional[int]) -> Optional[int]:
@@ -481,7 +481,7 @@ class PlayQueueImpl(PlayQueueController):
             self._track_player.remove(stream_id)
         self.prepared_tracks.clear()
 
-    def _apply_play(self, index: int, track_info) -> None:
+    def _apply_play(self, index: int, track_source: TrackSource) -> None:
         """Replace current playback with the already-resolved track."""
         self._retry_attempted = False
         self._cancel_prefetch_timer()
@@ -491,25 +491,25 @@ class PlayQueueImpl(PlayQueueController):
         # Append new stream — auto-starts. prepared_tracks is non-empty so the
         # FINISHED handler (triggered by the removals above) will not auto-play.
         stream_id = self._new_stream_id()
-        self._track_player.append(stream_id, track_info.url, track_info.format)
-        self.prepared_tracks[index] = (track_info, stream_id)
+        self._track_player.append(stream_id, track_source)
+        self.prepared_tracks[index] = (track_source, stream_id)
 
         if self.current_stream_id is not None:
             self._track_player.remove(self.current_stream_id)
             self.current_stream_id = None
 
-    def _apply_prefetch(self, index: int, track_info) -> None:
+    def _apply_prefetch(self, index: int, track_source: TrackSource) -> None:
         """Append the already-resolved track as the upcoming stream."""
         # Resolution may have landed on a now-queued index, or the player may
         # have stopped while we were fetching — fall back to a full replace.
         if index in self.prepared_tracks:
             return
         if self._track_player.get_state().state == AudioGraphNodeState.STOPPED:
-            self._apply_play(index, track_info)
+            self._apply_play(index, track_source)
             return
         stream_id = self._new_stream_id()
-        self._track_player.append(stream_id, track_info.url, track_info.format)
-        self.prepared_tracks[index] = (track_info, stream_id)
+        self._track_player.append(stream_id, track_source)
+        self.prepared_tracks[index] = (track_source, stream_id)
 
     @serialised
     async def pause(self, paused: bool):
@@ -857,13 +857,13 @@ class PlayQueueImpl(PlayQueueController):
                 # The saved snapshot is authoritative for metadata: a module
                 # may be unable to re-fetch it on restore (e.g. source-side
                 # indexing lag, where the module can still produce a playback
-                # URL but not the title/artist/album). Use the module's
-                # TrackInfo only for playback (link_retriever) and keep the
+                # source but not the title/artist/album). Use the module's
+                # TrackInfo only for playback (source_retriever) and keep the
                 # metadata the queue had when it was saved.
                 track_infos.append(
                     TrackInfo(
                         id=track.id,
-                        link_retriever=track_info.link_retriever,
+                        source_retriever=track_info.source_retriever,
                         metadata=track,
                     )
                 )
@@ -990,17 +990,17 @@ class PlayQueueImpl(PlayQueueController):
     def _estimated_progress(self, stream_state: StreamState) -> int:
         return stream_state.position_at(time.monotonic_ns())
 
-    async def _fetch_track_url(self, index):
-        """Fetch the stream URL for a track, returning None if retrieval fails.
+    async def _fetch_track_source(self, index):
+        """Fetch the stream source for a track, returning None if retrieval fails.
 
-        Bounded by LINK_RETRIEVAL_TIMEOUT_S so a plugin that ignores its own
+        Bounded by SOURCE_RETRIEVAL_TIMEOUT_S so a plugin that ignores its own
         HTTP timeout can never pin the resolution slot indefinitely. Runs
         off-lane, so a slow fetch never blocks the serial executor.
         """
         try:
             track = self.track_list[index]
             return await asyncio.wait_for(
-                track.link_retriever(), timeout=LINK_RETRIEVAL_TIMEOUT_S
+                track.source_retriever(), timeout=SOURCE_RETRIEVAL_TIMEOUT_S
             )
         except Exception as e:
             logger.warning(
@@ -1016,8 +1016,8 @@ class PlayQueueImpl(PlayQueueController):
         (so they can be flagged) and which one succeeded. ``step`` must be +1
         (forward) or -1 (backward); any other value is normalised so the scan
         visits each track at most once. Returns
-        ``(index, track_url, track_ref, failed)`` for the first track that yields
-        a URL — ``track_ref`` is the TrackInfo whose link produced the URL, so
+        ``(index, track_source, track_ref, failed)`` for the first track that yields
+        a source — ``track_ref`` is the TrackInfo whose retriever produced it, so
         the commit can detect a concurrent reindex — or
         ``(None, None, None, failed)`` if none do in that direction.
         Already-prepared tracks are returned from cache.
@@ -1037,16 +1037,16 @@ class PlayQueueImpl(PlayQueueController):
                 else:
                     return None, None, None, failed
             if index in self.prepared_tracks:
-                # Already prepared — its URL is known good.
+                # Already prepared — its source is known good.
                 return index, self.prepared_tracks[index][0], self.track_list[index], failed
-            # Capture the track ref before awaiting: _fetch_track_url reads the
+            # Capture the track ref before awaiting: _fetch_track_source reads the
             # same self.track_list[index] before its own await, so this is the
-            # exact track the resolved URL belongs to even if the list shifts
+            # exact track the resolved source belongs to even if the list shifts
             # during the await.
             track_ref = self.track_list[index]
-            track_info = await self._fetch_track_url(index)
-            if track_info is not None:
-                return index, track_info, track_ref, failed
+            track_source = await self._fetch_track_source(index)
+            if track_source is not None:
+                return index, track_source, track_ref, failed
             failed.append(index)
             index += step
         return None, None, None, failed
@@ -1066,7 +1066,7 @@ class PlayQueueImpl(PlayQueueController):
         )
 
     async def _retry_current_track_async(self, position_ms: int) -> None:
-        """Re-fetch the current track's URL off-lane and resume from position_ms.
+        """Re-fetch the current track's source off-lane and resume from position_ms.
 
         Whenever the same track has to be played again on a fresh claim: an
         HTTP stream error, a renderer that came back, a switch to another one.
@@ -1078,25 +1078,27 @@ class PlayQueueImpl(PlayQueueController):
         index = self.current_track_id
         self._begin_resolution(
             index,
-            resolve=lambda: self._fetch_track_url(index),
-            next_step=lambda gen, track_info: self._retry_resolved(
-                gen, index, track_info, position_ms
+            resolve=lambda: self._fetch_track_source(index),
+            next_step=lambda gen, track_source: self._retry_resolved(
+                gen, index, track_source, position_ms
             ),
         )
 
     @serialised
-    async def _retry_resolved(self, gen, index, track_info, position_ms) -> None:
+    async def _retry_resolved(self, gen, index, track_source, position_ms) -> None:
         if not self._resolution.is_current(gen):
             return
         self._resolution.finish(gen)
-        if track_info is None:
+        if track_source is None:
             self.event_emitter.dispatch(
-                PlaybackErrorEvent(message="Failed to retrieve track link on retry")
+                PlaybackErrorEvent(message="Failed to retrieve track source on retry")
             )
             return
-        self._apply_retry(index, track_info, position_ms)
+        self._apply_retry(index, track_source, position_ms)
 
-    def _apply_retry(self, index: int, track_info, position_ms: int) -> None:
+    def _apply_retry(
+        self, index: int, track_source: TrackSource, position_ms: int
+    ) -> None:
         """Re-append the already-resolved current track, starting at position_ms.
 
         The offset rides the append rather than a seek behind it: a seek can
@@ -1114,10 +1116,8 @@ class PlayQueueImpl(PlayQueueController):
 
         self._retry_pending = True
         stream_id = self._new_stream_id()
-        self._track_player.append(
-            stream_id, track_info.url, track_info.format, position_ms
-        )
-        self.prepared_tracks[index] = (track_info, stream_id)
+        self._track_player.append(stream_id, track_source, position_ms)
+        self.prepared_tracks[index] = (track_source, stream_id)
 
     def _request_more_tracks(self):
         if not self.repeat_all and self.current_track_id == len(self.track_list) - 1:

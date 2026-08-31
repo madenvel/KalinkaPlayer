@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
+from .netutils import server_base_url
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import (
     CloseReason,
@@ -70,10 +71,7 @@ def tone_filename(channel: str) -> str:
 def tone_url(server_addr: tuple[str, int], channel: str) -> str:
     """Where a renderer fetches the tone; `server_addr` is the server address
     that renderer dialed to register (RendererRecord.server_addr)."""
-    host, port = server_addr
-    if ":" in host:
-        host = f"[{host}]"
-    return f"http://{host}:{port}{TONE_ROUTE}/{tone_filename(channel)}"
+    return f"{server_base_url(server_addr)}{TONE_ROUTE}/{tone_filename(channel)}"
 
 
 def tone_uri(channel: str) -> str:

@@ -7,7 +7,7 @@ import pytest
 
 from kalinka_plugin_sdk import EventEmitter, PlaybackStateChangedEvent
 from kalinka_plugin_sdk.datamodel import Album, EntityId, EntityType, PlayerStateEnum
-from kalinka_plugin_sdk.inputmodule import Track, TrackInfo, TrackUrl
+from kalinka_plugin_sdk.inputmodule import DirectUrl, Track, TrackInfo, TrackSource
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
 from kalinka_server.renderer_proto import renderer_pb2 as pb
@@ -31,8 +31,8 @@ from tests.sim_renderer import SimRenderer
 def _track(track_id: str = "1") -> TrackInfo:
     entity = EntityId(id=track_id, type=EntityType.TRACK, source="test_source")
 
-    async def link_retriever() -> TrackUrl:
-        return TrackUrl(url=f"http://example/{track_id}.flac", format="FLAC")
+    async def source_retriever() -> TrackSource:
+        return TrackSource(source=DirectUrl(url=f"http://example/{track_id}.flac"), format="FLAC")
 
     return TrackInfo(
         id=entity,
@@ -42,7 +42,7 @@ def _track(track_id: str = "1") -> TrackInfo:
             duration=10,
             album=Album(id=entity, title="album"),
         ),
-        link_retriever=link_retriever,
+        source_retriever=source_retriever,
     )
 
 
