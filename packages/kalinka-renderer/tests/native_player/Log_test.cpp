@@ -38,7 +38,25 @@ TEST(LogPattern, FullPatternCarriesTimestampLevelThreadAndName) {
   EXPECT_TRUE(std::regex_match(
       logOne(false, spdlog::level::warn),
       std::regex(R"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} )"
-                 R"(WARN \d+ renderer: hello\n)")));
+                 R"(WARNING \d+ renderer: hello\n)")));
+}
+
+TEST(LogPattern, JournalPrefixesEveryLineOfTheMessage) {
+  std::ostringstream out;
+  auto sink = std::make_shared<spdlog::sinks::ostream_sink_st>(out);
+  spdlog::logger logger("renderer", sink);
+  applyLogPattern(logger, true);
+  logger.error("first\nsecond");
+  EXPECT_EQ(out.str(), "<3>first\n<3>second\n");
+}
+
+TEST(LogPattern, JournalLeavesNoPrefixOnATrailingBlankLine) {
+  std::ostringstream out;
+  auto sink = std::make_shared<spdlog::sinks::ostream_sink_st>(out);
+  spdlog::logger logger("renderer", sink);
+  applyLogPattern(logger, true);
+  logger.error("body\n");
+  EXPECT_EQ(out.str(), "<3>body\n");
 }
 
 namespace {
@@ -79,6 +97,13 @@ TEST_F(JournalStreamEnv, MatchingDeviceAndInodeIsJournal) {
 
 TEST_F(JournalStreamEnv, MalformedValueIsNotJournal) {
   setenv("JOURNAL_STREAM", "not-a-stream", 1);
+  EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
+}
+
+TEST_F(JournalStreamEnv, TrailingGarbageIsNotJournal) {
+  // Matches what Python's int() would reject, so both sides agree on a value
+  // that only starts out looking like ours.
+  setenv("JOURNAL_STREAM", (identityOf(STDOUT_FILENO) + ":7").c_str(), 1);
   EXPECT_FALSE(streamIsJournal(STDOUT_FILENO));
 }
 

@@ -50,8 +50,10 @@ class JournalFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         prefix = f"<{_syslog_priority(record.levelno)}>"
-        # journald reads line by line, so a traceback's lines each need one.
-        return prefix + super().format(record).replace("\n", "\n" + prefix)
+        # journald reads line by line, so a traceback's lines each need one; a
+        # trailing newline would leave a prefix alone on an empty line.
+        body = super().format(record).rstrip("\n")
+        return prefix + body.replace("\n", "\n" + prefix)
 
 
 def make_formatter(stream: Optional[IO] = None) -> logging.Formatter:
@@ -69,3 +71,14 @@ def make_formatter(stream: Optional[IO] = None) -> logging.Formatter:
     if mode == "journal":
         return JournalFormatter()
     return logging.Formatter(LOG_FORMAT, DATE_FORMAT)
+
+
+def make_handler(stream: Optional[IO] = None) -> logging.StreamHandler:
+    """A stream handler carrying the formatter its own stream calls for.
+
+    Pairing the two here is what keeps the choice honest: a formatter picked
+    for one stream and attached to another silently logs in the wrong format.
+    """
+    handler = logging.StreamHandler(stream) if stream else logging.StreamHandler()
+    handler.setFormatter(make_formatter(handler.stream))
+    return handler
