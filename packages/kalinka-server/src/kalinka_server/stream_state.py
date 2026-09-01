@@ -70,6 +70,26 @@ class StreamInfo:
     # None, never 0, when the renderer cannot tell: 0 reads as "already ended".
     duration_ms: Optional[int] = None
 
+    @property
+    def lossless_path(self) -> bool:
+        """Whether the decoded samples reach the device unaltered.
+
+        Exclusivity carries this: a shared device reports the format its plugin
+        was opened at, which says nothing about what the card ends up running,
+        so no comparison can rescue it. Comparing the formats then catches a
+        renderer whose device took something other than what was decoded.
+
+        The volume is deliberately not part of it — it is reported with the
+        device that applies it, where it is current.
+        """
+        if self.device is None or self.device.access is not DeviceAccess.EXCLUSIVE:
+            return False
+        return (
+            self.device.format.sample_rate == self.format.sample_rate
+            and self.device.format.bits_per_sample == self.format.bits_per_sample
+            and self.device.format.channels == self.format.channels
+        )
+
 
 @dataclass
 class StreamError:

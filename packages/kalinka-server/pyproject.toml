@@ -49,7 +49,7 @@ dependencies = [
     "protobuf>=7.35,<8",
     # >=1.4.0: the server publishes the renderer topology with the queue events
     # and RendererDescriptor added there.
-    "kalinka-plugin-sdk>=1.4.0,<2",
+    "kalinka-plugin-sdk>=1.5.0,<2",
 ]
 dynamic = ["version"]
 

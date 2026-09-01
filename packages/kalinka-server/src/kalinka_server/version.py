@@ -39,7 +39,9 @@ def get_version() -> str:
 # and the built-in local-alsa device is gone.
 # 0.3: /queue/ws reports the renderer topology — renderers_changed and
 # current_renderer_changed events, and the matching replay state fields.
-REST_API_VERSION = "0.3"
+# 0.4: playback state carries the output device (audio_info.output) and the
+# device volume names the backend it is applied by.
+REST_API_VERSION = "0.4"
 
 
 def get_rest_api_version() -> str:

@@ -113,3 +113,58 @@ def test_nothing_else_advances():
 
 def test_a_timestamp_from_the_future_never_rewinds_playback():
     assert _at(AudioGraphNodeState.STREAMING, 4200, age_ms=-500) == 4200
+
+
+def _path(decoded: dict, device: dict | None):
+    """The lossless verdict for a stream decoded one way and played another."""
+    snapshot = renderer_state.empty_state() | {
+        "playback_state": "playing",
+        "format": decoded,
+    }
+    if device is not None:
+        snapshot["device_info"] = device
+    state = from_snapshot(snapshot)
+    assert state is not None and state.stream_info is not None
+    return state.stream_info.lossless_path
+
+
+_CD = {"sample_rate_hz": 44100, "channels": 2, "bits_per_sample": 16}
+
+
+def test_an_exclusive_device_running_the_decoded_format_is_lossless():
+    assert _path(_CD, {"format": _CD, "access": "exclusive"})
+
+
+def test_a_shared_device_is_never_lossless_however_well_it_matches():
+    """It reports the format its plugin was opened at, which says nothing
+    about what the card ends up running."""
+    assert not _path(_CD, {"format": _CD, "access": "shared"})
+
+
+def test_a_device_that_cannot_say_how_it_is_held_is_not_taken_on_trust():
+    assert not _path(_CD, {"format": _CD, "access": "unknown"})
+
+
+def test_no_device_is_no_claim():
+    assert not _path(_CD, None)
+
+
+def test_a_resampling_device_is_not_lossless():
+    resampled = _CD | {"sample_rate_hz": 48000}
+    assert not _path(_CD, {"format": resampled, "access": "exclusive"})
+
+
+def test_a_device_carrying_fewer_bits_is_not_lossless():
+    truncated = _CD | {"bits_per_sample": 8}
+    assert not _path(_CD, {"format": truncated, "access": "exclusive"})
+
+
+def test_a_device_opened_for_other_channels_is_not_lossless():
+    """Every ALSA device is opened for stereo; a mono stream is not that."""
+    assert not _path(_CD | {"channels": 1}, {"format": _CD, "access": "exclusive"})
+
+
+def test_a_device_described_without_a_decoded_format_claims_nothing():
+    """A renderer that names its output but not what it decoded — the browser —
+    has not shown that the two agree."""
+    assert not _path({}, {"format": _CD, "access": "exclusive"})

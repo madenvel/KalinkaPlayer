@@ -604,6 +604,20 @@ class GenreList(BaseModel):
     items: List[Genre]
 
 
+class VolumeBackend(str, Enum):
+    """
+    Where a device applies its volume, and so whether it touches the samples.
+
+    Only SOFTWARE does, and only below unity; a device that cannot say reports
+    UNKNOWN rather than claiming either.
+    """
+
+    UNKNOWN = "unknown"
+    NONE = "none"
+    HARDWARE = "hardware"
+    SOFTWARE = "software"
+
+
 class DeviceVolume(BaseModel):
     """
     Volume control information for audio devices.
@@ -619,6 +633,42 @@ class DeviceVolume(BaseModel):
     current_volume: int = 0
     volume_gain: int = 0
     supported: bool = True
+    backend: VolumeBackend = VolumeBackend.UNKNOWN
+
+
+class DeviceAccess(str, Enum):
+    """
+    How a renderer holds its output device.
+
+    SHARED is not proof that anything alters the samples, only that nothing
+    rules it out — the most a renderer can say about a path it shares.
+    """
+
+    UNKNOWN = "unknown"
+    EXCLUSIVE = "exclusive"
+    SHARED = "shared"
+
+
+class OutputInfo(BaseModel):
+    """
+    What the output device runs at, against the stream that was decoded for it.
+
+    Attributes:
+        sample_rate (int): Device sample rate in Hz
+        bits_per_sample (int): Significant bits the device carries, not the
+            width of the container they are shifted into
+        channels (int): Device channel count
+        access (DeviceAccess): How the device is held
+        lossless_path (bool): Whether the decoded samples reach the device
+            unaltered. Says nothing about the volume: that is reported with the
+            device it is applied by, because only there is it current.
+    """
+
+    sample_rate: int = 0
+    bits_per_sample: int = 0
+    channels: int = 0
+    access: DeviceAccess = DeviceAccess.UNKNOWN
+    lossless_path: bool = False
 
 
 class AudioInfo(BaseModel):
@@ -630,12 +680,15 @@ class AudioInfo(BaseModel):
         bits_per_sample (int): Bit depth (e.g., 16, 24)
         channels (int): Number of audio channels (1=mono, 2=stereo)
         duration_ms (int): Track duration in milliseconds
+        output (Optional[OutputInfo]): The device the stream is played out of,
+            absent when the renderer has none open or cannot describe it
     """
 
     sample_rate: int
     bits_per_sample: int
     channels: int
     duration_ms: int
+    output: Optional[OutputInfo] = None
 
 
 class PlaybackMode(BaseModel):
