@@ -636,6 +636,9 @@ void AlsaAudioEmitter::workerThread(std::stop_token token) {
     }
   } catch (const std::exception &ex) {
     spdlog::error("Error in AlsaAudioEmitter::workerThread: {}", ex.what());
+    // Nothing is emitted after this, so the device has to go first or the
+    // failure is the last state anyone sees and it names an open device.
+    closeDevice();
     setState({AudioGraphNodeState::ERROR,
               StreamError{StreamErrorSource::AUDIO_OUTPUT,
                           "Internal error: " + std::string(ex.what())}});
