@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 from kalinka_eventbus import EventBus
-from kalinka_plugin_sdk.datamodel import DeviceVolume
+from kalinka_plugin_sdk.datamodel import DeviceVolume, VolumeBackend
 from kalinka_plugin_sdk.ext_device import SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import (
     ExtDeviceEvent,
@@ -20,6 +20,8 @@ from kalinka_plugin_sdk.ext_device_events import (
 from kalinka_server.renderer_output_device import RendererVolumeDevice
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
+
+from kalinka_server.renderer_proto import renderer_pb2 as pb
 
 from tests.sim_renderer import SimRenderer
 
@@ -168,6 +170,29 @@ async def test_unsupported_volume_reported(renderer, bus):
         assert device.supported_functions() == []
         assert (await device.get_volume()).supported is False
         await session.close()
+    finally:
+        await device.shutdown()
+
+
+async def test_the_volume_names_the_backend_that_applies_it(renderer, bus):
+    """Only software attenuation touches the samples, so a client weighing
+    whether playback is bit-perfect has to know which backend is at work."""
+    renderer.volume_backend = pb.VOLUME_BACKEND_SOFTWARE
+    device = await make_device(renderer, bus).start()
+    try:
+        session = await renderer.pool.open(SimRenderer.RENDERER_ID)
+        await asyncio.sleep(SETTLE_S)
+        assert (await device.get_volume()).backend is VolumeBackend.SOFTWARE
+        await session.close()
+    finally:
+        await device.shutdown()
+
+
+async def test_a_renderer_yet_to_report_claims_no_backend(renderer, bus):
+    """The placeholder level is a guess; naming a backend would be one too."""
+    device = await make_device(renderer, bus).start()
+    try:
+        assert (await device.get_volume()).backend is VolumeBackend.UNKNOWN
     finally:
         await device.shutdown()
 

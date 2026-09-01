@@ -19,7 +19,7 @@ from typing import ClassVar, Optional
 
 from pydantic import Field
 
-from kalinka_plugin_sdk.datamodel import DeviceVolume
+from kalinka_plugin_sdk.datamodel import DeviceVolume, VolumeBackend
 from kalinka_plugin_sdk.ext_device import ExternalOutputDevice, SupportedFunction
 from kalinka_plugin_sdk.ext_device_events import (
     ExtDeviceEventType,
@@ -56,6 +56,13 @@ class RendererOutputConfig(ModuleConfig):
         frozen=True,
         exclude=True,
     )
+
+
+_BACKENDS = {
+    "none": VolumeBackend.NONE,
+    "hardware": VolumeBackend.HARDWARE,
+    "software": VolumeBackend.SOFTWARE,
+}
 
 
 class RendererVolumeDevice(ExternalOutputDevice):
@@ -198,6 +205,7 @@ class RendererVolumeDevice(ExternalOutputDevice):
             current_volume=volume["current"],
             volume_gain=0,
             supported=volume["supported"],
+            backend=_BACKENDS.get(volume.get("backend") or "", VolumeBackend.UNKNOWN),
         )
         self._dispatch()
 

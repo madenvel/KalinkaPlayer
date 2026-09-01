@@ -59,6 +59,7 @@ class SimRenderer:
         self.commands: list[pb.Command] = []
         self.volume = 40
         self.volume_supported = True
+        self.volume_backend = pb.VOLUME_BACKEND_HARDWARE
         self.config_updates: list[dict] = []
         self.volume_policies: list[bool] = []
         # Set accept=False to play a renderer another Core already holds.
@@ -303,9 +304,7 @@ class SimRenderer:
         out.current = self.volume
         out.max = 100
         out.backend = (
-            pb.VOLUME_BACKEND_HARDWARE
-            if self.volume_supported
-            else pb.VOLUME_BACKEND_NONE
+            self.volume_backend if self.volume_supported else pb.VOLUME_BACKEND_NONE
         )
 
     def _send(self, change: StateChange, message) -> None:

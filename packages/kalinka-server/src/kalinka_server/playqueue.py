@@ -17,7 +17,9 @@ from kalinka_serialized import (
 )
 
 from kalinka_plugin_sdk.datamodel import (
+    DeviceAccess,
     EntityId,
+    OutputInfo,
     PlayerStateEnum,
     Track,
     AudioInfo,
@@ -43,6 +45,7 @@ from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 from .renderer_player import RendererPlayer
 from .stream_state import (
     AudioGraphNodeState,
+    DeviceAccess as StreamDeviceAccess,
     StateMonitor,
     StreamErrorSource,
     StreamInfo,
@@ -78,6 +81,25 @@ def _remap_index(idx: int, from_index: int, to_index: int) -> int:
     return idx
 
 
+_ACCESS = {
+    StreamDeviceAccess.UNKNOWN: DeviceAccess.UNKNOWN,
+    StreamDeviceAccess.EXCLUSIVE: DeviceAccess.EXCLUSIVE,
+    StreamDeviceAccess.SHARED: DeviceAccess.SHARED,
+}
+
+
+def to_output_info(stream_info: StreamInfo) -> Optional[OutputInfo]:
+    if stream_info.device is None:
+        return None
+    return OutputInfo(
+        sample_rate=stream_info.device.format.sample_rate,
+        channels=stream_info.device.format.channels,
+        bits_per_sample=stream_info.device.format.bits_per_sample,
+        access=_ACCESS.get(stream_info.device.access, DeviceAccess.UNKNOWN),
+        lossless_path=stream_info.lossless_path,
+    )
+
+
 def to_audio_info(stream_info: StreamInfo):
     if stream_info is None:
         return None
@@ -87,6 +109,7 @@ def to_audio_info(stream_info: StreamInfo):
         bits_per_sample=stream_info.format.bits_per_sample,
         # The REST AudioInfo has no absent; clients have always read 0 there.
         duration_ms=stream_info.duration_ms or 0,
+        output=to_output_info(stream_info),
     )
 
 

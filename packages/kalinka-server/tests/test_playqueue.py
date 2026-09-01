@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, Mock, call
 
 from kalinka_plugin_sdk.datamodel import (
     AudioInfo,
+    DeviceAccess,
+    OutputInfo,
     PlaybackState,
     PlayerStateEnum,
     Album,
@@ -40,6 +42,21 @@ from tests.sim_renderer import (
     DURATION_MS,
     SAMPLE_RATE,
     SimRenderer,
+)
+
+# What the simulator plays: an exclusive device running the decoded format.
+AUDIO_INFO = AudioInfo(
+    sample_rate=SAMPLE_RATE,
+    bits_per_sample=BITS_PER_SAMPLE,
+    channels=CHANNELS,
+    duration_ms=DURATION_MS,
+    output=OutputInfo(
+        sample_rate=SAMPLE_RATE,
+        bits_per_sample=BITS_PER_SAMPLE,
+        channels=CHANNELS,
+        access=DeviceAccess.EXCLUSIVE,
+        lossless_path=True,
+    ),
 )
 
 
@@ -347,12 +364,7 @@ async def test_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -419,12 +431,7 @@ async def test_switch_track(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -451,12 +458,7 @@ async def test_switch_track(event_emitter, playqueue):
                     index=1,
                     position=0,
                     current_track=track2.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -531,12 +533,7 @@ async def test_play_next(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track1.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -563,12 +560,7 @@ async def test_play_next(event_emitter, playqueue):
                     index=2,
                     position=0,
                     current_track=track3.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -636,12 +628,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -654,12 +641,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -697,12 +679,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -766,12 +743,7 @@ async def test_seek(event_emitter, playqueue):
                     index=0,
                     position=3000,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -784,12 +756,7 @@ async def test_seek(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -802,12 +769,7 @@ async def test_seek(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
-                    audio_info=AudioInfo(
-                        sample_rate=SAMPLE_RATE,
-                        bits_per_sample=BITS_PER_SAMPLE,
-                        channels=CHANNELS,
-                        duration_ms=DURATION_MS,
-                    ),
+                    audio_info=AUDIO_INFO,
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )

@@ -34,6 +34,7 @@ from .datamodel import (
     EntityType,
     EntityId,
     DeviceVolume,
+    VolumeBackend,
 )
 from .inputmodule import (
     InputModule,
@@ -85,6 +86,7 @@ __all__ = [
     "EntityType",
     "EntityId",
     "DeviceVolume",
+    "VolumeBackend",
     "TrackUrl",
     "TrackInfo",
     "SearchType",
