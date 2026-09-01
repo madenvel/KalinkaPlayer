@@ -47,8 +47,8 @@ dependencies = [
     # Renderer protocol (renderer_ws_handler.py). The committed generated
     # bindings (renderer_proto/) pin the runtime floor; `make proto` regenerates.
     "protobuf>=7.35,<8",
-    # >=1.4.0: the server publishes the renderer topology with the queue events
-    # and RendererDescriptor added there.
+    # >=1.5.0: the playback state carries the output device (OutputInfo) and
+    # DeviceVolume names the VolumeBackend applying it, both added in SDK 1.5.
     "kalinka-plugin-sdk>=1.5.0,<2",
 ]
 dynamic = ["version"]
