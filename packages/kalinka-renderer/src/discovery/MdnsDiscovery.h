@@ -28,10 +28,11 @@
  * from permanent removal, so a route change does not say the renderer shut
  * down and discard an active session.
  *
- * Servers whose "renderer_proto" TXT value falls outside the range this binary
- * speaks are never reported; a TXT change — a server upgrade re-announcing,
- * say — flips them in or out, so servers that would only reject us are never
- * bombarded with connections.
+ * Servers that advertise no "renderer_proto" TXT value at all are never
+ * reported; a TXT change — a server upgrade re-announcing, say — flips them in
+ * or out. The value itself is not filtered on: a Core speaking a version this
+ * binary does not is still dialed, because that connection is the only way it
+ * can tell us to upgrade.
  *
  * A server is reported gone when it says goodbye, and also when it simply stops
  * answering: every answer restarts its lifetime in the DiscoveryCache, and one

@@ -51,10 +51,12 @@ protected:
     return protocol;
   }
 
-  void welcome(ProtocolSession &protocol, const std::string &serverId) {
+  void welcome(ProtocolSession &protocol, const std::string &serverId,
+               uint32_t protocolVersion = kMaxRendererProtocolVersion) {
     pb::Envelope env;
     env.set_message_id(1);
     env.mutable_welcome()->set_server_id(serverId);
+    env.mutable_welcome()->set_protocol_version(protocolVersion);
     protocol.onMessage(env.SerializeAsString());
   }
 
@@ -367,4 +369,44 @@ TEST(RendererProtocolRange, AcceptsEveryVersionInsideItAndNothingOutside) {
       static_cast<int>(kMinRendererProtocolVersion) - 1));
   EXPECT_FALSE(rendererProtocolSupported(
       static_cast<int>(kMaxRendererProtocolVersion) + 1));
+}
+
+TEST_F(ProtocolSessionTest, AWelcomeFromACoreWeCannotFollowKeepsTheLink) {
+  // Dropping the link here would leave this renderer unreachable by anything
+  // but a shell on its own machine — the connection is what an upgrade rides.
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+
+  welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
+
+  EXPECT_FALSE(wire.gaveUp);
+  EXPECT_TRUE(wire.sent.empty());
+}
+
+TEST_F(ProtocolSessionTest, ACoreWeCannotFollowIsRefusedPlayback) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
+
+  openSession(*protocol, "sid-1");
+
+  ASSERT_EQ(wire.sent.size(), 1u);
+  const pb::SessionOpenResult &result = wire.sent[0].session_open_result();
+  EXPECT_FALSE(result.accepted());
+  EXPECT_EQ(result.error(), pb::SessionOpenResult::ERROR_INTERNAL);
+  EXPECT_EQ(services.sessions->current(), nullptr);
+}
+
+TEST_F(ProtocolSessionTest, ASessionIsNotLeftPlayingForACoreWeCannotFollow) {
+  // The Core that opened it has upgraded past us: it can no longer stop it,
+  // so the renderer ends it rather than playing on unreachably.
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  std::string busyOwner;
+  services.sessions->open("sid-1", "server-a", busyOwner);
+  ASSERT_NE(services.sessions->current(), nullptr);
+
+  welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
+
+  EXPECT_EQ(services.sessions->current(), nullptr);
 }

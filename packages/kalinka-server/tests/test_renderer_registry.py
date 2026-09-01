@@ -8,6 +8,7 @@ from kalinka_server.renderer_registry import (
     RegistrationKind,
     RendererRegistry,
     RendererStatus,
+    RendererUnavailable,
 )
 
 
@@ -285,3 +286,64 @@ async def test_subscribing_reports_the_picture_at_once():
     events = _subscribe(registry)
 
     assert events == [("renderers", []), ("current", None, "rid-later")]
+
+
+async def test_incompatible_renderer_is_listed_but_never_played_to():
+    """A renderer whose protocol this Core cannot speak stays visible — that
+    listing is the only handle anyone has on it — but playback goes elsewhere."""
+    registry = RendererRegistry()
+    stale = object()
+    registry.register(
+        renderer_id="old-rid",
+        instance_id="inst-old",
+        friendly_name="Old Renderer",
+        software_version="0.3.0",
+        kind="native",
+        platform={"os": "linux"},
+        session=stale,
+        compatible=False,
+    )
+    (entry,) = registry.list()
+    assert entry["status"] == "connected"
+    assert entry["compatible"] is False
+    assert registry.active_id() is None
+
+    _register(registry, object(), renderer_id="new-rid", instance_id="inst-new")
+    assert registry.active_id() == "new-rid"
+
+
+async def test_selecting_an_incompatible_renderer_does_not_send_playback_there():
+    registry = RendererRegistry()
+    registry.register(
+        renderer_id="old-rid",
+        instance_id="inst-old",
+        friendly_name="Old Renderer",
+        software_version="0.3.0",
+        kind="native",
+        platform={"os": "linux"},
+        session=object(),
+        compatible=False,
+    )
+    _register(registry, object(), renderer_id="new-rid", instance_id="inst-new")
+
+    registry.select("old-rid")
+    assert registry.active_id() == "new-rid"
+
+
+async def test_driving_an_incompatible_renderer_is_refused_not_left_hanging():
+    registry = RendererRegistry()
+    link = object()
+    registry.register(
+        renderer_id="old-rid",
+        instance_id="inst-old",
+        friendly_name="Old Renderer",
+        software_version="0.3.0",
+        kind="native",
+        platform={"os": "linux"},
+        session=link,
+        compatible=False,
+    )
+    # The link itself stays reachable — it is what an upgrade would ride.
+    assert registry.live_session("old-rid") is link
+    with pytest.raises(RendererUnavailable):
+        registry.require_session("old-rid")

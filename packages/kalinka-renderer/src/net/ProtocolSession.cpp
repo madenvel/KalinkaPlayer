@@ -131,10 +131,25 @@ void ProtocolSession::handleWelcome(const pb::Welcome &welcome) {
   }
   welcomed_ = true;
   serverId_ = welcome.server_id();
-  adoptSession();
+  coreSpeaksOurProtocol_ =
+      rendererProtocolSupported(static_cast<int>(welcome.protocol_version()));
   spdlog::info("[{}] Registered: server '{}' version {} (api {}, protocol v{})",
                name_, welcome.server_name(), welcome.server_version(),
                welcome.api_version(), welcome.protocol_version());
+  if (!coreSpeaksOurProtocol_) {
+    spdlog::warn(
+        "[{}] Server speaks protocol v{}, this renderer speaks {}-{}; staying "
+        "connected so it can upgrade us, but playback is refused until then",
+        name_, welcome.protocol_version(), kMinRendererProtocolVersion,
+        kMaxRendererProtocolVersion);
+    // A session this Core opened before it moved on cannot be driven by it
+    // any more; ending it beats leaving audio running with no route back.
+    if (auto orphan = services_.sessions->ownedBy(serverId_)) {
+      orphan->close("server speaks a protocol this renderer does not");
+    }
+    return;
+  }
+  adoptSession();
 }
 
 void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {
@@ -148,6 +163,10 @@ void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {
     result->set_accepted(false);
     result->set_error(pb::SessionOpenResult::ERROR_INTERNAL);
     result->set_detail("session opened before the handshake completed");
+  } else if (!coreSpeaksOurProtocol_) {
+    result->set_accepted(false);
+    result->set_error(pb::SessionOpenResult::ERROR_INTERNAL);
+    result->set_detail("renderer does not speak this server's protocol");
   } else {
     std::string busyOwner;
     std::string openError;

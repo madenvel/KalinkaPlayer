@@ -99,4 +99,8 @@ private:
   // route without a lookup; the gate is sessionId().
   std::shared_ptr<SessionEventSink> session_;
   bool welcomed_ = false;
+  // Whether the Core's protocol version is one this binary speaks. A Core that
+  // has moved past us keeps the connection — that is how it can tell us to
+  // upgrade — but nothing it asks us to play is acted on.
+  bool coreSpeaksOurProtocol_ = true;
 };

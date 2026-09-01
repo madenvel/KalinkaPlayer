@@ -51,8 +51,16 @@ class RendererRecord:
     # The server (host, port) the renderer dialed to register — an address it
     # provably reaches, which no server-side guess can promise.
     server_addr: Optional[tuple[str, int]] = None
+    # False when the renderer's protocol range excludes this Core's version.
+    compatible: bool = True
     # The renderer's connection while it has one; compared by identity.
     session: Optional[RendererLink] = field(default=None, repr=False)
+
+    @property
+    def playable(self) -> bool:
+        """Whether playback may be pointed here — connected is not enough, the
+        Core also has to speak the renderer's protocol."""
+        return self.session is not None and self.compatible
 
     @property
     def status(self) -> RendererStatus:
@@ -71,6 +79,7 @@ class RendererRecord:
             software_version=self.software_version,
             kind=self.kind,
             status=self.status.value,
+            compatible=self.compatible,
             platform=self.platform,
             connected_at=self.connected_at,
             last_seen=self.last_seen,
@@ -114,6 +123,7 @@ class RendererRegistry:
         platform: dict[str, str],
         session: RendererLink,
         server_addr: Optional[tuple[str, int]] = None,
+        compatible: bool = True,
     ) -> RegistrationKind:
         self._cancel_reap(renderer_id)
         now = time.time()
@@ -149,6 +159,7 @@ class RendererRegistry:
             last_seen=now,
             server_addr=server_addr,
             session=session,
+            compatible=compatible,
         )
         logger.info(
             "Renderer %s: '%s' (%s, id=%s)",
@@ -246,22 +257,34 @@ class RendererRegistry:
         return self._renderers.get(renderer_id)
 
     def live_session(self, renderer_id: str) -> Optional[RendererLink]:
-        """The renderer's session handle while it is connected, else None."""
+        """The renderer's link while it is connected, else None.
+
+        The raw link, held even for a renderer whose protocol this Core does
+        not speak — that connection is how such a renderer is reached at all.
+        Callers that need the renderer to *understand* them want
+        :meth:`require_session`."""
         record = self._renderers.get(renderer_id)
         return record.session if record is not None else None
 
     def require_session(self, renderer_id: str) -> RendererLink:
-        """Same, for callers that have nothing to say to a renderer that is
-        not there."""
-        session = self.live_session(renderer_id)
-        if session is None:
-            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
-        return session
+        """The link to a renderer that can be driven, or raise.
 
-    def _first_connected_id(self) -> Optional[str]:
-        """Earliest-registered renderer that is connected right now."""
+        Refuses an incompatible renderer as it refuses an absent one: the
+        message would go out and never be answered, so the caller is told now
+        rather than left waiting for a timeout."""
+        record = self._renderers.get(renderer_id)
+        if record is None or record.session is None:
+            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
+        if not record.compatible:
+            raise RendererUnavailable(
+                f"renderer {renderer_id} speaks a protocol this server does not"
+            )
+        return record.session
+
+    def _first_playable_id(self) -> Optional[str]:
+        """Earliest-registered renderer playback can actually be sent to."""
         for renderer_id, record in self._renderers.items():
-            if record.session is not None:
+            if record.playable:
                 return renderer_id
         return None
 
@@ -279,16 +302,18 @@ class RendererRegistry:
 
     def active_id(self) -> Optional[str]:
         """The renderer playback opens sessions on: the selected one while it
-        is connected, otherwise the first connected. A selected renderer that
-        is offline is not forgotten — it wins again when it returns."""
+        is connected and speaks our protocol, otherwise the first that is. A
+        selected renderer that is offline is not forgotten — it wins again
+        when it returns."""
         return self.resolve_active(self._prefs.selected_renderer_id)
 
     def resolve_active(self, selected_id: Optional[str]) -> Optional[str]:
         """What :meth:`active_id` would return for a given selection. Lets a
         caller see where playback is headed before committing the choice."""
-        if selected_id and self.live_session(selected_id) is not None:
+        record = self._renderers.get(selected_id) if selected_id else None
+        if record is not None and record.playable:
             return selected_id
-        return self._first_connected_id()
+        return self._first_playable_id()
 
     def list(self) -> list[dict]:
         active = self.active_id()

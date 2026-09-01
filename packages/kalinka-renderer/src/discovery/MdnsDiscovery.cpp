@@ -449,9 +449,13 @@ void MdnsDiscovery::drainSocket(int sock) {
       if (!packet.txtSeen.contains(instance)) {
         continue;  // capability not judgeable from this message
       }
+      // Advertising the key at all is what makes a Core worth dialing. Which
+      // versions it speaks is settled in the handshake, where a Core that has
+      // moved past this binary still lists it and can upgrade it — a filter
+      // here would instead leave that renderer unreachable by anything but a
+      // shell on its own machine.
       const auto proto = packet.rendererProto.find(instance);
-      const bool capable = proto != packet.rendererProto.end() &&
-                           rendererProtocolSupported(proto->second);
+      const bool capable = proto != packet.rendererProto.end();
       const auto announced = cache_.announced(instance);
       if (!capable) {
         if (announced.has_value() && !*announced) {
@@ -465,10 +469,9 @@ void MdnsDiscovery::drainSocket(int sock) {
           grouper_.remove(instance);
         } else {
           spdlog::info(
-              "[Discovery] '{}' has no renderer support (renderer_proto "
-              "missing or outside {}-{}); will connect if it appears",
-              displayName(instance), kMinRendererProtocolVersion,
-              kMaxRendererProtocolVersion);
+              "[Discovery] '{}' has no renderer support (no renderer_proto); "
+              "will connect if it appears",
+              displayName(instance));
         }
         continue;
       }
