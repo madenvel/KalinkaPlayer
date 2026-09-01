@@ -168,3 +168,9 @@ def test_a_device_described_without_a_decoded_format_claims_nothing():
     """A renderer that names its output but not what it decoded — the browser —
     has not shown that the two agree."""
     assert not _path({}, {"format": _CD, "access": "exclusive"})
+
+
+def test_a_device_and_a_stream_that_both_say_nothing_do_not_agree():
+    """Exclusive access with no format either side is a claim out of nothing:
+    the zeros mean unreported, not two formats that happen to match."""
+    assert not _path({}, {"access": "exclusive"})

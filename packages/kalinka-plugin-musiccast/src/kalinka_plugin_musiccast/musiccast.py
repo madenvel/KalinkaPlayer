@@ -8,7 +8,7 @@ import urllib.parse
 from typing import Any, Dict, Optional
 
 import httpx
-from kalinka_plugin_sdk.datamodel import PlaybackState, PlayerStateEnum
+from kalinka_plugin_sdk.datamodel import PlaybackState, PlayerStateEnum, VolumeBackend
 from kalinka_plugin_sdk.ext_device_events import (
     DevicePowerStateChangedEvent,
     ExtDeviceState,
@@ -346,7 +346,11 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
         # device disappears. supported=False keeps the UI from offering
         # volume controls until we actually know the device is reachable.
         self.volume = DeviceVolume(
-            max_volume=0, current_volume=0, volume_gain=0, supported=False
+            max_volume=0,
+            current_volume=0,
+            volume_gain=0,
+            supported=False,
+            backend=VolumeBackend.HARDWARE,
         )
 
         # Worker tasks may be spawned before get_ready() completes (when
@@ -375,6 +379,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
             current_volume=status["volume"],
             volume_gain=0,
             supported=True,
+            backend=VolumeBackend.HARDWARE,
         )
         logger.debug(
             f"[volume] init from getStatus: current={self.volume.current_volume} "
@@ -582,6 +587,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                                 max_volume=self.volume.max_volume,
                                 current_volume=target,
                                 volume_gain=self.volume.volume_gain,
+                                backend=self.volume.backend,
                             )
                         )
                     )
@@ -912,6 +918,7 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
                 current_volume=self.volume.current_volume,
                 volume_gain=self.volume.volume_gain,
                 supported=False,
+                backend=self.volume.backend,
             )
             self.event_emitter.dispatch(VolumeChangedEvent(volume=self.volume))
 
@@ -974,7 +981,11 @@ class KalinkaPluginMusiccastDevice(ExternalOutputDevice):
     async def get_volume(self) -> DeviceVolume:
         if not self.ready:
             return DeviceVolume(
-                max_volume=0, current_volume=0, volume_gain=0, supported=False
+                max_volume=0,
+                current_volume=0,
+                volume_gain=0,
+                supported=False,
+                backend=VolumeBackend.HARDWARE,
             )
 
         return self.volume

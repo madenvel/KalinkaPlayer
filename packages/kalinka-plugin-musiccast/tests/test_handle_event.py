@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import MagicMock, call
 
+from kalinka_plugin_sdk.datamodel import VolumeBackend
 from kalinka_plugin_sdk.ext_device import DeviceVolume
 from kalinka_plugin_sdk.ext_device_events import DevicePowerStateChangedEvent
 
@@ -132,3 +133,29 @@ async def test_both_standby_and_volume(device):
         DevicePowerStateChangedEvent(power_on=False)
     )
     assert device._device_power_on is False
+
+
+@pytest.mark.unit
+async def test_an_unready_device_still_names_where_its_volume_is_applied(device):
+    """The amplifier attenuates in its own hardware whether or not we have
+    reached it yet — a client weighing bit-perfection must not read the
+    silence of a device that has not answered as an unknown backend."""
+    device.ready = False
+    assert (await device.get_volume()).backend is VolumeBackend.HARDWARE
+
+
+@pytest.mark.unit
+async def test_going_unreachable_keeps_the_backend(device):
+    """_mark_unavailable rebuilds the volume; the backend is a property of the
+    amplifier, not of whether we can currently talk to it."""
+    device.volume = DeviceVolume(
+        max_volume=60,
+        current_volume=30,
+        volume_gain=0,
+        supported=True,
+        backend=VolumeBackend.HARDWARE,
+    )
+    device._mark_unavailable()
+
+    assert device.volume.supported is False
+    assert device.volume.backend is VolumeBackend.HARDWARE
