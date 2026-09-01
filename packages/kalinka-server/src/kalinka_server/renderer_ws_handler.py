@@ -28,6 +28,11 @@ PROTOCOL_VERSION = 2
 
 INBOX_SIZE = 256
 
+# The messages whose meaning is fixed for every protocol version, so they stay
+# usable with a renderer this Core cannot otherwise talk to. Nothing may be
+# removed from here: it is the channel an incompatible renderer is reached on.
+_VERSION_FREE_PAYLOADS = frozenset({"hello", "goodbye"})
+
 _CLOSE_REASON_TO_PB = {
     CloseReason.STALE: pb.SessionClose.REASON_STALE,
     CloseReason.CLOSED_BY_SERVER: pb.SessionClose.REASON_CLOSED_BY_SERVER,
@@ -148,6 +153,7 @@ async def handle_renderer_connection(
     inbox: asyncio.Queue[pb.Envelope] = asyncio.Queue(maxsize=INBOX_SIZE)
 
     registered_id: str | None = None
+    registered_compatible: bool | None = None
     clean_goodbye = False
     renderer_desc = "unregistered renderer"
 
@@ -170,10 +176,23 @@ async def handle_renderer_connection(
             await inbox.put(env)
 
     async def processor():
-        nonlocal registered_id, clean_goodbye, renderer_desc
+        nonlocal registered_id, registered_compatible, clean_goodbye
+        nonlocal renderer_desc
         while True:
             env = await inbox.get()
             payload = env.WhichOneof("payload")
+            if (
+                registered_compatible is False
+                and payload not in _VERSION_FREE_PAYLOADS
+            ):
+                # Nothing outside the version-free set means the same thing on
+                # both sides once the protocols differ, so it is not acted on.
+                logger.debug(
+                    "Ignoring %r from incompatible renderer %s",
+                    payload,
+                    renderer_desc,
+                )
+                continue
             if payload == "hello":
                 hello = env.hello
                 if registered_id is not None:
@@ -188,20 +207,20 @@ async def handle_renderer_connection(
                     f"'{hello.friendly_name}' (id={hello.renderer_id})"
                 )
                 versions = hello.protocol_versions
-                if not versions.min <= PROTOCOL_VERSION <= versions.max:
+                compatible = versions.min <= PROTOCOL_VERSION <= versions.max
+                if not compatible:
+                    # Kept rather than hung up on: a renderer dropped here is
+                    # invisible to every client, so the only way to upgrade it
+                    # would be a shell on its machine. It registers, is listed
+                    # as incompatible, and playback is routed elsewhere.
                     logger.warning(
-                        "Renderer %s speaks protocol %d-%d, server speaks "
-                        "%d; rejecting",
+                        "Renderer %s speaks protocol %d-%d, server speaks %d; "
+                        "keeping it connected as incompatible",
                         renderer_desc,
                         versions.min,
                         versions.max,
                         PROTOCOL_VERSION,
                     )
-                    await session.send_goodbye(
-                        pb.Goodbye.REASON_VERSION_UNSUPPORTED,
-                        f"server speaks protocol version {PROTOCOL_VERSION}",
-                    )
-                    return
                 # The accepted socket's local address — what the renderer dialed.
                 addr = websocket.scope.get("server")
                 registry.register(
@@ -219,9 +238,15 @@ async def handle_renderer_connection(
                     },
                     session=session,
                     server_addr=(addr[0], addr[1]) if addr and addr[1] else None,
+                    compatible=compatible,
                 )
                 registered_id = hello.renderer_id
+                registered_compatible = compatible
+                # Sent either way: the version it names is what tells an
+                # incompatible renderer what it has to become.
                 await session.send_welcome(config)
+                if not compatible:
+                    continue
                 await sessions.reconcile(
                     renderer_id=hello.renderer_id,
                     reported_session_id=hello.active_session_id,

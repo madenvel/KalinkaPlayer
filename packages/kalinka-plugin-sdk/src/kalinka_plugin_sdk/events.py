@@ -39,6 +39,10 @@ class RendererDescriptor(BaseModel):
     software_version: str = ""
     kind: str = ""
     status: str = "offline"
+    # False when the renderer speaks no protocol version this Core does. It
+    # stays listed and connected so it can still be told to upgrade, but
+    # playback never goes to it.
+    compatible: bool = True
     platform: Dict[str, str] = Field(default_factory=dict)
     connected_at: float = 0.0
     last_seen: float = 0.0
