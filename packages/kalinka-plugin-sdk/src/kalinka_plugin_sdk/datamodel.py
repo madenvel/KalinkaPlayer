@@ -608,8 +608,10 @@ class VolumeBackend(str, Enum):
     """
     Where a device applies its volume, and so whether it touches the samples.
 
-    Only SOFTWARE does, and only below unity; a device that cannot say reports
-    UNKNOWN rather than claiming either.
+    Only SOFTWARE does, and only below unity. UNKNOWN is an unanswered
+    question, not a denial: deciding the samples are untouched takes NONE,
+    HARDWARE, or SOFTWARE at its maximum. Testing ``!= SOFTWARE`` instead reads
+    a device that cannot say as one that has said no.
     """
 
     UNKNOWN = "unknown"

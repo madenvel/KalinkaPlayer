@@ -84,10 +84,14 @@ class StreamInfo:
         """
         if self.device is None or self.device.access is not DeviceAccess.EXCLUSIVE:
             return False
+        decoded, device = self.format, self.device.format
+        # Zero is "not reported", and two silences are not an agreement.
+        if min(decoded.sample_rate, decoded.bits_per_sample, decoded.channels) <= 0:
+            return False
         return (
-            self.device.format.sample_rate == self.format.sample_rate
-            and self.device.format.bits_per_sample == self.format.bits_per_sample
-            and self.device.format.channels == self.format.channels
+            device.sample_rate == decoded.sample_rate
+            and device.bits_per_sample == decoded.bits_per_sample
+            and device.channels == decoded.channels
         )
 
 
