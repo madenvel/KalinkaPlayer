@@ -50,7 +50,11 @@ struct StreamAudioFormat {
 /// @brief How the renderer holds the output device.
 /// @note Shared is not proof that anything alters the samples, only that
 /// nothing rules it out — the most a renderer can say about a path it shares.
-enum class DeviceAccess { Unknown, Exclusive, Shared };
+enum class DeviceAccess {
+  Unknown,
+  Exclusive,  ///< the device itself, nothing in between
+  Shared      ///< something sits between us and the card
+};
 
 inline std::string deviceAccessToString(DeviceAccess access) {
   switch (access) {

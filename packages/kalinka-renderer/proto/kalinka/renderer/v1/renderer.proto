@@ -101,7 +101,7 @@ enum ErrorSource {
 enum DeviceAccess {
   DEVICE_ACCESS_UNSPECIFIED = 0;  // the renderer cannot tell
   DEVICE_ACCESS_EXCLUSIVE = 1;    // the device itself, nothing in between
-  DEVICE_ACCESS_SHARED = 2;       // mixed, resampled or converted below us
+  DEVICE_ACCESS_SHARED = 2;       // something sits between us and the card
 }
 
 enum VolumeBackend {  // native VolumeBackend

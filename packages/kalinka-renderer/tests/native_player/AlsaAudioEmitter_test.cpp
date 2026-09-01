@@ -9,6 +9,31 @@
 #include "SlowOutputNode.h"
 #include "TestHelpers.h"
 
+// Fails from inside the audio path, which reaches the worker as an exception
+// rather than as an ERROR state the way ErrorFakeNode does.
+class ThrowingOutputNode : public AudioGraphOutputNode {
+public:
+  ThrowingOutputNode() {
+    setState({AudioGraphNodeState::STREAMING, 0,
+              StreamInfo{.format = {.sampleRate = 44100,
+                                    .channels = 2,
+                                    .bitsPerSample = 16},
+                         .streamType = StreamType::FRAMES,
+                         .streamSize = 44100}});
+  }
+  size_t read(void *, size_t) override {
+    throw std::runtime_error("the device went away mid-write");
+  }
+  size_t waitForData(std::stop_token = std::stop_token(),
+                     size_t = 1) override {
+    return 4096;
+  }
+  size_t waitForDataFor(std::stop_token, std::chrono::milliseconds,
+                        size_t) override {
+    return 4096;
+  }
+};
+
 class AlsaAudioEmitterTest : public ::testing::Test {
 protected:
   Config config = {{"output.alsa.device", testDevice()},
@@ -117,6 +142,21 @@ TEST_F(AlsaAudioEmitterTest, a_playing_state_names_what_the_device_opened) {
   alsaAudioEmitter->disconnect(outputNode);
   EXPECT_FALSE(alsaAudioEmitter->getState().deviceInfo.has_value())
       << "a closed device is open at nothing";
+}
+
+TEST_F(AlsaAudioEmitterTest, a_failure_in_the_worker_leaves_no_device_behind) {
+  auto outputNode = std::make_shared<ThrowingOutputNode>();
+  alsaAudioEmitter->connectTo(outputNode);
+
+  const auto state =
+      waitForStatus(*alsaAudioEmitter, AudioGraphNodeState::ERROR);
+  ASSERT_EQ(state.state, AudioGraphNodeState::ERROR);
+  // Nothing is reported after this one, so it must not be the state that
+  // leaves a closed device on record as open.
+  EXPECT_FALSE(state.deviceInfo.has_value());
+  EXPECT_FALSE(alsaAudioEmitter->getState().deviceInfo.has_value());
+
+  alsaAudioEmitter->disconnect(outputNode);
 }
 
 TEST_F(AlsaAudioEmitterTest, stream_error) {
