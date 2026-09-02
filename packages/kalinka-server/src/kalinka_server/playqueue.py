@@ -570,6 +570,17 @@ class PlayQueueImpl(PlayQueueController):
         had reached. An idle queue claims nothing — the selection just takes
         effect at the next play.
         """
+        record = (
+            self._registry.get(renderer_id) if renderer_id is not None else None
+        )
+        if record is not None and not record.compatible:
+            # Resolution skips a renderer this Core cannot drive, so accepting
+            # the pin would leave playback somewhere else while the client
+            # believed it had moved. Refusing says what has to happen instead.
+            raise RendererUnavailable(
+                f"{record.friendly_name or renderer_id} speaks a protocol this "
+                f"server does not, and cannot play until it is upgraded"
+            )
         target = self._registry.resolve_active(renderer_id)
         old = self._track_player
         if old.renderer_id is None or old.renderer_id == target:

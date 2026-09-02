@@ -70,7 +70,7 @@ class SimRenderer:
         self.configs = None
         self._message_id = 0
 
-    def connect(self) -> None:
+    def connect(self, compatible: bool = True) -> None:
         self.registry.register(
             renderer_id=self.RENDERER_ID,
             instance_id="sim-instance",
@@ -79,6 +79,7 @@ class SimRenderer:
             kind="native",
             platform={},
             session=self,
+            compatible=compatible,
         )
 
     # ------------------------------------------------------------------
