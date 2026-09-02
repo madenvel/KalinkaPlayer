@@ -279,11 +279,14 @@ async def handle_renderer_connection(
                 )
             elif payload == "upgrade_result":
                 upgrades.handle_reply(
-                    registered_id or "", env.in_reply_to, env.upgrade_result
+                    registered_id or "", session, env.in_reply_to, env.upgrade_result
                 )
             elif payload in ("config_snapshot", "config_result"):
                 configs.handle_reply(
-                    registered_id or "", env.in_reply_to, getattr(env, payload)
+                    registered_id or "",
+                    session,
+                    env.in_reply_to,
+                    getattr(env, payload),
                 )
             elif payload == "command_rejected":
                 sessions.handle_rejection(
@@ -327,8 +330,8 @@ async def handle_renderer_connection(
         if registered_id is not None:
             registry.disconnect(registered_id, session, clean=clean_goodbye)
             sessions.suspend(registered_id, session)
-            configs.handle_disconnect(registered_id)
-            upgrades.handle_disconnect(registered_id)
+            configs.handle_disconnect(registered_id, session)
+            upgrades.handle_disconnect(registered_id, session)
         else:
             logger.info("Renderer connection closed before registration")
         try:

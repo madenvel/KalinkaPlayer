@@ -38,7 +38,7 @@ class FakeLink:
         self.requested.append(target_version)
         result = pb.UpgradeResult(accepted=self.accepted, detail=self.detail)
         assert self.service is not None
-        self.service.handle_reply(self.renderer_id, message_id, result)
+        self.service.handle_reply(self.renderer_id, self, message_id, result)
 
 
 def _registry_with(
@@ -129,6 +129,26 @@ async def test_an_absent_renderer_cannot_be_upgraded():
         await service.upgrade("rid-1", "0.4.0")
 
 
+async def test_a_second_request_is_refused_while_one_is_in_flight():
+    """Two triggers install twice, the second onto a box already restarting."""
+
+    class SilentLink(FakeLink):
+        async def send_upgrade(self, message_id: int, target_version: str) -> None:
+            self.requested.append(target_version)
+
+    _, service, link = _registry_with(link=SilentLink())
+    first = asyncio.ensure_future(service.upgrade("rid-1", "0.4.0"))
+    await asyncio.sleep(0)
+
+    with pytest.raises(UpgradeRefused, match="already upgrading"):
+        await service.upgrade("rid-1", "0.4.0")
+    assert link.requested == ["0.4.0"]
+
+    service.handle_disconnect("rid-1", link)
+    with pytest.raises(RendererUnavailable):
+        await first
+
+
 async def test_a_disconnect_mid_request_fails_the_wait():
     class SilentLink(FakeLink):
         async def send_upgrade(self, message_id: int, target_version: str) -> None:
@@ -137,7 +157,7 @@ async def test_a_disconnect_mid_request_fails_the_wait():
     registry, service, link = _registry_with(link=SilentLink())
     task = asyncio.ensure_future(service.upgrade("rid-1", "0.4.0"))
     await asyncio.sleep(0)
-    service.handle_disconnect("rid-1")
+    service.handle_disconnect("rid-1", link)
 
     with pytest.raises(RendererUnavailable):
         await task

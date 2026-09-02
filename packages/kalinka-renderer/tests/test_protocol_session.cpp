@@ -512,3 +512,26 @@ TEST_F(ProtocolSessionTest, HelloSaysThisInstallCanUpgradeItself) {
   ASSERT_FALSE(wire.sent.empty());
   EXPECT_TRUE(wire.sent[0].hello().upgrade_supported());
 }
+
+TEST_F(ProtocolSessionTest, ACoreWeCannotFollowGetsNothingButTheRescueMessages) {
+  // Only hello/goodbye/upgrade are carried by every version; the rest mean
+  // whatever the two ends last agreed, which no longer holds.
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
+
+  pb::Envelope request;
+  request.set_message_id(7);
+  request.mutable_config_request();
+  feed(*protocol, request);
+
+  pb::Envelope update;
+  update.set_message_id(8);
+  pb::ConfigUpdate::Setting *setting =
+      update.mutable_config_update()->add_settings();
+  setting->set_path("output.buffer_ms");
+  setting->set_value("250");
+  feed(*protocol, update);
+
+  EXPECT_TRUE(wire.sent.empty());
+}

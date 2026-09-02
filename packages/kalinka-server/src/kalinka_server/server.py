@@ -1058,6 +1058,10 @@ async def create_app(
         Progress and failure detail stay in the systemd journal; the app
         confirms the outcome by re-reading /server/version after
         reconnect.
+
+        Renderers on other machines go first, as they do on the automatic
+        path: one asked here is still restarting into its new build, so
+        this answers 409 and the press is repeated once it is back.
         """
         if not update_check.upgrade_supported():
             raise HTTPException(
@@ -1078,6 +1082,11 @@ async def create_app(
         )
         if rejection:
             raise HTTPException(status_code=409, detail=rejection)
+        if not await _renderers_ready():
+            raise HTTPException(
+                status_code=409,
+                detail="Upgrading the renderers first; try again in a moment",
+            )
         try:
             update_check.request_upgrade()
         except OSError as e:

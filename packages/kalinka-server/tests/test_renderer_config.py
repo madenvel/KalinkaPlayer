@@ -66,7 +66,7 @@ class FakeWs:
     async def send_config_request(self, message_id) -> None:
         self.requests += 1
         if self.answer:
-            self.service.handle_reply(RENDERER_ID, message_id, self._snapshot())
+            self.service.handle_reply(RENDERER_ID, self, message_id, self._snapshot())
 
     async def send_config_update(self, message_id, changes) -> None:
         self.updates.append(dict(changes))
@@ -85,7 +85,7 @@ class FakeWs:
                 outcome.value = self.values.get(path, "")
                 outcome.error = "not one of the offered options"
         result.config_version = f"v{len(self.device_options)}"
-        self.service.handle_reply(RENDERER_ID, message_id, result)
+        self.service.handle_reply(RENDERER_ID, self, message_id, result)
 
     async def replace(self):
         pass
@@ -235,7 +235,7 @@ async def test_a_disconnect_fails_the_request_in_flight():
 
     task = asyncio.create_task(service.get(RENDERER_ID))
     await asyncio.sleep(0)
-    service.handle_disconnect(RENDERER_ID)
+    service.handle_disconnect(RENDERER_ID, ws)
 
     with pytest.raises(RendererUnavailable):
         await task
@@ -254,7 +254,7 @@ async def test_a_silent_renderer_times_out():
 async def test_a_reply_nobody_awaits_is_dropped():
     registry, service, ws = make_service()
 
-    service.handle_reply(RENDERER_ID, 999, pb.ConfigSnapshot())  # no raise
+    service.handle_reply(RENDERER_ID, ws, 999, pb.ConfigSnapshot())  # no raise
 
     config = await service.get(RENDERER_ID)
     assert config["config_version"] == "v2"
