@@ -400,43 +400,11 @@ async def create_app(
         return playback.state in (PlayerStateEnum.STOPPED, None)
 
     async def _renderers_ready() -> bool:
-        """Whether the server may move: every registered renderer is already
-        at the release this one would install.
-
-        A release can move the renderer protocol, and a renderer left behind
-        on another machine has to be reachable to be fixed — so it is upgraded
-        first, and this server waits for the next tick, by which time the
-        renderer has restarted and re-registered at the new version. One that
-        cannot install a release of itself is named and not waited for; there
-        is nothing this server could do about it on any later night either.
-        """
-        latest = update_check.checker.latest_renderer
-        for stranded in renderer_upgrades.stranded(latest):
-            logger.warning(
-                "Renderer '%s' is on %s and cannot upgrade itself; upgrading "
-                "this server anyway",
-                stranded.friendly_name,
-                stranded.installed_version,
-            )
-        behind = renderer_upgrades.candidates(latest)
-        if not behind or latest is None:
-            return True
-        for candidate in behind:
-            if candidate.busy:
-                logger.info(
-                    "Renderer '%s' is playing; leaving the upgrade for later",
-                    candidate.friendly_name,
-                )
-                continue
-            try:
-                await renderer_upgrades.upgrade(candidate.renderer_id, latest)
-            except Exception as e:  # noqa: BLE001 — one bad renderer, not all
-                logger.warning(
-                    "Renderer '%s' did not take the upgrade: %s",
-                    candidate.friendly_name,
-                    e,
-                )
-        return False
+        """Renderers go first: a release can move the protocol they speak, and
+        one left behind on another machine has to be reachable to be fixed."""
+        return await renderer_upgrades.bring_forward(
+            update_check.checker.latest_renderer
+        )
 
     app.state.update_check_task = asyncio.create_task(
         update_check.checker.run(

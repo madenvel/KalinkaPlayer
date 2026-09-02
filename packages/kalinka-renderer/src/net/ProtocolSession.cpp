@@ -158,8 +158,8 @@ void ProtocolSession::handleWelcome(const pb::Welcome &welcome) {
 }
 
 void ProtocolSession::handleUpgrade(const pb::Envelope &env) {
-  // Answered whatever protocol the Core speaks: a Core we cannot follow is
-  // exactly the one that needs to be able to replace this binary.
+  // Answered whatever the Core speaks: one we cannot follow is exactly the
+  // one that needs to replace this binary.
   pb::Envelope out;
   pb::UpgradeResult *result = out.mutable_upgrade_result();
   const std::string &target = env.upgrade().target_version();
