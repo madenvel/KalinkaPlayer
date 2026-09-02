@@ -7,7 +7,7 @@
 # in the bundle — server, plugins, SDK — is pure Python and arch-independent
 # (_all), so the same artifacts install on any machine.
 #
-# Two pieces ship on their own release trains and are installed on top, each
+# Two pieces ship on their own release trains and are installed alongside, each
 # best-effort so a lookup failure only warns:
 #
 #   * the browser player (kalinka-web), released from the app repo — the
@@ -15,7 +15,9 @@
 #   * the renderer (kalinka-renderer), which is what actually plays audio, in
 #     per-arch packages picked by install-renderer.sh. Installing it here is
 #     what makes a plain install play sound through this machine's sound card;
-#     rendering boxes elsewhere on the network run that script themselves.
+#     rendering boxes elsewhere on the network run that script themselves. It
+#     goes in before the bundle so this machine is never left running a new
+#     server against a renderer too old to talk to it.
 #
 # Re-running the script upgrades whatever is already installed, which is how
 # the server's own auto-upgrade reaches all three.
@@ -178,6 +180,38 @@ for url in "${URLS[@]}"; do
   download "$url" "$TMPDIR_DL/$name"
 done
 
+# --- renderer -----------------------------------------------------------------
+# Ahead of the bundle, because a release can move the renderer protocol and a
+# renderer speaks the version before its own as well as its own: new renderer
+# with old server works, old renderer with new server may not. Going first
+# means the box is never left in the pairing that does not.
+#
+# Best-effort either way: a platform with no renderer package still ends up
+# with the server installed below.
+install_renderer() {
+  local script self
+  self="${BASH_SOURCE[0]:-}"
+  if [ -f "$self" ] && [ -r "$(dirname "$self")/install-renderer.sh" ]; then
+    # Run from a checkout: use the sibling script, not the published one.
+    script="$(cd "$(dirname "$self")" && pwd)/install-renderer.sh"
+  else
+    script="$TMPDIR_DL/install-renderer.sh"
+    download "$RENDERER_INSTALLER" "$script"
+  fi
+  KALINKA_REPO="$REPO" bash "$script"
+}
+
+if [ "${KALINKA_RENDERER:-1}" != "0" ]; then
+  echo
+  echo ">> Installing the renderer on this machine ..."
+  if ! install_renderer; then
+    echo ">> note: the renderer could not be installed — the server install" >&2
+    echo "   below still goes ahead, and the browser player plays audio in the" >&2
+    echo "   browser. Install it later with scripts/install-renderer.sh, or set" >&2
+    echo "   KALINKA_RENDERER=0 to skip this step." >&2
+  fi
+fi
+
 # --- install ------------------------------------------------------------------
 # Wait for a held dpkg/apt lock (e.g. unattended-upgrades) instead of failing
 # outright — this script also runs unattended from kalinka-upgrade.service.
@@ -196,33 +230,6 @@ if ! $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL"/*.deb; then
   echo ">> apt-get install failed; falling back to dpkg -i + apt-get -f install"
   $SUDO dpkg -i "$TMPDIR_DL"/*.deb || true
   $SUDO apt-get "${APT_OPTS[@]}" -f install -y
-fi
-
-# --- renderer -----------------------------------------------------------------
-# Runs after the bundle so a renderer that has no package for this platform
-# still leaves a working server behind.
-install_renderer() {
-  local script self
-  self="${BASH_SOURCE[0]:-}"
-  if [ -f "$self" ] && [ -r "$(dirname "$self")/install-renderer.sh" ]; then
-    # Run from a checkout: use the sibling script, not the published one.
-    script="$(cd "$(dirname "$self")" && pwd)/install-renderer.sh"
-  else
-    script="$TMPDIR_DL/install-renderer.sh"
-    download "$RENDERER_INSTALLER" "$script"
-  fi
-  KALINKA_REPO="$REPO" bash "$script"
-}
-
-if [ "${KALINKA_RENDERER:-1}" != "0" ]; then
-  echo
-  echo ">> Installing the renderer on this machine ..."
-  if ! install_renderer; then
-    echo ">> note: the renderer could not be installed — the server is up and" >&2
-    echo "   the browser player still plays audio in the browser. Install it" >&2
-    echo "   later with scripts/install-renderer.sh, or set KALINKA_RENDERER=0" >&2
-    echo "   to skip this step." >&2
-  fi
 fi
 
 # --- report -------------------------------------------------------------------
