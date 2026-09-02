@@ -192,8 +192,7 @@ async def handle_renderer_connection(
                 registered_compatible is False
                 and payload not in _VERSION_FREE_PAYLOADS
             ):
-                # Nothing outside the version-free set means the same thing on
-                # both sides once the protocols differ, so it is not acted on.
+                # Outside that set, nothing means the same on both sides.
                 logger.debug(
                     "Ignoring %r from incompatible renderer %s",
                     payload,
@@ -216,10 +215,8 @@ async def handle_renderer_connection(
                 versions = hello.protocol_versions
                 compatible = versions.min <= PROTOCOL_VERSION <= versions.max
                 if not compatible:
-                    # Kept rather than hung up on: a renderer dropped here is
-                    # invisible to every client, so the only way to upgrade it
-                    # would be a shell on its machine. It registers, is listed
-                    # as incompatible, and playback is routed elsewhere.
+                    # Hanging up would hide it from every client, leaving a
+                    # shell on its own machine as the only way to upgrade it.
                     logger.warning(
                         "Renderer %s speaks protocol %d-%d, server speaks %d; "
                         "keeping it connected as incompatible",

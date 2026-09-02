@@ -449,11 +449,9 @@ void MdnsDiscovery::drainSocket(int sock) {
       if (!packet.txtSeen.contains(instance)) {
         continue;  // capability not judgeable from this message
       }
-      // Advertising the key at all is what makes a Core worth dialing. Which
-      // versions it speaks is settled in the handshake, where a Core that has
-      // moved past this binary still lists it and can upgrade it — a filter
-      // here would instead leave that renderer unreachable by anything but a
-      // shell on its own machine.
+      // Advertising the key is what makes a Core worth dialing; which
+      // version it speaks is the handshake's business, and a Core that moved
+      // past us is the one that has to reach us to upgrade us.
       const auto proto = packet.rendererProto.find(instance);
       const bool capable = proto != packet.rendererProto.end();
       const auto announced = cache_.announced(instance);

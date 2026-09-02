@@ -204,3 +204,43 @@ class TestVersionOrdering:
     def test_an_unknown_version_is_never_ranked(self):
         assert not version_is_newer("0.4.0", "")
         assert not version_is_newer("", "0.3.0")
+
+
+class TestBringForward:
+    """The Core asks this before upgrading itself, so 'nothing left to do' is
+    the only answer that lets it move."""
+
+    async def test_a_renderer_that_is_current_needs_nothing(self):
+        _, service, link = _registry_with(version="0.4.0")
+        assert await service.bring_forward("0.4.0") is True
+        assert link.requested == []
+
+    async def test_a_behind_renderer_is_upgraded_and_the_caller_waits(self):
+        _, service, link = _registry_with(version="0.3.0")
+        assert await service.bring_forward("0.4.0") is False
+        assert link.requested == ["0.4.0"]
+
+    async def test_a_playing_renderer_is_left_for_later(self):
+        _, service, link = _registry_with(version="0.3.0", busy=True)
+        assert await service.bring_forward("0.4.0") is False
+        assert link.requested == []
+
+    async def test_one_that_cannot_upgrade_itself_is_not_waited_for(self):
+        """No later attempt would change it, so holding the Core back for ever
+        buys nothing."""
+        _, service, link = _registry_with(
+            version="0.3.0", upgrade_supported=False
+        )
+        assert await service.bring_forward("0.4.0") is True
+        assert link.requested == []
+
+    async def test_a_refusal_does_not_stop_the_caller_looking_again(self):
+        _, service, _ = _registry_with(
+            version="0.3.0", link=FakeLink(accepted=False, detail="busy")
+        )
+        assert await service.bring_forward("0.4.0") is False
+
+    async def test_nothing_is_done_while_no_release_is_known(self):
+        _, service, link = _registry_with(version="0.3.0")
+        assert await service.bring_forward(None) is True
+        assert link.requested == []

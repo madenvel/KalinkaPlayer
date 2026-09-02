@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 from .renderer_link import RendererLink
 from .renderer_registry import RendererRegistry, RendererUnavailable
+from .update_check import is_newer
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -94,6 +95,42 @@ class RendererUpgradeService:
                 )
             )
         return found
+
+    async def bring_forward(self, latest_version: Optional[str]) -> bool:
+        """Upgrade every renderer ``latest_version`` would bring forward.
+
+        Returns whether nothing needed doing. False means one was asked and
+        has not come back yet, so a caller with its own upgrade to make — the
+        Core, whose next release may move the protocol — should look again
+        later rather than moving past them. One that is playing is left for
+        that later look; one that cannot install a release of itself is said
+        out loud and not waited for, because no later look would change it.
+        """
+        for stranded in self.stranded(latest_version):
+            logger.warning(
+                "Renderer '%s' is on %s and cannot upgrade itself",
+                stranded.friendly_name,
+                stranded.installed_version,
+            )
+        behind = self.candidates(latest_version)
+        if not behind or latest_version is None:
+            return True
+        for candidate in behind:
+            if candidate.busy:
+                logger.info(
+                    "Renderer '%s' is playing; leaving its upgrade for later",
+                    candidate.friendly_name,
+                )
+                continue
+            try:
+                await self.upgrade(candidate.renderer_id, latest_version)
+            except Exception as e:  # noqa: BLE001 — one bad renderer, not all
+                logger.warning(
+                    "Renderer '%s' did not take the upgrade: %s",
+                    candidate.friendly_name,
+                    e,
+                )
+        return False
 
     async def upgrade(self, renderer_id: str, target_version: str) -> str:
         """Ask one renderer to install ``target_version``; returns its detail.
@@ -174,27 +211,19 @@ class RendererUpgradeService:
 def version_is_newer(candidate: str, installed: str) -> bool:
     """Whether ``candidate`` is a later release than ``installed``.
 
-    Compared field by field so a renderer packaged for any distro is judged the
-    same way: the deb ordering rules do not apply to an rpm host, and the
-    versions on both sides are plain ``major.minor.patch`` releases.
+    Ordered by the release each version leads to, not by packaging rules: the
+    deb ordering :func:`update_check.deb_is_newer` applies does not hold on an
+    rpm or flatpak host, and a renderer may run any of the three.
     """
     if not candidate or not installed:
         return False
+    left, right = _release_of(candidate), _release_of(installed)
+    if left == right:
+        # 0.4.0 over the 0.4.0~dev3 that led up to it, never the reverse.
+        return "~" in installed and "~" not in candidate
+    return is_newer(left, right)
 
-    def parts(value: str) -> list[int]:
-        # A development build ("0.4.0~dev3+g1a2b3c4") counts as the release it
-        # leads up to, minus one place, so it is offered the real thing.
-        head = value.split("~")[0].split("+")[0]
-        out = []
-        for piece in head.split("."):
-            digits = "".join(c for c in piece if c.isdigit())
-            out.append(int(digits) if digits else 0)
-        return out
 
-    left, right = parts(candidate), parts(installed)
-    size = max(len(left), len(right))
-    left += [0] * (size - len(left))
-    right += [0] * (size - len(right))
-    if left == right and "~" in installed:
-        return True  # 0.4.0 over 0.4.0~dev3
-    return left > right
+def _release_of(version: str) -> str:
+    """The release a version belongs to: ``0.4.0~dev3+g1a2b3c4`` -> ``0.4.0``."""
+    return version.split("~")[0].split("+")[0]
