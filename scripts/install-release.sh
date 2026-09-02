@@ -33,7 +33,8 @@
 #   KALINKA_WEB      set to 0 to skip installing the browser player
 #   KALINKA_RENDERER set to 0 to skip installing the local renderer
 #   KALINKA_RENDERER_INSTALLER  URL of the renderer installer to use instead of
-#                    the published one (only needed to test an unmerged change)
+#                    the published one at kalinkaplayer.com/install-renderer.sh
+#                    (only needed to test an unmerged change)
 #   GITHUB_TOKEN     optional, only to avoid the 60-req/hr anonymous API limit
 #   NO_APT_UPDATE    set to 1 to skip `apt-get update` before installing
 #
@@ -43,7 +44,7 @@ set -euo pipefail
 
 REPO="${KALINKA_REPO:-madenvel/KalinkaPlayer}"
 API="https://api.github.com/repos/${REPO}/releases"
-RENDERER_INSTALLER="${KALINKA_RENDERER_INSTALLER:-https://raw.githubusercontent.com/$REPO/main/scripts/install-renderer.sh}"
+RENDERER_INSTALLER="${KALINKA_RENDERER_INSTALLER:-https://kalinkaplayer.com/install-renderer.sh}"
 REQUEST="${1:-}"   # optional version or tag
 
 have() { command -v "$1" >/dev/null 2>&1; }

@@ -11,8 +11,10 @@
 # piped, so a truncated download cannot execute half a script.
 set -euo pipefail
 
-REPO="${KALINKA_REPO:-madenvel/KalinkaPlayer}"
-URL="${KALINKA_RENDERER_INSTALLER:-https://raw.githubusercontent.com/$REPO/main/scripts/install-renderer.sh}"
+# The website's stable short URL, a redirect to the repo's install-renderer.sh
+# on main — the same indirection the server's upgrade.sh uses, so the script
+# stays current and the URL survives the repo moving.
+URL="${KALINKA_RENDERER_INSTALLER:-https://kalinkaplayer.com/install-renderer.sh}"
 TRIGGER="${KALINKA_RENDERER_UPGRADE_TRIGGER:-/run/kalinka-renderer/upgrade-request}"
 
 # An empty or absent request means "whatever is newest", which is what the
