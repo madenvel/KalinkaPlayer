@@ -5,6 +5,10 @@ set -e
 # removal stops it.
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
     systemctl disable --now kalinka-renderer.service 2>/dev/null || true
+    # Enabled by postinst; the timer only if the box opted into it. Both point
+    # at units this removes.
+    systemctl disable --now kalinka-renderer-upgrade.path 2>/dev/null || true
+    systemctl disable --now kalinka-renderer-upgrade.timer 2>/dev/null || true
 fi
 
 exit 0

@@ -179,7 +179,7 @@ class SimRenderer:
             outcome.path = path
             outcome.applied = True
             outcome.value = str(value)
-        self.configs.handle_reply(self.RENDERER_ID, message_id, result)
+        self.configs.handle_reply(self.RENDERER_ID, self, message_id, result)
 
     async def replace(self) -> None:
         pass

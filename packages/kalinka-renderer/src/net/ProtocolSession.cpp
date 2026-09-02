@@ -44,6 +44,22 @@ pb::ControlKind kindOf(const pb::Command &command) {
   }
   return pb::CONTROL_KIND_UNSPECIFIED;
 }
+
+// The rescue messages every version carries, plus SessionOpen — refused, but
+// refused out loud, since dropping it would leave the Core waiting for a
+// result that never comes. Anything else means whatever the two versions
+// agreed it meant, which is exactly what no longer holds.
+bool handledFromACoreWeCannotFollow(pb::Envelope::PayloadCase payload) {
+  switch (payload) {
+  case pb::Envelope::kWelcome:
+  case pb::Envelope::kGoodbye:
+  case pb::Envelope::kUpgrade:
+  case pb::Envelope::kSessionOpen:
+    return true;
+  default:
+    return false;
+  }
+}
 }  // namespace
 
 ProtocolSession::ProtocolSession(std::string name, const Identity &identity,
@@ -89,6 +105,13 @@ void ProtocolSession::onMessage(const std::string &data) {
   if (!env.ParseFromString(data)) {
     spdlog::warn("[{}] Dropping unparseable {}-byte message", name_,
                  data.size());
+    return;
+  }
+  if (welcomed_ && !coreSpeaksOurProtocol_ &&
+      !handledFromACoreWeCannotFollow(env.payload_case())) {
+    spdlog::debug("[{}] Ignoring payload case {} from a Core whose protocol "
+                  "this renderer does not speak",
+                  name_, static_cast<int>(env.payload_case()));
     return;
   }
   switch (env.payload_case()) {

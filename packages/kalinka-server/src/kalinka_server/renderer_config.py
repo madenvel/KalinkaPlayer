@@ -14,14 +14,14 @@ request.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, Optional
 
 from . import renderer_state
 from .renderer_link import RendererLink
 from .renderer_proto import renderer_pb2 as pb
-from .renderer_registry import RendererRegistry, RendererUnavailable
+from .renderer_registry import RendererRegistry
+from .renderer_replies import PendingReplies
 from .renderer_sessions import DEFAULT_TIMEOUT_S
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -123,15 +123,14 @@ class RendererConfigService:
         self, registry: RendererRegistry, timeout_s: float = DEFAULT_TIMEOUT_S
     ):
         self._registry = registry
-        self._timeout_s = timeout_s
-        self._pending: dict[tuple[str, int], asyncio.Future] = {}
+        self._pending = PendingReplies("config", timeout_s)
 
     async def get(self, renderer_id: str) -> dict:
-        reply = await self._request(renderer_id, "config")
+        reply = await self._request(renderer_id)
         return snapshot_to_dict(reply)
 
     async def update(self, renderer_id: str, changes: dict[str, str]) -> dict:
-        reply = await self._request(renderer_id, "config update", changes=changes)
+        reply = await self._request(renderer_id, changes=changes)
         applied = [o for o in reply.outcomes if o.applied]
         if applied:
             logger.info(
@@ -142,47 +141,25 @@ class RendererConfigService:
         return result_to_dict(reply)
 
     async def _request(
-        self, renderer_id: str, what: str, changes: Optional[dict[str, str]] = None
+        self, renderer_id: str, changes: Optional[dict[str, str]] = None
     ) -> Any:
         ws = self._connection(renderer_id)
-        # Reserved before the write: the answer must never be able to arrive
-        # before there is something waiting for it.
-        message_id = ws.next_message_id()
-        key = (renderer_id, message_id)
-        future = asyncio.get_running_loop().create_future()
-        self._pending[key] = future
-        try:
+
+        async def send(message_id: int) -> None:
             if changes is None:
                 await ws.send_config_request(message_id)
             else:
                 await ws.send_config_update(message_id, changes)
-            return await asyncio.wait_for(future, self._timeout_s)
-        except asyncio.TimeoutError:
-            logger.warning("Renderer %s did not answer for %s", renderer_id, what)
-            raise
-        finally:
-            self._pending.pop(key, None)
+
+        return await self._pending.request(renderer_id, ws, send)
 
     def _connection(self, renderer_id: str) -> RendererLink:
         return self._registry.require_session(renderer_id)
 
-    def handle_reply(self, renderer_id: str, in_reply_to: int, message: Any) -> None:
-        future = self._pending.get((renderer_id, in_reply_to))
-        if future is None or future.done():
-            logger.debug(
-                "Ignoring config reply to message %d from %s, which nobody awaits",
-                in_reply_to,
-                renderer_id,
-            )
-            return
-        future.set_result(message)
+    def handle_reply(
+        self, renderer_id: str, link: RendererLink, in_reply_to: int, message: Any
+    ) -> None:
+        self._pending.handle_reply(renderer_id, link, in_reply_to, message)
 
-    def handle_disconnect(self, renderer_id: str) -> None:
-        """Nothing is coming back on a socket that is gone."""
-        for key, future in list(self._pending.items()):
-            if key[0] == renderer_id and not future.done():
-                future.set_exception(
-                    RendererUnavailable(
-                        f"renderer {renderer_id} disconnected before answering"
-                    )
-                )
+    def handle_disconnect(self, renderer_id: str, link: RendererLink) -> None:
+        self._pending.handle_disconnect(renderer_id, link)

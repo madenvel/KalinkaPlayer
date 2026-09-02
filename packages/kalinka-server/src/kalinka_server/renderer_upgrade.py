@@ -13,13 +13,13 @@ that cannot install a release of itself is never offered one.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .renderer_link import RendererLink
 from .renderer_registry import RendererRegistry, RendererUnavailable
+from .renderer_replies import PendingReplies
 from .update_check import is_newer
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -42,7 +42,7 @@ class UpgradeCandidate:
 
 
 class RendererUpgradeService:
-    """One in-flight request per renderer, matched by the envelope's id."""
+    """At most one upgrade in flight per renderer, whatever asks for it."""
 
     def __init__(
         self,
@@ -55,8 +55,7 @@ class RendererUpgradeService:
         rather than on the pool that answers it."""
         self._registry = registry
         self._is_busy = is_busy
-        self._timeout_s = timeout_s
-        self._pending: dict[tuple[str, int], asyncio.Future] = {}
+        self._pending = PendingReplies("upgrade", timeout_s)
 
     def candidates(self, latest_version: Optional[str]) -> list[UpgradeCandidate]:
         """Connected native renderers behind ``latest_version`` that could take
@@ -150,7 +149,17 @@ class RendererUpgradeService:
             raise UpgradeRefused(f"{name} cannot install a release of itself")
         if self._is_busy(renderer_id):
             raise UpgradeRefused(f"{name} is playing right now")
-        result = await self._request(record.session, renderer_id, target_version)
+        if self._pending.waiting_on(record.session):
+            # Two triggers would install twice, and the second would land on a
+            # box already restarting into the first.
+            raise UpgradeRefused(f"{name} is already upgrading")
+        result = await self._pending.request(
+            renderer_id,
+            record.session,
+            lambda message_id: record.session.send_upgrade(
+                message_id, target_version
+            ),
+        )
         if not result.accepted:
             raise UpgradeRefused(
                 f"{name} refused: {result.detail}"
@@ -165,47 +174,13 @@ class RendererUpgradeService:
         )
         return result.detail
 
-    async def _request(
-        self, link: RendererLink, renderer_id: str, target_version: str
-    ):
-        # Reserved before the write: the answer must never be able to arrive
-        # before there is something waiting for it.
-        message_id = link.next_message_id()
-        key = (renderer_id, message_id)
-        future = asyncio.get_running_loop().create_future()
-        self._pending[key] = future
-        try:
-            await link.send_upgrade(message_id, target_version)
-            return await asyncio.wait_for(future, self._timeout_s)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Renderer %s did not answer the upgrade request", renderer_id
-            )
-            raise
-        finally:
-            self._pending.pop(key, None)
+    def handle_reply(
+        self, renderer_id: str, link: RendererLink, in_reply_to: int, message
+    ) -> None:
+        self._pending.handle_reply(renderer_id, link, in_reply_to, message)
 
-    def handle_reply(self, renderer_id: str, in_reply_to: int, message) -> None:
-        future = self._pending.get((renderer_id, in_reply_to))
-        if future is None or future.done():
-            logger.debug(
-                "Ignoring upgrade reply to message %d from %s, which nobody "
-                "awaits",
-                in_reply_to,
-                renderer_id,
-            )
-            return
-        future.set_result(message)
-
-    def handle_disconnect(self, renderer_id: str) -> None:
-        """Nothing is coming back on a socket that is gone."""
-        for key, future in list(self._pending.items()):
-            if key[0] == renderer_id and not future.done():
-                future.set_exception(
-                    RendererUnavailable(
-                        f"renderer {renderer_id} disconnected before answering"
-                    )
-                )
+    def handle_disconnect(self, renderer_id: str, link: RendererLink) -> None:
+        self._pending.handle_disconnect(renderer_id, link)
 
 
 def version_is_newer(candidate: str, installed: str) -> bool:
