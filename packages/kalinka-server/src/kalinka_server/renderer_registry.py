@@ -53,6 +53,8 @@ class RendererRecord:
     server_addr: Optional[tuple[str, int]] = None
     # False when the renderer's protocol range excludes this Core's version.
     compatible: bool = True
+    # Whether the renderer can install a new release of itself on request.
+    upgrade_supported: bool = False
     # The renderer's connection while it has one; compared by identity.
     session: Optional[RendererLink] = field(default=None, repr=False)
 
@@ -80,6 +82,7 @@ class RendererRecord:
             kind=self.kind,
             status=self.status.value,
             compatible=self.compatible,
+            upgrade_supported=self.upgrade_supported,
             platform=self.platform,
             connected_at=self.connected_at,
             last_seen=self.last_seen,
@@ -124,6 +127,7 @@ class RendererRegistry:
         session: RendererLink,
         server_addr: Optional[tuple[str, int]] = None,
         compatible: bool = True,
+        upgrade_supported: bool = False,
     ) -> RegistrationKind:
         self._cancel_reap(renderer_id)
         now = time.time()
@@ -160,6 +164,7 @@ class RendererRegistry:
             server_addr=server_addr,
             session=session,
             compatible=compatible,
+            upgrade_supported=upgrade_supported,
         )
         logger.info(
             "Renderer %s: '%s' (%s, id=%s)",
@@ -255,6 +260,10 @@ class RendererRegistry:
 
     def get(self, renderer_id: str) -> Optional[RendererRecord]:
         return self._renderers.get(renderer_id)
+
+    def records(self) -> list[RendererRecord]:
+        """Every renderer known right now, connected or not."""
+        return list(self._renderers.values())
 
     def live_session(self, renderer_id: str) -> Optional[RendererLink]:
         """The renderer's link while it is connected, else None.

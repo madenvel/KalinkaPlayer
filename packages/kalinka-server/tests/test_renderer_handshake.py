@@ -15,6 +15,7 @@ from kalinka_server.renderer_config import RendererConfigService
 from kalinka_server.renderer_proto import renderer_pb2 as pb
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
+from kalinka_server.renderer_upgrade import RendererUpgradeService
 from kalinka_server.renderer_ws_handler import (
     PROTOCOL_VERSION,
     handle_renderer_connection,
@@ -84,6 +85,7 @@ async def _run(
             registry,
             pool,
             RendererConfigService(registry),
+            RendererUpgradeService(registry, lambda _: False),
         ),
         timeout=5,
     )

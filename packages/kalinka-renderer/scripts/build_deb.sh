@@ -37,10 +37,17 @@ TARGET_DIR="kalinka-renderer-$VERSION"
 TARGET_FILE="$TARGET_DIR.$PLATFORM.$ARCH.deb"
 rm -rf "$TARGET_DIR"
 
-mkdir -p "$TARGET_DIR/usr/bin" "$TARGET_DIR/usr/lib/systemd/system" "$TARGET_DIR/DEBIAN"
+mkdir -p "$TARGET_DIR/usr/bin" "$TARGET_DIR/usr/lib/systemd/system" \
+    "$TARGET_DIR/opt/kalinka" "$TARGET_DIR/DEBIAN"
 install -m 755 "$BUILD_DIR/kalinka-renderer" "$TARGET_DIR/usr/bin/kalinka-renderer"
 strip --strip-unneeded "$TARGET_DIR/usr/bin/kalinka-renderer"
 install -m 644 scripts/kalinka-renderer.service "$TARGET_DIR/usr/lib/systemd/system/"
+# The upgrade plane: the renderer asks by touching a file, root does the work.
+install -m 644 scripts/kalinka-renderer-upgrade.path "$TARGET_DIR/usr/lib/systemd/system/"
+install -m 644 scripts/kalinka-renderer-upgrade.service "$TARGET_DIR/usr/lib/systemd/system/"
+# Shipped inert: enabling it is how a box opts into upgrading without a Core.
+install -m 644 scripts/kalinka-renderer-upgrade.timer "$TARGET_DIR/usr/lib/systemd/system/"
+install -m 755 scripts/upgrade-renderer.sh "$TARGET_DIR/opt/kalinka/upgrade-renderer.sh"
 
 # Depends from what the stripped binary actually links on this distro.
 SHLIBDEPS=""

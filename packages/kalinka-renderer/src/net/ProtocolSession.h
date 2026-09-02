@@ -82,6 +82,7 @@ private:
   void handleSessionClose(const std::string &sessionId);
   void handleCommand(const kalinka::renderer::v1::Envelope &env);
   void handleGoodbye(const kalinka::renderer::v1::Goodbye &goodbye);
+  void handleUpgrade(const kalinka::renderer::v1::Envelope &env);
   void adoptSession();
   void detachSession();
   void sendEnvelope(kalinka::renderer::v1::Envelope &env);

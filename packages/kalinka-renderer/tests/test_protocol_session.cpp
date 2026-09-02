@@ -11,6 +11,7 @@
 #include "fakes.h"
 #include "net/ProtocolSession.h"
 #include "session/SessionManager.h"
+#include "upgrade/UpgradeService.h"
 
 namespace pb = kalinka::renderer::v1;
 using namespace std::chrono_literals;
@@ -36,6 +37,24 @@ struct FakeWire {
         },
         [this] { gaveUp = true; },
     };
+  }
+};
+
+/// Records what was asked of it instead of touching the filesystem.
+class FakeUpgradeService : public UpgradeService {
+public:
+  bool available = true;
+  std::string failWith;
+  std::vector<std::string> requested;
+
+  bool supported() const override { return available; }
+
+  std::string request(const std::string &targetVersion) override {
+    if (!failWith.empty()) {
+      return failWith;
+    }
+    requested.push_back(targetVersion);
+    return {};
   }
 };
 
@@ -75,10 +94,13 @@ protected:
   boost::asio::io_context ioc;
   std::shared_ptr<FakePlayer> player = std::make_shared<FakePlayer>();
   Identity identity{"rid-1", "iid-1"};
+  std::shared_ptr<FakeUpgradeService> upgrade =
+      std::make_shared<FakeUpgradeService>();
   RendererServices services{
       std::make_shared<SessionManager>(ioc, 60s, player),
       std::make_shared<ConfigService>(
           std::vector<std::shared_ptr<ConfigContributor>>{player}),
+      upgrade,
   };
 };
 
@@ -409,4 +431,84 @@ TEST_F(ProtocolSessionTest, ASessionIsNotLeftPlayingForACoreWeCannotFollow) {
   welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
 
   EXPECT_EQ(services.sessions->current(), nullptr);
+}
+
+TEST_F(ProtocolSessionTest, AnUpgradeRequestIsPassedToTheUpgradePlane) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a");
+
+  pb::Envelope env;
+  env.set_message_id(7);
+  env.mutable_upgrade()->set_target_version("0.4.0");
+  feed(*protocol, env);
+
+  EXPECT_EQ(upgrade->requested, std::vector<std::string>{"0.4.0"});
+  ASSERT_EQ(wire.sent.size(), 1u);
+  EXPECT_TRUE(wire.sent[0].upgrade_result().accepted());
+  EXPECT_EQ(wire.sent[0].in_reply_to(), 7u);
+}
+
+TEST_F(ProtocolSessionTest, ACoreWeCannotFollowCanStillUpgradeUs) {
+  // The whole point of the version-free set: the Core that has left us behind
+  // is the one that has to be able to replace this binary.
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a", kMaxRendererProtocolVersion + 1);
+
+  pb::Envelope env;
+  env.mutable_upgrade()->set_target_version("0.4.0");
+  feed(*protocol, env);
+
+  EXPECT_EQ(upgrade->requested, std::vector<std::string>{"0.4.0"});
+  ASSERT_EQ(wire.sent.size(), 1u);
+  EXPECT_TRUE(wire.sent[0].upgrade_result().accepted());
+}
+
+TEST_F(ProtocolSessionTest, PlaybackIsNotCutOffByAnUpgrade) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  welcome(*protocol, "server-a");
+  openSession(*protocol, "sid-1");
+  wire.sent.clear();
+
+  pb::Envelope env;
+  env.mutable_upgrade()->set_target_version("0.4.0");
+  feed(*protocol, env);
+
+  EXPECT_TRUE(upgrade->requested.empty());
+  ASSERT_EQ(wire.sent.size(), 1u);
+  EXPECT_FALSE(wire.sent[0].upgrade_result().accepted());
+}
+
+TEST_F(ProtocolSessionTest, AnInstallThatCannotUpgradeItselfSaysSo) {
+  // A flatpak or from-source build: refusing is what stops a Core offering an
+  // upgrade that would silently do nothing.
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+  upgrade->available = false;
+  protocol->onUp();
+  welcome(*protocol, "server-a");
+
+  ASSERT_FALSE(wire.sent.empty());
+  EXPECT_FALSE(wire.sent[0].hello().upgrade_supported());
+
+  wire.sent.clear();
+  pb::Envelope env;
+  env.mutable_upgrade();
+  feed(*protocol, env);
+
+  ASSERT_EQ(wire.sent.size(), 1u);
+  EXPECT_FALSE(wire.sent[0].upgrade_result().accepted());
+  EXPECT_TRUE(upgrade->requested.empty());
+}
+
+TEST_F(ProtocolSessionTest, HelloSaysThisInstallCanUpgradeItself) {
+  FakeWire wire;
+  auto protocol = makeProtocol(wire);
+
+  protocol->onUp();
+
+  ASSERT_FALSE(wire.sent.empty());
+  EXPECT_TRUE(wire.sent[0].hello().upgrade_supported());
 }

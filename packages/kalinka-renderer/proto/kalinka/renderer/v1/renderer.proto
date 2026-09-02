@@ -39,6 +39,7 @@ message Envelope {
     SessionClosed session_closed = 1014;
     ConfigSnapshot config_snapshot = 1015;
     ConfigResult config_result = 1016;
+    UpgradeResult upgrade_result = 1017;
     // core -> renderer: 2000-2999
     Welcome welcome = 2000;
     Command command = 2001;
@@ -46,6 +47,7 @@ message Envelope {
     SessionClose session_close = 2004;
     ConfigRequest config_request = 2005;
     ConfigUpdate config_update = 2006;
+    Upgrade upgrade = 2007;
     // either direction
     Goodbye goodbye = 3000;
   }
@@ -210,6 +212,12 @@ message Hello {
   // every Core; only the one whose server_id matches acts on it.
   string active_session_id = 11;
   string session_owner_server_id = 12;
+
+  // Whether this renderer can install a new release of itself on request —
+  // the root-side units that do it are present. False for a build installed
+  // some other way (flatpak, from source), which a Core must not offer to
+  // upgrade.
+  bool upgrade_supported = 13;
 }
 
 // Core's response to a valid Hello.
@@ -441,6 +449,25 @@ message ConfigUpdate {
     string value = 2;
   }
   repeated Setting settings = 1;
+}
+
+// Core -> renderer: install a published renderer release and restart into it.
+//
+// Meaning fixed for every protocol version: a Core that has moved past this
+// renderer still sends it, and that is how such a renderer gets un-stranded.
+// The renderer only requests the upgrade — the install is done by root-side
+// units it cannot reach itself.
+message Upgrade {
+  // Release to install, e.g. "0.4.0". Empty asks for the latest published.
+  string target_version = 1;
+}
+
+// Whether the renderer took the request on. Success here means the install
+// was started, not that it finished: the renderer restarts into the new
+// version and re-registers, which is what actually reports the outcome.
+message UpgradeResult {
+  bool accepted = 1;
+  string detail = 2;
 }
 
 enum ConfigFieldType {

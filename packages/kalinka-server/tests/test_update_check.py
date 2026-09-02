@@ -220,12 +220,16 @@ class TestMaybeAutoUpgrade:
         monkeypatch.setattr(update_check, "get_version", lambda: "3.2.0")
         return checker, requests
 
-    def _attempt(self, checker, at, stopped=None):
+    def _attempt(self, checker, at, stopped=None, renderers_ready=None):
         async def probe():
             return stopped
 
         asyncio.run(
-            checker.maybe_auto_upgrade(None if stopped is None else probe, at)
+            checker.maybe_auto_upgrade(
+                None if stopped is None else probe,
+                renderers_ready,
+                now=at,
+            )
         )
 
     def test_fires_in_quiet_hours(self, monkeypatch):
@@ -277,6 +281,44 @@ class TestMaybeAutoUpgrade:
         self._attempt(checker, datetime(2026, 7, 27, 4, 0), stopped=True)
         assert requests == [1]
 
+
+    def test_renderers_are_brought_forward_before_the_server_moves(
+        self, monkeypatch
+    ):
+        """A release can move the renderer protocol, and a renderer stranded on
+        another machine is the expensive failure — so it goes first."""
+        checker, requests = self._armed_checker(monkeypatch)
+        calls = []
+
+        async def not_yet():
+            calls.append(1)
+            return False
+
+        self._attempt(
+            checker, datetime(2026, 7, 27, 3, 30), renderers_ready=not_yet
+        )
+        assert calls == [1]
+        assert requests == []
+
+        # The tick after the renderers came back finds nothing left to do.
+        async def ready():
+            return True
+
+        self._attempt(
+            checker, datetime(2026, 7, 27, 4, 30), renderers_ready=ready
+        )
+        assert requests == [1]
+
+    def test_a_failing_renderer_check_holds_the_server_where_it_is(
+        self, monkeypatch
+    ):
+        checker, requests = self._armed_checker(monkeypatch)
+
+        async def boom():
+            raise RuntimeError("registry is having a moment")
+
+        self._attempt(checker, datetime(2026, 7, 27, 3, 30), renderers_ready=boom)
+        assert requests == []
 
 class TestUpdateChecker:
     def _checker_with_fetches(self, results, monkeypatch, installed=None):

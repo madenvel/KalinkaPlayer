@@ -43,6 +43,10 @@ class RendererDescriptor(BaseModel):
     # stays listed and connected so it can still be told to upgrade, but
     # playback never goes to it.
     compatible: bool = True
+    # Whether this renderer can install a new release of itself on request.
+    # False for one installed some other way (flatpak, from source), which is
+    # never offered an upgrade it could not perform.
+    upgrade_supported: bool = False
     platform: Dict[str, str] = Field(default_factory=dict)
     connected_at: float = 0.0
     last_seen: float = 0.0

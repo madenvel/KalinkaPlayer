@@ -96,6 +96,16 @@ Under `$KALINKA_PREFIX/var/lib/kalinka-renderer` (`KALINKA_PREFIX` defaults to
 If the directory is not writable the renderer still runs, with an ephemeral id
 and settings that last only for the run.
 
+## Upgrading
+
+The renderer runs unprivileged and cannot install anything itself. It asks, by
+writing the version it was told to install into `/run/kalinka-renderer/upgrade-request`; the root-owned `kalinka-renderer-upgrade.path` unit picks that up and runs `/opt/kalinka/upgrade-renderer.sh`, which fetches the current `install-renderer.sh` and installs that release. The renderer reports whether that machinery is present in its Hello, so a Core never offers an upgrade to a build installed some other way (flatpak, from source), which could not perform it.
+
+There are two ways in, and the second exists because the first can be cut off:
+
+- **From a Core.** `POST /renderer/<id>/upgrade` sends an Upgrade message down the renderer's own connection. It is carried by every protocol version, so it still reaches a renderer whose protocol the Core no longer speaks — the case where nothing else can. The renderer refuses while a playback session is running.
+- **On its own.** `systemctl enable --now kalinka-renderer-upgrade.timer` has the box install the latest published renderer nightly, with no Core involved at all. Shipped inert, because it restarts the renderer to apply — which is why it runs in the small hours. Enable it on a renderer whose Core is not reliably reachable, or where nobody will be around to press the button.
+
 ## Test
 
 ```sh

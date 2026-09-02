@@ -96,6 +96,7 @@ from .renderer_sessions import (
     SessionOpenFailed,
     SessionPool,
 )
+from .renderer_upgrade import RendererUpgradeService, UpgradeRefused
 from .renderer_test_tone import (
     TONE_DIR,
     TONE_MOUNT_NAME,
@@ -310,9 +311,14 @@ async def create_app(
     renderer_sessions = SessionPool(renderer_registry, get_server_id())
     renderer_registry.set_on_removed(renderer_sessions.handle_renderer_removed)
     renderer_configs = RendererConfigService(renderer_registry)
+    renderer_upgrades = RendererUpgradeService(
+        renderer_registry,
+        lambda renderer_id: renderer_sessions.get(renderer_id) is not None,
+    )
     app.state.renderer_registry = renderer_registry
     app.state.renderer_sessions = renderer_sessions
     app.state.renderer_configs = renderer_configs
+    app.state.renderer_upgrades = renderer_upgrades
 
     player_context = await setup(
         config,
@@ -393,9 +399,50 @@ async def create_app(
         playback = await app.state.player_context.playqueue.get_playback_state()
         return playback.state in (PlayerStateEnum.STOPPED, None)
 
+    async def _renderers_ready() -> bool:
+        """Whether the server may move: every registered renderer is already
+        at the release this one would install.
+
+        A release can move the renderer protocol, and a renderer left behind
+        on another machine has to be reachable to be fixed — so it is upgraded
+        first, and this server waits for the next tick, by which time the
+        renderer has restarted and re-registered at the new version. One that
+        cannot install a release of itself is named and not waited for; there
+        is nothing this server could do about it on any later night either.
+        """
+        latest = update_check.checker.latest_renderer
+        for stranded in renderer_upgrades.stranded(latest):
+            logger.warning(
+                "Renderer '%s' is on %s and cannot upgrade itself; upgrading "
+                "this server anyway",
+                stranded.friendly_name,
+                stranded.installed_version,
+            )
+        behind = renderer_upgrades.candidates(latest)
+        if not behind or latest is None:
+            return True
+        for candidate in behind:
+            if candidate.busy:
+                logger.info(
+                    "Renderer '%s' is playing; leaving the upgrade for later",
+                    candidate.friendly_name,
+                )
+                continue
+            try:
+                await renderer_upgrades.upgrade(candidate.renderer_id, latest)
+            except Exception as e:  # noqa: BLE001 — one bad renderer, not all
+                logger.warning(
+                    "Renderer '%s' did not take the upgrade: %s",
+                    candidate.friendly_name,
+                    e,
+                )
+        return False
+
     app.state.update_check_task = asyncio.create_task(
         update_check.checker.run(
-            lambda: app.state.config.server.auto_upgrade, _playback_stopped
+            lambda: app.state.config.server.auto_upgrade,
+            _playback_stopped,
+            _renderers_ready,
         )
     )
 
@@ -1448,7 +1495,12 @@ async def create_app(
     async def renderer_websocket_endpoint(websocket: WebSocket):
         """WebSocket endpoint for native renderers (binary protobuf)."""
         await handle_renderer_connection(
-            websocket, config, renderer_registry, renderer_sessions, renderer_configs
+            websocket,
+            config,
+            renderer_registry,
+            renderer_sessions,
+            renderer_configs,
+            renderer_upgrades,
         )
 
     def _volume_control_modules() -> List[str]:
@@ -1476,12 +1528,43 @@ async def create_app(
         """Known renderers, their connection status, and which module controls
         each one's volume, with the modules available to be picked."""
         renderers = renderer_registry.list()
+        behind = {
+            candidate.renderer_id
+            for candidate in renderer_upgrades.candidates(
+                update_check.checker.latest_renderer
+            )
+        }
         for row in renderers:
             row["volume_control"] = renderer_prefs.volume_control(row["renderer_id"])
+            row["update_available"] = row["renderer_id"] in behind
         return {
             "renderers": renderers,
             "volume_control_modules": _volume_control_modules(),
         }
+
+    @app.post("/renderer/{renderer_id}/upgrade")
+    async def renderer_upgrade(renderer_id: str):
+        """Ask one renderer to install the latest published release.
+
+        Answers as soon as the renderer has taken the request on; it then
+        restarts and re-registers, which is what reports the outcome. Refused
+        while a playback session is running on it, and for a renderer that
+        cannot install a release of itself.
+        """
+        latest = update_check.checker.latest_renderer
+        if not latest:
+            raise HTTPException(
+                status_code=409, detail="No renderer release is known yet"
+            )
+        try:
+            detail = await renderer_upgrades.upgrade(renderer_id, latest)
+        except RendererUnavailable as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except UpgradeRefused as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="The renderer did not answer")
+        return {"renderer_id": renderer_id, "version": latest, "detail": detail}
 
     @app.get("/renderer/sessions")
     async def renderer_session_list():

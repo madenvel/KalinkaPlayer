@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for kalinka-renderer upgrade requests
+After=kalinka-renderer.service
+
+[Path]
+PathChanged=/run/kalinka-renderer/upgrade-request
+Unit=kalinka-renderer-upgrade.service
+
+[Install]
+WantedBy=multi-user.target

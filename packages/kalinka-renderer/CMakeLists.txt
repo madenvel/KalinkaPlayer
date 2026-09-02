@@ -88,13 +88,14 @@ target_link_libraries(kalinka_native_player PUBLIC
 )
 
 # --- kalinka_renderer_core: everything that decides --------------------------
-# The session, config and protocol planes — no live sockets, discovery or
-# daemon plumbing, so unit tests link exactly what they exercise.
+# The session, config, upgrade and protocol planes — no live sockets,
+# discovery or daemon plumbing, so unit tests link exactly what they exercise.
 add_library(kalinka_renderer_core STATIC
   src/config/ConfigService.cpp
   src/net/ProtocolSession.cpp
   src/session/Session.cpp
   src/session/SessionManager.cpp
+  src/upgrade/TriggerFileUpgradeService.cpp
 )
 target_compile_definitions(kalinka_renderer_core PRIVATE
   KALINKA_RENDERER_VERSION="${KALINKA_VERSION}"
@@ -162,6 +163,7 @@ if(GTest_FOUND)
     tests/test_discovery_cache.cpp
     tests/test_native_player_settings.cpp
     tests/test_protocol_session.cpp
+    tests/test_upgrade_service.cpp
     tests/test_renderer_name.cpp
     tests/test_session.cpp
     tests/test_session_manager.cpp
