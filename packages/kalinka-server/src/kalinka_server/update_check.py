@@ -261,6 +261,7 @@ class UpdateChecker:
         self,
         auto_upgrade_enabled: Callable[[], bool] = lambda: False,
         playback_stopped: Callable[[], Awaitable[bool]] | None = None,
+        renderers_ready: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         """Hourly tick: refresh the release info and, when the (live-read)
         config toggle is on, fire the auto-upgrade in the quiet-hours
@@ -268,17 +269,25 @@ class UpdateChecker:
         while True:
             await self.check_now()
             if auto_upgrade_enabled():
-                await self.maybe_auto_upgrade(playback_stopped)
+                await self.maybe_auto_upgrade(playback_stopped, renderers_ready)
             await asyncio.sleep(_TICK_INTERVAL)
 
     async def maybe_auto_upgrade(
         self,
         playback_stopped: Callable[[], Awaitable[bool]] | None = None,
+        renderers_ready: Callable[[], Awaitable[bool]] | None = None,
         now: datetime | None = None,
     ) -> None:
         """Trigger the root-side upgrade during quiet hours, but never
         while something is playing — a later tick in the same window
         retries once playback stops.
+
+        The renderers go first. ``renderers_ready`` says whether any
+        registered renderer still has to be brought forward; while one
+        does, this server holds where it is, because a release that moves
+        the renderer protocol would otherwise leave it stranded on
+        another machine. The tick that follows finds them upgraded and
+        goes ahead.
 
         At most one attempt per day: a failed install (server still up
         next tick) retries the following night rather than hammering,
@@ -300,6 +309,14 @@ class UpdateChecker:
                     return
             except Exception as e:  # noqa: BLE001 — don't upgrade blind
                 logger.warning("Auto-upgrade playback probe failed: %s", e)
+                return
+        if renderers_ready is not None:
+            try:
+                if not await renderers_ready():
+                    logger.info("Auto-upgrade postponed: renderers go first")
+                    return
+            except Exception as e:  # noqa: BLE001 — don't upgrade blind
+                logger.warning("Auto-upgrade renderer check failed: %s", e)
                 return
         self._last_auto_attempt = now.date()
         try:

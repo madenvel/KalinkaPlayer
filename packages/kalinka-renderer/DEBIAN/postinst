@@ -8,6 +8,7 @@ set -euo pipefail
 USER="kalrndr"
 STATE_DIR="/var/lib/kalinka-renderer"
 UNIT_NAME="kalinka-renderer.service"
+UPGRADE_PATH_UNIT="kalinka-renderer-upgrade.path"
 
 case "$1" in
   configure)
@@ -26,6 +27,10 @@ case "$1" in
 
     systemctl daemon-reload
     systemctl enable "$UNIT_NAME"
+    # Enabling arms the watcher at boot; starting arms it for this one, so an
+    # upgrade requested before the next reboot is still acted on.
+    systemctl enable "$UPGRADE_PATH_UNIT"
+    systemctl start "$UPGRADE_PATH_UNIT"
     systemctl restart "$UNIT_NAME"
     ;;
 esac

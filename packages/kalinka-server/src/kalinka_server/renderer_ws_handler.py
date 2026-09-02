@@ -18,6 +18,7 @@ from .renderer_link import RendererLink
 from .renderer_registry import RendererRegistry
 from .renderer_sessions import CloseReason, SessionPool
 from .renderer_state import StateChange
+from .renderer_upgrade import RendererUpgradeService
 from .server_identity import get_server_id
 from .version import get_rest_api_version, get_version
 
@@ -31,7 +32,7 @@ INBOX_SIZE = 256
 # The messages whose meaning is fixed for every protocol version, so they stay
 # usable with a renderer this Core cannot otherwise talk to. Nothing may be
 # removed from here: it is the channel an incompatible renderer is reached on.
-_VERSION_FREE_PAYLOADS = frozenset({"hello", "goodbye"})
+_VERSION_FREE_PAYLOADS = frozenset({"hello", "goodbye", "upgrade_result"})
 
 _CLOSE_REASON_TO_PB = {
     CloseReason.STALE: pb.SessionClose.REASON_STALE,
@@ -115,6 +116,11 @@ class RendererSession(RendererLink):
             setting.value = str(value)
         await self._send(env)
 
+    async def send_upgrade(self, message_id: int, target_version: str) -> None:
+        env = self._envelope(message_id)
+        env.upgrade.target_version = target_version
+        await self._send(env)
+
     async def send_session_close(self, session_id: str, reason) -> None:
         env = self._envelope()
         env.session_close.session_id = session_id
@@ -147,6 +153,7 @@ async def handle_renderer_connection(
     registry: RendererRegistry,
     sessions: SessionPool,
     configs: RendererConfigService,
+    upgrades: RendererUpgradeService,
 ):
     await websocket.accept()
     session = RendererSession(websocket)
@@ -237,6 +244,7 @@ async def handle_renderer_connection(
                         "audio_backend": hello.platform.audio_backend,
                     },
                     session=session,
+                    upgrade_supported=hello.upgrade_supported,
                     server_addr=(addr[0], addr[1]) if addr and addr[1] else None,
                     compatible=compatible,
                 )
@@ -271,6 +279,10 @@ async def handle_renderer_connection(
                     renderer_error=closed.reason
                     == pb.SessionClosed.REASON_RENDERER_ERROR,
                     detail=closed.detail,
+                )
+            elif payload == "upgrade_result":
+                upgrades.handle_reply(
+                    registered_id or "", env.in_reply_to, env.upgrade_result
                 )
             elif payload in ("config_snapshot", "config_result"):
                 configs.handle_reply(
@@ -319,6 +331,7 @@ async def handle_renderer_connection(
             registry.disconnect(registered_id, session, clean=clean_goodbye)
             sessions.suspend(registered_id, session)
             configs.handle_disconnect(registered_id)
+            upgrades.handle_disconnect(registered_id)
         else:
             logger.info("Renderer connection closed before registration")
         try:

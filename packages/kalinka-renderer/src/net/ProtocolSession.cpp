@@ -59,6 +59,8 @@ void ProtocolSession::onUp() {
   pb::Hello *hello = env.mutable_hello();
   hello->mutable_protocol_versions()->set_min(kMinRendererProtocolVersion);
   hello->mutable_protocol_versions()->set_max(kMaxRendererProtocolVersion);
+  hello->set_upgrade_supported(services_.upgrade &&
+                               services_.upgrade->supported());
   hello->set_renderer_id(identity_.rendererId);
   hello->set_instance_id(identity_.instanceId);
   hello->set_friendly_name(friendlyName_);
@@ -114,6 +116,9 @@ void ProtocolSession::onMessage(const std::string &data) {
     sendReply(out, env.message_id());
     break;
   }
+  case pb::Envelope::kUpgrade:
+    handleUpgrade(env);
+    break;
   case pb::Envelope::kGoodbye:
     handleGoodbye(env.goodbye());
     break;
@@ -150,6 +155,39 @@ void ProtocolSession::handleWelcome(const pb::Welcome &welcome) {
     return;
   }
   adoptSession();
+}
+
+void ProtocolSession::handleUpgrade(const pb::Envelope &env) {
+  // Answered whatever protocol the Core speaks: a Core we cannot follow is
+  // exactly the one that needs to be able to replace this binary.
+  pb::Envelope out;
+  pb::UpgradeResult *result = out.mutable_upgrade_result();
+  const std::string &target = env.upgrade().target_version();
+
+  if (!services_.upgrade || !services_.upgrade->supported()) {
+    result->set_accepted(false);
+    result->set_detail(
+        "this renderer was not installed in a way that can upgrade itself");
+  } else if (services_.sessions->current() != nullptr) {
+    // The restart would cut the audio off mid-track. A Core asks idle
+    // renderers first; this is the renderer's own last word on it.
+    result->set_accepted(false);
+    result->set_detail("a playback session is running");
+  } else if (std::string error = services_.upgrade->request(target);
+             !error.empty()) {
+    result->set_accepted(false);
+    result->set_detail(error);
+  } else {
+    result->set_accepted(true);
+    result->set_detail(target.empty() ? "upgrading to the latest release"
+                                      : "upgrading to " + target);
+    spdlog::info("[{}] Upgrade requested by the Core (target '{}')", name_,
+                 target.empty() ? "latest" : target);
+  }
+  if (!result->accepted()) {
+    spdlog::warn("[{}] Upgrade request refused: {}", name_, result->detail());
+  }
+  sendReply(out, env.message_id());
 }
 
 void ProtocolSession::handleSessionOpen(const pb::SessionOpen &open) {

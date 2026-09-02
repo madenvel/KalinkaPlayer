@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly kalinka-renderer upgrade check
+Documentation=https://github.com/madenvel/KalinkaPlayer
+
+[Timer]
+# Quiet hours, spread over an hour so a shelf of renderers does not all pull
+# at once. Installing restarts the renderer, which is why this runs at night.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

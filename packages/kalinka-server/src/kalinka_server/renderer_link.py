@@ -46,6 +46,13 @@ class RendererLink(Protocol):
         self, message_id: int, changes: dict[str, str]
     ) -> None: ...
 
+    async def send_upgrade(self, message_id: int, target_version: str) -> None:
+        """Ask the renderer to install ``target_version`` and restart into it.
+
+        Carried by every protocol version, so it reaches a renderer this Core
+        can no longer drive — which is the one that needs it."""
+        ...
+
     async def replace(self) -> None:
         """Retire this connection in favour of a newer one for the same
         renderer."""

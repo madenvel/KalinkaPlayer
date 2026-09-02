@@ -12,6 +12,11 @@ SupplementaryGroups=audio
 # /var/lib/kalinka-renderer — where the renderer persists its stable id.
 StateDirectory=kalinka-renderer
 StateDirectoryMode=0750
+# /run/kalinka-renderer — where it writes the upgrade request that
+# kalinka-renderer-upgrade.path watches. It cannot install anything itself.
+RuntimeDirectory=kalinka-renderer
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 
 # Foreground; logs go to the journal.
 ExecStart=/usr/bin/kalinka-renderer

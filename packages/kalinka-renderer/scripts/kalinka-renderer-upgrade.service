@@ -1,0 +1,10 @@
+[Unit]
+Description=Upgrade kalinka-renderer to a published release on request
+
+[Service]
+Type=oneshot
+# Downloading and installing a package on a Pi can take minutes, and the new
+# package's postinst restarts kalinka-renderer.service inside this run.
+TimeoutStartSec=infinity
+ExecStart=/opt/kalinka/upgrade-renderer.sh
+ExecStartPost=-/bin/rm -f /run/kalinka-renderer/upgrade-request

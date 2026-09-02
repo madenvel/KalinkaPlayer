@@ -20,6 +20,7 @@
 #include "Daemon.h"
 #include "Identity.h"
 #include "RendererServices.h"
+#include "upgrade/TriggerFileUpgradeService.h"
 #include "config/ConfigService.h"
 #include "config/RendererName.h"
 #include "discovery/MdnsDiscovery.h"
@@ -162,6 +163,7 @@ int main(int argc, char **argv) {
       std::make_shared<ConfigService>(
           std::vector<std::shared_ptr<ConfigContributor>>{
               name, player, player->bufferSettings()}),
+      std::make_shared<TriggerFileUpgradeService>(),
   };
   ConnectionManager manager(ioc, identity, name->value(), services);
 
