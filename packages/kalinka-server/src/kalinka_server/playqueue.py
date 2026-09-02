@@ -297,26 +297,11 @@ class PlayQueueImpl(PlayQueueController):
         else:
             self._cancel_prefetch_timer()
 
-        state_update_ts = time.monotonic_ns()
-        position_diff = 0
-        if new_state.state == AudioGraphNodeState.STREAMING:
-            position_diff = int((state_update_ts - new_state.timestamp) / 1_000_000)
         if new_state.state == AudioGraphNodeState.FINISHED:
             new_state.position = 0
 
         self.event_emitter.dispatch(
-            PlaybackStateChangedEvent(
-                state=PlaybackState(
-                    state=to_state_name(new_state.state),
-                    current_track=self._get_track_info(self.current_track_id),
-                    index=self.current_track_id,
-                    position=new_state.position + position_diff,
-                    message=new_state.error.message if new_state.error else None,
-                    audio_info=to_audio_info(new_state.stream_info),
-                    mime_type=self.current_format,
-                    timestamp_ns=state_update_ts,
-                )
-            ),
+            PlaybackStateChangedEvent(state=self._to_playback_state(new_state)),
         )
 
     @serialised
@@ -784,19 +769,20 @@ class PlayQueueImpl(PlayQueueController):
         return self._get_playback_state()
 
     def _get_playback_state(self) -> PlaybackState:
-        stream_state = self._track_player.get_state()
+        return self._to_playback_state(self._track_player.get_state())
+
+    def _to_playback_state(self, stream_state: StreamState) -> PlaybackState:
+        """What clients are told, from one renderer state; the single shape
+        the REST snapshot and every PlaybackStateChangedEvent are built in."""
         return PlaybackState(
             state=to_state_name(stream_state.state),
-            current_track=(
-                self._get_track_info(self.current_track_id)
-                if self.current_track_id in range(0, len(self.track_list))
-                else None
-            ),
+            current_track=self._get_track_info(self.current_track_id),
             index=self.current_track_id,
             position=self._estimated_progress(stream_state),
             message=stream_state.error.message if stream_state.error else None,
             audio_info=to_audio_info(stream_state.stream_info),
             mime_type=self.current_format,
+            stream_url=self._track_player.stream_uri(self.current_stream_id),
             timestamp_ns=time.monotonic_ns(),
         )
 

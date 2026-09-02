@@ -95,6 +95,8 @@ class RendererPlayer:
         )
         self._session: Optional[PlaybackSession] = None
         self._interrupted: Optional[Callable[[int], Any]] = None
+        # What each live stream was addressed as — minted per renderer, here.
+        self._stream_uris: dict[int, str] = {}
         # Commands are applied strictly in call order by one sender task.
         self._ops: asyncio.Queue = asyncio.Queue()
         self._sender_task: Optional[asyncio.Task] = None
@@ -108,6 +110,12 @@ class RendererPlayer:
 
     def get_state(self) -> StreamState:
         return self._last_state
+
+    def stream_uri(self, stream_id: Optional[int]) -> Optional[str]:
+        """Where the renderer is fetching this stream from, while it holds it."""
+        if stream_id is None:
+            return None
+        return self._stream_uris.get(stream_id)
 
     def on_interrupted(self, callback: Callable[[int], Any]) -> None:
         """Called with the position when playback was cut short but the
@@ -193,12 +201,14 @@ class RendererPlayer:
         if op == "append":
             stream_id, source, start_offset_ms = args
             session = await self._ensure_session()
+            uri = self._resolve_uri(source, session.renderer_id)
             await session.enqueue_source(
-                self._resolve_uri(source, session.renderer_id),
+                uri,
                 mime_type=source.format or "",
                 source_token=str(stream_id),
                 start_offset_ms=start_offset_ms,
             )
+            self._stream_uris[stream_id] = uri
             return
         if op == "stop":
             await self._release(synthesize_stopped=True)
@@ -209,8 +219,10 @@ class RendererPlayer:
             logger.debug("Dropping %s: no renderer session", op)
             return
         if op == "remove":
+            self._stream_uris.pop(args[0], None)
             await session.remove_source(str(args[0]))
         elif op == "clear_all":
+            self._stream_uris.clear()
             await session.clear_queue()
         elif op == "pause":
             await session.pause()
@@ -279,6 +291,7 @@ class RendererPlayer:
 
     async def _release(self, synthesize_stopped: bool) -> None:
         self._cancel_release()
+        self._stream_uris.clear()
         session, self._session = self._session, None
         if session is None:
             return

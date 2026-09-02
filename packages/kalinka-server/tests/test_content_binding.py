@@ -161,3 +161,55 @@ async def test_a_renderer_with_no_known_address_cannot_be_given_content(
         for call in emitter.dispatch.call_args_list
         if isinstance(call.args[0], PlaybackStateChangedEvent)
     ]
+
+
+async def test_the_state_reports_the_url_the_renderer_is_fetching(renderers, queue):
+    """Which link a track resolved to is not knowable from the queue alone —
+    it is minted per renderer — so the state carries what was handed over."""
+    _registry, _pool, _first, _second = renderers
+    await queue.add([_asset_track()])
+    await queue.play()
+    await asyncio.sleep(0.2)
+
+    state = await queue.get_playback_state()
+    assert state.stream_url == "http://10.0.0.1:8000/content/localfiles/1"
+
+
+async def test_the_reported_url_follows_a_renderer_switch(renderers, queue):
+    _registry, _pool, _first, _second = renderers
+    await queue.add([_asset_track()])
+    await queue.play()
+    await asyncio.sleep(0.2)
+    await queue.switch_renderer("rid-b")
+    await asyncio.sleep(0.2)
+
+    state = await queue.get_playback_state()
+    assert state.stream_url == "http://192.168.5.4:8000/content/localfiles/1"
+
+
+async def test_a_direct_url_is_reported_as_the_module_gave_it(renderers, queue):
+    _registry, _pool, _first, _second = renderers
+    await queue.add(
+        [
+            _track(
+                TrackSource(source=DirectUrl(url="https://cdn.test/1.mp3"), format="MP3")
+            )
+        ]
+    )
+    await queue.play()
+    await asyncio.sleep(0.2)
+
+    state = await queue.get_playback_state()
+    assert state.stream_url == "https://cdn.test/1.mp3"
+
+
+async def test_nothing_playing_reports_no_url(renderers, queue):
+    _registry, _pool, _first, _second = renderers
+    await queue.add([_asset_track()])
+    await queue.play()
+    await asyncio.sleep(0.2)
+    await queue.stop()
+    await asyncio.sleep(0.2)
+
+    state = await queue.get_playback_state()
+    assert state.stream_url is None
