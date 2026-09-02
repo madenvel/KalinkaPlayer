@@ -110,6 +110,17 @@ async def test_a_refusal_from_the_renderer_is_reported_not_swallowed():
         await service.upgrade("rid-1", "0.4.0")
 
 
+async def test_refusals_name_the_renderer_rather_than_its_id():
+    """These reach a person, who knows the renderer as 'Attic' and has no way
+    to read a uuid off a toast."""
+    _, service, _ = _registry_with(upgrade_supported=False)
+
+    with pytest.raises(UpgradeRefused) as refusal:
+        await service.upgrade("rid-1", "0.4.0")
+    assert "Attic" in str(refusal.value)
+    assert "rid-1" not in str(refusal.value)
+
+
 async def test_an_absent_renderer_cannot_be_upgraded():
     registry, service, _ = _registry_with()
     registry.disconnect("rid-1", registry.get("rid-1").session, clean=True)
