@@ -30,8 +30,11 @@ def register_content_route(
 
     # HEAD as well as GET: FastAPI does not answer it off a GET route the way a
     # mount does, and a client may ask for the size and type alone.
+    # `:path` because an asset id is opaque and may hold a slash: the %2F the
+    # link carries is decoded before the route is matched, and a single-segment
+    # converter would not match what the module actually minted.
     @app.api_route(
-        f"{CONTENT_ROUTE}/{{module_name}}/{{asset_id}}", methods=["GET", "HEAD"]
+        f"{CONTENT_ROUTE}/{{module_name}}/{{asset_id:path}}", methods=["GET", "HEAD"]
     )
     async def get_content(module_name: str, asset_id: str):
         info = await resolve_module(module_name).get_content_info(asset_id)

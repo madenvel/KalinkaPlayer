@@ -6,6 +6,8 @@ seek at all unless ``Accept-Ranges`` says it may. These are the guarantees the
 old in-plugin media server made and this endpoint inherits.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -39,6 +41,11 @@ def client(tmp_path):
                 ),
                 # A module may know the asset and still refuse to serve it.
                 "unservable": ContentInfo(mime_type="audio/flac"),
+                # Asset ids are the module's to mint and need not be one path
+                # segment; this one survives only if the route allows a slash.
+                "disc 1/track 1": ContentInfo(
+                    mime_type="audio/flac", local_path=str(path), cacheable=True
+                ),
             }
         )
     }
@@ -135,7 +142,39 @@ def test_content_url_brackets_an_ipv6_host():
     )
 
 
+def test_a_minted_link_reaches_the_asset_it_names(client):
+    """The link is the contract between content_url and this route: an id with
+    a slash in it is escaped on the way out and must survive the round trip,
+    which a single-segment route silently fails."""
+    url = content_url(("testserver", 80), "localfiles", "disc 1/track 1")
+
+    r = client.get(url.removeprefix("http://testserver:80"))
+
+    assert r.status_code == 200
+    assert r.content == AUDIO
+
+
 def test_content_url_escapes_the_asset_id():
     """Ids are opaque — a module may mint one holding a slash or a space."""
     url = content_url(("10.0.0.1", 8000), "localfiles", "a b/c")
     assert url == "http://10.0.0.1:8000/content/localfiles/a%20b%2Fc"
+
+
+def test_a_disabled_module_serves_no_content(monkeypatch):
+    """A module the user has switched off must read as absent, not as a fault:
+    `input_module` alone answers 500 once the interface has been torn down."""
+    from kalinka_server import server
+
+    prepared = {"localfiles": SimpleNamespace(interface=None)}
+    monkeypatch.setattr(
+        server.modules,
+        "prepared_input_modules",
+        prepared,
+        raising=False,
+    )
+    monkeypatch.setattr(server.modules, "enabled_input_modules", set(), raising=False)
+
+    with pytest.raises(HTTPException) as raised:
+        server.enabled_input_module("localfiles")
+
+    assert raised.value.status_code == 404
