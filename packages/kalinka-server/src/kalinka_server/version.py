@@ -41,7 +41,8 @@ def get_version() -> str:
 # current_renderer_changed events, and the matching replay state fields.
 # 0.4: playback state carries the output device (audio_info.output) and the
 # device volume names the backend it is applied by.
-REST_API_VERSION = "0.4"
+# 0.5: playback state names the URL the renderer is fetching (stream_url).
+REST_API_VERSION = "0.5"
 
 
 def get_rest_api_version() -> str:

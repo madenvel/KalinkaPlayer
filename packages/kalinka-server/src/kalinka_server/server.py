@@ -216,6 +216,20 @@ def input_module(name: str) -> InputModule:
     )
 
 
+def enabled_input_module(name: str) -> InputModule:
+    """The input module `name`, provided the user has it enabled.
+
+    Content from a module that is disabled — or was never installed — is absent
+    rather than a server fault, so neither may reach the 500 `input_module`
+    raises for an interface that has been torn down.
+    """
+    if name not in modules.enabled_input_modules:
+        raise HTTPException(
+            status_code=404, detail=f"Input module '{name}' is not available"
+        )
+    return input_module(name)
+
+
 def input_module_from_id(entity_id: str | EntityId) -> InputModule:
     """Get the input module based on the entity ID."""
     if isinstance(entity_id, str):
@@ -1455,7 +1469,7 @@ async def create_app(
 
         return FileResponse(resolved_path, media_type=mime_type)
 
-    register_content_route(app, input_module)
+    register_content_route(app, enabled_input_module)
 
     @app.websocket("/queue/ws")
     async def queue_websocket_endpoint(websocket: WebSocket):
