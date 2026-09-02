@@ -41,7 +41,10 @@ def get_version() -> str:
 # current_renderer_changed events, and the matching replay state fields.
 # 0.4: playback state carries the output device (audio_info.output) and the
 # device volume names the backend it is applied by.
-# 0.5: playback state names the URL the renderer is fetching (stream_url).
+# 0.5: renderer records say whether this Core can drive them (compatible)
+# and whether they can install a release of themselves (upgrade_supported),
+# which POST /renderer/{id}/upgrade asks them to do; playback state names
+# the URL the renderer is fetching (stream_url).
 REST_API_VERSION = "0.5"
 
 
