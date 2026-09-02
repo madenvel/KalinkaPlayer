@@ -10,7 +10,10 @@ from kalinka_plugin_sdk.datamodel import Album, EntityId, EntityType, PlayerStat
 from kalinka_plugin_sdk.inputmodule import Track, TrackInfo, TrackUrl
 from kalinka_server.config_model import KalinkaConfig
 from kalinka_server.playqueue import PlayQueueImpl
-from kalinka_server.renderer_registry import RendererRegistry
+from kalinka_server.renderer_registry import (
+    RendererRegistry,
+    RendererUnavailable,
+)
 from kalinka_server.renderer_sessions import RendererBusy, SessionPool
 
 from tests.sim_renderer import SimRenderer
@@ -88,6 +91,22 @@ async def test_playback_moves_to_the_selected_renderer(queue, renderers, emitter
     assert first.current is None  # and stopped here
     assert first.session_id is None  # the claim was given up
     assert queue.current_track_id == 0  # the same track
+
+
+async def test_switching_to_a_renderer_we_cannot_drive_is_refused(
+    queue, renderers
+):
+    """Resolution skips it, so accepting the pin would leave playback where it
+    was while the client believed it had moved. The refusal says what to do."""
+    registry, _pool, first, second = renderers
+    await _play_on(queue, first)
+    second.connect(compatible=False)
+
+    with pytest.raises(RendererUnavailable, match="upgraded"):
+        await queue.switch_renderer("rid-b")
+
+    assert registry.active_id() == "rid-a"
+    assert first.current is not None, "playback stayed put"
 
 
 async def test_the_track_picks_up_where_it_had_reached(queue, renderers):
