@@ -148,7 +148,7 @@ Optional extras live in **Settings**: a free [AcoustID](https://acoustid.org/) k
 
 **No sound, or no outputs to pick from.** Something has to play the audio, and the server does not — check the renderer with `systemctl status kalinka-renderer`. If the unit doesn't exist, no renderer is installed on that machine: run the renderer installer below. Meanwhile the browser player at `http://<server-ip>:8000` always works, since the browser is its own output.
 
-**A renderer on another machine never appears.** It finds the server over mDNS, so multicast has to reach it — see the caveats under *Renderers on other machines*. `journalctl -u kalinka-renderer -f` on that box says what it sees: `[Discovery] Found …` means it worked, silence means the announcements aren't arriving, and a line about `renderer_proto` means the server is too old or too new for it.
+**A renderer on another machine never appears.** It finds the server over mDNS, so multicast has to reach it — see the caveats under *Renderers on other machines*. `journalctl -u kalinka-renderer -f` on that box says what it sees: `[Discovery] Found …` means it worked, silence means the announcements aren't arriving, and a line about `renderer_proto` means that server announces no renderer support at all.
 
 **The app can't find the server.** Same mDNS story, one layer up. Enter the address by hand in **Settings → Connection** to confirm the server is otherwise fine — if that works, the problem is discovery, not Kalinka.
 
@@ -161,16 +161,18 @@ Optional extras live in **Settings**: a free [AcoustID](https://acoustid.org/) k
 The renderer bundled by the quick install plays through the machine the server runs on. To make another box an output — a Pi wired to an amplifier, say — install only the renderer there:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/madenvel/KalinkaPlayer/main/scripts/install-renderer.sh | sudo bash
+curl -fsSL https://kalinkaplayer.com/install-renderer.sh | sudo bash
 ```
 
 It picks the right package for that machine (`.deb` on Debian/Ubuntu, `.rpm` on Fedora, per architecture) and starts the service; there is also a flatpak for other distributions, see [`packages/kalinka-renderer/flatpak/README.md`](packages/kalinka-renderer/flatpak/README.md). Renderers appear in the app's output list on their own — but only if they can hear the server: **discovery is mDNS**, so the renderer and the server must share a network segment where multicast to `224.0.0.251:5353` gets through. Wi-Fi access points with client isolation or multicast filtering, VLANs without an mDNS reflector and Docker's default bridge all block it; put both ends on the same subnet, or bridge mDNS across it. Once a renderer has found the server it connects out to it and fetches media over HTTP itself, so nothing else needs opening in the other direction.
 
-Renderers installed this way are upgraded by re-running that same command on their own machine.
+Upgrading one afterwards does not need a shell on that machine. The app's output list carries an upgrade button on any renderer a published release would bring forward, and offers it as the fix on one that has fallen too far behind to play at all; the server brings its renderers forward before it upgrades itself, so a set of them moves in the order that keeps working; and `systemctl enable --now kalinka-renderer-upgrade.timer` on the renderer has it install the latest release nightly with no server involved — worth enabling on a box nobody will be standing next to. Re-running the install command by hand still works too.
+
+A renderer installed some other way — the flatpak, or built from source — reports that it cannot replace itself, and is never offered an upgrade it could not perform.
 
 ## Updating
 
-With `server.auto_upgrade` enabled the server checks the published releases hourly and upgrades itself during quiet hours while playback is stopped; otherwise the app offers the upgrade and you press the button. Either way it runs the same installer as above, so the server, the plugins, the browser player and the local renderer all move together — the renderer has its own release train (`kalinka-renderer-v*`) and version, and is upgraded whenever a newer one has been published.
+With `server.auto_upgrade` enabled the server checks the published releases hourly and upgrades itself during quiet hours while playback is stopped; otherwise the app offers the upgrade and you press the button. Either way it runs the same installer as above, so the server, the plugins, the browser player and the local renderer all move together — the renderer has its own release train (`kalinka-renderer-v*`) and version, and is upgraded whenever a newer one has been published. The renderer goes in first: a release can move the protocol the two speak, and a renderer understands the version before its own as well as its own, so upgrading it ahead of the server never leaves the machine in the pairing that does not work. Renderers on other machines are brought forward the same way, before the server moves.
 
 ## Debian Package
 Deb packages are provided in the [Releases](https://github.com/madenvel/KalinkaPlayer/releases) section. The whole app bundle (server, plugins, SDK) is pure Python and arch-independent (`_all.deb`); only the renderer ships per-arch builds, from its own `kalinka-renderer-v*` releases.
