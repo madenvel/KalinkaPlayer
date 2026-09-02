@@ -104,18 +104,22 @@ class RendererUpgradeService:
         """
         record = self._registry.get(renderer_id)
         if record is None or record.session is None:
-            raise RendererUnavailable(f"renderer {renderer_id} is not connected")
+            # Named, not numbered: these reach a person, who knows the
+            # renderer by what it calls itself and never by its id.
+            name = record.friendly_name if record else renderer_id
+            raise RendererUnavailable(f"{name} is not connected")
+        name = record.friendly_name or renderer_id
         if not record.upgrade_supported:
-            raise UpgradeRefused(
-                f"renderer {renderer_id} cannot install a release of itself"
-            )
+            raise UpgradeRefused(f"{name} cannot install a release of itself")
         if self._is_busy(renderer_id):
-            raise UpgradeRefused(
-                f"renderer {renderer_id} is running a playback session"
-            )
+            raise UpgradeRefused(f"{name} is playing right now")
         result = await self._request(record.session, renderer_id, target_version)
         if not result.accepted:
-            raise UpgradeRefused(result.detail or "the renderer refused")
+            raise UpgradeRefused(
+                f"{name} refused: {result.detail}"
+                if result.detail
+                else f"{name} refused the upgrade"
+            )
         logger.info(
             "Renderer '%s' (id=%s) is upgrading to %s",
             record.friendly_name,
