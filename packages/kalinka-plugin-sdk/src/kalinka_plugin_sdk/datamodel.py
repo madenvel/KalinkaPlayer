@@ -738,6 +738,8 @@ class PlaybackState(BaseModel):
         message (Optional[str]): Status message or error information
         audio_info (Optional[AudioInfo]): Technical details about the audio stream
         mime_type (Optional[str]): MIME type of the audio stream
+        stream_url (Optional[str]): Where the renderer is fetching the current
+            stream from, as it was handed over. Absent while nothing is loaded.
         timestamp_ns (NonNegativeInt): Timestamp when this state was captured
     """
 
@@ -748,6 +750,7 @@ class PlaybackState(BaseModel):
     message: Optional[str] = None
     audio_info: Optional[AudioInfo] = None
     mime_type: Optional[str] = None
+    stream_url: Optional[str] = None
     timestamp_ns: NonNegativeInt = 0
 
 

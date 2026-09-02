@@ -1,7 +1,6 @@
 import time
 import pytest
 import asyncio
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
 from kalinka_plugin_sdk.datamodel import (
@@ -30,8 +29,10 @@ from kalinka_server.playqueue import PlayQueueImpl
 from kalinka_server.stream_state import (
     AudioFormatInfo,
     AudioGraphNodeState,
+    StreamError,
     StreamErrorSource,
     StreamInfo,
+    StreamState,
 )
 from kalinka_server.renderer_registry import RendererRegistry
 from kalinka_server.renderer_sessions import SessionPool
@@ -77,25 +78,21 @@ def create_track(id: str):
     )
 
 
+URL1 = "https://getsamplefiles.com/download/flac/sample-3.flac"
+URL2 = "https://getsamplefiles.com/download/flac/sample-4.flac"
+URL3 = "https://getsamplefiles.com/download/flac/sample-2.flac"
+
+
 async def url1():
-    return TrackSource(
-        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-3.flac"),
-        format="FLAC",
-    )
+    return TrackSource(source=DirectUrl(url=URL1), format="FLAC")
 
 
 async def url2():
-    return TrackSource(
-        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-4.flac"),
-        format="FLAC",
-    )
+    return TrackSource(source=DirectUrl(url=URL2), format="FLAC")
 
 
 async def url3():
-    return TrackSource(
-        source=DirectUrl(url="https://getsamplefiles.com/download/flac/sample-2.flac"),
-        format="FLAC",
-    )
+    return TrackSource(source=DirectUrl(url=URL3), format="FLAC")
 
 
 def player_state_converter(*args, **kwargs):
@@ -353,6 +350,7 @@ async def test_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -366,6 +364,7 @@ async def test_play(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -420,6 +419,7 @@ async def test_switch_track(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -433,6 +433,7 @@ async def test_switch_track(event_emitter, playqueue):
                     current_track=track1.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -447,6 +448,7 @@ async def test_switch_track(event_emitter, playqueue):
                     current_track=track2.metadata,
                     # Nothing decoded for this source yet, so no format.
                     mime_type="FLAC",
+                    stream_url=URL2,
                     timestamp_ns=1,
                 )
             )
@@ -460,6 +462,7 @@ async def test_switch_track(event_emitter, playqueue):
                     current_track=track2.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL2,
                     timestamp_ns=1,
                 )
             )
@@ -522,6 +525,7 @@ async def test_play_next(event_emitter, playqueue):
                     position=0,
                     current_track=track1.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -535,6 +539,7 @@ async def test_play_next(event_emitter, playqueue):
                     current_track=track1.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -549,6 +554,7 @@ async def test_play_next(event_emitter, playqueue):
                     current_track=track3.metadata,
                     # Nothing decoded for this source yet, so no format.
                     mime_type="FLAC",
+                    stream_url=URL3,
                     timestamp_ns=1,
                 )
             )
@@ -562,6 +568,7 @@ async def test_play_next(event_emitter, playqueue):
                     current_track=track3.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL3,
                     timestamp_ns=1,
                 )
             )
@@ -617,6 +624,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -630,6 +638,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -643,6 +652,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -654,6 +664,8 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     index=0,
                     position=0,
                     current_track=track.metadata,
+                    # The renderer is holding nothing after a stop, so there is
+                    # no URL to report; the format is the track's, and stays.
                     mime_type="FLAC",
                     timestamp_ns=1,
                 )
@@ -668,6 +680,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -681,6 +694,7 @@ async def test_play_pause_stop_play(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -732,6 +746,7 @@ async def test_seek(event_emitter, playqueue):
                     position=0,
                     current_track=track.metadata,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -745,6 +760,7 @@ async def test_seek(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -758,6 +774,7 @@ async def test_seek(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -771,6 +788,7 @@ async def test_seek(event_emitter, playqueue):
                     current_track=track.metadata,
                     audio_info=AUDIO_INFO,
                     mime_type="FLAC",
+                    stream_url=URL1,
                     timestamp_ns=1,
                 )
             )
@@ -886,9 +904,9 @@ async def test_retry_happens_only_for_http_stream_errors(playqueue):
     playqueue._retry_attempted = False
     playqueue._retry_current_track_async = AsyncMock()
 
-    http_error_state = SimpleNamespace(
+    http_error_state = StreamState(
         state=AudioGraphNodeState.ERROR,
-        error=SimpleNamespace(
+        error=StreamError(
             source=StreamErrorSource.HTTP_STREAM,
             message="temporary http failure",
         ),
@@ -906,15 +924,14 @@ async def test_retry_is_skipped_for_non_http_errors(playqueue):
     playqueue._retry_attempted = False
     playqueue._retry_current_track_async = AsyncMock()
 
-    non_http_error_state = SimpleNamespace(
+    non_http_error_state = StreamState(
         state=AudioGraphNodeState.ERROR,
-        error=SimpleNamespace(
+        error=StreamError(
             source=StreamErrorSource.AUDIO_OUTPUT,
             message="device output failure",
         ),
         position=50,
         timestamp=time.monotonic_ns(),
-        stream_info=None,
     )
 
     await playqueue._process_state_update(non_http_error_state)
@@ -924,23 +941,17 @@ async def test_retry_is_skipped_for_non_http_errors(playqueue):
 
 
 def _finished_state():
-    return SimpleNamespace(
+    return StreamState(
         state=AudioGraphNodeState.FINISHED,
-        error=None,
         position=1000,
         timestamp=time.monotonic_ns(),
-        stream_info=None,
-        stream_id=None,
     )
 
 
 def _source_changed(stream_id=None):
-    return SimpleNamespace(
+    return StreamState(
         state=AudioGraphNodeState.SOURCE_CHANGED,
-        error=None,
-        position=0,
         timestamp=time.monotonic_ns(),
-        stream_info=None,
         stream_id=stream_id,
     )
 
@@ -1725,10 +1736,8 @@ def test_playqueue_state_apply_track_unavailable():
 
 
 def _streaming_with_duration(duration_ms):
-    return SimpleNamespace(
+    return StreamState(
         state=AudioGraphNodeState.STREAMING,
-        error=None,
-        position=0,
         timestamp=time.monotonic_ns(),
         stream_info=StreamInfo(
             format=AudioFormatInfo(sample_rate=44100, channels=2, bits_per_sample=16),
