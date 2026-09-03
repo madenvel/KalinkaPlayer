@@ -146,9 +146,8 @@ async def test_missing_file_inside_config_still_purged(tmp_path):
     await init_db(fi.db_manager.db_path)
     path = keep / "gone.mp3"
     await _index_file(fi, path, artist="A", album="AA", title="a")
-    # A sibling keeps the root demonstrably alive: a root left completely
-    # empty looks like an unmounted share and blocks purging instead (see
-    # test_cleanup_mount_guard.py).
+    # A sibling keeps the root alive: an empty unsigned root reads as an
+    # unmounted share and blocks purging (see test_cleanup_mount_guard.py).
     await _index_file(fi, keep / "stays.mp3", artist="A", album="AA", title="s")
     os.remove(path)
 

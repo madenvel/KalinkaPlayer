@@ -157,9 +157,7 @@ class FileIndexer:
             "tracks": set(),
         }
 
-        # Probe the roots before touching them: the probe gives a pending
-        # automount its window, and an unavailable root is skipped rather
-        # than scanned as an empty tree.
+        # An unavailable root must be skipped, not scanned as an empty tree.
         root_status = await self._probe_music_roots()
         available_folders = [
             folder
@@ -188,10 +186,8 @@ class FileIndexer:
         self._scan_total = sum(folder_counts.values())
         await self._publish_scan_progress(force=True)
 
-        # A root that demonstrably holds music gets its mount identity
-        # remembered; the cleanup refuses to purge when the identity later
-        # changes. Refreshed only on real content, so a bare mountpoint (or
-        # a stray sentinel file) never overwrites the mark.
+        # Record the identity only where music was found, so a bare
+        # mountpoint never overwrites the mark the purge guard trusts.
         for folder in available_folders:
             identity = root_status[folder].identity
             if folder_counts.get(folder, 0) > 0 and identity:
@@ -346,9 +342,8 @@ class FileIndexer:
     async def _count_supported_files(self, folders: List[str]) -> Dict[str, int]:
         """Count supported audio files per folder. Directory listing only —
         no per-file stat — so it stays cheap even for large libraries. Walks
-        only the folders it is given: an unavailable root must not be
-        touched here, or the walk would re-trigger a failed automount or
-        hang on a dead network mount before the scan's own skip."""
+        only the folders given: touching an unavailable root here would
+        re-trigger a failed automount or hang on a dead mount."""
 
         def _count() -> Dict[str, int]:
             counts: Dict[str, int] = {}
@@ -1287,9 +1282,8 @@ class FileIndexer:
             if root in blocked:
                 kept_per_root[root] = kept_per_root.get(root, 0) + 1
             elif root is None:
-                # Not textually under any root: purge only when the
-                # symlink-aware boundary check agrees the file left the
-                # configured folders — a config change, not a mount issue.
+                # A file the symlink-aware check also puts outside the roots
+                # left by config change, not by unmount.
                 if not path_within_roots(file_path, self.music_folders):
                     candidates.append((track, None))
             elif not os.path.exists(file_path):
@@ -1303,9 +1297,8 @@ class FileIndexer:
             )
 
         removed_tracks = 0
-        # Re-verify just before deleting: a fresh probe per affected root and
-        # a fresh stat per file, so nothing that vanished only because its
-        # share went offline during the sweep is dropped.
+        # Fresh probe and stat at delete time: the share may have gone
+        # offline during the sweep.
         recheck = {
             root: await probe_root_async(root)
             for root in {r for _, r in candidates if r is not None}
@@ -1466,8 +1459,8 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                 except (OSError, PermissionError) as e:
                     logger.debug(f"Could not watch {path}: {e}")
 
-            # Roots whose watches are gone (never armed, unmounted, or
-            # deleted); the loop below re-arms them once they come back.
+            # Roots without watches (never armed, unmounted, or deleted),
+            # re-armed by the loop below once they come back.
             lost_roots: Set[str] = set()
             next_rearm_check = 0.0
 
@@ -1488,10 +1481,8 @@ async def _file_watcher_worker(config: LocalFilesConfig):
 
             async def _rearm_lost_roots():
                 for root in sorted(lost_roots):
-                    # Reading mountinfo alone never touches the path: while
-                    # autofs still answers for the root, stat-probing it here
-                    # would re-trigger the very automount whose idle expiry
-                    # unmounted it. Wait for something else to mount it.
+                    # A stat here would re-trigger the automount whose idle
+                    # expiry just unmounted the root; mountinfo alone doesn't.
                     if autofs_pending(root):
                         continue
                     status = await probe_root_async(root)
@@ -1541,12 +1532,9 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                             else dir_path
                         )
 
-                        # The filesystem under a watch was unmounted: the
-                        # kernel has already dropped every watch on it, and
-                        # no per-file DELETE events follow. Retire the whole
-                        # root's bookkeeping and let the re-arm loop bring it
-                        # back once remounted — without this the watcher
-                        # stays silently blind to the root forever.
+                        # Unmount: the kernel already dropped every watch on
+                        # the filesystem and no per-file DELETE events follow,
+                        # so retire the whole root for the re-arm loop.
                         if event.mask & flags.UNMOUNT:
                             root = root_of(dir_path, music_folders) or dir_path
                             prefix = root + os.sep
@@ -1605,9 +1593,8 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                                 relevant_changes.add(("path_removed", file_path))
                                 logger.debug(f"File removed/moved out: {file_path}")
 
-                        # Handle watched directory removal. A configured root
-                        # deleted out from under us should re-arm when it
-                        # reappears (a recreated mountpoint, a restored dir).
+                        # Handle watched directory removal; a deleted root
+                        # re-arms when it reappears.
                         elif event.mask & flags.DELETE_SELF:
                             if event.wd in watched_dirs:
                                 del watched_dirs[event.wd]

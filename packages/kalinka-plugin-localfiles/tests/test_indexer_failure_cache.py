@@ -137,8 +137,8 @@ async def test_cleanup_prunes_failures_for_deleted_files(indexer, monkeypatch):
     await fi.process_file(file_path)
     assert await fi.db_manager.get_failure(file_path) is not None
 
-    # A sibling keeps the root demonstrably alive: a root left completely
-    # empty looks like an unmounted share and blocks the cleanup instead.
+    # A sibling keeps the root alive: an empty unsigned root reads as an
+    # unmounted share and blocks the cleanup.
     _write(music_dir / "stays.mp3")
     os.remove(file_path)
     await fi.cleanup_stale_tracks()

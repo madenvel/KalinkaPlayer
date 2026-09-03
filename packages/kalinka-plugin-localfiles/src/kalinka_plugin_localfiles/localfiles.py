@@ -48,8 +48,7 @@ from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
-# Bound on any single filesystem check against the music folders; a hard
-# NFS mount can otherwise block a stat indefinitely.
+# A hard NFS mount can otherwise block a stat indefinitely.
 STAT_TIMEOUT_S = 5.0
 
 
@@ -652,8 +651,8 @@ class LocalFilesInputModule(InputModule):
 
     async def _require_readable_bounded(self, track_path: str) -> None:
         """`_require_readable` off the event loop, bounded: a hung network
-        mount must neither freeze the server nor pin this request forever —
-        it reads as transiently unavailable instead."""
+        mount reads as transiently unavailable instead of pinning the
+        request."""
         try:
             await asyncio.wait_for(
                 asyncio.to_thread(self._require_readable, track_path),
@@ -666,11 +665,10 @@ class LocalFilesInputModule(InputModule):
 
     async def _await_readable(self, track_path: str) -> None:
         """`_require_readable` with a mount-aware second chance: when the file
-        is missing because its music folder is an unmounted share, wait a
-        bounded moment for the automounter instead of declaring the track
-        gone. Raises SourceUnavailableError while the folder stays offline —
-        including a static mount that silently gave way to the directory
-        underneath it, detected by the mount identity the indexer recorded."""
+        is missing because its music folder is an unmounted share — offline,
+        automount pending, or a static mount whose recorded identity no
+        longer matches — raise SourceUnavailableError instead of declaring
+        the track gone."""
         try:
             await self._require_readable_bounded(track_path)
             return
