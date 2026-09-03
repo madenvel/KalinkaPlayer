@@ -155,17 +155,27 @@ if [ "$FORMAT" = deb ]; then
   APT_OPTS=(-o DPkg::Lock::Timeout=300)
   echo ">> Installing with apt ..."
   if ! $SUDO apt-get "${APT_OPTS[@]}" install -y "$TMPDIR_DL/$NAME"; then
-    case "$NAME" in
-      *".$PLATFORM.$ARCH.deb") die "apt could not install $NAME" ;;
-    esac
-    cat >&2 <<EOF
+    # apt finishes configuring whatever else the box left half-installed, and
+    # that failure lands on this exit status too. Ask dpkg what actually
+    # happened before blaming the package we came to install.
+    pkg="$(dpkg-deb -f "$TMPDIR_DL/$NAME" Package 2>/dev/null || true)"
+    want="$(dpkg-deb -f "$TMPDIR_DL/$NAME" Version 2>/dev/null || true)"
+    have="$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null || true)"
+    if [ -z "$want" ] || [ "$want" != "$have" ]; then
+      case "$NAME" in
+        *".$PLATFORM.$ARCH.deb") die "apt could not install $NAME" ;;
+      esac
+      cat >&2 <<EOF
 
 error: $NAME is built for another distro, and $TAG ships no deb for $PLATFORM,
        so apt cannot satisfy its library versions. Install the flatpak instead
        (see packages/kalinka-renderer/flatpak/README.md), or build a package on
        this machine with 'make renderer-deb'.
 EOF
-    exit 1
+      exit 1
+    fi
+    echo ">> note: apt reported a failure, but $pkg $have is installed — the" >&2
+    echo "   failure was another package's, left half-configured on this box." >&2
   fi
 else
   echo ">> Installing with dnf ..."

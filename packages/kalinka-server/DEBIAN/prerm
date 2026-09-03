@@ -4,11 +4,18 @@ set -e
 VENV_DIR=/opt/kalinka/venv
 WHEELS_DIR=/opt/kalinka/wheels
 
+# An upgrade removes nothing: the incoming version's bootstrap installs its
+# wheel over what is here. Uninstalling first would say "Removing Kalinka
+# Server" in the middle of an upgrade, and would leave the venv with no server
+# at all if that bootstrap then failed to run — which is how a failed upgrade
+# turned into a box with nothing installed to fall back to.
+case "$1" in
+    upgrade|failed-upgrade) exit 0 ;;
+esac
+
 echo "Removing Kalinka Server..."
 
 # Stop and disable the restart-trigger path unit before files are removed.
-# On upgrade ($1 = "upgrade"), leave units alone so the new version's postinst
-# can re-enable cleanly.
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
     systemctl disable --now kalinka-restart.path 2>/dev/null || true
 fi
