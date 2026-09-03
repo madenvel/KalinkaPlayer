@@ -48,6 +48,10 @@ from .input_module_db import LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
+# Bound on any single filesystem check against the music folders; a hard
+# NFS mount can otherwise block a stat indefinitely.
+STAT_TIMEOUT_S = 5.0
+
 
 def artist_id(id: str) -> EntityId:
     return EntityId(id=id, type=EntityType.ARTIST, source="localfiles")
@@ -646,15 +650,29 @@ class LocalFilesInputModule(InputModule):
         if not os.access(track_path, os.R_OK):
             raise PermissionError(f"Track file is not readable: {track_path}")
 
+    async def _require_readable_bounded(self, track_path: str) -> None:
+        """`_require_readable` off the event loop, bounded: a hung network
+        mount must neither freeze the server nor pin this request forever —
+        it reads as transiently unavailable instead."""
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self._require_readable, track_path),
+                STAT_TIMEOUT_S,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            raise SourceUnavailableError(
+                "Music storage did not respond (hung network mount?)"
+            )
+
     async def _await_readable(self, track_path: str) -> None:
         """`_require_readable` with a mount-aware second chance: when the file
         is missing because its music folder is an unmounted share, wait a
         bounded moment for the automounter instead of declaring the track
-        gone. Raises SourceUnavailableError while the folder stays offline.
-        The checks run off the event loop — a hung network mount must not
-        freeze the server."""
+        gone. Raises SourceUnavailableError while the folder stays offline —
+        including a static mount that silently gave way to the directory
+        underneath it, detected by the mount identity the indexer recorded."""
         try:
-            await asyncio.to_thread(self._require_readable, track_path)
+            await self._require_readable_bounded(track_path)
             return
         except FileNotFoundError:
             root = root_of(track_path, self._music_folders)
@@ -665,7 +683,13 @@ class LocalFilesInputModule(InputModule):
             raise SourceUnavailableError(
                 f"Music folder {root} is not available: {status.reason}"
             )
-        await asyncio.to_thread(self._require_readable, track_path)
+        stored = self.db_manager.get_root_signature(root)
+        if stored and status.identity and status.identity != stored:
+            raise SourceUnavailableError(
+                f"Music folder {root} is not mounted "
+                f"(the library was indexed from {stored})"
+            )
+        await self._require_readable_bounded(track_path)
 
     async def get_content_info(self, asset_id: str) -> Optional[ContentInfo]:
         """Resolve a track id to the file the server serves for it.

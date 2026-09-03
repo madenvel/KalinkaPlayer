@@ -161,6 +161,17 @@ class FileIndexer:
         # automount its window, and an unavailable root is skipped rather
         # than scanned as an empty tree.
         root_status = await self._probe_music_roots()
+        available_folders = [
+            folder
+            for folder in self.music_folders
+            if root_status[folder].available
+        ]
+        for folder in self.music_folders:
+            if folder not in available_folders:
+                logger.warning(
+                    f"Music folder is not available, skipping scan: "
+                    f"{folder} ({root_status[folder].reason})"
+                )
 
         # Publish a zeroed row first: it overwrites anything a scan killed
         # harder than `finally` (OOM, power loss) left behind, and an
@@ -173,19 +184,21 @@ class FileIndexer:
 
         # Pre-count pass: a directory-listing-only walk (no stat, no reads)
         # so the per-file loop below can report real percentage progress.
-        self._scan_total = await self._count_supported_files()
+        folder_counts = await self._count_supported_files(available_folders)
+        self._scan_total = sum(folder_counts.values())
         await self._publish_scan_progress(force=True)
 
-        try:
-            for folder in self.music_folders:
-                status = root_status.get(folder)
-                if status is not None and not status.available:
-                    logger.warning(
-                        f"Music folder is not available, skipping scan: "
-                        f"{folder} ({status.reason})"
-                    )
-                    continue
+        # A root that demonstrably holds music gets its mount identity
+        # remembered; the cleanup refuses to purge when the identity later
+        # changes. Refreshed only on real content, so a bare mountpoint (or
+        # a stray sentinel file) never overwrites the mark.
+        for folder in available_folders:
+            identity = root_status[folder].identity
+            if folder_counts.get(folder, 0) > 0 and identity:
+                await self.db_manager.set_root_signature(folder, identity)
 
+        try:
+            for folder in available_folders:
                 logger.debug(f"Scanning folder: {folder}")
                 await self.scan_folder(folder, changed_items)
         finally:
@@ -330,19 +343,21 @@ class FileIndexer:
                         self._scan_processed += 1
                         await self._publish_scan_progress()
 
-    async def _count_supported_files(self) -> int:
-        """Count supported audio files across the music folders. Directory
-        listing only — no per-file stat — so it stays cheap even for large
-        libraries."""
+    async def _count_supported_files(self, folders: List[str]) -> Dict[str, int]:
+        """Count supported audio files per folder. Directory listing only —
+        no per-file stat — so it stays cheap even for large libraries. Walks
+        only the folders it is given: an unavailable root must not be
+        touched here, or the walk would re-trigger a failed automount or
+        hang on a dead network mount before the scan's own skip."""
 
-        def _count() -> int:
-            count = 0
-            for folder in self.music_folders:
+        def _count() -> Dict[str, int]:
+            counts: Dict[str, int] = {}
+            for folder in folders:
+                n = 0
                 for _, _, files in os.walk(folder):
-                    count += sum(
-                        1 for f in files if self._is_supported_audio_file(f)
-                    )
-            return count
+                    n += sum(1 for f in files if self._is_supported_audio_file(f))
+                counts[folder] = n
+            return counts
 
         return await asyncio.get_running_loop().run_in_executor(None, _count)
 
@@ -1206,6 +1221,34 @@ class FileIndexer:
         bounded chance to complete before the root is called unavailable."""
         return {root: await await_root_available(root) for root in self.music_folders}
 
+    @staticmethod
+    def _blocked_reason(
+        status: RootStatus, stored_signature: Optional[str]
+    ) -> Optional[str]:
+        """Why nothing under this root may be purged right now, or None.
+
+        Three signatures of storage that is gone rather than emptied: the
+        root is unavailable; the mount identity no longer matches the one
+        the library was indexed from (a static share silently gave way to
+        the directory underneath it); or the root is empty with no recorded
+        identity to vouch for it. An empty root whose identity still matches
+        is a genuinely emptied library and purges normally.
+        """
+        if not status.available:
+            return status.reason
+        if (
+            stored_signature
+            and status.identity
+            and status.identity != stored_signature
+        ):
+            return (
+                f"the mount changed (indexed from {stored_signature}, "
+                f"now {status.identity})"
+            )
+        if status.empty and not stored_signature:
+            return "the folder is empty while the library expects files there"
+        return None
+
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries that are no longer valid for the file system.
 
@@ -1217,19 +1260,23 @@ class FileIndexer:
         this method) runs on startup, the cleanup happens immediately after a
         restart with the new config.
 
-        Guarded against unmounted storage: rows under a root that is
-        unavailable — or present but empty, the signature of a mountpoint
-        with nothing mounted on it — are never purged, and each candidate's
-        root is re-probed right before deletion so a share going offline
-        mid-sweep cannot masquerade as a deleted library.
+        Guarded against unmounted storage: rows under a root that
+        :meth:`_blocked_reason` rejects are never purged, and each
+        candidate's root is re-probed right before deletion so a share going
+        offline mid-sweep cannot masquerade as a deleted library.
         """
         logger.debug("Checking for stale files in the database...")
         root_status = await self._probe_music_roots()
-        blocked = {
-            root
-            for root, status in root_status.items()
-            if not status.available or status.empty
+        signatures = {
+            root: await self.db_manager.get_root_signature(root)
+            for root in self.music_folders
         }
+        blocked_reasons = {}
+        for root, status in root_status.items():
+            reason = self._blocked_reason(status, signatures[root])
+            if reason is not None:
+                blocked_reasons[root] = reason
+        blocked = set(blocked_reasons)
 
         all_tracks = await self.db_manager.get_all_tracks()
         candidates: List[Tuple[Dict[str, Any], Optional[str]]] = []
@@ -1249,11 +1296,9 @@ class FileIndexer:
                 candidates.append((track, root))
 
         for root, count in kept_per_root.items():
-            reason = root_status[root].reason or (
-                "the folder is empty while the library expects files there"
-            )
             logger.warning(
-                f"Music folder {root} looks unmounted ({reason}); "
+                f"Music folder {root} looks unmounted "
+                f"({blocked_reasons[root]}); "
                 f"keeping {count} track(s) that cannot be verified"
             )
 
@@ -1269,7 +1314,9 @@ class FileIndexer:
             file_path = track["file_path"]
             if root is not None:
                 status = recheck[root]
-                if not status.available or status.empty or os.path.exists(file_path):
+                if self._blocked_reason(
+                    status, signatures.get(root)
+                ) is not None or os.path.exists(file_path):
                     continue
                 logger.info(
                     f"File no longer exists, removing from database: {file_path}"

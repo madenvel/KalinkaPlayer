@@ -67,9 +67,30 @@ def _format_subfeature_status(sf: "_SubfeatureBookkeeping") -> str:
     return sf.message or ""
 
 
-def _format_root_status(status: RootStatus, scan_interval_minutes: int) -> str:
+def _mount_mismatch(status: RootStatus, stored_signature: Optional[str]) -> bool:
+    """True when the folder's current mount is not the one the library was
+    indexed from — a static share silently gave way to the local directory
+    underneath it."""
+    return bool(
+        status.available
+        and stored_signature
+        and status.identity
+        and status.identity != stored_signature
+    )
+
+
+def _format_root_status(
+    status: RootStatus,
+    stored_signature: Optional[str],
+    scan_interval_minutes: int,
+) -> str:
     """Render one music folder's mount status as the markdown the UI displays."""
-    if status.available:
+    if _mount_mismatch(status, stored_signature):
+        text = (
+            f"**Not available** — `{status.root}`: the filesystem the library "
+            f"was indexed from ({stored_signature}) is not mounted."
+        )
+    elif status.available:
         kind = (
             f"{status.fs_type} network share" if status.is_network else "local folder"
         )
@@ -377,8 +398,11 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 ai.state = ModuleHealthState.READY
                 ai.message = ""
 
-    async def _music_folder_statuses(self) -> list[RootStatus]:
-        """Live availability of each configured music folder.
+    async def _music_folder_statuses(
+        self,
+    ) -> list[tuple[RootStatus, Optional[str]]]:
+        """Live availability of each configured music folder, paired with the
+        mount identity the indexer recorded for it (None when unrecorded).
 
         Evaluated on demand (module status, dynamic status field) rather than
         once at setup, so an unmounted share shows up — and clears — without
@@ -390,11 +414,20 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             return []
         config = LocalFilesConfig(**self._context.config.model_dump())
         folders = [os.path.expanduser(f) for f in config.music_folders if f]
-        return list(
-            await asyncio.gather(
-                *(probe_root_async(folder, timeout=2.0) for folder in folders)
-            )
+        statuses = await asyncio.gather(
+            *(probe_root_async(folder, timeout=2.0) for folder in folders)
         )
+        module = self._inputmodule
+        signatures_readable = module is not None and module.db_manager.is_good()
+        return [
+            (
+                status,
+                module.db_manager.get_root_signature(status.root)
+                if signatures_readable
+                else None,
+            )
+            for status in statuses
+        ]
 
     # ------------------------------------------------------------------
     # SDK overrides
@@ -435,7 +468,9 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         # misconfiguration we have. Checked live so an unmounted share both
         # appears and clears without a restart.
         unavailable_roots = [
-            s for s in await self._music_folder_statuses() if not s.available
+            status
+            for status, stored in await self._music_folder_statuses()
+            if not status.available or _mount_mismatch(status, stored)
         ]
         if unavailable_roots:
             degraded_titles.append("Music folder access")
@@ -475,8 +510,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 return "No music folders configured."
             config = LocalFilesConfig(**self._context.config.model_dump())
             return "\n\n".join(
-                _format_root_status(s, config.scan_interval_minutes)
-                for s in statuses
+                _format_root_status(status, stored, config.scan_interval_minutes)
+                for status, stored in statuses
             )
         # Strip the "<subfeature>." prefix from a "<subfeature>.status_view" path.
         if path.endswith(".status_view"):

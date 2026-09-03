@@ -19,11 +19,15 @@ from kalinka_plugin_localfiles.utils.mount_status import RootStatus
 
 
 class _FakeDb:
-    def __init__(self, track):
+    def __init__(self, track, root_signature=None):
         self._track = track
+        self._root_signature = root_signature
 
     def is_good(self):
         return True
+
+    def get_root_signature(self, root):
+        return self._root_signature
 
     def get_tracks_by_ids(self, track_ids):
         return [self._track] if self._track["id"] in track_ids else []
@@ -36,13 +40,13 @@ class _FakeDb:
         return None
 
 
-def _module(tmp_path, music_folders, track):
+def _module(tmp_path, music_folders, track, root_signature=None):
     config = LocalFilesConfig(
         music_folders=[str(f) for f in music_folders],
         db_path=str(tmp_path / "localfiles.db"),
         artwork_path=str(tmp_path / "artwork"),
     )
-    return LocalFilesInputModule(config, _FakeDb(track))
+    return LocalFilesInputModule(config, _FakeDb(track, root_signature))
 
 
 def _track(file_path):
@@ -156,6 +160,41 @@ async def test_source_retriever_recovers_when_mount_appears(tmp_path, monkeypatc
     [info] = await module.get_track_info(["track_1"])
     source = await info.source_retriever()
     assert source.source == ModuleAsset(module="localfiles", asset_id="track_1")
+
+
+@pytest.mark.asyncio
+async def test_source_retriever_reports_identity_mismatch_as_transient(tmp_path):
+    """The root stats fine but is not the filesystem the library was indexed
+    from (a silently unmounted static share): transient, not file-gone."""
+    music = tmp_path / "music"
+    music.mkdir()
+    path = music / "song.mp3"  # missing: it lives on the unmounted share
+
+    module = _module(
+        tmp_path, [music], _track(path), root_signature="nfs4 host:/export"
+    )
+    [info] = await module.get_track_info(["track_1"])
+    with pytest.raises(SourceUnavailableError, match="nfs4 host:/export"):
+        await info.source_retriever()
+
+
+@pytest.mark.asyncio
+async def test_source_retriever_bounds_a_hung_stat(tmp_path, monkeypatch):
+    import time as time_mod
+
+    music = tmp_path / "music"
+    music.mkdir()
+    path = music / "song.mp3"
+    path.write_bytes(b"x")
+
+    module = _module(tmp_path, [music], _track(path))
+    monkeypatch.setattr(localfiles_mod, "STAT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(
+        module, "_require_readable", lambda _p: time_mod.sleep(0.5)
+    )
+    [info] = await module.get_track_info(["track_1"])
+    with pytest.raises(SourceUnavailableError, match="did not respond"):
+        await info.source_retriever()
 
 
 @pytest.mark.asyncio

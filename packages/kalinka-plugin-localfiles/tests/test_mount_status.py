@@ -5,9 +5,12 @@ The probe's job is to tell an unmounted network share apart from a deleted
 library — the distinction every purge and playback guard hangs off.
 """
 
+import asyncio
+
 import pytest
 
 from kalinka_plugin_localfiles.utils.mount_status import (
+    probe_root_async,
     Mount,
     RootStatus,
     autofs_pending,
@@ -119,6 +122,35 @@ def test_probe_classifies_mounted_network_share(tmp_path):
     assert status.available
     assert status.is_network
     assert status.is_autofs
+    assert status.identity == "nfs4 host:/export"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_probes_share_one_worker(tmp_path, monkeypatch):
+    """Piled-up requests against one root must ride a single probe: a hung
+    mount may cost one worker thread, never one per request."""
+    import threading
+
+    import kalinka_plugin_localfiles.utils.mount_status as ms
+
+    release = threading.Event()
+    calls = {"n": 0}
+    real_probe = ms.probe_root
+
+    def slow_probe(root, mounts=None):
+        calls["n"] += 1
+        release.wait(timeout=5)
+        return real_probe(root, mounts)
+
+    monkeypatch.setattr(ms, "probe_root", slow_probe)
+    first = asyncio.create_task(probe_root_async(str(tmp_path), timeout=5))
+    second = asyncio.create_task(probe_root_async(str(tmp_path), timeout=5))
+    await asyncio.sleep(0.05)
+    release.set()
+    statuses = await asyncio.gather(first, second)
+
+    assert calls["n"] == 1
+    assert all(s.available for s in statuses)
 
 
 @pytest.mark.asyncio
@@ -166,7 +198,7 @@ def test_format_root_status_recommends_for_autofs_share():
         is_network=True,
         is_autofs=True,
     )
-    text = _format_root_status(status, 15)
+    text = _format_root_status(status, None, 15)
     assert "**Available**" in text
     assert "nfs4 network share" in text
     assert "autofs" in text
@@ -185,6 +217,26 @@ def test_format_root_status_names_the_reason_when_unavailable():
         is_network=False,
         is_autofs=True,
     )
-    text = _format_root_status(status, 15)
+    text = _format_root_status(status, None, 15)
     assert "**Not available**" in text
     assert "automounter" in text
+
+
+def test_format_root_status_flags_a_mount_identity_mismatch():
+    from kalinka_plugin_localfiles.module_setup import _format_root_status
+
+    # The mountpoint answers as a plain local dir while the library was
+    # indexed from an NFS share: a silently unmounted static mount.
+    status = RootStatus(
+        root="/mnt/nas/music",
+        available=True,
+        empty=False,
+        reason="",
+        fs_type="ext4",
+        is_network=False,
+        is_autofs=False,
+        identity="ext4 /dev/sda1",
+    )
+    text = _format_root_status(status, "nfs4 192.168.1.5:/export", 15)
+    assert "**Not available**" in text
+    assert "nfs4 192.168.1.5:/export" in text

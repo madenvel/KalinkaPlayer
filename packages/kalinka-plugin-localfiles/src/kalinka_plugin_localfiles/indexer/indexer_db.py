@@ -471,6 +471,30 @@ class AsyncIndexerDb:
             )
             await conn.commit()
 
+    async def set_root_signature(self, root: str, identity: str) -> None:
+        """Remember which mounted filesystem a music root was indexed from
+        ("nfs4 192.168.1.5:/export"). The cleanup refuses to purge under a
+        root whose current mount no longer matches — the mark that tells a
+        silently-unmounted static share from a genuinely emptied folder."""
+        async with self._open() as conn:
+            await conn.execute(
+                "INSERT OR REPLACE INTO indexer_state (key, value) "
+                "VALUES (?, ?)",
+                (f"root_signature:{root}", identity),
+            )
+            await conn.commit()
+
+    async def get_root_signature(self, root: str) -> Optional[str]:
+        """The identity stored by :meth:`set_root_signature`, or None."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT value FROM indexer_state WHERE key = ?",
+                (f"root_signature:{root}",),
+            )
+            row = await cursor.fetchone()
+        return row[0] if row and row[0] else None
+
     async def get_scan_progress(self) -> Optional[Dict]:
         """Read the scan progress published by :meth:`set_scan_progress`.
         Returns None when absent or unreadable."""
