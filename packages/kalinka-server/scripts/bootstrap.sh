@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="/opt/kalinka"
+# The roots are overridable only so the wheel-install policy below can be
+# exercised in tests; the unit sets none of them.
+INSTALL_DIR="${KALINKA_INSTALL_DIR:-/opt/kalinka}"
 VENV_DIR="$INSTALL_DIR/venv"
 WHEELS_DIR="$INSTALL_DIR/wheels"
 MANIFESTS_DIR="$INSTALL_DIR/allowed_packages"
-CACHE_DIR="/var/cache/kalinka"
-STATE_DIR="/var/lib/kalinka"
+CACHE_DIR="${KALINKA_CACHE_DIR:-/var/cache/kalinka}"
+STATE_DIR="${KALINKA_STATE_DIR:-/var/lib/kalinka}"
 PENDING_INSTALLS="$STATE_DIR/pending_installs.json"
 LAST_INSTALL="$STATE_DIR/last_install.json"
 
@@ -46,7 +48,28 @@ shopt -s nullglob
 wheels=( "$WHEELS_DIR"/*.whl )
 if [ ${#wheels[@]} -gt 0 ]; then
   echo "[bootstrap] Installing wheels: ${wheels[*]}"
-  "$VENV_DIR/bin/pip" install --quiet --upgrade "${wheels[@]}"
+  if ! "$VENV_DIR/bin/pip" install --quiet --upgrade "${wheels[@]}"; then
+    # One wheel pip cannot place must not cost the server its startup. A plugin
+    # from outside the bundle is left behind by an SDK major — its pin excludes
+    # the SDK now shipping, and resolving the whole directory at once turns that
+    # into a server that never boots. Installed one at a time, the bundle still
+    # lands and the load-time REQUIRES_SDK gate reports the odd one out as
+    # unavailable, which is what it is there for.
+    echo "[bootstrap] Wheels do not resolve together; installing them singly" >&2
+    ordered=()
+    # The SDK leads: everything else requires it, and no index carries it, so a
+    # plugin installed ahead of it has nowhere to resolve it from.
+    for wheel in "${wheels[@]}"; do
+      case "${wheel##*/}" in kalinka_plugin_sdk-*) ordered+=( "$wheel" ) ;; esac
+    done
+    for wheel in "${wheels[@]}"; do
+      case "${wheel##*/}" in kalinka_plugin_sdk-*) ;; *) ordered+=( "$wheel" ) ;; esac
+    done
+    for wheel in "${ordered[@]}"; do
+      "$VENV_DIR/bin/pip" install --quiet --upgrade "$wheel" \
+        || echo "[bootstrap] skipped ${wheel##*/}" >&2
+    done
+  fi
 else
   echo "[bootstrap] No wheels found in $WHEELS_DIR"
 fi
