@@ -418,14 +418,10 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             *(probe_root_async(folder, timeout=2.0) for folder in folders)
         )
         module = self._inputmodule
-        signatures_readable = module is not None and module.db_manager.is_good()
+        if module is None or not module.db_manager.is_good():
+            return [(status, None) for status in statuses]
         return [
-            (
-                status,
-                module.db_manager.get_root_signature(status.root)
-                if signatures_readable
-                else None,
-            )
+            (status, module.db_manager.get_root_signature(status.root))
             for status in statuses
         ]
 
@@ -463,10 +459,8 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                     seen_packages.add(pkg)
                     missing_packages.append(pkg)
 
-        # A missing or unmounted music folder doesn't crash anything — the
-        # indexer just finds nothing — which makes it the most silent
-        # misconfiguration we have. Checked live so an unmounted share both
-        # appears and clears without a restart.
+        # A missing or unmounted music folder is the most silent
+        # misconfiguration we have — the indexer just finds nothing.
         unavailable_roots = [
             status
             for status, stored in await self._music_folder_statuses()

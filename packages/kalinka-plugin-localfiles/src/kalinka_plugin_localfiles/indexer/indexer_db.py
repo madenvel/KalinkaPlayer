@@ -473,9 +473,8 @@ class AsyncIndexerDb:
 
     async def set_root_signature(self, root: str, identity: str) -> None:
         """Remember which mounted filesystem a music root was indexed from
-        ("nfs4 192.168.1.5:/export"). The cleanup refuses to purge under a
-        root whose current mount no longer matches — the mark that tells a
-        silently-unmounted static share from a genuinely emptied folder."""
+        ("nfs4 192.168.1.5:/export"); the cleanup refuses to purge under a
+        root whose current mount no longer matches."""
         async with self._open() as conn:
             await conn.execute(
                 "INSERT OR REPLACE INTO indexer_state (key, value) "

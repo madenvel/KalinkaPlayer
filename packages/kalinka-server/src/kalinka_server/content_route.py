@@ -37,9 +37,8 @@ def register_content_route(
         f"{CONTENT_ROUTE}/{{module_name}}/{{asset_id:path}}", methods=["GET", "HEAD"]
     )
     async def get_content(module_name: str, asset_id: str):
-        # Transiently unreachable storage (an unmounted share) answers 503,
-        # not 404: renderers retry 5xx but treat 4xx as fatal, so this is the
-        # difference between riding out a slow mount and killing the stream.
+        # An unmounted share answers 503, not 404: renderers retry 5xx but
+        # treat 4xx as fatal.
         try:
             info = await resolve_module(module_name).get_content_info(asset_id)
         except SourceUnavailableError as e:
