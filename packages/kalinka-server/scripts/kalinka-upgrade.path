@@ -1,6 +1,6 @@
 [Unit]
 Description=Watch for kalinka upgrade requests
-After=kalinka.service
+# No After=kalinka.service — see kalinka-restart.path.
 
 [Path]
 PathChanged=/run/kalinka/upgrade-request

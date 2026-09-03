@@ -1,6 +1,7 @@
 [Unit]
 Description=Watch for kalinka restart requests
-After=kalinka.service
+# No After=kalinka.service: a path unit is Before=paths.target, so that
+# ordering creates a boot cycle systemd resolves by not starting kalinka.
 
 [Path]
 PathChanged=/run/kalinka/restart-request

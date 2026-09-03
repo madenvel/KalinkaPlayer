@@ -1,6 +1,7 @@
 [Unit]
 Description=Watch for kalinka-renderer upgrade requests
-After=kalinka-renderer.service
+# No After=kalinka-renderer.service: a path unit is Before=paths.target,
+# so that ordering creates a boot cycle — see kalinka-restart.path.
 
 [Path]
 PathChanged=/run/kalinka-renderer/upgrade-request
