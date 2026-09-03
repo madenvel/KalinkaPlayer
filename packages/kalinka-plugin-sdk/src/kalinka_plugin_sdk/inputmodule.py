@@ -16,6 +16,18 @@ from .datamodel import (
 )
 
 
+class SourceUnavailableError(RuntimeError):
+    """A track's backing storage is temporarily unreachable.
+
+    Raised by :meth:`InputModule.get_content_info` or a track's
+    ``source_retriever`` when the content exists but cannot be served right
+    now — an unmounted network share, an offline backend. Distinct from a
+    missing asset: callers should surface it as a transient condition (the
+    server answers a content fetch with 503 rather than 404). The message is
+    shown to users, so keep it presentable.
+    """
+
+
 class ModuleAsset(BaseModel):
     """
     Content the server fetches from the module and serves on its behalf.

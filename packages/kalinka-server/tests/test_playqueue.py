@@ -13,7 +13,13 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
 )
-from kalinka_plugin_sdk.inputmodule import DirectUrl, TrackInfo, Track, TrackSource
+from kalinka_plugin_sdk.inputmodule import (
+    DirectUrl,
+    SourceUnavailableError,
+    Track,
+    TrackInfo,
+    TrackSource,
+)
 from kalinka_plugin_sdk import (
     PlayQueueEventType,
     PlaybackStateChangedEvent,
@@ -1390,12 +1396,31 @@ async def test_resolve_playable_skips_failed_track(event_emitter, playqueue):
     assert index == 1
     assert track_url is not None
     assert track_ref is playqueue.track_list[1]
-    assert failed == [0]
+    assert failed == [(0, None)]
     # Resolver is pure: no flagging, no events.
     assert playqueue._unavailable_indices == set()
     assert not any(
         isinstance(e, TrackUnavailableEvent) for e in dispatched_events(event_emitter)
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_playable_carries_the_module_reason(event_emitter, playqueue):
+    """A SourceUnavailableError's message (user-presentable, e.g. an unmounted
+    share) rides along with the failed index so the commit step can put it in
+    the TrackUnavailableEvent."""
+
+    async def unavailable():
+        raise SourceUnavailableError("Music folder /mnt/nas is not available")
+
+    tracks = make_tracks_with_failures(2, set())
+    tracks[0] = tracks[0].model_copy(update={"source_retriever": unavailable})
+    playqueue.track_list = tracks
+
+    index, _, _, failed = await playqueue._resolve_playable(0, step=1)
+
+    assert index == 1
+    assert failed == [(0, "Music folder /mnt/nas is not available")]
 
 
 @pytest.mark.asyncio
@@ -1409,7 +1434,7 @@ async def test_resolve_playable_all_failed_returns_none(event_emitter, playqueue
     assert index is None
     assert track_url is None
     assert track_ref is None
-    assert failed == [0, 1, 2]
+    assert failed == [(0, None), (1, None), (2, None)]
     # Resolver does not mutate flag state; the commit step would.
     assert playqueue._unavailable_indices == set()
 

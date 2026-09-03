@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from kalinka_plugin_sdk.inputmodule import ContentInfo
+from kalinka_plugin_sdk.inputmodule import ContentInfo, SourceUnavailableError
 
 from kalinka_server.content_route import register_content_route
 from kalinka_server.content_urls import CONTENT_ROUTE, content_url
@@ -25,6 +25,8 @@ class _FakeModule:
         self._assets = assets
 
     async def get_content_info(self, asset_id):
+        if asset_id == "offline":
+            raise SourceUnavailableError("Music folder /mnt/nas is not available")
         return self._assets.get(asset_id)
 
 
@@ -121,6 +123,14 @@ def test_asset_the_module_will_not_serve_is_absent(client):
 
 def test_unknown_module_is_absent(client):
     assert client.get(_url(module="no_such_module")).status_code == 404
+
+
+def test_transiently_unreachable_storage_is_a_503(client):
+    """An unmounted share must not read as a missing file: renderers retry
+    5xx but abort on 4xx, so 503 is what keeps the stream alive."""
+    r = client.get(_url(asset="offline"))
+    assert r.status_code == 503
+    assert r.headers["retry-after"] == "2"
 
 
 def test_a_file_that_went_away_is_absent(client, tmp_path):

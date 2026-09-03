@@ -38,7 +38,11 @@ from kalinka_plugin_sdk.events import (
     TrackMovedEvent,
     TrackUnavailableEvent,
 )
-from kalinka_plugin_sdk.inputmodule import TrackInfo, TrackSource
+from kalinka_plugin_sdk.inputmodule import (
+    SourceUnavailableError,
+    TrackInfo,
+    TrackSource,
+)
 
 from kalinka_plugin_sdk.api import PlayQueueController, EventEmitter
 
@@ -394,8 +398,8 @@ class PlayQueueImpl(PlayQueueController):
         index, track_source, track_ref, failed = result
         # Flag failures only now, on the lane, so the marks (and their dedup
         # state) stay consistent with mutations that remap _unavailable_indices.
-        for i in failed:
-            self._set_track_unavailable(i, True)
+        for i, reason in failed:
+            self._set_track_unavailable(i, True, reason)
         if track_source is None or index is None:
             return None
         # A multi-step scan can resolve an index *past* the start target, and a
@@ -977,7 +981,10 @@ class PlayQueueImpl(PlayQueueController):
         return stream_state.position_at(time.monotonic_ns())
 
     async def _fetch_track_source(self, index):
-        """Fetch the stream source for a track, returning None if retrieval fails.
+        """Fetch the stream source for a track as ``(source, reason)`` —
+        ``(None, reason)`` if retrieval fails, where ``reason`` is a
+        user-presentable cause when the module offered one (a
+        SourceUnavailableError) and None otherwise.
 
         Bounded by SOURCE_RETRIEVAL_TIMEOUT_S so a plugin that ignores its own
         HTTP timeout can never pin the resolution slot indefinitely. Runs
@@ -985,21 +992,28 @@ class PlayQueueImpl(PlayQueueController):
         """
         try:
             track = self.track_list[index]
-            return await asyncio.wait_for(
+            source = await asyncio.wait_for(
                 track.source_retriever(), timeout=SOURCE_RETRIEVAL_TIMEOUT_S
             )
+            return source, None
+        except SourceUnavailableError as e:
+            logger.warning(
+                "Track source for index %d is unavailable: %s", index, e
+            )
+            return None, str(e)
         except Exception as e:
             logger.warning(
                 "Failed to retrieve track link for index %d: %s", index, repr(e)
             )
-            return None
+            return None, None
 
     async def _resolve_playable(self, start_index, step=1):
         """Find the first playable track from start_index, moving by ``step``.
 
         Pure I/O: runs off the serial lane and performs no state mutation or
         event dispatch — the caller's commit step records which indices failed
-        (so they can be flagged) and which one succeeded. ``step`` must be +1
+        (``failed`` holds ``(index, reason)`` pairs so they can be flagged with
+        a cause) and which one succeeded. ``step`` must be +1
         (forward) or -1 (backward); any other value is normalised so the scan
         visits each track at most once. Returns
         ``(index, track_source, track_ref, failed)`` for the first track that yields
@@ -1009,7 +1023,7 @@ class PlayQueueImpl(PlayQueueController):
         Already-prepared tracks are returned from cache.
         """
         n = len(self.track_list)
-        failed: list[int] = []
+        failed: list[tuple[int, Optional[str]]] = []
         if n == 0:
             return None, None, None, failed
 
@@ -1030,14 +1044,14 @@ class PlayQueueImpl(PlayQueueController):
             # exact track the resolved source belongs to even if the list shifts
             # during the await.
             track_ref = self.track_list[index]
-            track_source = await self._fetch_track_source(index)
+            track_source, fail_reason = await self._fetch_track_source(index)
             if track_source is not None:
                 return index, track_source, track_ref, failed
-            failed.append(index)
+            failed.append((index, fail_reason))
             index += step
         return None, None, None, failed
 
-    def _set_track_unavailable(self, index, unavailable):
+    def _set_track_unavailable(self, index, unavailable, reason=None):
         """Notify clients of a track availability change (only on real change)."""
         if unavailable:
             if index in self._unavailable_indices:
@@ -1048,7 +1062,7 @@ class PlayQueueImpl(PlayQueueController):
                 return
             self._unavailable_indices.discard(index)
         self.event_emitter.dispatch(
-            TrackUnavailableEvent(index=index, unavailable=unavailable)
+            TrackUnavailableEvent(index=index, unavailable=unavailable, reason=reason)
         )
 
     async def _retry_current_track_async(self, position_ms: int) -> None:
@@ -1071,13 +1085,17 @@ class PlayQueueImpl(PlayQueueController):
         )
 
     @serialised
-    async def _retry_resolved(self, gen, index, track_source, position_ms) -> None:
+    async def _retry_resolved(self, gen, index, fetch_result, position_ms) -> None:
         if not self._resolution.is_current(gen):
             return
         self._resolution.finish(gen)
+        track_source, fail_reason = fetch_result
         if track_source is None:
             self.event_emitter.dispatch(
-                PlaybackErrorEvent(message="Failed to retrieve track source on retry")
+                PlaybackErrorEvent(
+                    message=fail_reason
+                    or "Failed to retrieve track source on retry"
+                )
             )
             return
         self._apply_retry(index, track_source, position_ms)
