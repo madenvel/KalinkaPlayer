@@ -14,7 +14,7 @@ from typing import Callable
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from kalinka_plugin_sdk.inputmodule import InputModule
+from kalinka_plugin_sdk.inputmodule import InputModule, SourceUnavailableError
 
 from .content_urls import CONTENT_ROUTE
 
@@ -37,7 +37,15 @@ def register_content_route(
         f"{CONTENT_ROUTE}/{{module_name}}/{{asset_id:path}}", methods=["GET", "HEAD"]
     )
     async def get_content(module_name: str, asset_id: str):
-        info = await resolve_module(module_name).get_content_info(asset_id)
+        # Transiently unreachable storage (an unmounted share) answers 503,
+        # not 404: renderers retry 5xx but treat 4xx as fatal, so this is the
+        # difference between riding out a slow mount and killing the stream.
+        try:
+            info = await resolve_module(module_name).get_content_info(asset_id)
+        except SourceUnavailableError as e:
+            raise HTTPException(
+                status_code=503, detail=str(e), headers={"Retry-After": "2"}
+            )
         # A file the module will not name, or that went away since it did, is
         # absent rather than a server fault — FileResponse would raise on the
         # missing stat.

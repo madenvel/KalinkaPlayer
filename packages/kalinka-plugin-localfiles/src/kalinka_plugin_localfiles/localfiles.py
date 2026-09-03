@@ -14,6 +14,7 @@ from kalinka_plugin_sdk.inputmodule import (
     InputModule,
     ModuleAsset,
     SearchType,
+    SourceUnavailableError,
     TrackInfo,
     TrackSource,
 )
@@ -41,6 +42,7 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
+from .utils.mount_status import await_root_available, root_of
 from .utils.name_utils import expand_music_folders, path_within_roots
 from .input_module_db import LocalFilesInputModuleDb
 
@@ -610,7 +612,7 @@ class LocalFilesInputModule(InputModule):
                 # dead source.
                 def create_source_retriever(track_db_id, track_path, track_format):
                     async def source_retriever():
-                        self._require_readable(track_path)
+                        await self._await_readable(track_path)
                         return TrackSource(
                             source=ModuleAsset(
                                 module=self.module_name(), asset_id=track_db_id
@@ -644,6 +646,27 @@ class LocalFilesInputModule(InputModule):
         if not os.access(track_path, os.R_OK):
             raise PermissionError(f"Track file is not readable: {track_path}")
 
+    async def _await_readable(self, track_path: str) -> None:
+        """`_require_readable` with a mount-aware second chance: when the file
+        is missing because its music folder is an unmounted share, wait a
+        bounded moment for the automounter instead of declaring the track
+        gone. Raises SourceUnavailableError while the folder stays offline.
+        The checks run off the event loop — a hung network mount must not
+        freeze the server."""
+        try:
+            await asyncio.to_thread(self._require_readable, track_path)
+            return
+        except FileNotFoundError:
+            root = root_of(track_path, self._music_folders)
+            if root is None:
+                raise
+        status = await await_root_available(root)
+        if not status.available:
+            raise SourceUnavailableError(
+                f"Music folder {root} is not available: {status.reason}"
+            )
+        await asyncio.to_thread(self._require_readable, track_path)
+
     async def get_content_info(self, asset_id: str) -> Optional[ContentInfo]:
         """Resolve a track id to the file the server serves for it.
 
@@ -660,7 +683,7 @@ class LocalFilesInputModule(InputModule):
         if not track_path:
             return None
         try:
-            self._require_readable(track_path)
+            await self._await_readable(track_path)
         except OSError as e:
             logger.warning("Refusing content for track %s: %s", asset_id, e)
             return None

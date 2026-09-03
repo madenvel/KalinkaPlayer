@@ -152,6 +152,9 @@ class TrackUnavailableEvent(PlayQueueEvent):
     # True marks the track as unavailable (URL retrieval failed); False clears
     # the flag once the track has been streamed successfully again.
     unavailable: bool = True
+    # User-presentable cause when the module offered one (e.g. an unmounted
+    # network share); None for a generic failure.
+    reason: Optional[str] = None
 
 
 class PlaybackErrorEvent(PlayQueueEvent):

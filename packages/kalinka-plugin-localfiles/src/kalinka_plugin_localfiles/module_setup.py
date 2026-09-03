@@ -18,6 +18,7 @@ from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .config_model import LocalFilesConfig
 from .db_schema import init_db
+from .utils.mount_status import RootStatus, probe_root_async
 from .input_module_db import LocalFilesInputModuleDb
 from .localfiles import LocalFilesInputModule
 from .optional_packages import OPTIONAL_PACKAGES
@@ -66,6 +67,35 @@ def _format_subfeature_status(sf: "_SubfeatureBookkeeping") -> str:
     return sf.message or ""
 
 
+def _format_root_status(status: RootStatus, scan_interval_minutes: int) -> str:
+    """Render one music folder's mount status as the markdown the UI displays."""
+    if status.available:
+        kind = (
+            f"{status.fs_type} network share" if status.is_network else "local folder"
+        )
+        if status.is_autofs:
+            kind += ", automounted"
+        text = f"**Available** — `{status.root}` ({kind})."
+    else:
+        text = f"**Not available** — `{status.root}`: {status.reason}."
+    notes = []
+    if status.is_autofs:
+        notes.append(
+            "autofs mounts on demand and unmounts when idle, which can delay "
+            "or fail the first playback after a pause. A static mount (or an "
+            "autofs idle timeout of 0) avoids this."
+        )
+    if status.is_network:
+        notes.append(
+            "Changes made to the share by other machines are picked up by the "
+            f"periodic rescan (every {scan_interval_minutes} min), not "
+            "instantly."
+        )
+    if notes:
+        text += "\n" + "\n".join(f"- {note}" for note in notes)
+    return text
+
+
 class KalinkaPluginLocalFiles(InputModulePlugin):
     REQUIRES_SDK = ">=2,<3"
     PLUGIN_ID = "localfiles"
@@ -86,6 +116,12 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         "ai_search.status_view": DynamicFieldDecl(
             section_id="ai_search",
             label="Status",
+            widget="rich_text",
+            value_type="str",
+        ),
+        "storage.status_view": DynamicFieldDecl(
+            section_id="",
+            label="Music folders status",
             widget="rich_text",
             value_type="str",
         ),
@@ -273,27 +309,6 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             idx.state = ModuleHealthState.ERROR
             idx.message = "Librarian subprocess failed to start."
 
-        # Music folders: a missing or unreadable folder doesn't crash the
-        # indexer — it just finds nothing — which makes it the most silent
-        # misconfiguration we have. Surface it as a WARNING naming the
-        # offending paths. The check runs inside the service sandbox, so
-        # it also catches paths hidden by systemd hardening.
-        if idx.state == ModuleHealthState.READY:
-            bad_folders = []
-            for folder in config.music_folders:
-                expanded = os.path.expanduser(folder)
-                if not os.path.isdir(expanded) or not os.access(
-                    expanded, os.R_OK | os.X_OK
-                ):
-                    bad_folders.append(folder)
-            if bad_folders:
-                idx.state = ModuleHealthState.WARNING
-                idx.message = (
-                    "Music folder(s) not accessible to the service: "
-                    f"{', '.join(bad_folders)}. Check that the path exists "
-                    "and is readable by the 'kalusr' user."
-                )
-
         # Enricher: DISABLED if config.enricher.enabled is False; else READY
         # (hard dependencies are guaranteed by the plugin's deb). The one
         # optional leg is generated album art, which needs numpy — a
@@ -362,6 +377,25 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 ai.state = ModuleHealthState.READY
                 ai.message = ""
 
+    async def _music_folder_statuses(self) -> list[RootStatus]:
+        """Live availability of each configured music folder.
+
+        Evaluated on demand (module status, dynamic status field) rather than
+        once at setup, so an unmounted share shows up — and clears — without
+        a restart. Probing stats the folder, which also nudges a pending
+        automount. Runs inside the service sandbox, so it also catches paths
+        hidden by systemd hardening.
+        """
+        if self._context is None:
+            return []
+        config = LocalFilesConfig(**self._context.config.model_dump())
+        folders = [os.path.expanduser(f) for f in config.music_folders if f]
+        return list(
+            await asyncio.gather(
+                *(probe_root_async(folder, timeout=2.0) for folder in folders)
+            )
+        )
+
     # ------------------------------------------------------------------
     # SDK overrides
     # ------------------------------------------------------------------
@@ -396,6 +430,16 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                     seen_packages.add(pkg)
                     missing_packages.append(pkg)
 
+        # A missing or unmounted music folder doesn't crash anything — the
+        # indexer just finds nothing — which makes it the most silent
+        # misconfiguration we have. Checked live so an unmounted share both
+        # appears and clears without a restart.
+        unavailable_roots = [
+            s for s in await self._music_folder_statuses() if not s.available
+        ]
+        if unavailable_roots:
+            degraded_titles.append("Music folder access")
+
         if any_required_error:
             state = ModuleHealthState.ERROR
         elif any_optional_error or degraded_titles:
@@ -425,6 +469,15 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
 
     async def resolve_dynamic_field(self, path: str) -> Any:
         """Return rich-text status for each declared dynamic field."""
+        if path == "storage.status_view":
+            statuses = await self._music_folder_statuses()
+            if not statuses or self._context is None:
+                return "No music folders configured."
+            config = LocalFilesConfig(**self._context.config.model_dump())
+            return "\n\n".join(
+                _format_root_status(s, config.scan_interval_minutes)
+                for s in statuses
+            )
         # Strip the "<subfeature>." prefix from a "<subfeature>.status_view" path.
         if path.endswith(".status_view"):
             sf_id = path[: -len(".status_view")]

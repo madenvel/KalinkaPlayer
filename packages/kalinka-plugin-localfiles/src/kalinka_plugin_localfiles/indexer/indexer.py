@@ -26,6 +26,13 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..utils.mount_status import (
+    RootStatus,
+    autofs_pending,
+    await_root_available,
+    probe_root_async,
+    root_of,
+)
 from ..utils.name_utils import (
     album_folder_for_path,
     clean_display_name,
@@ -55,6 +62,9 @@ from ..clustering.classify import (  # noqa: E402
 
 
 SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
+
+# How often the file watcher checks whether a lost root came back.
+REARM_CHECK_INTERVAL_S = 15.0
 
 
 # Configure logger for watchfiles.main only to WARNING level
@@ -147,6 +157,11 @@ class FileIndexer:
             "tracks": set(),
         }
 
+        # Probe the roots before touching them: the probe gives a pending
+        # automount its window, and an unavailable root is skipped rather
+        # than scanned as an empty tree.
+        root_status = await self._probe_music_roots()
+
         # Publish a zeroed row first: it overwrites anything a scan killed
         # harder than `finally` (OOM, power loss) left behind, and an
         # all-zero row reads as "no outstanding work" while the pre-count
@@ -163,8 +178,12 @@ class FileIndexer:
 
         try:
             for folder in self.music_folders:
-                if not os.path.exists(folder):
-                    logger.warning(f"Music folder does not exist: {folder}")
+                status = root_status.get(folder)
+                if status is not None and not status.available:
+                    logger.warning(
+                        f"Music folder is not available, skipping scan: "
+                        f"{folder} ({status.reason})"
+                    )
                     continue
 
                 logger.debug(f"Scanning folder: {folder}")
@@ -1182,6 +1201,11 @@ class FileIndexer:
             return True
         return False
 
+    async def _probe_music_roots(self) -> Dict[str, RootStatus]:
+        """Availability of each configured root, giving a pending automount a
+        bounded chance to complete before the root is called unavailable."""
+        return {root: await await_root_available(root) for root in self.music_folders}
+
     async def cleanup_stale_tracks(self) -> Dict[str, int]:
         """Remove entries that are no longer valid for the file system.
 
@@ -1192,30 +1216,79 @@ class FileIndexer:
         purged so they aren't served or played. Because ``run_scan`` (and thus
         this method) runs on startup, the cleanup happens immediately after a
         restart with the new config.
+
+        Guarded against unmounted storage: rows under a root that is
+        unavailable — or present but empty, the signature of a mountpoint
+        with nothing mounted on it — are never purged, and each candidate's
+        root is re-probed right before deletion so a share going offline
+        mid-sweep cannot masquerade as a deleted library.
         """
         logger.debug("Checking for stale files in the database...")
+        root_status = await self._probe_music_roots()
+        blocked = {
+            root
+            for root, status in root_status.items()
+            if not status.available or status.empty
+        }
+
         all_tracks = await self.db_manager.get_all_tracks()
-        removed_tracks = 0
+        candidates: List[Tuple[Dict[str, Any], Optional[str]]] = []
+        kept_per_root: Dict[str, int] = {}
         for track in all_tracks:
             file_path = track["file_path"]
-            if not os.path.exists(file_path):
+            root = root_of(file_path, self.music_folders)
+            if root in blocked:
+                kept_per_root[root] = kept_per_root.get(root, 0) + 1
+            elif root is None:
+                # Not textually under any root: purge only when the
+                # symlink-aware boundary check agrees the file left the
+                # configured folders — a config change, not a mount issue.
+                if not path_within_roots(file_path, self.music_folders):
+                    candidates.append((track, None))
+            elif not os.path.exists(file_path):
+                candidates.append((track, root))
+
+        for root, count in kept_per_root.items():
+            reason = root_status[root].reason or (
+                "the folder is empty while the library expects files there"
+            )
+            logger.warning(
+                f"Music folder {root} looks unmounted ({reason}); "
+                f"keeping {count} track(s) that cannot be verified"
+            )
+
+        removed_tracks = 0
+        # Re-verify just before deleting: a fresh probe per affected root and
+        # a fresh stat per file, so nothing that vanished only because its
+        # share went offline during the sweep is dropped.
+        recheck = {
+            root: await probe_root_async(root)
+            for root in {r for _, r in candidates if r is not None}
+        }
+        for track, root in candidates:
+            file_path = track["file_path"]
+            if root is not None:
+                status = recheck[root]
+                if not status.available or status.empty or os.path.exists(file_path):
+                    continue
                 logger.info(
                     f"File no longer exists, removing from database: {file_path}"
                 )
-                await self.db_manager.delete_track(track["id"])
-                removed_tracks += 1
-            elif not path_within_roots(file_path, self.music_folders):
+            else:
                 logger.info(
                     "File is outside the configured music folders, removing "
                     f"from database: {file_path}"
                 )
-                await self.db_manager.delete_track(track["id"])
-                removed_tracks += 1
+            await self.db_manager.delete_track(track["id"])
+            removed_tracks += 1
 
         # Drop failure-cache rows for files that have since been deleted or
         # moved out of the configured folders, so the cache doesn't accumulate
-        # entries for files this module no longer manages.
+        # entries for files this module no longer manages. Rows under a
+        # blocked root are kept for the same reason their tracks are.
         for failed_path in await self.db_manager.get_failure_paths():
+            if root_of(failed_path, self.music_folders) in blocked:
+                continue
             if not os.path.exists(failed_path) or not path_within_roots(
                 failed_path, self.music_folders
             ):
@@ -1346,12 +1419,46 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                 except (OSError, PermissionError) as e:
                     logger.debug(f"Could not watch {path}: {e}")
 
+            # Roots whose watches are gone (never armed, unmounted, or
+            # deleted); the loop below re-arms them once they come back.
+            lost_roots: Set[str] = set()
+            next_rearm_check = 0.0
+
             for folder in music_folders:
-                _add_watches(folder)
+                status = await probe_root_async(folder)
+                if status.available:
+                    _add_watches(folder)
+                else:
+                    lost_roots.add(folder)
+                    logger.warning(
+                        f"Music folder not available yet, deferring watches: "
+                        f"{folder} ({status.reason})"
+                    )
 
             logger.info(
                 f"File watcher initialized with {len(watched_dirs)} directories"
             )
+
+            async def _rearm_lost_roots():
+                for root in sorted(lost_roots):
+                    # Reading mountinfo alone never touches the path: while
+                    # autofs still answers for the root, stat-probing it here
+                    # would re-trigger the very automount whose idle expiry
+                    # unmounted it. Wait for something else to mount it.
+                    if autofs_pending(root):
+                        continue
+                    status = await probe_root_async(root)
+                    if not status.available:
+                        continue
+                    lost_roots.discard(root)
+                    _add_watches(root)
+                    logger.info(
+                        f"Music folder is back, watching it again and "
+                        f"rescanning: {root}"
+                    )
+                    await _indexer_queue.put(
+                        {"incremental_changes": {("dir_added", root)}}
+                    )
 
             while not _file_watcher_stop_event.is_set():
                 try:
@@ -1366,6 +1473,11 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                     events = await asyncio.get_running_loop().run_in_executor(
                         None, lambda: inotify.read(timeout=1000)
                     )
+
+                    if lost_roots and time.monotonic() >= next_rearm_check:
+                        next_rearm_check = time.monotonic() + REARM_CHECK_INTERVAL_S
+                        await _rearm_lost_roots()
+
                     if not events:
                         continue
 
@@ -1382,6 +1494,24 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                             else dir_path
                         )
 
+                        # The filesystem under a watch was unmounted: the
+                        # kernel has already dropped every watch on it, and
+                        # no per-file DELETE events follow. Retire the whole
+                        # root's bookkeeping and let the re-arm loop bring it
+                        # back once remounted — without this the watcher
+                        # stays silently blind to the root forever.
+                        if event.mask & flags.UNMOUNT:
+                            root = root_of(dir_path, music_folders) or dir_path
+                            prefix = root + os.sep
+                            for wd, path in list(watched_dirs.items()):
+                                if path == root or path.startswith(prefix):
+                                    del watched_dirs[wd]
+                            lost_roots.add(root)
+                            logger.warning(
+                                f"Filesystem unmounted under {root}; "
+                                "suspending watches until it returns"
+                            )
+
                         # A directory appeared — created in place (mkdir,
                         # cp -r) or moved in whole (mv). A moved-in tree is
                         # already populated and emits no per-file events, so
@@ -1389,7 +1519,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                         # unit. Same handling for a rename within the tree:
                         # re-adding the watches refreshes the wd -> path
                         # mapping for the new location.
-                        if event.mask & (
+                        elif event.mask & (
                             flags.CREATE | flags.MOVED_TO
                         ) and os.path.isdir(file_path):
                             relevant_changes.add(("dir_added", file_path))
@@ -1428,11 +1558,15 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                                 relevant_changes.add(("path_removed", file_path))
                                 logger.debug(f"File removed/moved out: {file_path}")
 
-                        # Handle watched directory removal
+                        # Handle watched directory removal. A configured root
+                        # deleted out from under us should re-arm when it
+                        # reappears (a recreated mountpoint, a restored dir).
                         elif event.mask & flags.DELETE_SELF:
                             if event.wd in watched_dirs:
                                 del watched_dirs[event.wd]
                                 logger.debug(f"Directory removed: {dir_path}")
+                            if dir_path in music_folders:
+                                lost_roots.add(dir_path)
 
                     if relevant_changes:
                         logger.info(

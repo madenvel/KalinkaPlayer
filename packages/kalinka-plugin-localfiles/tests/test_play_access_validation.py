@@ -10,10 +10,12 @@ retriever by raising, the content lookup by reporting the asset absent.
 
 import pytest
 
-from kalinka_plugin_sdk.inputmodule import ModuleAsset
+from kalinka_plugin_sdk.inputmodule import ModuleAsset, SourceUnavailableError
 
+import kalinka_plugin_localfiles.localfiles as localfiles_mod
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.localfiles import LocalFilesInputModule
+from kalinka_plugin_localfiles.utils.mount_status import RootStatus
 
 
 class _FakeDb:
@@ -96,6 +98,77 @@ async def test_source_retriever_raises_for_missing_file(tmp_path):
     [info] = await module.get_track_info(["track_1"])
     with pytest.raises(FileNotFoundError):
         await info.source_retriever()
+
+
+def _offline(monkeypatch):
+    """Report every root as an unmounted share, without the retry window."""
+
+    async def unavailable(root, deadline_s=None):
+        return RootStatus(
+            root=root,
+            available=False,
+            empty=True,
+            reason="the automounter has not mounted it",
+            fs_type="autofs",
+            is_network=False,
+            is_autofs=True,
+        )
+
+    monkeypatch.setattr(localfiles_mod, "await_root_available", unavailable)
+
+
+@pytest.mark.asyncio
+async def test_source_retriever_reports_unmounted_root_as_transient(
+    tmp_path, monkeypatch
+):
+    music = tmp_path / "music"  # in config, never mounted: no dir at all
+    path = music / "song.mp3"
+    _offline(monkeypatch)
+
+    module = _module(tmp_path, [music], _track(path))
+    [info] = await module.get_track_info(["track_1"])
+    with pytest.raises(SourceUnavailableError):
+        await info.source_retriever()
+
+
+@pytest.mark.asyncio
+async def test_source_retriever_recovers_when_mount_appears(tmp_path, monkeypatch):
+    music = tmp_path / "music"
+    path = music / "song.mp3"
+
+    async def mounts_late(root, deadline_s=None):
+        # The share comes up during the wait — as a completing automount does.
+        music.mkdir()
+        path.write_bytes(b"x")
+        return RootStatus(
+            root=root,
+            available=True,
+            empty=False,
+            reason="",
+            fs_type="nfs4",
+            is_network=True,
+            is_autofs=True,
+        )
+
+    monkeypatch.setattr(localfiles_mod, "await_root_available", mounts_late)
+
+    module = _module(tmp_path, [music], _track(path))
+    [info] = await module.get_track_info(["track_1"])
+    source = await info.source_retriever()
+    assert source.source == ModuleAsset(module="localfiles", asset_id="track_1")
+
+
+@pytest.mark.asyncio
+async def test_content_info_raises_for_unmounted_root(tmp_path, monkeypatch):
+    music = tmp_path / "music"
+    path = music / "song.mp3"
+    _offline(monkeypatch)
+
+    module = _module(tmp_path, [music], _track(path))
+    # Transient unavailability must NOT read as "absent" (a 404 kills the
+    # renderer's stream); the error carries through to the content route.
+    with pytest.raises(SourceUnavailableError):
+        await module.get_content_info("track_1")
 
 
 @pytest.mark.asyncio
