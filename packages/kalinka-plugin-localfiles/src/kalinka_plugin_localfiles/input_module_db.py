@@ -213,6 +213,24 @@ class LocalFilesInputModuleDb:
         finally:
             conn.close()
 
+    def get_root_signature(self, root: str) -> Optional[str]:
+        """The mount identity the indexer recorded for a music root, or None.
+        Lets the playback path tell an unmounted static share (identity
+        changed) from a genuinely missing file."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM indexer_state WHERE key = ?",
+                (f"root_signature:{root}",),
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else None
+        except sqlite3.Error:
+            return None
+        finally:
+            conn.close()
+
     def get_tracks_by_ids(self, track_ids: List[str]) -> List[Dict]:
         """Get track information by IDs, preserving the order of track_ids."""
         if not track_ids:

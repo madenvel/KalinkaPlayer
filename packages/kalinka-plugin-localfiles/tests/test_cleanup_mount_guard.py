@@ -177,6 +177,59 @@ async def test_out_of_config_tracks_purge_even_with_root_offline(
 
 
 @pytest.mark.asyncio
+async def test_run_scan_records_the_mount_identity(tmp_path, fast_probe):
+    music = tmp_path / "music"
+    music.mkdir()
+    (music / "a.mp3").write_bytes(b"x")
+
+    fi = _make_indexer(tmp_path, [music])
+    await init_db(fi.db_manager.db_path)
+    fi._extract_metadata = lambda _p: _meta(artist="A", album="AA", title="a")
+    await fi.run_scan()
+
+    signature = await fi.db_manager.get_root_signature(str(music))
+    assert signature  # e.g. "tmpfs tmpfs" or "ext4 /dev/..."
+
+
+@pytest.mark.asyncio
+async def test_mount_identity_change_blocks_the_purge(tmp_path, fast_probe):
+    """A static NFS mount silently unmounted: the mountpoint stats fine and
+    may even hold a stray file, but the identity no longer matches what the
+    library was indexed from — nothing may be purged."""
+    music = tmp_path / "music"
+    fi = _make_indexer(tmp_path, [music])
+    await init_db(fi.db_manager.db_path)
+    await _index_file(fi, music / "a.mp3", artist="A", album="AA", title="a")
+    await fi.db_manager.set_root_signature(str(music), "nfs4 host:/export")
+
+    os.remove(music / "a.mp3")
+    (music / "sentinel.txt").write_bytes(b"stray")  # root non-empty, wrong fs
+    removed = await fi.cleanup_stale_tracks()
+
+    assert removed["tracks"] == 0
+    assert len(await fi.db_manager.get_all_tracks()) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_root_with_matching_identity_purges(tmp_path, fast_probe):
+    """Deleting the last file of a genuinely local folder must still clean
+    the database: the recorded identity vouches that the storage itself did
+    not go anywhere."""
+    music = tmp_path / "music"
+    fi = _make_indexer(tmp_path, [music])
+    await init_db(fi.db_manager.db_path)
+    await _index_file(fi, music / "a.mp3", artist="A", album="AA", title="a")
+    current = await indexer_mod.probe_root_async(str(music))
+    await fi.db_manager.set_root_signature(str(music), current.identity)
+
+    os.remove(music / "a.mp3")  # root is now empty, identity unchanged
+    removed = await fi.cleanup_stale_tracks()
+
+    assert removed["tracks"] == 1
+    assert await fi.db_manager.get_all_tracks() == []
+
+
+@pytest.mark.asyncio
 async def test_failure_cache_rows_under_offline_root_are_kept(
     tmp_path, fast_probe
 ):

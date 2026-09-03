@@ -51,9 +51,15 @@ class RootStatus:
 
     ``available`` means the folder exists, is readable, and is not hidden
     behind a pending automount. ``empty`` is reported separately because an
-    empty folder that the library expects files under is the signature of a
-    mountpoint with nothing mounted on it — callers must not purge against
-    it. ``reason`` is a user-presentable phrase, non-empty when unavailable.
+    empty folder that the library expects files under may be a mountpoint
+    with nothing mounted on it — whether that blocks purging is the
+    caller's call, weighed against the recorded mount identity. ``reason``
+    is a user-presentable phrase, non-empty when unavailable.
+
+    ``identity`` names the mounted filesystem the folder currently lives on
+    ("nfs4 192.168.1.5:/export", "ext4 /dev/sda1"). Stable across reboots,
+    it lets callers detect that a static mount silently gave way to the
+    local directory underneath it — which availability alone cannot see.
     """
 
     root: str
@@ -63,6 +69,7 @@ class RootStatus:
     fs_type: Optional[str]
     is_network: bool
     is_autofs: bool
+    identity: Optional[str] = None
 
 
 def _unescape(field: str) -> str:
@@ -162,6 +169,7 @@ def probe_root(root: str, mounts: Optional[list[Mount]] = None) -> RootStatus:
         mounts = list_mounts()
     cov = covering_mount(root, mounts)
     fs_type = cov.fs_type if cov else None
+    identity = f"{cov.fs_type} {cov.source}" if cov else None
     is_autofs = any(m.fs_type == "autofs" and _covers(m.mount_point, root) for m in mounts)
     is_network = fs_type is not None and _is_network_fs(fs_type)
     if fs_type == "autofs":
@@ -173,6 +181,7 @@ def probe_root(root: str, mounts: Optional[list[Mount]] = None) -> RootStatus:
             fs_type=fs_type,
             is_network=is_network,
             is_autofs=True,
+            identity=identity,
         )
     if not accessible:
         return RootStatus(
@@ -183,6 +192,7 @@ def probe_root(root: str, mounts: Optional[list[Mount]] = None) -> RootStatus:
             fs_type=fs_type,
             is_network=is_network,
             is_autofs=is_autofs,
+            identity=identity,
         )
     try:
         with os.scandir(root) as entries:
@@ -196,6 +206,7 @@ def probe_root(root: str, mounts: Optional[list[Mount]] = None) -> RootStatus:
             fs_type=fs_type,
             is_network=is_network,
             is_autofs=is_autofs,
+            identity=identity,
         )
     return RootStatus(
         root=root,
@@ -205,14 +216,29 @@ def probe_root(root: str, mounts: Optional[list[Mount]] = None) -> RootStatus:
         fs_type=fs_type,
         is_network=is_network,
         is_autofs=is_autofs,
+        identity=identity,
     )
 
 
+# One in-flight probe per root (per event loop): repeated status or content
+# requests against a hung mount must pile onto the same blocked worker
+# thread, not claim a fresh one each and exhaust the executor.
+_inflight_probes: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Task]] = {}
+
+
 async def probe_root_async(root: str, timeout: float = _PROBE_TIMEOUT_S) -> RootStatus:
-    """`probe_root` off the event loop, bounded. On timeout the worker thread
-    is abandoned to its blocked stat and the root is reported unavailable."""
+    """`probe_root` off the event loop, bounded. On timeout the shared worker
+    thread is left to its blocked stat — later probes of the same root reuse
+    it — and the root is reported unavailable."""
+    loop = asyncio.get_running_loop()
+    entry = _inflight_probes.get(root)
+    if entry is None or entry[0] is not loop or entry[1].done():
+        task = loop.create_task(asyncio.to_thread(probe_root, root))
+        _inflight_probes[root] = (loop, task)
+    else:
+        task = entry[1]
     try:
-        return await asyncio.wait_for(asyncio.to_thread(probe_root, root), timeout)
+        return await asyncio.wait_for(asyncio.shield(task), timeout)
     except (asyncio.TimeoutError, TimeoutError):
         return RootStatus(
             root=root,
