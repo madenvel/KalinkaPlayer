@@ -1,5 +1,25 @@
 import abc
+import urllib.error
 from typing import Dict, List, Optional
+
+
+class TransientEnrichmentError(Exception):
+    """The attempt never reached the service — DNS failure, refused
+    connection, timeout. Nothing was learned about the entity, so its row
+    must stay pending for the next cycle rather than be recorded. Any HTTP
+    response, whatever its status, is the service's verdict and is recorded
+    as usual.
+    """
+
+
+def raise_if_musicbrainz_unreachable(error) -> None:
+    """Re-raise a ``musicbrainzngs.NetworkError`` as transient unless it
+    wraps an HTTP response (MusicBrainz answered — a verdict, not an
+    outage)."""
+    if not isinstance(getattr(error, "cause", None), urllib.error.HTTPError):
+        raise TransientEnrichmentError(
+            f"MusicBrainz is unreachable: {error}"
+        ) from error
 
 
 def inferred_claims(source: str, fields: Dict[str, object]) -> List[Dict]:

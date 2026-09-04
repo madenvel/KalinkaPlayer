@@ -6,7 +6,11 @@ from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
-from .enricher_plugin import EnricherPlugin, inferred_claims
+from .enricher_plugin import (
+    EnricherPlugin,
+    inferred_claims,
+    raise_if_musicbrainz_unreachable,
+)
 from .match_utils import (
     album_duration_bonus,
     duration_bonus,
@@ -47,7 +51,9 @@ def _same_release_group(a: Dict, b: Dict) -> bool:
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
-    ENRICHER_VERSION = 1
+    # 2: network outages no longer record an outcome, and rows they
+    # mis-recorded before re-open on this bump.
+    ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -331,6 +337,10 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             return {"updates": updates, "mbid": artist_mbid, "claims": claims}
 
+        except musicbrainzngs.NetworkError as e:
+            raise_if_musicbrainz_unreachable(e)
+            logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
             return None
@@ -616,6 +626,10 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             return {"updates": updates, "mbid": release_mbid, "claims": claims}
 
+        except musicbrainzngs.NetworkError as e:
+            raise_if_musicbrainz_unreachable(e)
+            logger.error(f"Error enriching album {album['title']}: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Error enriching album {album['title']}: {str(e)}")
             return None
@@ -912,6 +926,10 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Return data for further enrichment if needed
             return {"updates": updates, "mbid": recording_mbid}
 
+        except musicbrainzngs.NetworkError as e:
+            raise_if_musicbrainz_unreachable(e)
+            logger.error(f"Error enriching track {track['title']}: {str(e)}")
+            return None
         except Exception as e:
             logger.error(f"Error enriching track {track['title']}: {str(e)}")
             return None

@@ -12,6 +12,7 @@ from ..resolution.resolver import Claim, resolve_display_name, resolve_field
 from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
 
+from .enricher_plugin import TransientEnrichmentError
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
@@ -182,27 +183,40 @@ class MetadataEnricher:
                 self.running = False
 
     async def run_enrichment(self):
-        """Run the enrichment process"""
+        """Run the enrichment process.
+
+        A transport-level failure (a service unreachable, not answering)
+        ends the pass: the row being worked on keeps ``NOT_ENRICHED`` and is
+        picked up again on the next cycle, instead of being recorded as
+        FAILED or local-only off an answer that never arrived.
+        """
         totals = {"artists": 0, "albums": 0, "tracks": 0}
-        while True:
-            logger.debug("Processing artists for enrichment")
-            artist_update_count = await self._process_artists()
-            logger.debug("Processing albums for enrichment")
-            album_update_count = await self._process_albums()
-            logger.debug("Processing tracks for enrichment")
-            track_update_count = await self._process_tracks()
+        try:
+            while True:
+                logger.debug("Processing artists for enrichment")
+                artist_update_count = await self._process_artists()
+                logger.debug("Processing albums for enrichment")
+                album_update_count = await self._process_albums()
+                logger.debug("Processing tracks for enrichment")
+                track_update_count = await self._process_tracks()
 
-            totals["artists"] += artist_update_count
-            totals["albums"] += album_update_count
-            totals["tracks"] += track_update_count
+                totals["artists"] += artist_update_count
+                totals["albums"] += album_update_count
+                totals["tracks"] += track_update_count
 
-            total_updates = (
-                artist_update_count + album_update_count + track_update_count
+                total_updates = (
+                    artist_update_count + album_update_count + track_update_count
+                )
+
+                if total_updates == 0:
+                    logger.debug("No more items to process, finishing enrichment")
+                    break
+        except TransientEnrichmentError as e:
+            logger.warning(
+                "Enrichment paused — %s; pending rows will be retried on the "
+                "next cycle",
+                e,
             )
-
-            if total_updates == 0:
-                logger.debug("No more items to process, finishing enrichment")
-                break
 
         # Single INFO summary, only when the pass actually did work. On
         # an idle library this stays silent entirely.
