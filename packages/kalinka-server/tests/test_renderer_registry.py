@@ -347,3 +347,68 @@ async def test_driving_an_incompatible_renderer_is_refused_not_left_hanging():
     assert registry.live_session("old-rid") is link
     with pytest.raises(RendererUnavailable):
         registry.require_session("old-rid")
+
+
+async def test_a_renderer_returning_mid_playback_does_not_take_the_audio_back():
+    """A browser tab reload while music plays: the pinned renderer drops, the
+    track resumes on the fallback, and the tab comes back. Resolution prefers
+    the pin again, but the audio is on the fallback — saying otherwise leaves
+    every client naming a renderer that is silent."""
+    registry = RendererRegistry(offline_timeout_s=60)
+    web = object()
+    _register(registry, object(), renderer_id="rid-hifi")
+    _register(registry, web, renderer_id="rid-web", instance_id="inst-web")
+    registry.select("rid-web")
+    registry.session_claimed("rid-web")
+    assert registry.active_id() == "rid-web"
+
+    # Link dropped, session held for its return: playback has gone nowhere.
+    registry.disconnect("rid-web", web, clean=False)
+    assert registry.active_id() == "rid-web"
+
+    # The interrupted track resumes on the only renderer left.
+    registry.session_released("rid-web")
+    registry.session_claimed("rid-hifi")
+    assert registry.active_id() == "rid-hifi"
+
+    # The tab returns and is playable again — but it is not what is playing.
+    _register(registry, object(), renderer_id="rid-web", instance_id="inst-web2")
+    assert registry.active_id() == "rid-hifi"
+    entries = {e["renderer_id"]: e for e in registry.list()}
+    assert entries["rid-hifi"]["active"]
+    assert entries["rid-web"]["selected"] and not entries["rid-web"]["active"]
+
+    # Playback over, the pin decides again.
+    registry.session_released("rid-hifi")
+    assert registry.active_id() == "rid-web"
+    await registry.shutdown()
+
+
+async def test_a_late_release_does_not_clear_the_claim_that_replaced_it():
+    """Switching claims the new renderer before giving up the old, so the old
+    session's release arrives after the new one is already the answer."""
+    registry = RendererRegistry()
+    _register(registry, object(), renderer_id="rid-a")
+    _register(registry, object(), renderer_id="rid-b")
+
+    registry.session_claimed("rid-a")
+    registry.session_claimed("rid-b")
+    registry.session_released("rid-a")
+    assert registry.active_id() == "rid-b"
+    await registry.shutdown()
+
+
+async def test_claiming_and_releasing_a_session_tell_clients():
+    registry = RendererRegistry()
+    _register(registry, object(), renderer_id="rid-a")
+    _register(registry, object(), renderer_id="rid-b")
+    registry.select("rid-a")
+    events = _wire(registry)
+
+    registry.session_claimed("rid-b")
+    assert events == [("current", "rid-b", "rid-a")]
+    events.clear()
+
+    registry.session_released("rid-b")
+    assert events == [("current", "rid-a", "rid-a")]
+    await registry.shutdown()

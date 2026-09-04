@@ -286,6 +286,7 @@ class RendererPlayer:
         session.on_closed(self._on_session_closed)
         session.on_suspended(self._on_session_suspended)
         self._session = session
+        self._registry.session_claimed(renderer_id)
         logger.info("Claimed renderer %s for playback", renderer_id)
         return session
 
@@ -295,6 +296,7 @@ class RendererPlayer:
         session, self._session = self._session, None
         if session is None:
             return
+        self._registry.session_released(session.renderer_id)
         await session.close(CloseReason.CLOSED_BY_SERVER)
         if synthesize_stopped:
             self._publish(
@@ -307,6 +309,7 @@ class RendererPlayer:
         if session is not self._session:
             return  # a close we initiated; already detached
         self._session = None
+        self._registry.session_released(session.renderer_id)
         self._cancel_release()
         if reason in _QUIET_CLOSE_REASONS:
             return
