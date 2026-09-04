@@ -10,7 +10,11 @@ from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
 from ..utils.name_utils import clean_display_name
-from .enricher_plugin import EnricherPlugin, inferred_claims
+from .enricher_plugin import (
+    EnricherPlugin,
+    TransientEnrichmentError,
+    inferred_claims,
+)
 from .id_generator import generate_artist_id
 from .match_utils import duration_bonus
 
@@ -168,6 +172,8 @@ class AcoustIdPlugin(EnricherPlugin):
 
             return valid_results
 
+        except (requests.ConnectionError, requests.Timeout) as e:
+            raise TransientEnrichmentError(f"AcoustID is unreachable: {e}") from e
         except requests.RequestException as e:
             logger.error(f"AcoustID API request error: {str(e)}")
             return None
@@ -687,6 +693,8 @@ class AcoustIdPlugin(EnricherPlugin):
             # Return the updates for this track
             return result
 
+        except TransientEnrichmentError:
+            raise
         except Exception as e:
             logger.error(
                 f"Error enriching track {track.get('title', 'Unknown')} with AcoustID: {str(e)}"

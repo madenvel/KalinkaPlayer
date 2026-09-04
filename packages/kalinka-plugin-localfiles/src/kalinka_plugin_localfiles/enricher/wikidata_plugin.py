@@ -9,7 +9,11 @@ from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
-from .enricher_plugin import EnricherPlugin
+from .enricher_plugin import (
+    EnricherPlugin,
+    TransientEnrichmentError,
+    raise_if_musicbrainz_unreachable,
+)
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -117,6 +121,14 @@ class WikidataPlugin(EnricherPlugin):
 
             return {"updates": updates}
 
+        except httpx.TransportError as e:
+            raise TransientEnrichmentError(f"Wikidata is unreachable: {e}") from e
+        except musicbrainzngs.NetworkError as e:
+            raise_if_musicbrainz_unreachable(e)
+            logger.error(
+                f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"
+            )
+            return None
         except Exception as e:
             logger.error(
                 f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"

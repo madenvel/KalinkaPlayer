@@ -9,7 +9,11 @@ from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
-from .enricher_plugin import EnricherPlugin, inferred_claims
+from .enricher_plugin import (
+    EnricherPlugin,
+    TransientEnrichmentError,
+    inferred_claims,
+)
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -208,6 +212,8 @@ class DeezerPlugin(EnricherPlugin):
             else:
                 return None
 
+        except httpx.TransportError as e:
+            raise TransientEnrichmentError(f"Deezer is unreachable: {e}") from e
         except Exception as e:
             logger.error(
                 f"Error enriching artist {artist['name']} with Deezer image: {str(e)}"
@@ -300,6 +306,8 @@ class DeezerPlugin(EnricherPlugin):
             )
             return None
 
+        except httpx.TransportError as e:
+            raise TransientEnrichmentError(f"Deezer is unreachable: {e}") from e
         except Exception as e:
             logger.error(
                 f"Error enriching album {album['title']} with Deezer cover: {str(e)}"
