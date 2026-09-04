@@ -84,6 +84,12 @@ def catalog_id(id: str) -> EntityId:
     return EntityId(id=id, type=EntityType.CATALOG, source="localfiles")
 
 
+def artist_display_name(name: Optional[str]) -> str:
+    """A row the enricher has not reached yet may have no artist name;
+    browse output still needs one."""
+    return name or "Unknown artist"
+
+
 class LocalFilesInputModule(InputModule):
     """Local music files input module implementation"""
 
@@ -1033,7 +1039,10 @@ class LocalFilesInputModule(InputModule):
         album = Album(
             id=album_id(track["album_id"]),
             title=track["album_title"],
-            artist=Artist(id=artist_id(track["artist_id"]), name=track["artist_name"]),
+            artist=Artist(
+                id=artist_id(track["artist_id"]),
+                name=artist_display_name(track["artist_name"]),
+            ),
         )
 
         # Enriched genre, when the query joined it in (album_genre). Carried
@@ -1060,7 +1069,8 @@ class LocalFilesInputModule(InputModule):
 
         # Add performer if available
         track_obj.performer = Artist(
-            id=artist_id(track["artist_id"]), name=track["artist_name"]
+            id=artist_id(track["artist_id"]),
+            name=artist_display_name(track["artist_name"]),
         )
 
         # Add ReplayGain info if available
@@ -1097,7 +1107,10 @@ class LocalFilesInputModule(InputModule):
             title=album["title"],
             duration=album.get("duration", 0),
             track_count=album.get("track_count", 0),
-            artist=Artist(id=artist_id(album["artist_id"]), name=album["artist_name"]),
+            artist=Artist(
+                id=artist_id(album["artist_id"]),
+                name=artist_display_name(album["artist_name"]),
+            ),
         )
 
         # Add image if available
@@ -1139,7 +1152,10 @@ class LocalFilesInputModule(InputModule):
     def _create_artist_browse_item(self, artist: Dict) -> BrowseItem:
         """Create a BrowseItem for an artist"""
         # Create artist object
-        artist_obj = Artist(id=artist_id(artist["id"]), name=artist["name"])
+        artist_obj = Artist(
+            id=artist_id(artist["id"]),
+            name=artist_display_name(artist["name"]),
+        )
 
         # Add image if available
         image_path = self._get_artist_image_urls(artist["id"])

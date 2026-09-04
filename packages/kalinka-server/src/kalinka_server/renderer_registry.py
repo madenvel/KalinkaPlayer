@@ -114,6 +114,8 @@ class RendererRegistry:
         # that has to survive a restart. The store's other entries belong to
         # whoever owns that concern (volume delegation -> OutputDeviceRouter).
         self._prefs = prefs if prefs is not None else RendererPreferences()
+        # The renderer playback holds a session on, while it holds one.
+        self._playing_on: Optional[str] = None
 
     def register(
         self,
@@ -310,11 +312,39 @@ class RendererRegistry:
         return self._prefs.selected_renderer_id
 
     def active_id(self) -> Optional[str]:
-        """The renderer playback opens sessions on: the selected one while it
+        """The renderer playback runs on.
+
+        A held session settles it: that renderer is where the audio *is*, and a
+        renderer arriving mid-playback must not move the answer out from under
+        it. With none held, resolution decides — the selected renderer while it
         is connected and speaks our protocol, otherwise the first that is. A
-        selected renderer that is offline is not forgotten — it wins again
-        when it returns."""
+        selected renderer that is offline is not forgotten — it wins again when
+        it returns."""
+        # Not filtered by `playable`: a renderer whose link dropped mid-track
+        # keeps its session for the moment it may return, and playback has not
+        # gone anywhere else meanwhile. Reaping drops it from the map, and
+        # resolution takes over again.
+        if self._playing_on in self._renderers:
+            return self._playing_on
         return self.resolve_active(self._prefs.selected_renderer_id)
+
+    def session_claimed(self, renderer_id: str) -> None:
+        """Playback took a session on this renderer; it is the active one now."""
+        if self._playing_on == renderer_id:
+            return
+        self._playing_on = renderer_id
+        self._publish_current()
+
+    def session_released(self, renderer_id: str) -> None:
+        """That session is over, so resolution decides again.
+
+        A release for a renderer that is not the one holding playback is
+        ignored: switching claims the new session before giving up the old, and
+        the late release must not clear the claim that replaced it."""
+        if self._playing_on != renderer_id:
+            return
+        self._playing_on = None
+        self._publish_current()
 
     def resolve_active(self, selected_id: Optional[str]) -> Optional[str]:
         """What :meth:`active_id` would return for a given selection. Lets a
