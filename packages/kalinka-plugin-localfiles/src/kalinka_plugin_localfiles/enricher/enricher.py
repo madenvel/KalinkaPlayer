@@ -13,6 +13,7 @@ from ..config_model import LocalFilesConfig
 from ..resolution.resolver import Claim, resolve_display_name, resolve_field
 from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
+from ..worker_utils import nudge
 
 from .enricher_plugin import TransientEnrichmentError
 from .service_backoff import ServiceBackoff
@@ -20,6 +21,7 @@ from .service_timings import ServiceTimings
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
+from .coverartarchive_plugin import CoverArtArchivePlugin
 from .deezer_plugin import DeezerPlugin
 from .filesystem_fallback_plugin import FilesystemFallbackPlugin
 from .enricher_db import AsyncEnricherDb
@@ -69,9 +71,10 @@ ALBUM_EXTERNAL_FIELDS = ("genre", "year", "original_year", "language")
 # in-process asyncio queue, and the searcher nudge stays cross-process.
 _enricher_task: Optional[asyncio.Task] = None
 _enricher_queue: Optional[asyncio.Queue] = None
-# Nudges the searcher (a separate process) to re-tag once enrichment finishes;
-# the searcher in turn nudges the embedder. Stays a cross-process queue.
+# Woken after each pass: the searcher re-tags, the embedder picks up the
+# clap_text jobs the pass just made schedulable.
 _searcher_nudge_queue: Optional[multiprocessing.Queue] = None
+_embedder_nudge_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
@@ -144,6 +147,12 @@ class MetadataEnricher:
         if config.enricher.plugins.deezer.enabled:
             logger.info("Loading DeezerPlugin")
             self.plugins.append(DeezerPlugin(config, self.db_manager))
+
+        # After the fetching sources, before the generator: it only fills
+        # covers nothing else supplied, keyed by the MB release id.
+        if config.enricher.plugins.coverartarchive.enabled:
+            logger.info("Loading CoverArtArchivePlugin")
+            self.plugins.append(CoverArtArchivePlugin(config, self.db_manager))
 
         # Generated album art is strictly last: it only fills covers no
         # real source could provide, so every fetching plugin above must
@@ -891,11 +900,8 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
         """Run one enrichment pass; returns seconds until deferred rows are
         worth retrying, or None when nothing is waiting on a service."""
         await enricher_instance.start()
-        if _searcher_nudge_queue is not None:
-            try:
-                _searcher_nudge_queue.put_nowait("nudge")
-            except Exception:
-                pass
+        nudge(_searcher_nudge_queue)
+        nudge(_embedder_nudge_queue)
         return enricher_instance.next_retry_delay()
 
     # Process queue commands. When a pass left rows waiting on an

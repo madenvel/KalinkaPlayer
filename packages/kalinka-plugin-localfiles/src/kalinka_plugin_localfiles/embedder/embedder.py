@@ -306,7 +306,10 @@ class EmbeddingWorker:
             logger.info(
                 "CLAP embeddings written for %d tracks", len(completed_track_ids)
             )
-            await self._update_aggregate_embeddings(completed_track_ids)
+            # Pre-verdict tracks pool later, off their enrichment-gated text job.
+            settled = await self.db.filter_enriched_tracks(completed_track_ids)
+            if settled:
+                await self._update_aggregate_embeddings(settled)
         return True
 
     async def _process_va_backfill(self) -> bool:
@@ -430,10 +433,8 @@ class EmbeddingWorker:
                 "CLAP text embeddings written for %d tracks", len(completed_track_ids)
             )
             await self._update_aggregate_text_embeddings(completed_track_ids)
-            # Also refresh the mean-pooled audio aggregates: a text re-embed
-            # means metadata (and possibly album/artist membership) changed,
-            # and after a rebuild with restored audio blobs this is the only
-            # completion that fires for the new album/artist rows.
+            # The audio-aggregate refresh for tracks embedded pre-verdict
+            # (and for snapshot-restored blobs) rides this completion.
             await self._update_aggregate_embeddings(completed_track_ids)
         return True
 
@@ -585,7 +586,6 @@ class EmbeddingWorker:
             if await self.db.restore_snapshot(CLAP_MODEL_VERSION):
                 await self.db.backfill_missing_vec_rows()
 
-            # Schedule new CLAP jobs for enriched tracks
             await self.db.schedule_new_jobs(CLAP_MODEL_VERSION)
 
             did_work = False

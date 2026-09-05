@@ -29,6 +29,7 @@ logger = logging.getLogger("librarian")
 async def async_main(
     config: LocalFilesConfig,
     searcher_nudge_queue: Optional[multiprocessing.Queue] = None,
+    embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
 ):
     """Run the indexer and enricher worker loops in one event loop."""
     shutdown_event = asyncio.Event()
@@ -43,6 +44,9 @@ async def async_main(
         asyncio.Queue() if enricher_enabled else None
     )
     indexer_mod._enricher_queue = enrich_queue
+    # A finished scan wakes the embedder directly: clap_audio no longer
+    # waits for enrichment.
+    indexer_mod._embedder_nudge_queue = embedder_nudge_queue
 
     # Both worker loops set _shutdown_event on a "stop" command; point them
     # at the librarian's event so either one flags the whole process.
@@ -61,6 +65,7 @@ async def async_main(
     if enricher_enabled:
         enricher_mod._enricher_queue = enrich_queue
         enricher_mod._searcher_nudge_queue = searcher_nudge_queue
+        enricher_mod._embedder_nudge_queue = embedder_nudge_queue
         enricher_mod._shutdown_event = shutdown_event
         enricher_task = enricher_mod.start_enricher(config, AsyncEnricherDb(config))
 
@@ -85,6 +90,7 @@ def main(
     config: LocalFilesConfig,
     logger_queue: multiprocessing.Queue,
     searcher_nudge_queue: Optional[multiprocessing.Queue] = None,
+    embedder_nudge_queue: Optional[multiprocessing.Queue] = None,
 ):
     """Main entry point for the librarian daemon."""
     set_proc_title("kal-librarian")
@@ -96,7 +102,7 @@ def main(
     root.addHandler(logging.handlers.QueueHandler(logger_queue))
 
     try:
-        asyncio.run(async_main(config, searcher_nudge_queue))
+        asyncio.run(async_main(config, searcher_nudge_queue, embedder_nudge_queue))
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received by asyncio.run. Exiting.")
     except Exception as e:

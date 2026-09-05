@@ -258,6 +258,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
                 config,
                 self._logging_queue,
                 self._searcher_nudge_queue,
+                self._embedder_nudge_queue,
             ),
         )
         self._librarian_proc.start()

@@ -199,6 +199,19 @@ class DeezerConfig(BaseModel):
     enabled: bool = Field(default=True, title="Enable Deezer")
 
 
+class CoverArtArchiveConfig(BaseModel):
+    enabled: bool = Field(
+        default=True,
+        title="Enable Cover Art Archive",
+        json_schema_extra={
+            "help": (
+                "Fetch album covers from the MusicBrainz Cover Art Archive "
+                "for matched releases no other source has art for"
+            ),
+        },
+    )
+
+
 class FilesystemConfig(BaseModel):
     enabled: bool = Field(
         default=True,
@@ -234,6 +247,9 @@ class PluginsConfig(BaseModel):
     acoustid: AcoustIDConfig = Field(default_factory=AcoustIDConfig, title="AcoustID")
     wikidata: WikidataConfig = Field(default_factory=WikidataConfig, title="Wikidata")
     deezer: DeezerConfig = Field(default_factory=DeezerConfig, title="Deezer")
+    coverartarchive: CoverArtArchiveConfig = Field(
+        default_factory=CoverArtArchiveConfig, title="Cover Art Archive"
+    )
     procedural_artwork: ProceduralArtworkConfig = Field(
         default_factory=ProceduralArtworkConfig, title="Generated album art"
     )
