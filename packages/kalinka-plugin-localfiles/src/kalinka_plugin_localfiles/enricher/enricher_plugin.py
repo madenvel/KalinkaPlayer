@@ -22,6 +22,20 @@ def raise_musicbrainz_unreachable(error) -> None:
     ) from error
 
 
+def raise_if_service_unavailable(status_code: int, service: str) -> None:
+    """Turn a throttle or server-side failure into a transient error.
+
+    429 and 5xx describe the service's own state, not the entity: recording
+    them as a verdict marks the row terminal for an outage it knew nothing
+    about. Every other status — 200, 404, a malformed request — is the
+    service answering about the entity and stays the caller's to interpret.
+    """
+    if status_code == 429 or status_code >= 500:
+        raise TransientEnrichmentError(
+            f"{service} is unavailable: HTTP {status_code}"
+        )
+
+
 def inferred_claims(source: str, fields: Dict[str, object]) -> List[Dict]:
     """Build the enricher's claim dicts for each non-empty field, attributed to
     ``source`` at the ``inferred`` tier — the shape every plugin emits and the

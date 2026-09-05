@@ -86,7 +86,8 @@ class LocalFilesInputModuleDb:
                     CREATE TABLE embedding_snapshot AS
                     SELECT id AS track_id, embedding_clap_audio,
                            embedding_version, embedded_at,
-                           mood_valence, mood_arousal
+                           mood_valence, mood_arousal,
+                           file_size, modified_time
                     FROM tracks
                     WHERE embedding_clap_audio IS NOT NULL
                     """

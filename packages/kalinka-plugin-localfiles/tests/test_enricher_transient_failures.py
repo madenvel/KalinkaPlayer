@@ -17,6 +17,7 @@ from kalinka_plugin_localfiles.enricher.deezer_plugin import DeezerPlugin
 from kalinka_plugin_localfiles.enricher.enricher import MetadataEnricher
 from kalinka_plugin_localfiles.enricher.enricher_plugin import (
     TransientEnrichmentError,
+    raise_if_service_unavailable,
     raise_musicbrainz_unreachable,
 )
 
@@ -131,3 +132,24 @@ async def test_deezer_http_status_is_a_verdict(tmp_path):
 
     plugin.async_client.get = not_found
     assert await plugin.enrich_artist({"id": "ar1", "name": "VNV Nation"}) is None
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+@pytest.mark.asyncio
+async def test_deezer_throttle_and_outage_are_transient(tmp_path, status):
+    """A throttle or a 5xx arrives as a response, but it speaks about the
+    service, not the artist — recording it would mark the row local-only for
+    an outage it knew nothing about."""
+    plugin = _deezer(tmp_path)
+
+    async def unavailable(*_a, **_k):
+        return httpx.Response(status, request=httpx.Request("GET", "http://x"))
+
+    plugin.async_client.get = unavailable
+    with pytest.raises(TransientEnrichmentError):
+        await plugin.enrich_artist({"id": "ar1", "name": "VNV Nation"})
+
+
+@pytest.mark.parametrize("status", [200, 400, 404])
+def test_service_verdicts_pass_through(status):
+    raise_if_service_unavailable(status, "Deezer")

@@ -670,18 +670,22 @@ class LocalFilesInputModule(InputModule):
             )
 
     async def _await_readable(self, track_path: str) -> None:
-        """`_require_readable` with a mount-aware second chance: when the file
-        is missing because its music folder is an unmounted share — offline,
-        automount pending, or a static mount whose recorded identity no
-        longer matches — raise SourceUnavailableError instead of declaring
-        the track gone."""
-        try:
+        """`_require_readable`, but only once the track's music folder is
+        vouched for: an unmounted share — offline, automount pending, or a
+        static mount whose recorded identity no longer matches — raises
+        SourceUnavailableError instead of declaring the track gone or
+        serving whatever now sits at that path.
+
+        The folder is cleared first because the file check cannot tell the
+        difference on its own: a stat under a hung mount blocks, and a stray
+        file in the empty directory behind a lost mount reads as perfectly
+        available. Probing goes through the shared per-root worker, so a hung
+        mount costs one blocked thread however many tracks ask."""
+        root = root_of(track_path, self._music_folders)
+        if root is None:
             await self._require_readable_bounded(track_path)
             return
-        except FileNotFoundError:
-            root = root_of(track_path, self._music_folders)
-            if root is None:
-                raise
+
         status = await await_root_available(root)
         if not status.available:
             raise SourceUnavailableError(

@@ -179,6 +179,24 @@ async def test_source_retriever_reports_identity_mismatch_as_transient(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_a_stray_file_behind_a_lost_mount_is_not_served(tmp_path):
+    """The mountpoint directory can hold files of its own once the share is
+    gone. They stat perfectly, so readability alone would serve the wrong
+    audio — the recorded mount identity has to be checked first."""
+    music = tmp_path / "music"
+    music.mkdir()
+    path = music / "song.mp3"
+    path.write_bytes(b"not the indexed file")
+
+    module = _module(
+        tmp_path, [music], _track(path), root_signature="nfs4 host:/export"
+    )
+    [info] = await module.get_track_info(["track_1"])
+    with pytest.raises(SourceUnavailableError, match="nfs4 host:/export"):
+        await info.source_retriever()
+
+
+@pytest.mark.asyncio
 async def test_source_retriever_bounds_a_hung_stat(tmp_path, monkeypatch):
     import time as time_mod
 

@@ -18,9 +18,14 @@ from kalinka_plugin_localfiles.embedder.embedder_db import AsyncEmbedderDb
 
 CURRENT = 4
 STALE = 3
+SIZE = 4096
+MTIME = 1_700_000_000
 
 
-async def _seed(db_path: str, snapshot_rows) -> AsyncEmbedderDb:
+async def _seed(db_path: str, snapshot_rows, identity=(SIZE, MTIME)) -> AsyncEmbedderDb:
+    """Snapshot table as ``purge_all`` leaves it. Rows are given without file
+    identity; ``identity`` is appended to each, so a test that cares about a
+    changed file passes one that differs from the track's."""
     await init_db(db_path)
     async with aiosqlite.connect(db_path) as conn:
         await conn.execute(
@@ -28,24 +33,27 @@ async def _seed(db_path: str, snapshot_rows) -> AsyncEmbedderDb:
             CREATE TABLE embedding_snapshot (
                 track_id TEXT, embedding_clap_audio BLOB,
                 embedding_version INTEGER, embedded_at TIMESTAMP,
-                mood_valence REAL, mood_arousal REAL
+                mood_valence REAL, mood_arousal REAL,
+                file_size BIGINT, modified_time INTEGER
             )
             """
         )
         await conn.executemany(
-            "INSERT INTO embedding_snapshot VALUES (?, ?, ?, ?, ?, ?)",
-            snapshot_rows,
+            "INSERT INTO embedding_snapshot VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [tuple(row) + tuple(identity) for row in snapshot_rows],
         )
         await conn.commit()
     return AsyncEmbedderDb(LocalFilesConfig(db_path=db_path))
 
 
-async def _insert_track(db_path: str, track_id: str) -> None:
+async def _insert_track(
+    db_path: str, track_id: str, size: int = SIZE, mtime: int = MTIME
+) -> None:
     async with aiosqlite.connect(db_path) as conn:
         await conn.execute(
-            "INSERT INTO tracks (id, title, file_path, format, enriched) "
-            "VALUES (?, ?, ?, 'flac', 1)",
-            (track_id, track_id, f"/m/{track_id}.flac"),
+            "INSERT INTO tracks (id, title, file_path, format, enriched, "
+            "file_size, modified_time) VALUES (?, ?, ?, 'flac', 1, ?, ?)",
+            (track_id, track_id, f"/m/{track_id}.flac", size, mtime),
         )
         await conn.commit()
 
@@ -83,9 +91,11 @@ async def test_restore_reattaches_current_version_blobs(tmp_path):
         )
         assert await cursor.fetchall() == [("t1", "done", CURRENT)]
 
-        # t1 consumed; the stale t2 row stays until the next rebuild.
-        cursor = await conn.execute("SELECT track_id FROM embedding_snapshot")
-        assert await cursor.fetchall() == [("t2",)]
+        # Both tracks are back, so neither snapshot row can ever apply again.
+        cursor = await conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'embedding_snapshot'"
+        )
+        assert await cursor.fetchone() is None
 
 
 @pytest.mark.asyncio
@@ -155,6 +165,66 @@ async def test_vec_backfill_rebuilds_knn_rows_from_blobs(tmp_path):
             "SELECT track_id, length(embedding) FROM vec_tracks_clap"
         )
         assert await cursor.fetchall() == [("t1", 512)]
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_file_re_embeds_instead_of_inheriting(tmp_path):
+    """Track IDs are path hashes, so a different file dropped at the same path
+    claims the old ID. Its audio is not the audio we embedded — restoring the
+    blob would leave search permanently answering for a file that is gone."""
+    db_path = str(tmp_path / "test.db")
+    db = await _seed(db_path, [("t1", b"\x01\x02", CURRENT, None, None, None)])
+    await _insert_track(db_path, "t1", size=SIZE + 1, mtime=MTIME + 60)
+
+    assert await db.restore_snapshot(CURRENT) == 0
+
+    async with aiosqlite.connect(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT embedding_clap_audio FROM tracks WHERE id = 't1'"
+        )
+        assert (await cursor.fetchone())[0] is None
+        cursor = await conn.execute("SELECT 1 FROM embedding_jobs")
+        assert await cursor.fetchone() is None
+
+    await db.schedule_new_jobs(CURRENT)
+    async with aiosqlite.connect(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT status FROM embedding_jobs WHERE stage = 'clap_audio'"
+        )
+        assert await cursor.fetchall() == [("pending",)]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_file_identity_is_discarded(tmp_path):
+    """Left by a version that snapshotted no size/mtime: unverifiable, so it
+    is dropped and the audio recomputed rather than trusted."""
+    db_path = str(tmp_path / "test.db")
+    await init_db(db_path)
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(
+            """
+            CREATE TABLE embedding_snapshot (
+                track_id TEXT, embedding_clap_audio BLOB,
+                embedding_version INTEGER, embedded_at TIMESTAMP,
+                mood_valence REAL, mood_arousal REAL
+            )
+            """
+        )
+        await conn.execute(
+            "INSERT INTO embedding_snapshot VALUES ('t1', X'0102', ?, NULL, NULL, NULL)",
+            (CURRENT,),
+        )
+        await conn.commit()
+    await _insert_track(db_path, "t1")
+
+    db = AsyncEmbedderDb(LocalFilesConfig(db_path=db_path))
+    assert await db.restore_snapshot(CURRENT) == 0
+
+    async with aiosqlite.connect(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'embedding_snapshot'"
+        )
+        assert await cursor.fetchone() is None
 
 
 @pytest.mark.asyncio

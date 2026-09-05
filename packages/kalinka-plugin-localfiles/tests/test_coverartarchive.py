@@ -118,6 +118,7 @@ async def test_unreachable_archive_is_transient(tmp_path):
     for failure in (
         FakeClient(error=httpx.ConnectError("boom")),
         FakeClient(FakeResponse(503)),
+        FakeClient(FakeResponse(429)),
     ):
         p = _plugin(tmp_path)
         p.async_client = failure

@@ -15,12 +15,18 @@ from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
     inferred_claims,
+    raise_if_service_unavailable,
 )
 from .id_generator import generate_artist_id
 from .match_utils import duration_bonus
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+# Without one the lookup blocks its worker thread for as long as the service
+# stays silent; the read half is generous because a compressed fingerprint
+# lookup is real work for the server.
+_LOOKUP_TIMEOUT_S = (5, 30)
 
 
 class AcoustIdPlugin(EnricherPlugin):
@@ -154,7 +160,8 @@ class AcoustIdPlugin(EnricherPlugin):
                 "duration": math.floor(duration),
             }
 
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=_LOOKUP_TIMEOUT_S)
+            raise_if_service_unavailable(response.status_code, "AcoustID")
             if response.status_code != 200:
                 logger.error(
                     f"AcoustID API error: {response.status_code} - {response.text}"
@@ -186,6 +193,8 @@ class AcoustIdPlugin(EnricherPlugin):
 
             return valid_results
 
+        except TransientEnrichmentError:
+            raise
         except (requests.ConnectionError, requests.Timeout) as e:
             raise TransientEnrichmentError(f"AcoustID is unreachable: {e}") from e
         except requests.RequestException as e:

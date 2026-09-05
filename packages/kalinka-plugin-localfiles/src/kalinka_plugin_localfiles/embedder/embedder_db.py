@@ -131,12 +131,14 @@ class AsyncEmbedderDb:
         finished audio blobs in ``embedding_snapshot``. Track IDs are stable
         path hashes, so once the indexer recreates a track its blob (and the
         mood projection) is copied back and a done clap_audio job is recorded
-        instead of re-running the audio model. Only blobs of the current
-        ``model_version`` qualify — after a model bump nothing is restored
-        and normal scheduling recomputes. Consumed rows are deleted and the
-        table is dropped once empty, making the call a cheap no-op on every
-        later cycle. Snapshot rows for files that never reappear are inert
-        and vanish with the next rebuild.
+        instead of re-running the audio model. A path is not proof of content,
+        so size and mtime must match too: a file swapped for another at the
+        same path re-embeds rather than inheriting the old audio. Only blobs
+        of the current ``model_version`` qualify — after a model bump nothing
+        is restored and normal scheduling recomputes. Rows are deleted once
+        their track is back, restored or not, and the table is dropped once
+        empty, making the call a cheap no-op on every later cycle. Rows for
+        files that never reappear are inert and vanish with the next rebuild.
 
         Only the blob columns and job rows are restored here; the KNN index
         rows are rebuilt by :meth:`backfill_missing_vec_rows`, which the
@@ -148,6 +150,14 @@ class AsyncEmbedderDb:
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embedding_snapshot'"
             )
             if not await cursor.fetchone():
+                return 0
+            cursor = await conn.execute("PRAGMA table_info(embedding_snapshot)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if not {"file_size", "modified_time"} <= columns:
+                # Left by a version that did not record file identity: the
+                # blobs cannot be tied to a file any more, so recompute.
+                await conn.execute("DROP TABLE embedding_snapshot")
+                await conn.commit()
                 return 0
             cursor = await conn.execute(
                 """
@@ -161,6 +171,8 @@ class AsyncEmbedderDb:
                 WHERE tracks.id = s.track_id
                   AND s.embedding_version = ?
                   AND tracks.embedding_clap_audio IS NULL
+                  AND tracks.file_size IS s.file_size
+                  AND tracks.modified_time IS s.modified_time
                 """,
                 (model_version,),
             )
@@ -181,9 +193,7 @@ class AsyncEmbedderDb:
             await conn.execute(
                 """
                 DELETE FROM embedding_snapshot
-                WHERE track_id IN (
-                    SELECT id FROM tracks WHERE embedding_clap_audio IS NOT NULL
-                )
+                WHERE track_id IN (SELECT id FROM tracks)
                 """
             )
             cursor = await conn.execute(

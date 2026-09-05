@@ -250,15 +250,17 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         await init_db(config.db_path)
 
         # Indexer + enricher run in one process, wired by an in-process queue.
-        # It nudges the searcher (not the embedder directly) when enrichment
-        # completes; the enricher leg only runs if config.enricher.enabled.
+        # It nudges the searcher and the embedder as work lands; the enricher
+        # leg only runs if config.enricher.enabled. Without AI search there is
+        # no embedder to drain its queue, so it gets none rather than an
+        # unbounded backlog of wake-ups.
         self._librarian_proc = multiprocessing.Process(
             target=librarian.main,
             args=(
                 config,
                 self._logging_queue,
                 self._searcher_nudge_queue,
-                self._embedder_nudge_queue,
+                self._embedder_nudge_queue if config.ai_search.enabled else None,
             ),
         )
         self._librarian_proc.start()

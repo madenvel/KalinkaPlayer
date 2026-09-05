@@ -73,6 +73,25 @@ async def test_untagged_single_gets_track_art_at_index_time(indexer):
 
 
 @pytest.mark.asyncio
+async def test_reindex_without_embedded_art_drops_the_track_cover(indexer):
+    """The update is surgical, so a cover the file no longer carries would
+    otherwise stay on the row forever."""
+    fi, db, music_dir, config = indexer
+    path = music_dir / "loose.flac"
+    _write_flac(path, {"title": "Bee Moved", "artist": "Blue Coast"},
+                cover=_cover_png((250, 200, 20)))
+    changes = await fi.process_file(str(path))
+    track_id = changes["tracks"]
+    assert (await db.get_track_by_id(track_id))["image_url"] == f"{track_id}.jpg"
+
+    path.unlink()
+    _write_flac(path, {"title": "Bee Moved", "artist": "Blue Coast"})
+    await fi.process_file(str(path))
+
+    assert (await db.get_track_by_id(track_id))["image_url"] is None
+
+
+@pytest.mark.asyncio
 async def test_backfill_restores_art_after_clustering_demotion(indexer):
     fi, db, music_dir, config = indexer
     path = music_dir / "single.flac"

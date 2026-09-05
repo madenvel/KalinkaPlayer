@@ -8,6 +8,7 @@ Ranged requests are answered by FileResponse: a renderer seeks by asking for
 byte ranges, and reads the stream size out of ``Content-Range``.
 """
 
+import asyncio
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +18,10 @@ from fastapi.responses import FileResponse
 from kalinka_plugin_sdk.inputmodule import InputModule, SourceUnavailableError
 
 from .content_urls import CONTENT_ROUTE
+
+# A stat on a hung network mount never returns; the module's own checks are
+# bounded, and this last one before FileResponse must be too.
+_STAT_TIMEOUT_S = 3.0
 
 
 def register_content_route(
@@ -48,7 +53,19 @@ def register_content_route(
         # A file the module will not name, or that went away since it did, is
         # absent rather than a server fault — FileResponse would raise on the
         # missing stat.
-        if info is None or not info.local_path or not Path(info.local_path).is_file():
+        if info is None or not info.local_path:
+            raise HTTPException(status_code=404, detail="Content not found")
+        try:
+            present = await asyncio.wait_for(
+                asyncio.to_thread(Path(info.local_path).is_file), _STAT_TIMEOUT_S
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(
+                status_code=503,
+                detail="Content storage did not respond",
+                headers={"Retry-After": "2"},
+            )
+        if not present:
             raise HTTPException(status_code=404, detail="Content not found")
 
         return FileResponse(

@@ -100,6 +100,7 @@ class WikidataPlugin(EnricherPlugin):
             }
 
             response = await self.async_client.get(wikidata_api_url, params=params)
+            raise_if_service_unavailable(response.status_code, "Wikidata")
             data = response.json()
 
             # Extract image filename from response
@@ -120,6 +121,7 @@ class WikidataPlugin(EnricherPlugin):
 
             # Download the image
             image_response = await self.async_client.get(image_url)
+            raise_if_service_unavailable(image_response.status_code, "Wikimedia")
             if image_response.status_code != 200:
                 logger.error(
                     f"Failed to download image for artist {artist['name']}: {image_response.status_code}"
@@ -137,6 +139,8 @@ class WikidataPlugin(EnricherPlugin):
 
             return {"updates": updates}
 
+        except TransientEnrichmentError:
+            raise
         except httpx.TransportError as e:
             raise TransientEnrichmentError(f"Wikidata is unreachable: {e}") from e
         except musicbrainzngs.NetworkError as e:
@@ -165,6 +169,7 @@ class WikidataPlugin(EnricherPlugin):
             }
 
             response = await self.async_client.get(commons_api_url, params=params)
+            raise_if_service_unavailable(response.status_code, "Wikimedia")
             if response.status_code != 200:
                 logger.error(
                     f"Failed to query MediaWiki API for image {image_filename}: {response.status_code}"
@@ -186,6 +191,8 @@ class WikidataPlugin(EnricherPlugin):
 
             return page["imageinfo"][0]["url"]
 
+        except (httpx.TransportError, TransientEnrichmentError):
+            raise
         except Exception as e:
             logger.error(
                 f"Error getting Wikimedia image URL for {image_filename}: {str(e)}"
