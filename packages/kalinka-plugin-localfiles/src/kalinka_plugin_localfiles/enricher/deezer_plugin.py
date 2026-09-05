@@ -1,14 +1,12 @@
 import logging
-import os
 from pathlib import Path
 import httpx
-import io
 import difflib
 import re
-from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
+from ..utils.artwork_store import save_artwork_images
 from ..utils.name_utils import (
     repair_mojibake,
     space_dotted_abbreviations,
@@ -257,45 +255,9 @@ class DeezerPlugin(EnricherPlugin):
             return None
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str) -> bool:
-        """Save artwork images in different sizes"""
-        try:
-            img = Image.open(io.BytesIO(image_data))
-
-            # Create the directory if it doesn't exist
-            dir_path = os.path.join(self.artwork_path, entity_type)
-            os.makedirs(dir_path, exist_ok=True)
-
-            # Convert to RGB if needed (for PNG, etc.)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-
-            # Save thumbnail (50x50)
-            thumbnail = img.copy()
-            thumbnail.thumbnail((50, 50), Image.Resampling.LANCZOS)
-            thumbnail.save(
-                os.path.join(dir_path, f"{entity_id}_thumbnail.jpg"), "JPEG", quality=90
-            )
-
-            # Save small (230x230)
-            small = img.copy()
-            small.thumbnail((230, 230), Image.Resampling.LANCZOS)
-            small.save(
-                os.path.join(dir_path, f"{entity_id}_small.jpg"), "JPEG", quality=90
-            )
-
-            # Save large (600x600 or original if smaller)
-            large = img.copy()
-            large.thumbnail((600, 600), Image.Resampling.LANCZOS)
-            large.save(
-                os.path.join(dir_path, f"{entity_id}_large.jpg"), "JPEG", quality=90
-            )
-
-            return True
-        except Exception as e:
-            logger.error(
-                f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
-            )
-            return False
+        return save_artwork_images(
+            self.artwork_path, image_data, entity_id, entity_type
+        )
 
     async def enrich_album(self, album: Dict) -> Optional[Dict]:
         """

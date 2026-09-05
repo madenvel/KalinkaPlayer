@@ -133,6 +133,21 @@ def set_proc_title(name: str) -> None:
         pass
 
 
+def nudge(nudge_queue: Optional[multiprocessing.Queue]) -> None:
+    """Best-effort wake-up for a sibling worker's interruptible sleep.
+
+    Losing a nudge only costs waiting out the poll interval, so a full or
+    torn-down queue is ignored rather than propagated into the caller's own
+    work loop.
+    """
+    if nudge_queue is None:
+        return
+    try:
+        nudge_queue.put_nowait("nudge")
+    except Exception:  # noqa: BLE001 — wake-ups are advisory
+        pass
+
+
 async def sleep_interruptible(
     duration: float,
     shutdown_event: asyncio.Event,

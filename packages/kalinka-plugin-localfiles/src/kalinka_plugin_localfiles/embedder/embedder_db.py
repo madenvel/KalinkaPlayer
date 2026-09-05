@@ -240,30 +240,28 @@ class AsyncEmbedderDb:
 
     async def schedule_new_jobs(self, clap_version: int) -> int:
         """
-        Queue CLAP jobs for enriched tracks.
+        Queue CLAP jobs.
 
-        clap_audio and clap_text are both scheduled off enriched metadata;
-        the audio embedding is metadata-independent.
+        clap_audio is scheduled the moment the indexer lands a track: the
+        audio embedding depends only on the file, so semantic search covers
+        a track long before its metadata settles. clap_text embeds that
+        metadata, so it waits for the enricher's verdict (ENRICHED or
+        FAILED) — and the aggregate refresh rides on its completion.
 
         Returns total jobs inserted.
         """
         inserted = 0
 
         async with self._open() as conn:
-            # CLAP audio: schedule for every enriched track
+            # Every indexed track, however untagged — sentinels are handled
+            # downstream (blanked in text, skipped in aggregates).
             cursor = await conn.execute(
                 """
                 INSERT OR IGNORE INTO embedding_jobs
                     (entity_type, entity_id, stage, model_version)
                 SELECT 'track', t.id, 'clap_audio', ?
                 FROM tracks t
-                -- Embed every enriched track regardless of metadata: the audio
-                -- is metadata-independent, so V/A comps, orphan singles and
-                -- artist-less / fully-untagged tracks are all worth indexing
-                -- rather than silently dropped from search. Sentinels are
-                -- handled downstream (blanked in text, skipped in aggregates).
-                WHERE t.enriched IN (1, 2)
-                  AND NOT EXISTS (
+                WHERE NOT EXISTS (
                     SELECT 1 FROM embedding_jobs j
                     WHERE j.entity_id = t.id
                       AND j.stage = 'clap_audio'
@@ -274,14 +272,13 @@ class AsyncEmbedderDb:
             )
             inserted += cursor.rowcount
 
-            # CLAP text: independent of audio — only needs enriched metadata
             cursor = await conn.execute(
                 """
                 INSERT OR IGNORE INTO embedding_jobs
                     (entity_type, entity_id, stage, model_version)
                 SELECT 'track', t.id, 'clap_text', ?
                 FROM tracks t
-                -- Every enriched track gets a text embedding. The sentinel
+                -- Every ruled-on track gets a text embedding. The sentinel
                 -- artist/album strings are blanked in
                 -- get_track_metadata_for_embedding, so tracks embed as
                 -- "Artist - Title", "Title (Album)" or a bare "Title".
@@ -668,6 +665,22 @@ class AsyncEmbedderDb:
                 [(v, a, tid) for (tid, v, a) in updates],
             )
             await conn.commit()
+
+    async def filter_enriched_tracks(self, track_ids: list[str]) -> list[str]:
+        """The subset of ``track_ids`` the enricher has ruled on (ENRICHED or
+        FAILED). Aggregates pool only these: until the verdict, clustering
+        may still re-point a track's album or artist."""
+        if not track_ids:
+            return []
+        placeholders = ",".join("?" * len(track_ids))
+        async with self._open() as conn:
+            cursor = await conn.execute(
+                f"SELECT id FROM tracks WHERE id IN ({placeholders}) "
+                "AND enriched IN (1, 2)",
+                track_ids,
+            )
+            rows = await cursor.fetchall()
+        return [row[0] for row in rows]
 
     async def get_album_id_for_track(self, track_id: str) -> str | None:
         async with self._open() as conn:

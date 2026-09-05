@@ -8,6 +8,7 @@ import time
 import logging
 import asyncio
 import mimetypes
+import multiprocessing
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pathlib import Path
@@ -26,6 +27,8 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..utils.artwork_store import save_artwork_images
+from ..worker_utils import nudge
 from ..utils.mount_status import (
     RootStatus,
     autofs_pending,
@@ -104,6 +107,7 @@ _shutdown_event = asyncio.Event()
 # process). Set by librarian.async_main; None only in unit tests that
 # exercise FileIndexer without a running enricher.
 _enricher_queue: Optional[asyncio.Queue] = None
+_embedder_nudge_queue: Optional[multiprocessing.Queue] = None
 
 
 async def trigger_enricher_update(data):
@@ -113,6 +117,10 @@ async def trigger_enricher_update(data):
         return
 
     logger.debug(f"Triggering enricher update with data: {data}")
+
+    # clap_audio waits only on the index — wake the embedder even when the
+    # enricher is disabled.
+    nudge(_embedder_nudge_queue)
 
     if _enricher_queue is None:
         logger.debug("Enricher queue not initialized; skipping enrich trigger")
@@ -930,37 +938,9 @@ class FileIndexer:
             return None
 
     def _save_images(self, image_data: bytes, entity_id: str, entity_type: str):
-        """Save artwork images in different sizes"""
-        try:
-            img = Image.open(io.BytesIO(image_data))
-            dir_path = os.path.join(self.artwork_path, entity_type)
-            os.makedirs(dir_path, exist_ok=True)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-
-            thumbnail = img.copy()
-            thumbnail.thumbnail((50, 50), Image.Resampling.LANCZOS)
-            thumbnail.save(
-                os.path.join(dir_path, f"{entity_id}_thumbnail.jpg"), "JPEG", quality=90
-            )
-
-            small = img.copy()
-            small.thumbnail((230, 230), Image.Resampling.LANCZOS)
-            small.save(
-                os.path.join(dir_path, f"{entity_id}_small.jpg"), "JPEG", quality=90
-            )
-
-            large = img.copy()
-            large.thumbnail((600, 600), Image.Resampling.LANCZOS)
-            large.save(
-                os.path.join(dir_path, f"{entity_id}_large.jpg"), "JPEG", quality=90
-            )
-            return True
-        except Exception as e:
-            logger.exception(
-                f"Error saving artwork for {entity_type} {entity_id}: {str(e)}"
-            )
-            return False
+        return save_artwork_images(
+            self.artwork_path, image_data, entity_id, entity_type
+        )
 
     async def backfill_embedded_art(
         self, available_folders: List[str]

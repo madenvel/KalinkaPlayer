@@ -2,10 +2,11 @@
 
 V/A compilations and orphan singles keep a known artist but get parented to the
 ``unknown_album`` placeholder; some files have no resolvable artist either. These
-used to be skipped by the CLAP embedder entirely. Now every enriched track is
-embedded (audio + ``"Artist - Title"`` / ``"Title (Album)"`` / bare ``"Title"``
-text) so nothing silently disappears from search, while the ``"Unknown Album"`` /
-``"Unknown Artist"`` placeholder strings never leak into the text vector.
+used to be skipped by the CLAP embedder entirely. Now every indexed track gets
+an audio embedding and every ruled-on track a text one (``"Artist - Title"`` /
+``"Title (Album)"`` / bare ``"Title"``) so nothing silently disappears from
+search, while the ``"Unknown Album"`` / ``"Unknown Artist"`` placeholder
+strings never leak into the text vector.
 """
 
 import os
@@ -55,16 +56,16 @@ async def _seed(db_path: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_schedule_covers_all_enriched_tracks():
+async def test_schedule_covers_every_indexed_track_for_audio():
     db_path = os.path.join(tempfile.mkdtemp(), "test.db")
     await _seed(db_path)
 
     db = AsyncEmbedderDb(LocalFilesConfig(db_path=db_path))
     inserted = await db.schedule_new_jobs(clap_version=1)
 
-    # 4 enriched tracks (t1, t2, t3, t5) x 2 stages (clap_audio, clap_text);
-    # t4 is un-enriched and skipped.
-    assert inserted == 8
+    # clap_audio needs only the file, so all 5 indexed tracks queue for it;
+    # clap_text embeds metadata, so un-enriched t4 waits for a verdict.
+    assert inserted == 9
 
     async with aiosqlite.connect(db_path) as conn:
         cursor = await conn.execute("SELECT entity_id, stage FROM embedding_jobs")
@@ -72,7 +73,7 @@ async def test_schedule_covers_all_enriched_tracks():
 
     audio = {eid for eid, stage in rows if stage == "clap_audio"}
     text = {eid for eid, stage in rows if stage == "clap_text"}
-    assert audio == {"t1", "t2", "t3", "t5"}
+    assert audio == {"t1", "t2", "t3", "t4", "t5"}
     assert text == {"t1", "t2", "t3", "t5"}
 
 
