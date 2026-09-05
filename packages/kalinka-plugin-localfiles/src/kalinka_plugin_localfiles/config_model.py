@@ -269,6 +269,8 @@ class EnricherConfig(BaseModel):
     )
     concurrency: int = Field(
         default=6,
+        ge=1,
+        le=16,
         title="Parallel lookups",
         json_schema_extra={
             "help": (

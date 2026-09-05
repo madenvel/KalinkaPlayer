@@ -6,7 +6,11 @@ import httpx
 
 from ..config_model import LocalFilesConfig
 from ..utils.artwork_store import save_artwork_images
-from .enricher_plugin import EnricherPlugin, TransientEnrichmentError
+from .enricher_plugin import (
+    EnricherPlugin,
+    TransientEnrichmentError,
+    raise_if_service_unavailable,
+)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -73,13 +77,10 @@ class CoverArtArchivePlugin(EnricherPlugin):
                 f"Cover Art Archive is unreachable: {e}"
             ) from e
 
+        raise_if_service_unavailable(response.status_code, "Cover Art Archive")
         if response.status_code == 404:
             logger.debug(f"No archived cover for release {mbid}")
             return None
-        if response.status_code >= 500:
-            raise TransientEnrichmentError(
-                f"Cover Art Archive is unreachable: HTTP {response.status_code}"
-            )
         if response.status_code != 200:
             logger.warning(
                 f"Cover Art Archive returned {response.status_code} for {mbid}"

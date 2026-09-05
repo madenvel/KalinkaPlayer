@@ -619,12 +619,13 @@ class FileIndexer:
         # A single on unknown_album has no album row to carry its embedded
         # cover, so it gets track-level art. Clustering demotions are covered
         # by backfill_embedded_art after the recluster pass.
-        if album_id == "unknown_album" and "album_art" in metadata:
-            saved = await asyncio.to_thread(
+        if album_id == "unknown_album":
+            saved = "album_art" in metadata and await asyncio.to_thread(
                 self._save_images, metadata["album_art"], track_id, "track"
             )
-            if saved:
-                track_data["image_url"] = f"{track_id}.jpg"
+            # Written either way: a re-index of a file whose art was removed
+            # must drop the cover, which the surgical update would keep.
+            track_data["image_url"] = f"{track_id}.jpg" if saved else None
         if existing_track is None:
             await self.db_manager.insert_track(track_data)
         else:

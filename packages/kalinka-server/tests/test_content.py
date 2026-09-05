@@ -6,6 +6,8 @@ seek at all unless ``Accept-Ranges`` says it may. These are the guarantees the
 old in-plugin media server made and this endpoint inherits.
 """
 
+import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -137,6 +139,25 @@ def test_a_file_that_went_away_is_absent(client, tmp_path):
     """Between the module's answer and the read — a 404, not a 500."""
     (tmp_path / "song.flac").unlink()
     assert client.get(_url()).status_code == 404
+
+
+def test_a_hung_mount_does_not_pin_the_request(client, monkeypatch):
+    """The last existence check before FileResponse is bounded too: a mount
+    that hangs after the module answered reads as transient, and does not
+    hold the event loop while it does."""
+    import kalinka_server.content_route as content_route
+
+    class _HungPath(Path):
+        def is_file(self):
+            time.sleep(5)
+            return True
+
+    monkeypatch.setattr(content_route, "_STAT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(content_route, "Path", _HungPath)
+
+    r = client.get(_url())
+    assert r.status_code == 503
+    assert r.headers["retry-after"] == "2"
 
 
 def test_content_url_is_built_on_the_address_the_fetcher_reached():

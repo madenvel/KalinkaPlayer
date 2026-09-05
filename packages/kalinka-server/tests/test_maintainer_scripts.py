@@ -26,23 +26,49 @@ def _run(script, *args, env=None):
     )
 
 
+def _sandboxed_prerm(tmp_path):
+    """The prerm under test, unable to reach the machine it runs on.
+
+    It is written to run as root against fixed paths: it disables a systemd
+    unit and uninstalls /opt/kalinka. Run as-is, the removal case prompts the
+    tester's polkit agent and — on a box that has Kalinka installed — would
+    really uninstall it. Only the two roots are rewritten, into tmp_path, and
+    systemctl becomes a stub that records its arguments.
+    """
+    script = tmp_path / "prerm"
+    script.write_text(PRERM.read_text().replace("/opt/kalinka", f"{tmp_path}/opt"))
+    binv = tmp_path / "bin"
+    binv.mkdir()
+    systemctl_log = tmp_path / "systemctl.log"
+    stub = binv / "systemctl"
+    stub.write_text(f'#!/usr/bin/env bash\necho "$@" >> "{systemctl_log}"\n')
+    stub.chmod(0o755)
+    return script, {"PATH": f"{binv}:{os.environ['PATH']}"}, systemctl_log
+
+
 @pytest.mark.parametrize("action", ["upgrade", "failed-upgrade"])
-def test_prerm_removes_nothing_on_an_upgrade(action):
+def test_prerm_removes_nothing_on_an_upgrade(action, tmp_path):
     """It runs as root on a real box, so the guard has to come before anything
     it could act on — nothing is uninstalled and nothing is announced."""
-    result = _run(PRERM, action, "4.3.2")
+    script, env, systemctl_log = _sandboxed_prerm(tmp_path)
+
+    result = _run(script, action, "4.3.2", env=env)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert "Removing" not in result.stdout + result.stderr
+    assert not systemctl_log.exists()
 
 
 def test_prerm_still_reports_a_real_removal(tmp_path):
     """The message belongs to removal; only the upgrade path is silenced. No
-    venv here, so it stops before touching pip."""
-    result = _run(PRERM, "remove")
+    venv under the sandbox root, so it stops before touching pip."""
+    script, env, systemctl_log = _sandboxed_prerm(tmp_path)
+
+    result = _run(script, "remove", env=env)
 
     assert "Removing Kalinka Server..." in result.stdout
+    assert systemctl_log.read_text().strip() == "disable --now kalinka-restart.path"
 
 
 # ---------------------------------------------------------------- renderer

@@ -16,6 +16,7 @@ from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
     inferred_claims,
+    raise_if_service_unavailable,
 )
 
 
@@ -166,6 +167,7 @@ class DeezerPlugin(EnricherPlugin):
             response = await self.async_client.get(
                 search_url, params={"q": search_name, "limit": 10}
             )
+            raise_if_service_unavailable(response.status_code, "Deezer")
 
             if response.status_code != 200:
                 logger.error(
@@ -222,6 +224,7 @@ class DeezerPlugin(EnricherPlugin):
             # generic placeholder ("no real photo") — skipping it leaves the
             # artist open for a later source, so it's not an error.
             image_response = await self.async_client.get(deezer_artist["picture_xl"])
+            raise_if_service_unavailable(image_response.status_code, "Deezer")
             if image_response.is_redirect:
                 logger.debug(
                     f"Deezer has only a placeholder image for artist {artist['name']}"
@@ -246,6 +249,8 @@ class DeezerPlugin(EnricherPlugin):
             else:
                 return None
 
+        except TransientEnrichmentError:
+            raise
         except httpx.TransportError as e:
             raise TransientEnrichmentError(f"Deezer is unreachable: {e}") from e
         except Exception as e:
@@ -304,6 +309,8 @@ class DeezerPlugin(EnricherPlugin):
             )
             return None
 
+        except TransientEnrichmentError:
+            raise
         except httpx.TransportError as e:
             raise TransientEnrichmentError(f"Deezer is unreachable: {e}") from e
         except Exception as e:
@@ -338,6 +345,7 @@ class DeezerPlugin(EnricherPlugin):
                 "limit": 5,
             },
         )
+        raise_if_service_unavailable(response.status_code, "Deezer")
 
         if response.status_code != 200:
             logger.error(
@@ -383,6 +391,7 @@ class DeezerPlugin(EnricherPlugin):
                 "limit": 10,
             },
         )
+        raise_if_service_unavailable(response.status_code, "Deezer")
 
         if response.status_code != 200:
             logger.error(
@@ -448,6 +457,7 @@ class DeezerPlugin(EnricherPlugin):
                 "limit": 15,
             },
         )
+        raise_if_service_unavailable(response.status_code, "Deezer")
 
         if response.status_code != 200:
             logger.error(
@@ -507,6 +517,7 @@ class DeezerPlugin(EnricherPlugin):
 
         # Download the cover
         image_response = await self.async_client.get(deezer_album["cover_xl"])
+        raise_if_service_unavailable(image_response.status_code, "Deezer")
         if image_response.status_code != 200:
             logger.error(
                 f"Failed to download cover for album {album['title']}: {image_response.status_code}"

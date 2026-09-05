@@ -90,7 +90,10 @@ async def mb_call(fn, *args, **kwargs):
     ``fn`` is the musicbrainzngs function (``search_artists``,
     ``get_release_by_id``, …); exceptions propagate to the caller unchanged,
     so the plugins keep classifying them as verdicts or transient failures.
+
+    The permit is taken before the slot is reserved: a slot elapsing while
+    every permit is held would otherwise release its waiters together.
     """
-    await _pacer.wait_turn()
     async with _pacer.in_flight():
+        await _pacer.wait_turn()
         return await asyncio.to_thread(fn, *args, **kwargs)

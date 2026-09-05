@@ -546,6 +546,8 @@ class MusicBrainzPlugin(EnricherPlugin):
                         includes=["recordings", "artist-credits", "tags",
                                   "release-groups"],
                     )
+                except musicbrainzngs.NetworkError as e:
+                    raise_musicbrainz_unreachable(e)
                 except Exception as e:
                     logger.debug(
                         f"Could not fetch release {cand['id']} for stage-B scoring: {e}"
@@ -736,6 +738,8 @@ class MusicBrainzPlugin(EnricherPlugin):
                 release_mbid,
                 includes=["recordings"],
             )
+        except musicbrainzngs.NetworkError as e:
+            raise_musicbrainz_unreachable(e)
         except Exception as e:
             logger.debug(
                 f"Could not fetch release {release_mbid} for tracklist lookup: {e}"
