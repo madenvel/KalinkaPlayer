@@ -50,15 +50,103 @@ class LocalFilesInputModuleDb:
         self.db_state = None
 
     def purge_all(self):
-        """Delete the database (with its WAL/-shm sidecars) and the artwork
-        cache so the index is rebuilt from scratch.
+        """Wipe everything derived from the library so the index is rebuilt
+        from scratch, preserving finished CLAP audio embeddings.
+
+        An audio embedding depends only on the file's bytes and the model,
+        and track IDs are stable path hashes — so finished blobs are stashed
+        in ``embedding_snapshot`` before the tables are cleared, and the
+        embedder re-attaches them to re-indexed tracks instead of re-running
+        the audio model (see ``AsyncEmbedderDb.restore_snapshot``). If the
+        selective wipe fails (foreign schema, undroppable vec tables) the DB
+        file is removed instead — correct, just recomputes the embeddings.
 
         Used by the "Rebuild library on next restart" one-shot. Call before
         any worker opens the DB (i.e. early in setup), so nothing recreates
-        the file mid-purge.
+        the tables mid-purge.
         """
-        self._purge_database()
+        if not self._clear_database_keeping_embeddings():
+            self._purge_database()
         self._purge_artwork()
+
+    def _clear_database_keeping_embeddings(self) -> bool:
+        """Snapshot audio embeddings, then empty every other table. Returns
+        False when the DB can't be cleared in place (caller falls back to
+        deleting the file)."""
+        if not self.db_path.exists():
+            logger.info("No existing database to purge.")
+            return True
+        try:
+            conn = self._get_connection()
+            try:
+                self._drop_vec_tables(conn)
+                conn.execute("DROP TABLE IF EXISTS embedding_snapshot")
+                conn.execute(
+                    """
+                    CREATE TABLE embedding_snapshot AS
+                    SELECT id AS track_id, embedding_clap_audio,
+                           embedding_version, embedded_at,
+                           mood_valence, mood_arousal
+                    FROM tracks
+                    WHERE embedding_clap_audio IS NOT NULL
+                    """
+                )
+                tables = conn.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type = 'table'
+                      AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+                      AND name NOT LIKE 'vec\\_%' ESCAPE '\\'
+                      AND name != 'embedding_snapshot'
+                    """
+                ).fetchall()
+                for (table,) in tables:
+                    conn.execute(f'DELETE FROM "{table}"')
+                conn.commit()
+                snapshot = conn.execute(
+                    "SELECT COUNT(*) FROM embedding_snapshot"
+                ).fetchone()[0]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(
+                f"In-place purge failed ({e}); removing the database file "
+                "instead (embeddings will be recomputed)."
+            )
+            return False
+        logger.info(
+            f"Database cleared for rebuild; {snapshot} audio embedding(s) "
+            "snapshotted for reuse."
+        )
+        return True
+
+    def _drop_vec_tables(self, conn: sqlite3.Connection) -> None:
+        """Drop the sqlite-vec virtual tables (schema init recreates them
+        empty). Track vectors are re-derived from the snapshotted blobs, and
+        text/aggregate vectors are recomputed, so a clean slate here also
+        sheds rows for entities that no longer exist."""
+        vec_tables = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table'
+                  AND name LIKE 'vec\\_%' ESCAPE '\\'
+                  AND sql LIKE 'CREATE VIRTUAL TABLE%'
+                """
+            ).fetchall()
+        ]
+        if not vec_tables:
+            return
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        try:
+            conn.load_extension(sqlite_vec.loadable_path())
+        finally:
+            conn.enable_load_extension(False)
+        for table in vec_tables:
+            conn.execute(f'DROP TABLE "{table}"')
 
     def _purge_database(self):
         """Remove the database file and its WAL/-shm sidecars."""

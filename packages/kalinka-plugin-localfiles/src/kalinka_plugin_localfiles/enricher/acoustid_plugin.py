@@ -5,6 +5,7 @@ import time
 import os
 import json
 import subprocess
+import threading
 import requests
 from typing import Dict, Optional, List, Tuple
 
@@ -35,11 +36,19 @@ class AcoustIdPlugin(EnricherPlugin):
         if not self.api_key:
             logger.warning("AcoustID API key not configured. Plugin will be disabled.")
 
-        # Rate limiting
+        # Rate limiting. The interval is enforced inside worker threads, so
+        # the pacing state needs a real lock once several tracks are enriched
+        # at once — without it concurrent lookups read the same
+        # ``last_request_time`` and all fire together.
         self.last_request_time = 0
         self.request_interval = (
             1.0 / 3
         )  # 3 request per second to respect AcoustID limits
+        self._rate_limit_lock = threading.Lock()
+
+        # fpcalc decodes the whole file; a handful in parallel would saturate
+        # a Pi's CPU and disk and starve everything else in the pass.
+        self._fingerprint_slots = asyncio.Semaphore(2)
 
         # Match confidence thresholds (0-1.0)
         self.min_score_threshold = 0.7  # Minimum score to consider a match valid
@@ -53,15 +62,20 @@ class AcoustIdPlugin(EnricherPlugin):
         return {"api_key_present": bool(self.api_key)}
 
     def _wait_for_rate_limit(self):
-        """Wait to respect rate limits"""
-        now = time.time()
-        elapsed = now - self.last_request_time
+        """Wait to respect rate limits.
 
-        if elapsed < self.request_interval:
-            sleep_time = self.request_interval - elapsed
-            time.sleep(sleep_time)
+        Holds the lock across the sleep so concurrent lookups queue rather
+        than all observing the same idle gap and firing at once.
+        """
+        with self._rate_limit_lock:
+            now = time.time()
+            elapsed = now - self.last_request_time
 
-        self.last_request_time = time.time()
+            if elapsed < self.request_interval:
+                sleep_time = self.request_interval - elapsed
+                time.sleep(sleep_time)
+
+            self.last_request_time = time.time()
 
     def _generate_fingerprint(
         self, file_path: str
@@ -591,9 +605,10 @@ class AcoustIdPlugin(EnricherPlugin):
             # subprocess) and ``_lookup_fingerprint`` (HTTP + rate-limit
             # sleep) are blocking, so run them off the event loop to avoid
             # stalling the enricher's other coroutines.
-            fingerprint, duration = await asyncio.to_thread(
-                self._generate_fingerprint, track["file_path"]
-            )
+            async with self._fingerprint_slots:
+                fingerprint, duration = await asyncio.to_thread(
+                    self._generate_fingerprint, track["file_path"]
+                )
             if not fingerprint or not duration:
                 logger.debug(
                     f"Could not generate fingerprint for {track.get('file_path')}"

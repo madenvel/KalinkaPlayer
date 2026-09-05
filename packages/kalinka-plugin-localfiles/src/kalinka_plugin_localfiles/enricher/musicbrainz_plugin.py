@@ -6,10 +6,15 @@ from difflib import SequenceMatcher
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import (
+    repair_mojibake,
+    space_dotted_abbreviations,
+    unescape_web_entities,
+)
 from .enricher_plugin import (
     EnricherPlugin,
     inferred_claims,
-    raise_if_musicbrainz_unreachable,
+    raise_musicbrainz_unreachable,
 )
 from .match_utils import (
     album_duration_bonus,
@@ -21,6 +26,8 @@ from .match_utils import (
     track_count_bonus,
     tracklist_coverage_bonus,
 )
+from .keyed_lock import KeyedLock
+from .mb_client import mb_call
 from .tracklist_align import Alignment, align_tracklist
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -53,7 +60,9 @@ class MusicBrainzPlugin(EnricherPlugin):
 
     # 2: network outages no longer record an outcome, and rows they
     # mis-recorded before re-open on this bump.
-    ENRICHER_VERSION = 2
+    # 3: similarity judged against MB aliases too, so rows the whole-name
+    # floor rejected (curated short forms) re-open.
+    ENRICHER_VERSION = 3
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -68,6 +77,7 @@ class MusicBrainzPlugin(EnricherPlugin):
         self.string_similarity_threshold = (
             config.enricher.plugins.musicbrainz.string_similarity
         )
+        self.legacy_tag_encoding = config.legacy_tag_encoding
 
         # Enable detailed logging of match results for debugging
         self.debug_matching = config.enricher.plugins.musicbrainz.debug_matching
@@ -83,6 +93,11 @@ class MusicBrainzPlugin(EnricherPlugin):
         # Accepted release candidate per album_id (None = looked up, none
         # accepted), so placing N tracks costs one query per album, not N.
         self._accepted_map_cache: Dict[str, Optional[Dict]] = {}
+
+        # Single-flight guards for both caches: sibling tracks of one album
+        # are enriched concurrently and would otherwise each pay the miss.
+        self._release_locks = KeyedLock()
+        self._accepted_map_locks = KeyedLock()
 
         # Set up MusicBrainz API
         musicbrainzngs.set_useragent(
@@ -101,6 +116,8 @@ class MusicBrainzPlugin(EnricherPlugin):
             "album_threshold": self.album_threshold,
             "track_threshold": self.track_threshold,
             "string_similarity": self.string_similarity_threshold,
+            # Changes the search text, so garbled rows re-open when set.
+            "legacy_tag_encoding": self.legacy_tag_encoding,
         }
 
     def _normalize_string(self, text: str) -> str:
@@ -120,6 +137,53 @@ class MusicBrainzPlugin(EnricherPlugin):
             return 0.0
 
         return SequenceMatcher(None, a_norm, b_norm).ratio()
+
+    # What an initials match ("В. Цой" -> "Виктор Цой") scores: above the
+    # similarity floor, below a verbatim name, so exact matches still win.
+    _INITIALS_SIMILARITY = 0.9
+
+    def _initials_similarity(self, a: str, b: str) -> float:
+        """Initials-aware similarity: a single-letter token in the local name
+        is an initial and matches any candidate token starting with it, the
+        remaining tokens must match nearly verbatim. Requires at least one
+        initial and one full word — an all-initials name ("R. E. M.") says
+        too little to commit on."""
+        a_tokens = self._normalize_string(space_dotted_abbreviations(a)).split()
+        b_tokens = self._normalize_string(space_dotted_abbreviations(b)).split()
+        initials = [t for t in a_tokens if len(t) == 1]
+        if not initials or len(initials) == len(a_tokens) or len(a_tokens) < 2:
+            return 0.0
+        remaining = list(b_tokens)
+        for token in a_tokens:
+            match = None
+            for candidate in remaining:
+                if len(token) == 1:
+                    ok = candidate.startswith(token)
+                else:
+                    ok = SequenceMatcher(None, token, candidate).ratio() >= 0.85
+                if ok:
+                    match = candidate
+                    break
+            if match is None:
+                return 0.0
+            remaining.remove(match)
+        return self._INITIALS_SIMILARITY
+
+    def _name_similarity(self, a: str, b: str) -> float:
+        return max(self._string_similarity(a, b), self._initials_similarity(a, b))
+
+    def _best_name_similarity(self, name: str, item: Dict, match_key: str) -> float:
+        """Best similarity across the candidate's primary name, sort-name and
+        MB aliases. A local tag often carries a curated short form —
+        'Иванушки Int' is a MusicBrainz alias of 'Иванушки International' —
+        and the search score reflects that, so the similarity floor must
+        judge against the same vocabulary the search matched on."""
+        candidates = [item.get(match_key), item.get("sort-name")]
+        candidates += [a.get("alias") for a in item.get("alias-list", [])]
+        return max(
+            (self._name_similarity(name, c) for c in candidates if c),
+            default=0.0,
+        )
 
     def _find_best_match(
         self,
@@ -185,7 +249,7 @@ class MusicBrainzPlugin(EnricherPlugin):
                 compare_name = item["sort-name"]
 
             similarity = (
-                self._string_similarity(name, compare_name)
+                self._best_name_similarity(name, item, match_key)
                 if additional_checks
                 else 1.0
             )
@@ -280,10 +344,18 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             logger.debug(f"Enriching artist: {artist['name']}")
 
-            # Use alias to improve search, and limit results for faster processing
-            result = await asyncio.to_thread(
+            # Repair tag mangling before searching: "В.Цой" is one Lucene
+            # token and returns nothing, "В. Цой" scores 100; "&amp;" and
+            # cp1251-mojibake rows the same.
+            search_name = space_dotted_abbreviations(
+                unescape_web_entities(
+                    repair_mojibake(artist["name"], self.legacy_tag_encoding)
+                )
+            )
+
+            result = await mb_call(
                 musicbrainzngs.search_artists,
-                artist["name"],
+                search_name,
                 strict=True,  # Use strict search mode
                 limit=20,  # Limit results to top matches
             )
@@ -295,7 +367,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             # Find best match with string similarity check
             best_match, score, similarity = self._find_best_match(
                 result["artist-list"],
-                artist["name"],
+                search_name,
                 self.artist_threshold,
                 match_key="name",
             )
@@ -338,7 +410,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             return {"updates": updates, "mbid": artist_mbid, "claims": claims}
 
         except musicbrainzngs.NetworkError as e:
-            raise_if_musicbrainz_unreachable(e)
+            raise_musicbrainz_unreachable(e)
             logger.error(f"Error enriching artist {artist['name']}: {str(e)}")
             return None
         except Exception as e:
@@ -419,7 +491,7 @@ class MusicBrainzPlugin(EnricherPlugin):
 
             logger.debug(f"Enriching album: {album['title']} by {album['artist_name']}")
 
-            result = await asyncio.to_thread(
+            result = await mb_call(
                 musicbrainzngs.search_releases,
                 album["title"],
                 artistname=album["artist_name"],
@@ -468,7 +540,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             candidate_rows: List[Dict] = []
             for cand, base_score, similarity in shortlist[:3]:
                 try:
-                    details = await asyncio.to_thread(
+                    details = await mb_call(
                         musicbrainzngs.get_release_by_id,
                         cand["id"],
                         includes=["recordings", "artist-credits", "tags",
@@ -627,7 +699,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             return {"updates": updates, "mbid": release_mbid, "claims": claims}
 
         except musicbrainzngs.NetworkError as e:
-            raise_if_musicbrainz_unreachable(e)
+            raise_musicbrainz_unreachable(e)
             logger.error(f"Error enriching album {album['title']}: {str(e)}")
             return None
         except Exception as e:
@@ -648,8 +720,18 @@ class MusicBrainzPlugin(EnricherPlugin):
         cached = self._release_cache.get(release_mbid)
         if cached is not None:
             return cached
+        async with self._release_locks(release_mbid):
+            return await self._fetch_release_detail(release_mbid)
+
+    async def _fetch_release_detail(self, release_mbid: str) -> Optional[Dict]:
+        """Cache-miss half of :meth:`_get_release_detail`, under its key lock —
+        tracks of one album enrich concurrently, so the first arrival fetches
+        and the rest read the cache it fills."""
+        cached = self._release_cache.get(release_mbid)
+        if cached is not None:
+            return cached
         try:
-            details = await asyncio.to_thread(
+            details = await mb_call(
                 musicbrainzngs.get_release_by_id,
                 release_mbid,
                 includes=["recordings"],
@@ -677,14 +759,16 @@ class MusicBrainzPlugin(EnricherPlugin):
             return None
 
         if album_id not in self._accepted_map_cache:
-            try:
-                accepted = await self.db_manager.get_accepted_release_candidate(
-                    album_id
-                )
-            except Exception as e:
-                logger.debug(f"Could not read accepted release candidate: {e}")
-                accepted = None
-            self._accepted_map_cache[album_id] = accepted
+            async with self._accepted_map_locks(album_id):
+                if album_id not in self._accepted_map_cache:
+                    try:
+                        accepted = await self.db_manager.get_accepted_release_candidate(
+                            album_id
+                        )
+                    except Exception as e:
+                        logger.debug(f"Could not read accepted release candidate: {e}")
+                        accepted = None
+                    self._accepted_map_cache[album_id] = accepted
 
         accepted = self._accepted_map_cache[album_id]
         if not accepted:
@@ -881,7 +965,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             )
 
             # ---- Path 2: fallback global recording search ----
-            result = await asyncio.to_thread(
+            result = await mb_call(
                 musicbrainzngs.search_recordings,
                 track["title"],
                 artistname=track["artist_name"],
@@ -927,7 +1011,7 @@ class MusicBrainzPlugin(EnricherPlugin):
             return {"updates": updates, "mbid": recording_mbid}
 
         except musicbrainzngs.NetworkError as e:
-            raise_if_musicbrainz_unreachable(e)
+            raise_musicbrainz_unreachable(e)
             logger.error(f"Error enriching track {track['title']}: {str(e)}")
             return None
         except Exception as e:

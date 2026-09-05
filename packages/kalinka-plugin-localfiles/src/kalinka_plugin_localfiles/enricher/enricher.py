@@ -2,10 +2,12 @@
 import multiprocessing
 import asyncio
 import enum
+from collections import deque
 import importlib.util
 import json
 import logging
-from typing import Optional
+import time
+from typing import NamedTuple, Optional, Tuple
 
 from ..config_model import LocalFilesConfig
 from ..resolution.resolver import Claim, resolve_display_name, resolve_field
@@ -13,6 +15,8 @@ from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
 
 from .enricher_plugin import TransientEnrichmentError
+from .service_backoff import ServiceBackoff
+from .service_timings import ServiceTimings
 from .musicbrainz_plugin import MusicBrainzPlugin
 from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
@@ -71,6 +75,25 @@ _searcher_nudge_queue: Optional[multiprocessing.Queue] = None
 _shutdown_event = asyncio.Event()
 
 
+# How many entities of one kind are enriched concurrently. The phases stay
+# ordered (artists -> albums -> tracks) because each feeds the next; within a
+# phase the entities are independent, so this is what keeps MusicBrainz's
+# 1 req/s slot busy instead of idle between entities, and lets the other
+# services and local work overlap that wait. Small on purpose: the gain is
+# bounded by MB's fixed rate, while every extra slot costs a thread (MB calls
+# run via to_thread) and RAM on a Pi.
+ENTITY_CONCURRENCY = 6
+
+
+class PhaseResult(NamedTuple):
+    """One phase's outcome: how many rows were given a verdict, and which
+    rows were left pending because a service never answered. The ids (not a
+    count) so a pass that revisits a row does not tally it twice."""
+
+    processed: int
+    deferred_ids: frozenset
+
+
 class EnrichmentStatus(enum.IntEnum):
     """Enum for enrichment status values"""
 
@@ -82,12 +105,19 @@ class EnrichmentStatus(enum.IntEnum):
 class MetadataEnricher:
     """Main enricher class that processes database entries using async"""
 
+    #: Entities of one kind enriched at a time; the config overrides it.
+    entity_concurrency: int = ENTITY_CONCURRENCY
+    #: Rows the last pass left pending on an unavailable service.
+    deferred_rows: int = 0
+
     def __init__(self, config: LocalFilesConfig, db_manager: AsyncEnricherDb):
         self.config = config
         self.db_manager = db_manager
         self.running = False
         self.lock = asyncio.Lock()
         self.plugins = []
+        self.entity_concurrency = max(1, config.enricher.concurrency)
+        self.deferred_rows = 0
 
         logger.info("Initializing MetadataEnricher plugins...")
 
@@ -134,6 +164,26 @@ class MetadataEnricher:
         logger.info(
             f"Loaded {len(self.plugins)} enrichment plugins: {[p.__class__.__name__ for p in self.plugins]}"
         )
+
+    @property
+    def _backoff(self) -> ServiceBackoff:
+        """Per-service cooldowns, created on first use so the enricher can
+        be built without its constructor (tests) and still back off."""
+        backoff = self.__dict__.get("_service_backoff")
+        if backoff is None:
+            backoff = ServiceBackoff()
+            self.__dict__["_service_backoff"] = backoff
+        return backoff
+
+    @property
+    def _timings(self) -> ServiceTimings:
+        """Per-service wall time for the pass in progress, created on first
+        use for the same reason as :attr:`_backoff`."""
+        timings = self.__dict__.get("_service_timings")
+        if timings is None:
+            timings = ServiceTimings()
+            self.__dict__["_service_timings"] = timings
+        return timings
 
     def compute_fingerprint(self) -> str:
         """Stable signature of the *active* enrichment setup.
@@ -185,68 +235,238 @@ class MetadataEnricher:
     async def run_enrichment(self):
         """Run the enrichment process.
 
-        A transport-level failure (a service unreachable, not answering)
-        ends the pass: the row being worked on keeps ``NOT_ENRICHED`` and is
-        picked up again on the next cycle, instead of being recorded as
-        FAILED or local-only off an answer that never arrived.
+        A transport-level failure (a service unreachable, not answering) is
+        never a verdict about the entity, so the row it happened on keeps
+        ``NOT_ENRICHED`` and the pass moves on to the next one. The service
+        itself is stood down for a growing interval, so an outage costs a
+        few probes rather than one failed request per row, and the entities
+        other sources can still answer for keep enriching meanwhile.
         """
         totals = {"artists": 0, "albums": 0, "tracks": 0}
+        deferred_ids: set = set()
         try:
             while True:
                 logger.debug("Processing artists for enrichment")
-                artist_update_count = await self._process_artists()
+                artists = await self._process_artists()
                 logger.debug("Processing albums for enrichment")
-                album_update_count = await self._process_albums()
+                albums = await self._process_albums()
                 logger.debug("Processing tracks for enrichment")
-                track_update_count = await self._process_tracks()
+                tracks = await self._process_tracks()
 
-                totals["artists"] += artist_update_count
-                totals["albums"] += album_update_count
-                totals["tracks"] += track_update_count
+                totals["artists"] += artists.processed
+                totals["albums"] += albums.processed
+                totals["tracks"] += tracks.processed
+                deferred_ids |= (
+                    artists.deferred_ids | albums.deferred_ids | tracks.deferred_ids
+                )
 
                 total_updates = (
-                    artist_update_count + album_update_count + track_update_count
+                    artists.processed + albums.processed + tracks.processed
                 )
 
                 if total_updates == 0:
                     logger.debug("No more items to process, finishing enrichment")
                     break
         except TransientEnrichmentError as e:
+            # Safety net: the plugin chain handles these per plugin, so one
+            # reaching here means an unexpected raise path.
             logger.warning(
                 "Enrichment paused — %s; pending rows will be retried on the "
                 "next cycle",
                 e,
             )
 
+        self.deferred_rows = len(deferred_ids)
+
         # Single INFO summary, only when the pass actually did work. On
         # an idle library this stays silent entirely.
-        if any(totals.values()):
+        if any(totals.values()) or deferred_ids:
             logger.info(
-                "Enrichment pass complete: %d artists, %d albums, %d tracks updated",
+                "Enrichment pass complete: %d artists, %d albums, %d tracks "
+                "updated, %d row(s) awaiting an unavailable service",
                 totals["artists"],
                 totals["albums"],
                 totals["tracks"],
+                len(deferred_ids),
             )
+
+    def _log_service_timings(self, kind: str) -> None:
+        """Report where a phase's time went, worst source first, and start
+        the next phase's tally.
+
+        Reporting per phase rather than per pass is what makes this usable
+        on a slow library: the phases run in sequence, so a pass-level
+        summary only arrives once the longest one has finished. Workers
+        overlap, so the shares are of summed call time, not of the phase's
+        duration.
+        """
+        timings = self._timings
+        total = timings.total_seconds
+        summary = timings.summary()
+        timings.reset()
+        if not total:
+            return
+        breakdown = ", ".join(
+            f"{service} {seconds:.0f}s/{calls} call(s)"
+            f" ({seconds / total:.0%}, {seconds / calls:.2f}s avg)"
+            for service, calls, seconds in summary
+        )
+        logger.info("Enrichment time by source (%s): %s", kind, breakdown)
+
+    def next_retry_delay(self) -> Optional[float]:
+        """Seconds until deferred rows are worth another attempt, or None
+        when nothing is waiting on a stood-down service. This is what lets a
+        retry happen on the outage's own timescale instead of waiting for the
+        next library scan."""
+        if not self.deferred_rows:
+            return None
+        return self._backoff.next_retry_in()
+
+    async def _run_plugin_chain(
+        self, entity_id, updated, claims, can_enrich, enrich, is_complete
+    ) -> Tuple[bool, bool]:
+        """Run the plugin chain for one entity, isolating service outages.
+
+        A plugin whose service is unreachable is skipped — the next plugin
+        still gets its turn, because a dead MusicBrainz says nothing about
+        whether Deezer can answer. Its service is then stood down for a
+        while (see :class:`ServiceBackoff`) so the rest of the pass doesn't
+        re-discover the outage row by row.
+
+        Returns ``(had_updates, deferred)``. ``deferred`` means some service
+        never answered for this entity, so the caller must not record a
+        verdict on it — the row stays pending for a later retry.
+        """
+        had_updates = False
+        deferred = False
+        for plugin in self.plugins:
+            if not can_enrich(plugin):
+                continue
+
+            service = plugin.__class__.__name__
+            if self._backoff.is_cooling(service):
+                deferred = True
+                continue
+
+            try:
+                with self._timings.measure(service):
+                    result = await enrich(plugin, updated)
+            except TransientEnrichmentError as e:
+                delay = self._backoff.record_failure(service)
+                logger.warning(
+                    "%s unavailable (%s); standing it down for %.0fs and "
+                    "continuing with the other sources",
+                    service, e, delay,
+                )
+                deferred = True
+                continue
+
+            self._backoff.record_success(service)
+            if result:
+                claims.extend(result.get("claims") or [])
+            if result and "updates" in result:
+                updated.update(result["updates"])
+                had_updates = True
+                if is_complete(updated):
+                    logger.debug("%s has every desired field", entity_id)
+                    updated["enriched"] = EnrichmentStatus.ENRICHED
+                    break
+        return had_updates, deferred
+
+    async def _process_phase(self, kind: str, fetch, enrich) -> "PhaseResult":
+        """Drain one entity kind through a pool of concurrent workers.
+
+        ``fetch(limit)`` returns the next pending rows and ``enrich(row)``
+        processes one. Workers take the next row the moment they finish one,
+        rather than waiting for a whole batch: entity cost varies wildly (an
+        album may need one MusicBrainz request or ten), so a batch barrier
+        leaves most workers idle behind the slowest row — and with a shared
+        1 req/s budget, an idle worker is unused request budget.
+
+        Rows within a phase are independent; the ordering that matters is
+        between phases, which ``run_enrichment`` preserves. Rows in flight
+        carry no status yet, so they are held in ``in_flight`` to keep a
+        refill from handing the same row to a second worker.
+
+        A row whose enrichment was deferred (a service never answered) also
+        keeps no status, so it too would come straight back from the next
+        fetch: ``deferred`` holds those ids for the rest of the phase, which
+        is what lets the phase finish instead of re-serving the same rows
+        forever. They stay NOT_ENRICHED in the database and are retried on a
+        later pass.
+        """
+        concurrency = self.entity_concurrency
+        buffer: deque = deque()
+        in_flight: set[str] = set()
+        processed: set[str] = set()
+        deferred: set[str] = set()
+        fetch_lock = asyncio.Lock()
+        failures: list[BaseException] = []
+
+        batch = max(concurrency * 4, concurrency)
+
+        async def take_next() -> Optional[dict]:
+            async with fetch_lock:
+                if not buffer:
+                    # Deferred and in-flight rows are still pending in the
+                    # database, so the query keeps returning them; ask for
+                    # them *plus* a batch, or the phase would stop at the
+                    # first window once everything in it was deferred and
+                    # leave the rest of the library untried.
+                    rows = await fetch(len(deferred) + len(in_flight) + batch)
+                    buffer.extend(
+                        r for r in rows
+                        if r["id"] not in in_flight and r["id"] not in deferred
+                    )
+                if not buffer:
+                    return None
+                row = buffer.popleft()
+                in_flight.add(row["id"])
+                return row
+
+        async def worker() -> None:
+            while not failures:
+                row = await take_next()
+                if row is None:
+                    return
+                try:
+                    if await enrich(row):
+                        deferred.add(row["id"])
+                    else:
+                        processed.add(row["id"])
+                except BaseException as e:  # noqa: BLE001 - re-raised below
+                    failures.append(e)
+                finally:
+                    in_flight.discard(row["id"])
+
+        await asyncio.gather(*(worker() for _ in range(concurrency)))
+
+        if failures:
+            for extra in failures[1:]:
+                logger.warning(
+                    "Additional %s failure in the same pass: %s", kind, extra
+                )
+            raise failures[0]
+        logger.debug(
+            "Enriched %d %s, deferred %d", len(processed), kind, len(deferred)
+        )
+        self._log_service_timings(kind)
+        return PhaseResult(len(processed), frozenset(deferred))
 
     async def _process_artists(self) -> int:
         """Process non-enriched artists"""
+        return await self._process_phase(
+            "artists",
+            self.db_manager.get_non_enriched_artists,
+            self._enrich_artist,
+        )
 
-        processed_artists = set()
-        while True:
-            logger.debug("Querying database for non-enriched artists...")
-            artists = await self.db_manager.get_non_enriched_artists(limit=1)
-            logger.debug(f"Found {len(artists)} non-enriched artists")
-            if not artists:
-                logger.debug("No more artists to process")
-                return len(processed_artists)
-            artist = artists[0]
-            logger.debug(f"Processing artist: {artist}")
-            await self._enrich_artist(artist)
-            processed_artists.add(artist["id"])
-            logger.debug(f"Processed artist {artist['name']}")
+    async def _enrich_artist(self, artist) -> bool:
+        """Enrich a single artist.
 
-    async def _enrich_artist(self, artist):
-        """Enrich a single artist"""
+        Returns True when the row was deferred — a source never answered, so
+        it keeps no verdict and stays pending for a later retry.
+        """
         logger.debug(
             f"Starting enrichment for artist {artist.get('name', artist['id'])}"
         )
@@ -270,30 +490,15 @@ class MetadataEnricher:
             f"Artist {artist.get('name', artist['id'])} missing fields - starting plugin enrichment"
         )
         emitted_claims: list[dict] = []
-        for plugin in self.plugins:
-            if not plugin.can_enrich_artist():
-                continue
-
-            logger.debug(
-                f"Enriching artist {artist['name'] if 'name' in artist else artist['id']} with {plugin.__class__.__name__}"
-            )
-            result = await plugin.enrich_artist(updated_artist)
-            if result:
-                emitted_claims.extend(result.get("claims") or [])
-            if result and "updates" in result:
-                # Apply updates to our working copy
-                updated_artist.update(result["updates"])
-                # Track that we had updates
-                had_updates = True
-
-                # Stop early once every desired field is filled.
-                is_desired_complete = all(
-                    updated_artist.get(field) for field in ARTIST_DESIRED_FIELDS
-                )
-                if is_desired_complete:
-                    logger.debug(f"Artist {artist['name']} has all desired fields")
-                    updated_artist["enriched"] = EnrichmentStatus.ENRICHED
-                    break  # No need to check further plugins
+        chain_updates, deferred = await self._run_plugin_chain(
+            artist.get("name", artist["id"]),
+            updated_artist,
+            emitted_claims,
+            lambda p: p.can_enrich_artist(),
+            lambda p, e: p.enrich_artist(e),
+            lambda e: all(e.get(f) for f in ARTIST_DESIRED_FIELDS),
+        )
+        had_updates = had_updates or chain_updates
 
         # Resolve the display name from claims: a matching external match
         # supplies canonical casing without replacing a different local name.
@@ -312,6 +517,14 @@ class MetadataEnricher:
         # desired field, the artist is still ENRICHED when its required local
         # fields resolved — only a missing required field is a FAILURE.
         if updated_artist.get("enriched") != EnrichmentStatus.ENRICHED:
+            # A service that never answered leaves no verdict to record: the
+            # row keeps NOT_ENRICHED (with whatever other sources did fill in)
+            # and is retried once the service is back. Recording local-only
+            # here would close the row for good on a passing outage.
+            if deferred:
+                if had_updates:
+                    await self.db_manager.update_artist(artist["id"], updated_artist)
+                return True
             if all(updated_artist.get(f) for f in ARTIST_REQUIRED_FIELDS):
                 updated_artist["enriched"] = EnrichmentStatus.ENRICHED  # local-only
             else:
@@ -462,22 +675,18 @@ class MetadataEnricher:
 
     async def _process_albums(self) -> int:
         """Process non-enriched albums"""
-        processed_albums = set()
-        while True:
-            logger.debug("Querying database for non-enriched albums...")
-            albums = await self.db_manager.get_non_enriched_albums(limit=1)
-            logger.debug(f"Found {len(albums)} non-enriched albums")
-            if not albums:
-                logger.debug("No more albums to process")
-                return len(processed_albums)
-            album = albums[0]
-            logger.debug(f"Processing album: {album}")
-            await self._enrich_album(album)
-            processed_albums.add(album["id"])
-            logger.debug(f"Processed album {album['title']}")
+        return await self._process_phase(
+            "albums",
+            self.db_manager.get_non_enriched_albums,
+            self._enrich_album,
+        )
 
-    async def _enrich_album(self, album):
-        """Enrich a single album"""
+    async def _enrich_album(self, album) -> bool:
+        """Enrich a single album.
+
+        Returns True when the row was deferred — a source never answered, so
+        it keeps no verdict and stays pending for a later retry.
+        """
         updated_album = album.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
@@ -492,7 +701,7 @@ class MetadataEnricher:
             await self.db_manager.update_album(
                 album["id"], {"enriched": EnrichmentStatus.ENRICHED}
             )
-            return
+            return False
 
         # An untagged rip's album title is folder-derived and keeps the artist
         # prefix ("The Beatles - Abbey Road") until clustering learns the
@@ -505,28 +714,17 @@ class MetadataEnricher:
             had_updates = True
 
         emitted_claims: list[dict] = []
-        for plugin in self.plugins:
-            if not plugin.can_enrich_album():
-                continue
-
-            logger.debug(
-                f"Enriching album {album['name'] if 'name' in album else album['id']} with {plugin.__class__.__name__}"
-            )
-            result = await plugin.enrich_album(updated_album)
-            if result:
-                emitted_claims.extend(result.get("claims") or [])
-            if result and "updates" in result:
-                # Apply updates to our working copy
-                updated_album.update(result["updates"])
-                # Track that we had updates
-                had_updates = True
-
-                # Stop calling fetch plugins once every fetched field is filled.
-                # genre/year are resolved after the loop, so they don't gate this.
-                if all(updated_album.get(field) for field in ALBUM_FETCH_FIELDS):
-                    logger.debug(f"Album {album['title']} has all fetched fields")
-                    updated_album["enriched"] = EnrichmentStatus.ENRICHED
-                    break
+        # genre/year are resolved after the chain, so they must not gate it —
+        # only the plugin-fetched fields do.
+        chain_updates, deferred = await self._run_plugin_chain(
+            album.get("title", album["id"]),
+            updated_album,
+            emitted_claims,
+            lambda p: p.can_enrich_album(),
+            lambda p, e: p.enrich_album(e),
+            lambda e: all(e.get(f) for f in ALBUM_FETCH_FIELDS),
+        )
+        had_updates = had_updates or chain_updates
 
         # Resolve the display title from claims: a matching external match
         # supplies canonical casing without replacing a different local title.
@@ -550,6 +748,14 @@ class MetadataEnricher:
         # match/cover/year/genre — "ENRICHED (local-only)". FAILED only when a
         # required local field is still missing.
         if updated_album.get("enriched") != EnrichmentStatus.ENRICHED:
+            # A service that never answered leaves no verdict to record: the
+            # row keeps NOT_ENRICHED (with whatever other sources did fill in)
+            # and is retried once the service is back. Recording local-only
+            # here would close the row for good on a passing outage.
+            if deferred:
+                if had_updates:
+                    await self.db_manager.update_album(album["id"], updated_album)
+                return True
             if all(updated_album.get(f) for f in ALBUM_REQUIRED_FIELDS):
                 updated_album["enriched"] = EnrichmentStatus.ENRICHED  # local-only
             else:
@@ -565,22 +771,18 @@ class MetadataEnricher:
 
     async def _process_tracks(self) -> int:
         """Process non-enriched tracks"""
-        processed_tracks = set()
-        while True:
-            logger.debug("Querying database for non-enriched tracks...")
-            tracks = await self.db_manager.get_non_enriched_tracks(limit=1)
-            logger.debug(f"Found {len(tracks)} non-enriched tracks")
-            if not tracks:
-                logger.debug("No more tracks to process")
-                return len(processed_tracks)
-            track = tracks[0]
-            logger.debug(f"Processing track: {track}")
-            await self._enrich_track(track)
-            processed_tracks.add(track["id"])
-            logger.debug(f"Processed track {track['title']}")
+        return await self._process_phase(
+            "tracks",
+            self.db_manager.get_non_enriched_tracks,
+            self._enrich_track,
+        )
 
-    async def _enrich_track(self, track):
-        """Enrich a single track"""
+    async def _enrich_track(self, track) -> bool:
+        """Enrich a single track.
+
+        Returns True when the row was deferred — a source never answered, so
+        it keeps no verdict and stays pending for a later retry.
+        """
         updated_track = track.copy()  # Make a copy to carry updates between plugins
         had_updates = False
 
@@ -598,36 +800,15 @@ class MetadataEnricher:
             return
 
         emitted_claims: list[dict] = []
-        for plugin in self.plugins:
-            if not plugin.can_enrich_track():
-                continue
-
-            # Skip remaining plugins if we become fully enriched
-            if updated_track.get("enriched") == EnrichmentStatus.ENRICHED:
-                logger.debug(
-                    f"Track {track['id']} fully enriched, skipping remaining plugins"
-                )
-                break
-
-            logger.debug(
-                f"Enriching track {track['title'] if 'title' in track else track['id']} with {plugin.__class__.__name__}"
-            )
-            result = await plugin.enrich_track(updated_track)
-            if result:
-                emitted_claims.extend(result.get("claims") or [])
-            if result and "updates" in result:
-                # Apply updates to our working copy
-                updated_track.update(result["updates"])
-                # Track that we had updates
-                had_updates = True
-
-                # Stop early once every desired field is filled.
-                is_desired_complete = all(
-                    updated_track.get(field) for field in TRACK_DESIRED_FIELDS
-                )
-                if is_desired_complete:
-                    logger.debug(f"Track {track['title']} has all desired fields")
-                    updated_track["enriched"] = EnrichmentStatus.ENRICHED
+        chain_updates, deferred = await self._run_plugin_chain(
+            track.get("title", track["id"]),
+            updated_track,
+            emitted_claims,
+            lambda p: p.can_enrich_track(),
+            lambda p, e: p.enrich_track(e),
+            lambda e: all(e.get(f) for f in TRACK_DESIRED_FIELDS),
+        )
+        had_updates = had_updates or chain_updates
 
         # Resolve the display title from claims: an external match (e.g.
         # AcoustID) re-cases a matching local title but never replaces or invents
@@ -641,6 +822,12 @@ class MetadataEnricher:
         # resolved is ENRICHED even without an mbid — "ENRICHED (local-only)".
         # FAILED only when a required local field is still missing.
         if updated_track.get("enriched") != EnrichmentStatus.ENRICHED:
+            # See the artist/album tails: no answer means no verdict, so the
+            # row stays pending rather than being closed as local-only.
+            if deferred:
+                if had_updates:
+                    await self.db_manager.update_track(track["id"], updated_track)
+                return True
             missing = [f for f in TRACK_REQUIRED_FIELDS if not updated_track.get(f)]
             if not missing:
                 updated_track["enriched"] = EnrichmentStatus.ENRICHED  # local-only
@@ -700,13 +887,33 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
     except Exception as e:
         logger.warning(f"Failed-row retry reset skipped: {e}")
 
-    # Process queue commands
+    async def run_pass() -> Optional[float]:
+        """Run one enrichment pass; returns seconds until deferred rows are
+        worth retrying, or None when nothing is waiting on a service."""
+        await enricher_instance.start()
+        if _searcher_nudge_queue is not None:
+            try:
+                _searcher_nudge_queue.put_nowait("nudge")
+            except Exception:
+                pass
+        return enricher_instance.next_retry_delay()
+
+    # Process queue commands. When a pass left rows waiting on an
+    # unavailable service, the loop wakes on that service's cooldown instead
+    # of idling until the indexer's next scan — the scan interval is for
+    # finding new files, not for retrying an outage.
+    retry_at: Optional[float] = None
     while True:
         try:
+            now = time.monotonic()
+            timeout = 30.0
+            if retry_at is not None:
+                timeout = max(0.5, min(timeout, retry_at - now))
+
             # Check for commands with timeout
             try:
                 command = await asyncio.wait_for(
-                    _enricher_queue.get(), timeout=30.0
+                    _enricher_queue.get(), timeout=timeout
                 )
 
                 logger.debug("Received command from queue: %s", command)
@@ -717,16 +924,22 @@ async def _enricher_worker(config, db_manager: AsyncEnricherDb):
                     break
                 elif command == "enrich":
                     logger.debug("Manual enrichment triggered")
-                    await enricher_instance.start()
-                    if _searcher_nudge_queue is not None:
-                        try:
-                            _searcher_nudge_queue.put_nowait("nudge")
-                        except Exception:
-                            pass
+                    delay = await run_pass()
+                    retry_at = None if delay is None else time.monotonic() + delay
 
             except asyncio.TimeoutError:
-                # No command in the timeout window; loop and wait again.
-                logger.debug("No enricher commands received; continuing to wait")
+                if retry_at is not None and time.monotonic() >= retry_at:
+                    logger.info(
+                        "Retrying rows that were waiting on an unavailable "
+                        "service"
+                    )
+                    delay = await run_pass()
+                    retry_at = None if delay is None else time.monotonic() + delay
+                else:
+                    # No command in the timeout window; loop and wait again.
+                    logger.debug(
+                        "No enricher commands received; continuing to wait"
+                    )
                 continue
 
             # Small delay to avoid busy waiting

@@ -124,6 +124,120 @@ class AsyncEmbedderDb:
             await conn.commit()
         logger.info("Stale in_progress CLAP jobs reset to pending")
 
+    async def restore_snapshot(self, model_version: int) -> int:
+        """Re-attach snapshotted CLAP audio embeddings to re-indexed tracks.
+
+        A library rebuild (``LocalFilesInputModuleDb.purge_all``) stashes
+        finished audio blobs in ``embedding_snapshot``. Track IDs are stable
+        path hashes, so once the indexer recreates a track its blob (and the
+        mood projection) is copied back and a done clap_audio job is recorded
+        instead of re-running the audio model. Only blobs of the current
+        ``model_version`` qualify — after a model bump nothing is restored
+        and normal scheduling recomputes. Consumed rows are deleted and the
+        table is dropped once empty, making the call a cheap no-op on every
+        later cycle. Snapshot rows for files that never reappear are inert
+        and vanish with the next rebuild.
+
+        Only the blob columns and job rows are restored here; the KNN index
+        rows are rebuilt by :meth:`backfill_missing_vec_rows`, which the
+        caller runs after any restore.
+        """
+        restored = 0
+        async with self._open() as conn:
+            cursor = await conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embedding_snapshot'"
+            )
+            if not await cursor.fetchone():
+                return 0
+            cursor = await conn.execute(
+                """
+                UPDATE tracks
+                SET embedding_clap_audio = s.embedding_clap_audio,
+                    embedding_version = s.embedding_version,
+                    embedded_at = s.embedded_at,
+                    mood_valence = s.mood_valence,
+                    mood_arousal = s.mood_arousal
+                FROM embedding_snapshot s
+                WHERE tracks.id = s.track_id
+                  AND s.embedding_version = ?
+                  AND tracks.embedding_clap_audio IS NULL
+                """,
+                (model_version,),
+            )
+            restored = cursor.rowcount
+            if restored:
+                await conn.execute(
+                    """
+                    INSERT OR IGNORE INTO embedding_jobs
+                        (entity_type, entity_id, stage, status, model_version)
+                    SELECT 'track', t.id, 'clap_audio', 'done', s.embedding_version
+                    FROM tracks t
+                    JOIN embedding_snapshot s ON s.track_id = t.id
+                    WHERE s.embedding_version = ?
+                      AND t.embedding_clap_audio IS NOT NULL
+                    """,
+                    (model_version,),
+                )
+            await conn.execute(
+                """
+                DELETE FROM embedding_snapshot
+                WHERE track_id IN (
+                    SELECT id FROM tracks WHERE embedding_clap_audio IS NOT NULL
+                )
+                """
+            )
+            cursor = await conn.execute(
+                "SELECT EXISTS(SELECT 1 FROM embedding_snapshot)"
+            )
+            leftover = (await cursor.fetchone())[0]
+            if not leftover:
+                await conn.execute("DROP TABLE embedding_snapshot")
+            await conn.commit()
+        if restored:
+            logger.info(
+                "Restored %d CLAP audio embedding(s) from the rebuild snapshot",
+                restored,
+            )
+        return restored
+
+    async def backfill_missing_vec_rows(self) -> int:
+        """Reinsert vec_tracks_clap rows for tracks that have an audio blob
+        but no KNN index row.
+
+        The blob column is the source of truth; the vec row can be missing
+        after a snapshot restore or a failed upsert (those are warnings, not
+        errors). Inserts go row-by-row with the blob bound as a parameter —
+        ``vec_int8()`` over a column reference in ``INSERT``...``SELECT``
+        loses its subtype and vec0 rejects the value as float32.
+        """
+        if not self._vec_available:
+            return 0
+        async with self._open() as conn:
+            await self._load_vec(conn)
+            cursor = await conn.execute(
+                """
+                SELECT id, embedding_clap_audio FROM tracks
+                WHERE embedding_clap_audio IS NOT NULL
+                  AND id NOT IN (SELECT track_id FROM vec_tracks_clap)
+                """
+            )
+            missing = await cursor.fetchall()
+            for track_id, blob in missing:
+                try:
+                    await self._upsert_vec_embedding(
+                        conn, "vec_tracks_clap", "track_id", track_id, blob
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "vec_tracks_clap backfill failed for %s: %s", track_id, e
+                    )
+            await conn.commit()
+        if missing:
+            logger.info(
+                "Backfilled %d missing vec_tracks_clap row(s)", len(missing)
+            )
+        return len(missing)
+
     async def schedule_new_jobs(self, clap_version: int) -> int:
         """
         Queue CLAP jobs for enriched tracks.

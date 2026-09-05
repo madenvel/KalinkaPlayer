@@ -138,6 +138,41 @@ class AsyncIndexerDb:
         """Update track information"""
         await self._update("tracks", track_id, data)
 
+    async def get_albums_missing_art(self) -> List[Tuple[str, str]]:
+        """(album_id, one member file_path) for albums with no real cover —
+        none at all, or a procedural placeholder — whose files embed one
+        (evidence art_phash)."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT a.id, MIN(t.file_path) FROM albums a
+                JOIN tracks t ON t.album_id = a.id
+                JOIN track_evidence e ON e.track_id = t.id
+                WHERE (a.image_url IS NULL OR a.image_generated = 1)
+                  AND a.id != 'unknown_album'
+                  AND e.art_phash IS NOT NULL
+                GROUP BY a.id
+                """
+            )
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+
+    async def get_singles_missing_art(self) -> List[Tuple[str, str]]:
+        """(track_id, file_path) for unknown_album tracks whose file embeds a
+        cover (evidence art_phash) but that carry no track-level image yet."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT t.id, t.file_path FROM tracks t
+                JOIN track_evidence e ON e.track_id = t.id
+                WHERE t.album_id = 'unknown_album'
+                  AND t.image_url IS NULL
+                  AND e.art_phash IS NOT NULL
+                """
+            )
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+
     async def reassign_album(self, track_id: str, album_id: str) -> None:
         """The single owner of tracks.album_id writes — clustering / reconciler
         only. Album membership must flow through here, never through an

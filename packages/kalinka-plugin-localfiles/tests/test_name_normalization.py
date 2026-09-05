@@ -7,12 +7,29 @@ Covers:
   of the same artist/album hash to the same ID.
 - ID generators round-trip the normalization (so the in-DB ID is
   stable across the variants users actually have in their tags).
+- Tag-mangling repair: web HTML entities are unrolled once at index time
+  ("Simon &amp; Garfunkel"), and dotted abbreviations get their missing
+  space for search queries ("В.Цой" is one Lucene token and finds nothing
+  on MusicBrainz; "В. Цой" scores 100).
 """
 
+import numpy as np
+import pytest
+import pytest_asyncio
+import soundfile as sf
+from mutagen.flac import FLAC
+
+from kalinka_plugin_localfiles.config_model import LocalFilesConfig
+from kalinka_plugin_localfiles.db_schema import init_db
+from kalinka_plugin_localfiles.indexer.indexer import FileIndexer
+from kalinka_plugin_localfiles.indexer.indexer_db import AsyncIndexerDb
 from kalinka_plugin_localfiles.utils.name_utils import (
     album_folder_for_path,
     clean_display_name,
     normalize_for_id,
+    repair_mojibake,
+    space_dotted_abbreviations,
+    unescape_web_entities,
 )
 from kalinka_plugin_localfiles.enricher.id_generator import (
     generate_artist_id as enricher_artist_id,
@@ -190,3 +207,167 @@ class TestAlbumIdStability:
         assert enricher_album_id("", self.folder) == "unknown_album"
         # All-punctuation normalizes to empty → unknown.
         assert enricher_album_id("---", self.folder) == "unknown_album"
+
+
+class TestUnescapeWebEntities:
+    def test_common_entities(self):
+        assert unescape_web_entities("Simon &amp; Garfunkel") == "Simon & Garfunkel"
+        assert unescape_web_entities("&quot;Weird Al&quot; Yankovic") == (
+            '"Weird Al" Yankovic'
+        )
+        assert unescape_web_entities("Guns N&apos; Roses") == "Guns N' Roses"
+        assert unescape_web_entities("&#1071;") == "Я"
+        assert unescape_web_entities("&#x42F;") == "Я"
+
+    def test_single_pass_only(self):
+        # Double-encoded input unrolls one layer, as asked.
+        assert unescape_web_entities("A &amp;amp; B") == "A &amp; B"
+
+    def test_plain_ampersand_and_legacy_forms_untouched(self):
+        assert unescape_web_entities("AT&T") == "AT&T"
+        assert unescape_web_entities("Tom&Jerry") == "Tom&Jerry"
+        # html.unescape would turn this into "¬abene" (HTML5 legacy
+        # semicolon-less entity) — we must not.
+        assert unescape_web_entities("&notabene") == "&notabene"
+
+    def test_clean_display_name_unrolls_entities(self):
+        assert clean_display_name("Simon &amp; Garfunkel") == "Simon & Garfunkel"
+        # &nbsp; becomes a space and collapses with its neighbours.
+        assert clean_display_name("Daft&nbsp; Punk") == "Daft Punk"
+
+
+class TestSpaceDottedAbbreviations:
+    def test_initial_before_surname(self):
+        assert space_dotted_abbreviations("В.Цой") == "В. Цой"
+        assert space_dotted_abbreviations("J.S.Bach") == "J.S. Bach"
+        assert space_dotted_abbreviations("Dr.Dre") == "Dr. Dre"
+
+    def test_acronyms_and_ellipses_untouched(self):
+        assert space_dotted_abbreviations("R.E.M.") == "R.E.M."
+        assert space_dotted_abbreviations("S.P.O.R.T.") == "S.P.O.R.T."
+        assert space_dotted_abbreviations("...And Justice for All") == (
+            "...And Justice for All"
+        )
+
+    def test_numbers_untouched(self):
+        assert space_dotted_abbreviations("Vol 2.5") == "Vol 2.5"
+        assert space_dotted_abbreviations("Blink 18.2") == "Blink 18.2"
+
+    def test_already_spaced_untouched(self):
+        assert space_dotted_abbreviations("В. Цой") == "В. Цой"
+
+
+class TestRepairMojibake:
+    def test_utf8_as_latin1_always_repaired(self):
+        # Tier 1 (ftfy) needs no configured codepage — it is self-validating.
+        assert repair_mojibake("BjÃ¶rk") == "Björk"
+        assert repair_mojibake("Ã‰dith Piaf") == "Édith Piaf"  # cp1252 recovery
+        assert repair_mojibake("BjÃƒÂ¶rk") == "Björk"  # double-encoded
+
+    def test_legacy_codepage_off_by_default(self):
+        assert repair_mojibake("ÐÓÊÈ ÂÂÅÐÕ!") == "ÐÓÊÈ ÂÂÅÐÕ!"
+
+    def test_cp1251_repairs_cyrillic(self):
+        assert repair_mojibake("ÐÓÊÈ ÂÂÅÐÕ!", "cp1251") == "РУКИ ВВЕРХ!"
+        assert repair_mojibake("ÌÀØÈÍÀ ÂÐÅÌÅÍÈ", "cp1251") == "МАШИНА ВРЕМЕНИ"
+
+    def test_real_western_names_untouched(self):
+        for name in ("Sigur Rós", "Mötley Crüe", "Öxxö Xööx", "Çelik",
+                     "R.E.M.", "Motörhead"):
+            assert repair_mojibake(name, "cp1251") == name
+
+    def test_genuine_cyrillic_untouched(self):
+        assert repair_mojibake("Наутилус Помпилиус", "cp1251") == (
+            "Наутилус Помпилиус"
+        )
+
+    def test_bad_codepage_name_is_ignored(self):
+        assert repair_mojibake("ÐÓÊÈ ÂÂÅÐÕ!", "no-such-codec") == "ÐÓÊÈ ÂÂÅÐÕ!"
+
+
+@pytest_asyncio.fixture
+async def indexer(tmp_path):
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    config = LocalFilesConfig(
+        music_folders=[str(music_dir)],
+        db_path=str(tmp_path / "localfiles.db"),
+        artwork_path=str(tmp_path / "artwork"),
+        quiescence_seconds=0,
+    )
+    await init_db(config.db_path)
+    db = AsyncIndexerDb(config)
+    return FileIndexer(config, db), db, music_dir
+
+
+@pytest.mark.asyncio
+async def test_indexing_unrolls_entities_in_names_and_titles(indexer):
+    fi, db, music_dir = indexer
+    path = music_dir / "01 - song.flac"
+    sf.write(str(path), np.zeros(4410, dtype="float32"), 44100, format="FLAC")
+    audio = FLAC(str(path))
+    audio["title"] = "Bridge Over Troubled Water &#40;live&#41;"
+    audio["artist"] = "Simon &amp; Garfunkel"
+    audio["album"] = "Simon &amp; Garfunkel&apos;s Greatest Hits"
+    audio.save()
+
+    changes = await fi.process_file(str(path))
+    track = await db.get_track_by_id(changes["tracks"])
+    artist = await db.get_artist_by_id(track["artist_id"])
+    album = await db.get_album_by_id(track["album_id"])
+
+    assert track["title"] == "Bridge Over Troubled Water (live)"
+    assert artist["name"] == "Simon & Garfunkel"
+    assert album["title"] == "Simon & Garfunkel's Greatest Hits"
+
+
+@pytest.mark.asyncio
+async def test_indexing_stores_spaced_abbreviations(indexer):
+    fi, db, music_dir = indexer
+    path = music_dir / "song.flac"
+    sf.write(str(path), np.zeros(4410, dtype="float32"), 44100, format="FLAC")
+    audio = FLAC(str(path))
+    audio["title"] = "Спокойная ночь"
+    audio["artist"] = "В.Цой"
+    audio["album"] = "Звезда по имени Солнце"
+    audio.save()
+
+    changes = await fi.process_file(str(path))
+    track = await db.get_track_by_id(changes["tracks"])
+    artist = await db.get_artist_by_id(track["artist_id"])
+
+    # Stored the way search normalizes it — one form everywhere.
+    assert artist["name"] == "В. Цой"
+
+
+@pytest.mark.asyncio
+async def test_indexing_repairs_mojibake_with_configured_codepage(tmp_path):
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    config = LocalFilesConfig(
+        music_folders=[str(music_dir)],
+        db_path=str(tmp_path / "localfiles.db"),
+        artwork_path=str(tmp_path / "artwork"),
+        quiescence_seconds=0,
+        legacy_tag_encoding="cp1251",
+    )
+    await init_db(config.db_path)
+    db = AsyncIndexerDb(config)
+    fi = FileIndexer(config, db)
+
+    path = music_dir / "01 - song.flac"
+    sf.write(str(path), np.zeros(4410, dtype="float32"), 44100, format="FLAC")
+    audio = FLAC(str(path))
+    audio["title"] = "Ïðîñâèñòåëà"
+    audio["artist"] = "ÄÄÒ"
+    audio["album"] = "Ìèð íîìåð íîëü"
+    audio.save()
+
+    changes = await fi.process_file(str(path))
+    track = await db.get_track_by_id(changes["tracks"])
+    artist = await db.get_artist_by_id(track["artist_id"])
+    album = await db.get_album_by_id(track["album_id"])
+
+    assert track["title"] == "Просвистела"
+    assert artist["name"] == "ДДТ"
+    assert album["title"] == "Мир номер ноль"

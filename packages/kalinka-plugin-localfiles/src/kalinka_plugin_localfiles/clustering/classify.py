@@ -30,7 +30,18 @@ BARE_DISC_RE = re.compile(
     r"^(cd[-_ ]?\d+|disc\s*\d+|disk\s*\d+|volume\s*\d+|vol\.?\s*\d+)$",
     re.IGNORECASE,
 )
-VA_PREFIX_RE = re.compile(r"^(va|various artists?)\s*[-–—]\s*", re.IGNORECASE)
+# The names a compilation uses instead of an artist, in one place: as a
+# folder prefix ("VA - Best of 90s") and standing alone (the artist half of
+# "Various Artists - Best of 90s").
+_VA_NAME = r"va|v\.\s*a\.|various(?:\s+artists?)?"
+VA_PREFIX_RE = re.compile(rf"^(?:{_VA_NAME})\s*[-–—]\s*", re.IGNORECASE)
+_VA_NAME_RE = re.compile(rf"^(?:{_VA_NAME})$", re.IGNORECASE)
+
+
+def is_various_artists_name(name: str) -> bool:
+    """True when a name is the various-artists placeholder rather than a real
+    artist, so per-file "Artist - Title" naming still gets a say."""
+    return bool(name and _VA_NAME_RE.match(name.strip()))
 # A trailing "(Disc 2)" / "CD1" / "Vol. 3" on an album title.
 _DISC_SUFFIX_RE = re.compile(
     r"[\s\-–—_([]+(?:cd|disc|disk|volume|vol\.?)\s*\d+\s*[)\]]?\s*$",
