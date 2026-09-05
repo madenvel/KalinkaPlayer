@@ -9,14 +9,25 @@ from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
+from .mb_client import mb_call
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
-    raise_if_musicbrainz_unreachable,
+    raise_musicbrainz_unreachable,
 )
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+# Outbound requests in flight at once. The enricher processes several
+# entities concurrently; this keeps a burst from reaching the service
+# all at once without needing a limiter at each call site.
+_MAX_CONCURRENT_REQUESTS = 4
+
+# Waiting for one of those connections is queueing, not a service problem, so
+# it gets a long budget of its own: the plugins report a timeout as "service
+# unreachable", which ends the whole enrichment pass.
+_TIMEOUT = httpx.Timeout(5.0, pool=120.0)
 
 
 class WikidataPlugin(EnricherPlugin):
@@ -32,7 +43,14 @@ class WikidataPlugin(EnricherPlugin):
         # Set a proper User-Agent to avoid 403 errors from Wikimedia
         user_agent = config.enricher.plugins.user_agent
 
-        self.async_client = httpx.AsyncClient(headers={"User-Agent": user_agent})
+        # The connection cap is the rate limit now that entities are enriched
+        # concurrently: requests past it queue rather than hitting Wikimedia
+        # all at once.
+        self.async_client = httpx.AsyncClient(
+            headers={"User-Agent": user_agent},
+            limits=httpx.Limits(max_connections=_MAX_CONCURRENT_REQUESTS),
+            timeout=_TIMEOUT,
+        )
 
     def can_enrich_artist(self) -> bool:
         return True
@@ -53,7 +71,7 @@ class WikidataPlugin(EnricherPlugin):
             # Get MusicBrainz artist with relations
             artist_mbid = artist["mbid"]
 
-            mb_result = await asyncio.to_thread(
+            mb_result = await mb_call(
                 musicbrainzngs.get_artist_by_id,
                 artist_mbid,
                 includes=["url-rels"],
@@ -124,7 +142,7 @@ class WikidataPlugin(EnricherPlugin):
         except httpx.TransportError as e:
             raise TransientEnrichmentError(f"Wikidata is unreachable: {e}") from e
         except musicbrainzngs.NetworkError as e:
-            raise_if_musicbrainz_unreachable(e)
+            raise_musicbrainz_unreachable(e)
             logger.error(
                 f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"
             )

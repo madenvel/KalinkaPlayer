@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""A transport-level failure (DNS, refused connection, timeout — no HTTP
-response) must leave the entity pending for the next enrichment cycle, never
-recorded as FAILED or ENRICHED-local-only. Any HTTP response, whatever its
-status, is the service's verdict and is recorded as before.
+"""A failure that says nothing about the entity — transport-level (DNS,
+refused connection, timeout) or a service overload the client retried out —
+must leave it pending for the next enrichment cycle, never recorded as
+FAILED or ENRICHED-local-only. A response that speaks about the entity
+(found, 404, …) is a verdict and is recorded as before.
 """
 
 import urllib.error
@@ -16,7 +17,7 @@ from kalinka_plugin_localfiles.enricher.deezer_plugin import DeezerPlugin
 from kalinka_plugin_localfiles.enricher.enricher import MetadataEnricher
 from kalinka_plugin_localfiles.enricher.enricher_plugin import (
     TransientEnrichmentError,
-    raise_if_musicbrainz_unreachable,
+    raise_musicbrainz_unreachable,
 )
 
 
@@ -87,13 +88,17 @@ def test_musicbrainz_no_response_is_transient():
         cause=urllib.error.URLError("Temporary failure in name resolution")
     )
     with pytest.raises(TransientEnrichmentError):
-        raise_if_musicbrainz_unreachable(error)
+        raise_musicbrainz_unreachable(error)
 
 
-def test_musicbrainz_http_response_is_a_verdict():
+def test_musicbrainz_exhausted_rate_limit_is_transient():
+    # A NetworkError wrapping an HTTP response is 5xx that survived the
+    # library's 8 retries — overload, not a verdict (404s arrive as
+    # ResponseError and are recorded as before).
     http_error = urllib.error.HTTPError("url", 503, "busy", hdrs=None, fp=None)
-    error = musicbrainzngs.NetworkError(cause=http_error)
-    raise_if_musicbrainz_unreachable(error)  # must not raise
+    error = musicbrainzngs.NetworkError("retried 8 times", http_error)
+    with pytest.raises(TransientEnrichmentError):
+        raise_musicbrainz_unreachable(error)
 
 
 def _deezer(tmp_path):

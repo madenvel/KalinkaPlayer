@@ -1,0 +1,96 @@
+"""Paced access to the MusicBrainz web service.
+
+Every MusicBrainz call in this package goes through :func:`mb_call`, which
+owns the whole access policy: it spaces request *starts* one second apart
+(MusicBrainz's published limit for anonymous clients) and runs the blocking
+call in a worker thread.
+
+musicbrainzngs has its own limiter, but it holds a lock around the request
+itself, so concurrent callers execute strictly one at a time — pacing and
+round-trip latency add up, and a request that retries a 5xx internally
+(tens of seconds) freezes every other caller behind it. Since the enricher
+now works on several entities at once, that serialisation was costing more
+than the rate limit itself, so this module disables it and paces the starts
+instead: the average stays within the published limit while round-trips
+overlap. That makes this module the only correct way in: a caller that
+reaches musicbrainzngs directly is no longer paced by anything.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Optional
+
+import musicbrainzngs
+
+# Request starts, in seconds. MusicBrainz allows an anonymous client roughly
+# one request per second averaged over time.
+_MIN_INTERVAL = 1.0
+
+# Ceiling on requests in flight at once. Pacing alone keeps this near 1-2;
+# the cap only matters when responses turn slow, and keeps us from holding a
+# pile of connections open against one host.
+_MAX_IN_FLIGHT = 4
+
+# See the module docstring: musicbrainzngs' own limiter serialises whole
+# requests, so we take over the pacing.
+musicbrainzngs.set_rate_limit(False)
+
+
+class _Pacer:
+    """Hands out request slots spaced ``min_interval`` apart, and caps how
+    many calls are in flight.
+
+    The lock is held only while reserving a slot, never across the wait, so
+    callers queue in arrival order without blocking each other's requests.
+
+    Its lock and semaphore belong to the event loop that first contends on
+    them, so they are built on first use and rebuilt if the running loop
+    changes — the slot clock is loop time and starts over with it.
+    """
+
+    def __init__(self, min_interval: float, max_in_flight: int) -> None:
+        self._min_interval = min_interval
+        self._max_in_flight = max_in_flight
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._lock: Optional[asyncio.Lock] = None
+        self._in_flight: Optional[asyncio.Semaphore] = None
+        self._next_slot = 0.0
+
+    def _bind(self) -> asyncio.AbstractEventLoop:
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._loop = loop
+            self._lock = asyncio.Lock()
+            self._in_flight = asyncio.Semaphore(self._max_in_flight)
+            self._next_slot = 0.0
+        return loop
+
+    async def wait_turn(self) -> None:
+        loop = self._bind()
+        async with self._lock:
+            now = loop.time()
+            slot = max(now, self._next_slot)
+            self._next_slot = slot + self._min_interval
+        delay = slot - now
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    def in_flight(self) -> asyncio.Semaphore:
+        self._bind()
+        return self._in_flight
+
+
+_pacer = _Pacer(_MIN_INTERVAL, _MAX_IN_FLIGHT)
+
+
+async def mb_call(fn, *args, **kwargs):
+    """Await one paced MusicBrainz call, executed off the event loop.
+
+    ``fn`` is the musicbrainzngs function (``search_artists``,
+    ``get_release_by_id``, …); exceptions propagate to the caller unchanged,
+    so the plugins keep classifying them as verdicts or transient failures.
+    """
+    await _pacer.wait_turn()
+    async with _pacer.in_flight():
+        return await asyncio.to_thread(fn, *args, **kwargs)

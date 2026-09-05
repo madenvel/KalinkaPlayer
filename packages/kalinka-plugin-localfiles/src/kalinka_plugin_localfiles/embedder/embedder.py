@@ -430,6 +430,11 @@ class EmbeddingWorker:
                 "CLAP text embeddings written for %d tracks", len(completed_track_ids)
             )
             await self._update_aggregate_text_embeddings(completed_track_ids)
+            # Also refresh the mean-pooled audio aggregates: a text re-embed
+            # means metadata (and possibly album/artist membership) changed,
+            # and after a rebuild with restored audio blobs this is the only
+            # completion that fires for the new album/artist rows.
+            await self._update_aggregate_embeddings(completed_track_ids)
         return True
 
     async def _update_aggregate_text_embeddings(self, track_ids: list[str]) -> None:
@@ -536,6 +541,9 @@ class EmbeddingWorker:
 
         await self.db._check_vec_available()
         await self.db.recover_stale_jobs()
+        # Heal the KNN index from the blob column: rows can be missing after
+        # a snapshot restore or an earlier failed upsert.
+        await self.db.backfill_missing_vec_rows()
 
         # Start text-encode handler for searcher KNN queries (always runs)
         encode_task = None
@@ -572,6 +580,11 @@ class EmbeddingWorker:
         logger.info("Embedder waking — starting first work cycle")
 
         while not shutdown_event.is_set():
+            # Re-attach snapshotted audio embeddings from a library rebuild
+            # before scheduling, so those tracks never enter the audio queue.
+            if await self.db.restore_snapshot(CLAP_MODEL_VERSION):
+                await self.db.backfill_missing_vec_rows()
+
             # Schedule new CLAP jobs for enriched tracks
             await self.db.schedule_new_jobs(CLAP_MODEL_VERSION)
 

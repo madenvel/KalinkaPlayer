@@ -9,6 +9,11 @@ from PIL import Image
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
+from ..utils.name_utils import (
+    repair_mojibake,
+    space_dotted_abbreviations,
+    unescape_web_entities,
+)
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
@@ -17,6 +22,17 @@ from .enricher_plugin import (
 
 
 logger = logging.getLogger(__name__.split(".")[-1])
+
+# Outbound requests in flight at once. The enricher processes several
+# entities concurrently; this keeps a burst from reaching the service
+# all at once without needing a limiter at each call site.
+_MAX_CONCURRENT_REQUESTS = 4
+
+# Waiting for one of those connections is queueing, not a service problem, so
+# it gets a long budget of its own: the plugins report a timeout as "service
+# unreachable", which ends the whole enrichment pass.
+_TIMEOUT = httpx.Timeout(5.0, pool=120.0)
+
 
 # Fuzzy matching threshold for album and artist matching
 FUZZY_MATCH_THRESHOLD = 0.8
@@ -44,8 +60,15 @@ class DeezerPlugin(EnricherPlugin):
         # Common headers
         self.headers = {"User-Agent": user_agent}
 
-        # Initialize httpx async client for async requests
-        self.async_client = httpx.AsyncClient(headers=self.headers)
+        # Initialize httpx async client for async requests. Serial enrichment
+        # used to be Deezer's implicit rate limit; with entities enriched
+        # concurrently the connection pool is what keeps us civil — requests
+        # past the cap queue instead of leaving together.
+        self.async_client = httpx.AsyncClient(
+            headers=self.headers,
+            limits=httpx.Limits(max_connections=_MAX_CONCURRENT_REQUESTS),
+            timeout=_TIMEOUT,
+        )
 
     def can_enrich_artist(self) -> bool:
         return True
@@ -134,10 +157,16 @@ class DeezerPlugin(EnricherPlugin):
         try:
             logger.debug(f"Searching for artist image on Deezer: {artist['name']}")
 
-            # Search for artist on Deezer
+            # Same tag repair the MusicBrainz search does: "В.Цой" and
+            # "&amp;" find nothing as-is.
+            search_name = space_dotted_abbreviations(
+                unescape_web_entities(
+                    repair_mojibake(artist["name"], self.config.legacy_tag_encoding)
+                )
+            )
             search_url = "https://api.deezer.com/search/artist"
             response = await self.async_client.get(
-                search_url, params={"q": artist["name"], "limit": 10}
+                search_url, params={"q": search_name, "limit": 10}
             )
 
             if response.status_code != 200:
@@ -161,7 +190,7 @@ class DeezerPlugin(EnricherPlugin):
 
                 # Calculate artist name match score
                 name_score = self._fuzzy_match_score(
-                    deezer_artist["name"], artist["name"]
+                    deezer_artist["name"], search_name
                 )
 
                 logger.debug(
@@ -191,8 +220,15 @@ class DeezerPlugin(EnricherPlugin):
                 )
                 return None
 
-            # Download the image
+            # Download the image. A redirect is the CDN pointing at its
+            # generic placeholder ("no real photo") — skipping it leaves the
+            # artist open for a later source, so it's not an error.
             image_response = await self.async_client.get(deezer_artist["picture_xl"])
+            if image_response.is_redirect:
+                logger.debug(
+                    f"Deezer has only a placeholder image for artist {artist['name']}"
+                )
+                return None
             if image_response.status_code != 200:
                 logger.error(
                     f"Failed to download image for artist {artist['name']}: {image_response.status_code}"

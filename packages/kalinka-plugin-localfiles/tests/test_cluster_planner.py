@@ -87,6 +87,20 @@ def test_plan_strips_artist_prefix_from_folder_title():
     assert plan.clusters[0].title == "Abbey Road"
 
 
+def test_plan_repairs_folder_derived_title():
+    # The folder name is tag text too: an untagged rip in "В.Цой - Черный
+    # альбом" must get the same repairs a tagged title does, or the title
+    # keeps its unspaced abbreviation and no longer matches the (repaired)
+    # artist name the prefix strip compares against.
+    rows = [
+        (_track(f"t{i}", artist_id="tsoi", track_number=i,
+                artist_name="В. Цой"), _ev())
+        for i in range(1, 6)
+    ]
+    plan = plan_folder("/music/В.Цой - Черный альбом", rows)
+    assert plan.clusters[0].title == "Черный альбом"
+
+
 def test_plan_keeps_eponymous_album_title():
     # An album actually named after the artist isn't stripped to empty.
     rows = [
@@ -171,6 +185,71 @@ def test_plan_flat_va_dump_detaches_to_singles():
     assert c.anchor_artist_id == "unknown_artist"
     assert c.grouping_basis["reason"] == "va_dump_folder"
     assert len(c.track_ids) == 12             # every track detached, none lost
+
+
+def test_plan_va_dump_keeps_fully_declared_strays_as_albums():
+    # A junk pile with two fully-declared releases lost in it (album AND
+    # albumartist tags): the majority detaches to unknown_album — including
+    # a track with only a junk album tag — but the declared strays keep
+    # their albums.
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=1), _ev())
+        for i in range(1, 10)
+    ]
+    rows.append((_track("junk", artist_id="artist_junk", track_number=1),
+                 _ev(album="Album")))  # album tag but no albumartist
+    rows.append((_track("bee", artist_id="artist_bee", track_number=1),
+                 _ev(album="Bee Moved", albumartist="Blue Monday FM",
+                     art="ph_bee")))
+    rows.append((_track("gold", artist_id="artist_katz", track_number=1),
+                 _ev(album="Musopen Kickstarter Project",
+                     albumartist="Shelley Katz")))
+
+    plan = plan_folder("/mnt/usb/Music/Music", rows)
+    pools = [c for c in plan.clusters if c.kind == "singles_pool"]
+    albums = {c.title: c for c in plan.clusters if c.kind == "album"}
+    assert len(pools) == 1 and len(pools[0].track_ids) == 10
+    assert "junk" in pools[0].track_ids
+    assert pools[0].grouping_basis["reason"] == "va_dump_folder"
+    assert set(albums) == {"Bee Moved", "Musopen Kickstarter Project"}
+    assert albums["Bee Moved"].track_ids == ["bee"]
+    assert albums["Bee Moved"].anchor_artist_id == "artist_bee"
+
+
+def test_plan_va_dump_strays_with_same_generic_tag_stay_apart():
+    # Two artists' releases sharing a generic album tag must not fuse:
+    # strays bucket by (album, albumartist), not album alone.
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=1), _ev())
+        for i in range(1, 11)
+    ]
+    rows.append((_track("a", artist_id="artist_a2", track_number=1),
+                 _ev(album="Greatest Hits", albumartist="Alpha")))
+    rows.append((_track("b", artist_id="artist_b2", track_number=1),
+                 _ev(album="Greatest Hits", albumartist="Beta")))
+
+    plan = plan_folder("/mnt/usb/Music/Music", rows)
+    albums = [c for c in plan.clusters if c.kind == "album"]
+    assert len(albums) == 2
+    assert {tuple(c.track_ids) for c in albums} == {("a",), ("b",)}
+
+
+def test_plan_va_dump_of_declared_singles_still_flattens():
+    # A curated pool where every track fully declares its own single release:
+    # the declared subset is itself a many-artist pool, so the whole folder
+    # still detaches — no per-track junk albums.
+    rows = [
+        (_track(f"t{i}", artist_id=f"artist_{i}", track_number=1),
+         _ev(album=f"Single {i}", albumartist=f"Artist {i}", art=f"ph_{i}"))
+        for i in range(1, 13)
+    ]
+    plan = plan_folder(
+        "/music/Playlist - Urban - 500604904 --- Jamendo - MP3", rows
+    )
+    assert len(plan.clusters) == 1
+    c = plan.clusters[0]
+    assert c.kind == "singles_pool"
+    assert len(c.track_ids) == 12
 
 
 def test_plan_shared_album_tag_survives_many_artists():

@@ -1054,8 +1054,10 @@ class LocalFilesInputModule(InputModule):
                 name=track["album_genre"],
             )
 
-        # Add album image if available
-        cover_path = self._get_album_image_urls(track["album_id"])
+        # Album image, else the track's own cover (singles on unknown_album).
+        cover_path = self._get_album_image_urls(
+            track["album_id"]
+        ) or self._get_track_image_urls(track)
         if cover_path:
             album.image = cover_path
 
@@ -1261,77 +1263,48 @@ class LocalFilesInputModule(InputModule):
             sections=sections_obj,
         )
 
+    def _resource_image_urls(
+        self, entity_type: str, image_url: Optional[str]
+    ) -> Optional[CoverImage]:
+        """/resource/ URLs for a saved image set, or None if it doesn't exist."""
+        if not image_url:
+            return None
+        image_base = image_url.replace(".jpg", "")
+        thumbnail_path = (
+            self.artwork_path / entity_type / f"{image_base}_thumbnail.jpg"
+        )
+        if not thumbnail_path.exists():
+            return None
+        return CoverImage(
+            thumbnail=f"/resource/{entity_type}/{image_base}_thumbnail.jpg",
+            small=f"/resource/{entity_type}/{image_base}_small.jpg",
+            large=f"/resource/{entity_type}/{image_base}_large.jpg",
+        )
+
     def _get_album_image_urls(self, album_id: str) -> Optional[CoverImage]:
         """Get image URLs for an album"""
-        # Get album data from database to check if image_url exists
         album = self.db_manager.get_album_by_id(album_id)
-        if not album or not album.get("image_url"):
-            return None
+        return self._resource_image_urls(
+            "album", album.get("image_url") if album else None
+        )
 
-        # Use the image_url from database (without .jpg extension)
-        image_base = album["image_url"].replace(".jpg", "")
-
-        # Define relative paths for album images including the /resource/ prefix
-        thumbnail = f"/resource/album/{image_base}_thumbnail.jpg"
-        small = f"/resource/album/{image_base}_small.jpg"
-        large = f"/resource/album/{image_base}_large.jpg"
-
-        # Check if the image files exist using absolute path for the check
-        thumbnail_path = self.artwork_path / f"album/{image_base}_thumbnail.jpg"
-
-        # Only return image URLs if the thumbnail file exists
-        if thumbnail_path.exists():
-            return CoverImage(thumbnail=thumbnail, small=small, large=large)
-
-        return None
+    def _get_track_image_urls(self, track: Dict) -> Optional[CoverImage]:
+        """Track-level cover: a single on unknown_album carries its own art."""
+        return self._resource_image_urls("track", track.get("image_url"))
 
     def _get_artist_image_urls(self, artist_id: str) -> Optional[CoverImage]:
         """Get image URLs for an artist"""
-        # Get artist data from database to check if image_url exists
         artist = self.db_manager.get_artist_by_id(artist_id)
-        if not artist or not artist.get("image_url"):
-            return None
-
-        # Use the image_url from database (without .jpg extension)
-        image_base = artist["image_url"].replace(".jpg", "")
-
-        # Define relative paths for artist images including the /resource/ prefix
-        thumbnail = f"/resource/artist/{image_base}_thumbnail.jpg"
-        small = f"/resource/artist/{image_base}_small.jpg"
-        large = f"/resource/artist/{image_base}_large.jpg"
-
-        # Check if the image files exist using absolute path for the check
-        thumbnail_path = self.artwork_path / f"artist/{image_base}_thumbnail.jpg"
-
-        # Only return image URLs if the thumbnail file exists
-        if thumbnail_path.exists():
-            return CoverImage(thumbnail=thumbnail, small=small, large=large)
-
-        return None
+        return self._resource_image_urls(
+            "artist", artist.get("image_url") if artist else None
+        )
 
     def _get_playlist_image_urls(self, playlist_id: str) -> Optional[CoverImage]:
         """Get image URLs for a playlist"""
-        # Get playlist data from database to check if image_url exists
         playlist = self.db_manager.get_playlist_by_id(playlist_id)
-        if not playlist or not playlist.get("image_url"):
-            return None
-
-        # Use the image_url from database (without .jpg extension)
-        image_base = playlist["image_url"].replace(".jpg", "")
-
-        # Define relative paths for playlist images including the /resource/ prefix
-        thumbnail = f"/resource/playlist/{image_base}_thumbnail.jpg"
-        small = f"/resource/playlist/{image_base}_small.jpg"
-        large = f"/resource/playlist/{image_base}_large.jpg"
-
-        # Check if the image files exist using absolute path for the check
-        thumbnail_path = self.artwork_path / f"playlist/{image_base}_thumbnail.jpg"
-
-        # Only return image URLs if the thumbnail file exists
-        if thumbnail_path.exists():
-            return CoverImage(thumbnail=thumbnail, small=small, large=large)
-
-        return None
+        return self._resource_image_urls(
+            "playlist", playlist.get("image_url") if playlist else None
+        )
 
     async def get_resource_path(self, id: str) -> str | None:
         """Get full path to a resource"""

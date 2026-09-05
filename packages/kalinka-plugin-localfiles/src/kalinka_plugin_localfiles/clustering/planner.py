@@ -14,7 +14,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from ..utils.name_utils import clean_display_name, normalize_for_id
+from ..utils.name_utils import (
+    clean_display_name,
+    normalize_for_id,
+    repair_tag_text,
+)
 from .classify import (
     VARIOUS_ARTISTS_ID,
     compilation_title,
@@ -24,7 +28,7 @@ from .classify import (
     strip_artist_prefix,
     strip_disc_suffix,
 )
-from .engine import partition_folder
+from .engine import PartitionResult, partition_folder
 from .signals import TrackFeatures
 
 # Tag names for the same concept across ID3 (MP3) and Vorbis (FLAC).
@@ -52,9 +56,13 @@ def _tag(raw: Dict, *keys: str) -> Optional[str]:
     return None
 
 
-def _album_display(raw: Dict) -> Optional[str]:
+def _album_display(raw: Dict, legacy_encoding: Optional[str] = None) -> Optional[str]:
     album = _tag(raw, *_ALBUM_TAGS)
-    return clean_display_name(album) if album else None
+    if not album:
+        return None
+    # Same repairs the indexer stores, so a re-cluster can never rewrite
+    # a repaired album title back to its raw-tag form.
+    return clean_display_name(repair_tag_text(album, legacy_encoding))
 
 
 def _cue_album(cue: Dict) -> Optional[str]:
@@ -129,7 +137,11 @@ def _dominant(values) -> Optional[str]:
     return Counter(vals).most_common(1)[0][0] if vals else None
 
 
-def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderPlan:
+def plan_folder(
+    folder: str,
+    rows: List[Tuple[Dict, Optional[Dict]]],
+    legacy_encoding: Optional[str] = None,
+) -> FolderPlan:
     """Plan the clusters for one folder from (track_row, evidence_row) pairs."""
     if not rows:
         return FolderPlan(folder=folder, clusters=[], split=False)
@@ -137,7 +149,7 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
     display_by_id = {
         t["id"]: (
             t,
-            _album_display(_loads((e or {}).get("raw_tags"))),
+            _album_display(_loads((e or {}).get("raw_tags")), legacy_encoding),
             _cue_album(_loads((e or {}).get("cue_tracks"))),
         )
         for t, e in rows
@@ -153,10 +165,20 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
     # otherwise fragment it — tracks with their own cover art each split into a
     # single-artist album, art-less ones clump into V/A umbrella albums. The
     # V/A folder policy (detach to unknown_album so tracks surface as singles
-    # under their real artist) is the right outcome for the whole folder, so
-    # short-circuit before partitioning. A real compilation is protected two
-    # ways: its tracks share an album tag (fails the no-shared-album test), or
-    # the folder is an explicitly declared "VA - X" compilation (exempted).
+    # under their real artist) is the right outcome for the folder's loose
+    # tracks, so short-circuit before partitioning. A real compilation is
+    # protected two ways: its tracks share an album tag (fails the
+    # no-shared-album test), or the folder is an explicitly declared "VA - X"
+    # compilation (exempted).
+    #
+    # Exemption inside a dump: a track that fully declares its release —
+    # album AND albumartist tags, the deliberately-mastered signature that
+    # playlist rips and junk tags lack — keeps its album. The V/A test
+    # re-applied to just those tracks is the backstop: a curated pool of
+    # mastered singles (many artists) still flattens whole, while a real
+    # release lost in a junk pile survives. Strays bucket by album tag
+    # directly, skipping the merge scorer — it would fuse unrelated singles
+    # on weak positives like a shared codec.
     folder_real_artists = {
         t.get("artist_id")
         for t, _ in rows
@@ -166,32 +188,57 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
     dominant_album_cov = (
         Counter(album_keys).most_common(1)[0][1] / len(rows) if album_keys else 0.0
     )
+    clusters: List[ClusterPlan] = []
     if (
         is_va_folder(len(folder_real_artists), len(rows))
         and dominant_album_cov < 0.5
         and not is_declared_va_folder(folder)
     ):
-        return FolderPlan(
-            folder=folder,
-            clusters=[
+        tagged = [f for f in features if f.album_key and f.albumartist_key]
+        tagged_artists = {
+            display_by_id[f.track_id][0].get("artist_id")
+            for f in tagged
+            if display_by_id[f.track_id][0].get("artist_id")
+            and display_by_id[f.track_id][0].get("artist_id") != "unknown_artist"
+        }
+        keep_strays = bool(tagged) and not is_va_folder(
+            len(tagged_artists), len(tagged)
+        )
+        stray_ids = {f.track_id for f in tagged}
+        pool_ids = [
+            f.track_id
+            for f in features
+            if not keep_strays or f.track_id not in stray_ids
+        ]
+        if pool_ids:
+            clusters.append(
                 ClusterPlan(
-                    [t["id"] for t, _ in rows],
+                    pool_ids,
                     "singles_pool",
                     "",
                     "unknown_artist",
                     {
                         "reason": "va_dump_folder",
                         "distinct_artists": len(folder_real_artists),
-                        "tracks": len(rows),
+                        "tracks": len(pool_ids),
                     },
                     folder,
                 )
-            ],
-            split=False,
+            )
+        if not keep_strays:
+            return FolderPlan(folder=folder, clusters=clusters, split=False)
+        # Keyed by (album, albumartist): a generic album tag ("Greatest
+        # Hits") must not fuse two artists' strays.
+        by_key: Dict[Tuple[str, str], List[TrackFeatures]] = {}
+        for f in tagged:
+            by_key.setdefault((f.album_key, f.albumartist_key), []).append(f)
+        result = PartitionResult(
+            groups=list(by_key.values()),
+            split=True,
+            basis={"reason": "va_dump_tagged_stray"},
         )
-
-    result = partition_folder(features)
-    clusters: List[ClusterPlan] = []
+    else:
+        result = partition_folder(features)
     for group in result.groups:
         ids = [f.track_id for f in group]
         member_tracks = [display_by_id[i][0] for i in ids]
@@ -225,7 +272,16 @@ def plan_folder(folder: str, rows: List[Tuple[Dict, Optional[Dict]]]) -> FolderP
         title = (
             _dominant(titles)
             or _dominant(cue_titles)
-            or os.path.basename(folder.rstrip("/"))
+            # The folder name is tag text too — repair it like one, or an
+            # album named after its folder keeps mojibake and unspaced
+            # abbreviations the tagged path fixes ("В.Цой - Черный альбом"),
+            # and no longer matches its own repaired artist name when the
+            # enricher tries to strip the artist prefix.
+            or clean_display_name(
+                repair_tag_text(
+                    os.path.basename(folder.rstrip("/")), legacy_encoding
+                )
+            )
             or ""
         )
         anchor = _dominant(t.get("artist_id") for t in member_tracks) or "unknown_artist"

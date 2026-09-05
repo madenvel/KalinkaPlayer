@@ -39,6 +39,7 @@ from ..utils.name_utils import (
     expand_music_folders,
     parse_leading_track_number,
     path_within_roots,
+    repair_tag_text,
 )
 from .cue import find_cue_for, parse_cue
 from .id_generator import (
@@ -65,6 +66,23 @@ SUPPORTED_AUDIO_EXTENSIONS = {".mp3", ".flac"}
 
 # How often the file watcher checks whether a lost root came back.
 REARM_CHECK_INTERVAL_S = 15.0
+
+def rearm_needs_rescan(
+    unmount_seen: bool,
+    identity: Optional[str],
+    stored_signature: Optional[str],
+) -> bool:
+    """Whether a re-armed root owes a rescan, or was just an autofs bounce.
+
+    An unmounted root that returns with the mount identity the library was
+    indexed from is the same filesystem — remote changes are invisible to
+    inotify regardless, so the periodic scan covers them and a
+    bounce-triggered rescan adds nothing. ``unmount_seen`` is False when a
+    rescan is owed unconditionally (startup deferral, deleted root).
+    """
+    if not unmount_seen:
+        return True
+    return not (stored_signature and identity == stored_signature)
 
 
 # Configure logger for watchfiles.main only to WARNING level
@@ -233,6 +251,13 @@ class FileIndexer:
                     f"{va_results['tracks']} track(s) re-pointed, "
                     f"{va_results['orphans']} orphan album(s) deleted"
                 )
+
+        backfilled = await self.backfill_embedded_art(available_folders)
+        if any(backfilled.values()):
+            logger.info(
+                "Embedded art restored for %d album(s) and %d single(s)",
+                backfilled["albums"], backfilled["tracks"],
+            )
 
         # If anything changed and we have an enricher callback, notify it
         if any(changed_items.values()):
@@ -505,7 +530,7 @@ class FileIndexer:
         metadata["modified_time"] = modified_time
         metadata["last_updated"] = int(time.time())
 
-        raw_artist = metadata.get("artist", "Unknown Artist")
+        raw_artist = self._repair_tag_text(metadata.get("artist", "Unknown Artist"))
         artist_name = clean_display_name(raw_artist) or "Unknown Artist"
         artist_id = generate_artist_id(artist_name)
 
@@ -521,7 +546,7 @@ class FileIndexer:
             )
             changes["artists"] = artist_id
 
-        raw_album = metadata.get("album", "Unknown Album")
+        raw_album = self._repair_tag_text(metadata.get("album", "Unknown Album"))
         album_title = clean_display_name(raw_album) or "Unknown Album"
         album_id = generate_album_id(album_title, album_folder_for_path(file_path))
 
@@ -562,8 +587,13 @@ class FileIndexer:
             "id": track_id,
             # Basic fallback only: the raw filename. The enricher's
             # FilesystemFallbackPlugin detects this (title == basename) and does
-            # the smart "Artist - Title" parsing — keep that boundary intact.
-            "title": metadata.get("title", os.path.basename(file_path)),
+            # the smart "Artist - Title" parsing — keep that boundary intact
+            # (only a tagged title gets the tag repairs).
+            "title": (
+                self._repair_tag_text(metadata["title"])
+                if "title" in metadata
+                else os.path.basename(file_path)
+            ),
             "album_id": album_id,
             "artist_id": artist_id,
             "duration": metadata.get("duration", 0),
@@ -578,6 +608,15 @@ class FileIndexer:
             "enriched": 0,
             "last_updated": int(time.time()),
         }
+        # A single on unknown_album has no album row to carry its embedded
+        # cover, so it gets track-level art. Clustering demotions are covered
+        # by backfill_embedded_art after the recluster pass.
+        if album_id == "unknown_album" and "album_art" in metadata:
+            saved = await asyncio.to_thread(
+                self._save_images, metadata["album_art"], track_id, "track"
+            )
+            if saved:
+                track_data["image_url"] = f"{track_id}.jpg"
         if existing_track is None:
             await self.db_manager.insert_track(track_data)
         else:
@@ -613,6 +652,11 @@ class FileIndexer:
         await self.db_manager.clear_failure(file_path)
         logger.debug(f"Processed file: {file_path}")
         return changes
+
+    def _repair_tag_text(self, text: str) -> str:
+        """Mojibake, web-entity and dotted-abbreviation repair for one tag
+        string ("Â.Öîé" / "&amp;" / "В.Цой" all read right afterwards)."""
+        return repair_tag_text(text, self.config.legacy_tag_encoding)
 
     def _extract_metadata(self, file_path: str) -> Optional[Dict]:
         """Extract metadata from a music file"""
@@ -746,11 +790,9 @@ class FileIndexer:
                 metadata["replaygain_peak"] = float(peak_str)
             except ValueError:
                 pass
-        for tag in ["APIC:", "APIC:Cover", "APIC:CoverFront"]:
-            if tag in id3:
-                apic = id3[tag]
-                metadata["album_art"] = apic.data
-                break
+        cover = self._mp3_cover(id3)
+        if cover is not None:
+            metadata["album_art"] = cover
         # Verbatim text frames (incl. TPE2 album-artist, TCMP compilation) +
         # stream info for the clusterer. Binary frames (APIC) skipped.
         metadata["raw_tags"] = {
@@ -817,14 +859,9 @@ class FileIndexer:
                 metadata["replaygain_peak"] = float(peak_str)
             except ValueError:
                 pass
-        pictures = flac.pictures
-        if pictures:
-            for pic in pictures:
-                if pic.type == 3:  # Cover (front)
-                    metadata["album_art"] = pic.data
-                    break
-            else:
-                metadata["album_art"] = pictures[0].data
+        cover = self._flac_cover(flac)
+        if cover is not None:
+            metadata["album_art"] = cover
         # Every Vorbis comment verbatim (incl. albumartist/compilation) +
         # stream info. Keys can repeat, so values are lists.
         metadata["raw_tags"] = {key: list(flac[key]) for key in flac.keys()}
@@ -836,6 +873,38 @@ class FileIndexer:
             "encoder": flac["encoder"][0] if "encoder" in flac else None,
         }
         return metadata
+
+    @staticmethod
+    def _mp3_cover(id3) -> Optional[bytes]:
+        """Front-cover bytes from an ID3 tag set, or None."""
+        for tag in ("APIC:", "APIC:Cover", "APIC:CoverFront"):
+            if tag in id3:
+                return id3[tag].data
+        return None
+
+    @staticmethod
+    def _flac_cover(flac) -> Optional[bytes]:
+        """Front-cover bytes from a FLAC picture block, or None.
+
+        Prefers picture type 3 (cover front), falls back to the first picture.
+        """
+        pictures = flac.pictures
+        for pic in pictures:
+            if pic.type == 3:
+                return pic.data
+        return pictures[0].data if pictures else None
+
+    def _embedded_art(self, file_path: str) -> Optional[bytes]:
+        """Read just the embedded cover from a file, or None."""
+        try:
+            mime_type = mimetypes.guess_type(file_path)[0] or ""
+            if "audio/mpeg" in mime_type:
+                return self._mp3_cover(ID3(file_path))
+            if mime_type in ("audio/flac", "audio/x-flac"):
+                return self._flac_cover(FLAC(file_path))
+        except Exception as e:
+            logger.debug("Could not read embedded art from %s: %s", file_path, e)
+        return None
 
     @staticmethod
     def _art_phash(image_data: bytes) -> Optional[str]:
@@ -893,6 +962,57 @@ class FileIndexer:
             )
             return False
 
+    async def backfill_embedded_art(
+        self, available_folders: List[str]
+    ) -> Dict[str, int]:
+        """Re-extract embedded covers that clustering left behind.
+
+        Two shapes of loss, one cure. An album row minted by a re-cluster
+        starts with no cover even when its files embed one (a procedural
+        placeholder may have papered over it since). And a loose track
+        demoted to ``unknown_album`` loses its per-file album row — and the
+        cover reference with it — so it gets track-level art instead.
+
+        Each entity costs one file read, once: the evidence ``art_phash``
+        gates the pass to files known to embed a picture, and a recorded
+        ``image_url`` stops repeats. Only files under currently available
+        roots are touched. Runs before the enricher nudge so embedded art
+        wins over a procedural cover.
+        """
+        counts = {"albums": 0, "tracks": 0}
+        for album_id, file_path in await self.db_manager.get_albums_missing_art():
+            if await self._restore_embedded_art(
+                album_id, file_path, "album", available_folders
+            ):
+                await self.db_manager.update_album(
+                    album_id,
+                    {"image_url": f"{album_id}.jpg", "image_generated": 0},
+                )
+                counts["albums"] += 1
+        for track_id, file_path in await self.db_manager.get_singles_missing_art():
+            if await self._restore_embedded_art(
+                track_id, file_path, "track", available_folders
+            ):
+                await self.db_manager.update_track(
+                    track_id, {"image_url": f"{track_id}.jpg"}
+                )
+                counts["tracks"] += 1
+        return counts
+
+    async def _restore_embedded_art(
+        self,
+        entity_id: str,
+        file_path: str,
+        entity_type: str,
+        available_folders: List[str],
+    ) -> bool:
+        if root_of(file_path, available_folders) is None:
+            return False
+        art = await asyncio.to_thread(self._embedded_art, file_path)
+        if not art:
+            return False
+        return await asyncio.to_thread(self._save_images, art, entity_id, entity_type)
+
     async def recluster(self) -> Dict[str, int]:
         """Folder-first album grouping over the whole library.
 
@@ -922,7 +1042,13 @@ class FileIndexer:
 
         clusters = []
         for folder, folder_rows in by_folder.items():
-            clusters.extend(plan_folder(folder, folder_rows).clusters)
+            clusters.extend(
+                plan_folder(
+                    folder,
+                    folder_rows,
+                    legacy_encoding=self.config.legacy_tag_encoding,
+                ).clusters
+            )
         clusters = merge_disc_siblings(clusters)
 
         ids, aliases = assign_stable_ids(clusters, current_album_of)
@@ -1460,16 +1586,19 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                     logger.debug(f"Could not watch {path}: {e}")
 
             # Roots without watches (never armed, unmounted, or deleted),
-            # re-armed by the loop below once they come back.
-            lost_roots: Set[str] = set()
+            # re-armed by the loop below once they come back. True when an
+            # unmount lost the root; False when a rescan is owed
+            # unconditionally on return.
+            lost_roots: Dict[str, bool] = {}
             next_rearm_check = 0.0
+            db = AsyncIndexerDb(config)
 
             for folder in music_folders:
                 status = await probe_root_async(folder)
                 if status.available:
                     _add_watches(folder)
                 else:
-                    lost_roots.add(folder)
+                    lost_roots[folder] = False
                     logger.warning(
                         f"Music folder not available yet, deferring watches: "
                         f"{folder} ({status.reason})"
@@ -1480,7 +1609,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
             )
 
             async def _rearm_lost_roots():
-                for root in sorted(lost_roots):
+                for root, unmount_seen in sorted(lost_roots.items()):
                     # A stat here would re-trigger the automount whose idle
                     # expiry just unmounted the root; mountinfo alone doesn't.
                     if autofs_pending(root):
@@ -1488,8 +1617,17 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                     status = await probe_root_async(root)
                     if not status.available:
                         continue
-                    lost_roots.discard(root)
+                    del lost_roots[root]
                     _add_watches(root)
+                    stored = await db.get_root_signature(root)
+                    if not rearm_needs_rescan(
+                        unmount_seen, status.identity, stored
+                    ):
+                        logger.info(
+                            f"Music folder is back (same mount), watching "
+                            f"it again: {root}"
+                        )
+                        continue
                     logger.info(
                         f"Music folder is back, watching it again and "
                         f"rescanning: {root}"
@@ -1541,7 +1679,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                             for wd, path in list(watched_dirs.items()):
                                 if path == root or path.startswith(prefix):
                                     del watched_dirs[wd]
-                            lost_roots.add(root)
+                            lost_roots[root] = True
                             logger.warning(
                                 f"Filesystem unmounted under {root}; "
                                 "suspending watches until it returns"
@@ -1600,7 +1738,7 @@ async def _file_watcher_worker(config: LocalFilesConfig):
                                 del watched_dirs[event.wd]
                                 logger.debug(f"Directory removed: {dir_path}")
                             if dir_path in music_folders:
-                                lost_roots.add(dir_path)
+                                lost_roots[dir_path] = False
 
                     if relevant_changes:
                         logger.info(

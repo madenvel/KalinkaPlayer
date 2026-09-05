@@ -78,6 +78,7 @@ def _make_mb_plugin():
     config.enricher.plugins.musicbrainz.string_similarity = 0.6
     config.enricher.plugins.musicbrainz.debug_matching = False
     config.enricher.plugins.user_agent = "test/1.0 (test@example.com)"
+    config.legacy_tag_encoding = ""
     plugin = MusicBrainzPlugin(config, db_manager=MagicMock())
     # Phase 3 stage-B reads the local tracklist and records candidates; default
     # to "no local tracks", so alignment contributes a 0 bonus and these tests
@@ -147,6 +148,89 @@ class TestMusicBrainzFindBestMatch:
         )
         assert best is not None
         assert best["id"] == "b"
+
+    def test_alias_rescues_curated_short_form(self):
+        """A local tag matching a MusicBrainz alias must pass the
+        similarity floor even when the primary name is much longer
+        ('Иванушки Int' is a curated alias of 'Иванушки International')."""
+        plugin = _make_mb_plugin()
+        plugin.string_similarity_threshold = 0.8
+        candidates = [
+            {
+                "id": "ivanushki",
+                "name": "Иванушки International",
+                "sort-name": "Ivanushki International",
+                "ext:score": "100",
+                "alias-list": [
+                    {"alias": "Ivanushki International", "type": "Artist name"},
+                    {"alias": "Иванушки Int."},
+                ],
+            },
+        ]
+        best, score, sim = plugin._find_best_match(
+            candidates, "Иванушки Int", threshold=70, match_key="name"
+        )
+        assert best is not None
+        assert best["id"] == "ivanushki"
+        assert sim == 1.0
+
+    def test_initials_match_passes_the_similarity_floor(self):
+        """'В. Цой' names 'Виктор Цой' by initial + surname; MB has no short
+        alias for him, so SequenceMatcher alone (≈0.67) would reject the
+        score-100 match. The initials rule must carry it — and rank Виктор
+        above the other Цойs the search returns."""
+        plugin = _make_mb_plugin()
+        plugin.string_similarity_threshold = 0.8
+        candidates = [
+            {
+                "id": "viktor",
+                "name": "Виктор Цой",
+                "sort-name": "Цой, Виктор",
+                "ext:score": "100",
+                "alias-list": [{"alias": "Victor Tsoi"}, {"alias": "Viktor Tsoy"}],
+            },
+            {"id": "anita", "name": "Анита Цой", "ext:score": "88"},
+            {"id": "kirill", "name": "Кирилл Цой", "ext:score": "81"},
+        ]
+        best, _score, sim = plugin._find_best_match(
+            candidates, "В. Цой", threshold=70, match_key="name"
+        )
+        assert best is not None
+        assert best["id"] == "viktor"
+        assert sim >= 0.8
+
+        # The unspaced tag form works too — the initials rule spaces it.
+        best, _score, _sim = plugin._find_best_match(
+            candidates, "В.Цой", threshold=70, match_key="name"
+        )
+        assert best is not None and best["id"] == "viktor"
+
+    def test_all_initials_name_gets_no_initials_boost(self):
+        """'R. E. M.' carries too little signal for the initials rule; only
+        a verbatim/alias match may pass such a name."""
+        plugin = _make_mb_plugin()
+        assert plugin._initials_similarity("R. E. M.", "Rapid Eye Movement") == 0.0
+        assert plugin._initials_similarity("В. Цой", "Виктор Цой") == 0.9
+        assert plugin._initials_similarity("В. Цой", "Анита Цой") == 0.0
+
+    def test_dissimilar_name_without_alias_still_rejected(self):
+        """The similarity floor still rejects a candidate whose name and
+        aliases all differ from the local tag."""
+        plugin = _make_mb_plugin()
+        plugin.string_similarity_threshold = 0.8
+        candidates = [
+            {
+                "id": "other",
+                "name": "Совершенно другая группа",
+                "ext:score": "100",
+                "alias-list": [{"alias": "Another Band Entirely"}],
+            },
+        ]
+        best, score, _sim = plugin._find_best_match(
+            candidates, "Иванушки Int", threshold=70, match_key="name"
+        )
+        assert best is None
+        assert score == 0
 
     def test_min_margin_rejects_ambiguous_picks(self):
         """When two candidates are within the margin, neither should

@@ -123,6 +123,7 @@ async def init_db(db_path: str) -> None:
                 embedding_clap_text BLOB,
                 mood_valence REAL,
                 mood_arousal REAL,
+                image_url TEXT,
                 FOREIGN KEY (album_id) REFERENCES albums (id),
                 FOREIGN KEY (artist_id) REFERENCES artists (id)
             )
@@ -523,6 +524,11 @@ async def init_db(db_path: str) -> None:
         if "language" not in track_cols:
             await cursor.execute("ALTER TABLE tracks ADD COLUMN language TEXT")
             logger.info("Added tracks.language column")
+        # Track-level cover for singles: a track on unknown_album has no album
+        # row to carry its embedded art.
+        if "image_url" not in track_cols:
+            await cursor.execute("ALTER TABLE tracks ADD COLUMN image_url TEXT")
+            logger.info("Added tracks.image_url column")
 
         # Origin/era metadata (nationality + language + first-release year) so
         # queries like "italian 80s" resolve on structured facts instead of CLAP,

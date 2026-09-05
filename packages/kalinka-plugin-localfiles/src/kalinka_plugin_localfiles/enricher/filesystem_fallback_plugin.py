@@ -4,14 +4,17 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+from ..clustering.classify import is_various_artists_name
 from ..config_model import LocalFilesConfig
 from ..utils.name_utils import (
     TRACK_NUMBER_PREFIX_PATTERNS,
     album_folder_for_path,
     clean_display_name,
+    repair_tag_text,
 )
 from .enricher_plugin import EnricherPlugin
 from .id_generator import generate_artist_id, generate_album_id
+from .keyed_lock import KeyedLock
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -23,12 +26,18 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     This plugin uses file names and folder structure to assign artist, album and title:
     - Title: filename without extension and optional track number prefix (e.g., "1. " or "2.")
     - Album: second element of the path, may be in format "Artist - Album"
-    - Artist: extracted from filename if in "Artist - Track" format (takes precedence),
-             otherwise from album folder name if in "Artist - Album" format,
+    - Artist: from the album folder when it is in "Artist - Album" format,
+             else from the filename in "Artist - Track" format,
              or from parent folder as fallback
     - Track number: extracted from filename prefix
 
-    Filename artist-track splitting supports various dash variants: -, –, —, with or without spaces.
+    Filename artist-track splitting supports various dash variants: -, –, —,
+    with or without spaces, and applies only when the path names no artist —
+    a folder that does speaks for every file in it, so the dash belongs to
+    the title ("2.Красно - желтые дни"). A various-artists folder is the
+    exception, since there only the filename names an artist. An unspaced
+    dash additionally splits only before an uppercase letter, so a hyphenated
+    title ("Красно-желтые дни") stays whole.
 
     **Important**: This plugin only analyzes folder structure within the configured music
     directories. It will not use folder names outside of the music directories to avoid
@@ -45,7 +54,10 @@ class FilesystemFallbackPlugin(EnricherPlugin):
     """
 
     # v2: no-space "N.Title" prefix pattern + stem-echo title guard.
-    ENRICHER_VERSION = 2
+    # v3: a dash only introduces an artist when the path names none, and an
+    # unspaced one only before an uppercase letter; rows a dashed title was
+    # mis-split into re-open on this bump.
+    ENRICHER_VERSION = 3
 
     # Match the indexer's V/A detection criteria
     # (``orphan_va_folder_tracks``). Filesystem fallback skips album
@@ -74,6 +86,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         # Cleared between enrichment passes via the natural process
         # restart (the enricher subprocess is short-lived per pass).
         self._va_folder_cache: Dict[str, bool] = {}
+        self._va_folder_locks = KeyedLock()
 
     def can_enrich_artist(self) -> bool:
         """This plugin can enrich artist metadata from folder structure"""
@@ -88,13 +101,16 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         return True
 
     def _extract_track_number_and_title(
-        self, filename: str
+        self, filename: str, allow_artist_split: bool = True
     ) -> tuple[Optional[int], str, Optional[str]]:
         """
         Extract track number, clean title, and artist from filename.
 
         Args:
             filename: The filename without extension
+            allow_artist_split: whether a dash may introduce an artist. False
+                when the path already names one, so the dash is read as part
+                of the title instead.
 
         Returns:
             Tuple of (track_number, clean_title, artist_name)
@@ -113,7 +129,7 @@ class FilesystemFallbackPlugin(EnricherPlugin):
             "—",  # em-dash
         ]
 
-        for dash_pattern in dash_patterns:
+        for dash_pattern in dash_patterns if allow_artist_split else []:
             if dash_pattern in clean_title:
                 parts = clean_title.split(dash_pattern, 1)
                 if len(parts) == 2:
@@ -126,6 +142,14 @@ class FilesystemFallbackPlugin(EnricherPlugin):
                         and potential_title
                         and len(potential_artist) > 0
                     ):
+                        # An unspaced dash is as likely a hyphenated word
+                        # ("Красно-желтые дни") as an "Artist-Title" rip;
+                        # only an uppercase continuation reads as a new name.
+                        if (
+                            not dash_pattern.startswith(" ")
+                            and not potential_title[0].isupper()
+                        ):
+                            continue
                         artist_name = potential_artist
                         clean_title = potential_title
                         break
@@ -180,7 +204,11 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         Returns:
             The artist ID (existing or newly created)
         """
-        artist_name = clean_display_name(artist_name)
+        # Same repairs indexed tags get, so a filename-derived name
+        # ('В.Цой', mojibake) is stored in its repaired form too.
+        artist_name = clean_display_name(
+            repair_tag_text(artist_name, self.config.legacy_tag_encoding)
+        )
         if not artist_name:
             return "unknown_artist"
 
@@ -237,7 +265,9 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         Returns:
             The album ID (existing or newly created).
         """
-        album_title = clean_display_name(album_title)
+        album_title = clean_display_name(
+            repair_tag_text(album_title, self.config.legacy_tag_encoding)
+        )
         if not album_title:
             return "unknown_album"
 
@@ -280,6 +310,16 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         cached = self._va_folder_cache.get(folder)
         if cached is not None:
             return cached
+        # Tracks of one folder are enriched concurrently; without this the
+        # siblings all miss the cache and repeat the two counting queries.
+        async with self._va_folder_locks(folder):
+            cached = self._va_folder_cache.get(folder)
+            if cached is not None:
+                return cached
+            return await self._count_va_folder(folder)
+
+    async def _count_va_folder(self, folder: str) -> bool:
+        """Cache-miss half of :meth:`_is_va_folder`, under its key lock."""
         try:
             n_artists = await self.db_manager.count_distinct_artists_in_folder(folder)
             n_tracks = await self.db_manager.count_tracks_in_folder(folder)
@@ -370,38 +410,50 @@ class FilesystemFallbackPlugin(EnricherPlugin):
         # Get filename without extension
         filename = os.path.splitext(path_parts[-1])[0]
 
-        # Extract track number and clean title from filename
-        track_number, title, artist_from_filename = (
-            self._extract_track_number_and_title(filename)
-        )
-
-        # Handle album and artist based on path depth within music folder
+        # Read the album folder first: whether it names an artist decides how
+        # a dash inside the filename is read.
         album_title = None
-        artist_name = artist_from_filename  # Prioritize artist from filename
-
+        artist_from_folder = None
         if len(path_parts) >= 2:
             # At least one folder level: treat second-to-last as album folder
             album_folder = path_parts[-2]
             album_title, artist_from_folder = self._parse_album_folder(album_folder)
 
-            # If no artist from filename, use artist from album folder
-            if not artist_name:
-                artist_name = artist_from_folder
+        # A folder that names its artist ("В.Цой - Черный альбом") speaks for
+        # every file inside it, so a dash in one filename belongs to the title
+        # ("2.Красно - желтые дни") rather than introducing a second artist.
+        # A various-artists folder is the exception: there the per-file
+        # "Artist - Title" is the only place an artist is named.
+        allow_artist_split = not artist_from_folder or is_various_artists_name(
+            artist_from_folder
+        )
 
-            # If still no artist and we have another folder level, use it as artist
-            if not artist_name and len(path_parts) >= 3:
-                artist_name = path_parts[-3]
+        track_number, title, artist_from_filename = (
+            self._extract_track_number_and_title(filename, allow_artist_split)
+        )
+
+        artist_name = artist_from_filename or artist_from_folder
+
+        # If still no artist and we have another folder level, use it as artist
+        if not artist_name and len(path_parts) >= 3:
+            artist_name = path_parts[-3]
+
+        # Path-derived text gets the same repairs indexed tags do (mojibake,
+        # entities, dotted abbreviations) — all three names, so what this
+        # returns is already the form the library will store.
+        def repaired(text: str) -> str:
+            return repair_tag_text(text, self.config.legacy_tag_encoding)
 
         metadata = {
-            "title": title if title else filename,
+            "title": repaired(title if title else filename),
             "track_number": track_number,
         }
 
         if album_title:
-            metadata["album"] = album_title
+            metadata["album"] = repaired(album_title)
 
         if artist_name:
-            metadata["artist"] = artist_name
+            metadata["artist"] = repaired(artist_name)
 
         logger.debug(
             f"Extracted metadata from {file_path} (relative: {relative_path}): {metadata}"

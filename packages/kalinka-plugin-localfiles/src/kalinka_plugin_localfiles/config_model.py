@@ -251,6 +251,19 @@ class EnricherConfig(BaseModel):
     enabled: bool = Field(
         default=True, title="Enable enricher", json_schema_extra=_SIMPLE,
     )
+    concurrency: int = Field(
+        default=6,
+        title="Parallel lookups",
+        json_schema_extra={
+            "help": (
+                "How many artists, albums or tracks to look up at once. "
+                "Higher values hide the wait between metadata requests, but "
+                "each service still enforces its own rate limit, so raising "
+                "this past a handful buys little."
+            ),
+            "constraints": {"min": 1, "max": 16},
+        },
+    )
     plugins: PluginsConfig = Field(
         default_factory=PluginsConfig, title="Enrichment plugins"
     )
@@ -318,6 +331,18 @@ class LocalFilesConfig(ModuleConfig):
             **_PROMPT,
         },
     )
+    legacy_tag_encoding: str = Field(
+        default="",
+        title="Legacy tag encoding",
+        json_schema_extra={
+            "help": (
+                "Codepage that repairs garbled tags written by old taggers, "
+                "e.g. cp1251 for Cyrillic ('ÐÓÊÈ ÂÂÅÐÕ' -> 'РУКИ ВВЕРХ'). "
+                "Leave empty to disable; UTF-8 mojibake is always repaired."
+            ),
+            **_SIMPLE,
+        },
+    )
     quiescence_seconds: int = Field(
         default=5,
         title="Upload quiescence window",
@@ -338,7 +363,9 @@ class LocalFilesConfig(ModuleConfig):
         json_schema_extra={
             "help": (
                 "Purge the index and artwork cache and rescan all files on the "
-                "next server restart. Resets itself once done."
+                "next server restart. Finished AI audio analysis is kept and "
+                "reused; it re-runs only when the AI model changes. Resets "
+                "itself once done."
             ),
             # One-shot trigger: the framework resets this (persist-first)
             # before the plugin acts, so it fires at most once per arming.

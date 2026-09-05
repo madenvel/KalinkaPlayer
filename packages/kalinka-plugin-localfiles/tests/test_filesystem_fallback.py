@@ -158,6 +158,79 @@ class TestNoSpaceDotPrefix:
         assert updates["track_number"] == 1
 
 
+class TestUnspacedDashSplit:
+    """An unspaced dash splits "Artist-Title" only before an uppercase
+    letter — a hyphenated title must stay whole."""
+
+    def test_hyphenated_title_not_split(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "Красно-желтые дни"
+        )
+        assert artist is None
+        assert title == "Красно-желтые дни"
+
+    def test_unspaced_artist_title_still_splits(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "Кино-Пачка сигарет"
+        )
+        assert artist == "Кино"
+        assert title == "Пачка сигарет"
+
+    def test_spaced_dash_splits_regardless_of_case(self, plugin):
+        num, title, artist = plugin._extract_track_number_and_title(
+            "Pink Floyd - one of these days"
+        )
+        assert artist == "Pink Floyd"
+        assert title == "one of these days"
+
+
+class TestFolderArtistBeatsFilenameDash:
+    """A folder that names its artist speaks for every file in it, so a dash
+    inside a filename is part of the title, not a second artist. Without this
+    "В.Цой - Черный альбом/2.Красно - желтые дни.flac" was filed under an
+    artist "Красно" with the title "желтые дни"."""
+
+    def test_dashed_title_keeps_folder_artist(self, plugin):
+        metadata = plugin._extract_metadata_from_path(
+            "/home/user/Music/В.Цой - Черный альбом/2.Красно - желтые дни.flac"
+        )
+        assert metadata["artist"] == "В. Цой"
+        assert metadata["title"] == "Красно - желтые дни"
+        assert metadata["album"] == "Черный альбом"
+        assert metadata["track_number"] == 2
+
+    def test_undashed_sibling_is_unaffected(self, plugin):
+        metadata = plugin._extract_metadata_from_path(
+            "/home/user/Music/В.Цой - Черный альбом/1.Кончится лето.flac"
+        )
+        assert metadata["artist"] == "В. Цой"
+        assert metadata["title"] == "Кончится лето"
+
+    def test_folder_without_artist_still_splits(self, plugin):
+        """The V/A dump case: nothing else names an artist, so the filename
+        must."""
+        metadata = plugin._extract_metadata_from_path(
+            "/home/user/Music/Best of 2020/Pink Floyd - Time.mp3"
+        )
+        assert metadata["artist"] == "Pink Floyd"
+        assert metadata["title"] == "Time"
+
+    def test_various_artists_folder_still_splits(self, plugin):
+        """"Various Artists" is a placeholder, not an artist, so per-file
+        naming keeps its say."""
+        metadata = plugin._extract_metadata_from_path(
+            "/home/user/Music/Various Artists - Summer Hits/Pink Floyd - Time.mp3"
+        )
+        assert metadata["artist"] == "Pink Floyd"
+        assert metadata["title"] == "Time"
+
+    def test_va_shorthand_folder_still_splits(self, plugin):
+        metadata = plugin._extract_metadata_from_path(
+            "/home/user/Music/VA - Summer Hits/Pink Floyd - Time.mp3"
+        )
+        assert metadata["artist"] == "Pink Floyd"
+
+
 class TestTrackNumberAfterArtistPrefix:
     """A track number after the "Artist - " prefix ("Artist - 01.Title")
     is still parsed — the number sits mid-filename, not at the start."""
