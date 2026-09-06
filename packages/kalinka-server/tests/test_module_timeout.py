@@ -18,7 +18,7 @@ class SlowModule(InputModule):
         await asyncio.sleep(30)
         raise AssertionError("unreachable")
 
-    async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
+    async def browse(self, entity_id, offset=0, limit=50, filter=None):
         return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
 
     # Not part of the InputModule protocol — the server calls this via

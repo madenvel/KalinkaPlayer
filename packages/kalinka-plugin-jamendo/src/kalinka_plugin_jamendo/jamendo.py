@@ -22,13 +22,22 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
     FavoriteIds,
-    GenreList,
     Owner,
     Playlist,
     Preview,
     PreviewContentType,
     PreviewType,
     Track,
+)
+from kalinka_plugin_sdk.filters import (
+    TEXT_FIELD,
+    FilterKind,
+    FilterOp,
+    FilterQuery,
+    FilterSpec,
+    FilterValue,
+    FilterValueList,
+    UnsupportedFilter,
 )
 from kalinka_plugin_sdk.inputmodule import (
     DirectUrl,
@@ -57,6 +66,102 @@ MAX_LIMIT = 200
 # window is wide enough that offset pagination never runs dry: a 6-month window
 # holds well over MAX_LIMIT albums.
 NEW_RELEASES_WINDOW_DAYS = 180
+
+# Jamendo publishes no tag list, so this is the vocabulary we offer: the genres
+# its own tracks actually carry, by frequency over a sample of the popular and
+# recent catalog. Slugs are what the API matches; the labels are ours.
+GENRES = [
+    ("pop", "Pop"),
+    ("electronic", "Electronic"),
+    ("rock", "Rock"),
+    ("dance", "Dance"),
+    ("indie", "Indie"),
+    ("ambient", "Ambient"),
+    ("folk", "Folk"),
+    ("synthpop", "Synth-pop"),
+    ("hiphop", "Hip-hop"),
+    ("electronica", "Electronica"),
+    ("filmscore", "Film score"),
+    ("singersongwriter", "Singer-songwriter"),
+    ("rnb", "R&B"),
+    ("electropop", "Electropop"),
+    ("poprock", "Pop rock"),
+    ("synthwave", "Synthwave"),
+    ("soul", "Soul"),
+    ("funk", "Funk"),
+    ("chillout", "Chillout"),
+    ("newage", "New age"),
+    ("lofi", "Lo-fi"),
+    ("rap", "Rap"),
+    ("jazz", "Jazz"),
+    ("classical", "Classical"),
+    ("world", "World"),
+    ("country", "Country"),
+    ("indierock", "Indie rock"),
+    ("house", "House"),
+    ("drumnbass", "Drum & bass"),
+    ("rocknroll", "Rock & roll"),
+    ("dreampop", "Dream pop"),
+    ("hardrock", "Hard rock"),
+    ("experimental", "Experimental"),
+    ("indiepop", "Indie pop"),
+    ("easylistening", "Easy listening"),
+    ("punk", "Punk"),
+    ("disco", "Disco"),
+    ("metal", "Metal"),
+    ("reggae", "Reggae"),
+    ("blues", "Blues"),
+]
+
+# ``tags`` is honoured by /tracks/ alone — /albums/, /artists/ and /playlists/
+# drop it and say so in headers.warnings — and multiple tags intersect rather
+# than union, which is what ops says.
+GENRE_FILTER = FilterSpec(
+    id="genre",
+    kind=FilterKind.VALUES,
+    label="Genre",
+    ops=[FilterOp.ALL],
+)
+
+
+def _text_filter(what: str) -> FilterSpec:
+    """``namesearch`` matches the entity's own name and nothing else, so the
+    label says which name it is."""
+    return FilterSpec(id=TEXT_FIELD, kind=FilterKind.TEXT, label=f"Search {what}")
+
+
+SHELF_FILTERS = {
+    "popular-tracks": [_text_filter("track names"), GENRE_FILTER],
+    "popular-albums": [_text_filter("album names")],
+    "new-releases": [_text_filter("album names")],
+    "popular-artists": [_text_filter("artist names")],
+    "featured-playlists": [_text_filter("playlist names")],
+}
+
+
+def _shelf_params(endpoint: str, filter: FilterQuery) -> dict:
+    """The filter as Jamendo query parameters, refusing what this shelf never
+    offered."""
+    declared = SHELF_FILTERS.get(endpoint, [])
+    declared_ids = {spec.id for spec in declared}
+    filter.reject_undeclared(declared_ids)
+
+    params: dict = {}
+    text = filter.text() if TEXT_FIELD in declared_ids else ""
+    if text:
+        params["namesearch"] = text
+
+    genres = (
+        filter.values(GENRE_FILTER.id) if GENRE_FILTER.id in declared_ids else None
+    )
+    if genres:
+        if genres.any or genres.none:
+            raise UnsupportedFilter(
+                GENRE_FILTER.id, "this source can only require every genre at once"
+            )
+        params["tags"] = " ".join(genres.all)
+    return params
+
 
 FORMAT_CODE = {
     "MP3 (VBR ~V0)": "mp32",
@@ -342,7 +447,6 @@ def _album_tracks_section(aid: str) -> BrowseItem:
         catalog=Catalog(
             id=album_id(aid),
             title="Tracks",
-            can_genre_filter=False,
             preview_config=Preview(
                 type=PreviewType.TILE_NUMBERED,
                 content_type=PreviewContentType.TRACK,
@@ -364,7 +468,6 @@ def _artist_albums_section(aid: str) -> BrowseItem:
         catalog=Catalog(
             id=artist_id(aid),
             title="Albums",
-            can_genre_filter=False,
             preview_config=Preview(
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.ALBUM,
@@ -386,7 +489,6 @@ def _playlist_tracks_section(pid: str) -> BrowseItem:
         catalog=Catalog(
             id=playlist_id(pid),
             title="Tracks",
-            can_genre_filter=False,
             preview_config=Preview(
                 type=PreviewType.TILE,
                 content_type=PreviewContentType.TRACK,
@@ -531,17 +633,20 @@ class JamendoInputModule(InputModule):
         entity_id: EntityId,
         offset: PositiveInt = 0,
         limit: PositiveInt = 50,
-        genre_ids: List[EntityId] = [],
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
         limit = min(limit, MAX_LIMIT)
+        if entity_id.type == EntityType.CATALOG:
+            return await self._browse_catalog(entity_id.id, offset, limit, filter)
+
+        # These listings declare no filters, so a field sent to one is refused.
+        filter.reject_undeclared(())
         if entity_id.type == EntityType.ALBUM:
             return await self._browse_album(entity_id.id, offset, limit)
         elif entity_id.type == EntityType.ARTIST:
             return await self._browse_artist(entity_id.id, offset, limit)
         elif entity_id.type == EntityType.PLAYLIST:
             return await self._browse_playlist(entity_id.id, offset, limit)
-        elif entity_id.type == EntityType.CATALOG:
-            return await self._browse_catalog(entity_id.id, offset, limit)
         return EmptyList(offset, limit)
 
     async def _browse_album(
@@ -604,8 +709,16 @@ class JamendoInputModule(InputModule):
         )
 
     async def _browse_catalog(
-        self, endpoint: str, offset: int, limit: int
+        self,
+        endpoint: str,
+        offset: int,
+        limit: int,
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
+        # Narrowed before anything is listed, so an undeclared field is
+        # refused rather than dropped; the shelf keeps its own order either way.
+        narrowing = _shelf_params(endpoint, filter)
+
         if endpoint == "root":
             return self._root_catalog(offset, limit)
         elif endpoint == "popular-tracks":
@@ -616,13 +729,19 @@ class JamendoInputModule(InputModule):
                     "offset": offset,
                     "limit": limit,
                     "audioformat": self.audio_format,
+                    **narrowing,
                 },
             )
             items = self._tracks_to_browse_items(results)
         elif endpoint == "popular-albums":
             results = await self.client.request(
                 "albums",
-                {"order": "popularity_month", "offset": offset, "limit": limit},
+                {
+                    "order": "popularity_month",
+                    "offset": offset,
+                    "limit": limit,
+                    **narrowing,
+                },
             )
             items = self._albums_to_browse_items(results)
         elif endpoint == "new-releases":
@@ -635,19 +754,30 @@ class JamendoInputModule(InputModule):
                     "offset": offset,
                     "limit": limit,
                     "datebetween": f"{since.isoformat()}_{today.isoformat()}",
+                    **narrowing,
                 },
             )
             items = self._albums_to_browse_items(results)
         elif endpoint == "popular-artists":
             results = await self.client.request(
                 "artists",
-                {"order": "popularity_total", "offset": offset, "limit": limit},
+                {
+                    "order": "popularity_total",
+                    "offset": offset,
+                    "limit": limit,
+                    **narrowing,
+                },
             )
             items = self._artists_to_browse_items(results)
         elif endpoint == "featured-playlists":
             results = await self.client.request(
                 "playlists",
-                {"order": "creationdate_desc", "offset": offset, "limit": limit},
+                {
+                    "order": "creationdate_desc",
+                    "offset": offset,
+                    "limit": limit,
+                    **narrowing,
+                },
             )
             items = self._playlists_to_browse_items(results)
         else:
@@ -719,7 +849,7 @@ class JamendoInputModule(InputModule):
                     id=catalog_id(slug),
                     title=title,
                     description=description,
-                    can_genre_filter=False,
+                    filters=SHELF_FILTERS.get(slug, []),
                     preview_config=Preview(
                         type=ptype,
                         content_type=ctype,
@@ -1007,9 +1137,33 @@ class JamendoInputModule(InputModule):
     async def remove_from_favorite(self, id: str):
         logger.warning("Favorites are not supported in the Jamendo input module")
 
-    async def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
-        # Jamendo has no genre taxonomy — it uses free-form tags.
-        return GenreList(offset=offset, limit=limit, total=0, items=[])
+    async def list_filter_values(
+        self,
+        catalog_id: EntityId,
+        field: str,
+        offset: int = 0,
+        limit: int = 50,
+        q: str = "",
+    ) -> FilterValueList:
+        declared = SHELF_FILTERS.get(catalog_id.id, [])
+        if field != GENRE_FILTER.id or not any(spec.id == field for spec in declared):
+            raise UnsupportedFilter(field, "no such vocabulary here")
+
+        needle = q.casefold()
+        matching = [
+            (slug, label)
+            for slug, label in GENRES
+            if not needle or needle in label.casefold() or needle in slug
+        ]
+        return FilterValueList(
+            offset=offset,
+            limit=limit,
+            total=len(matching),
+            items=[
+                FilterValue(id=slug, name=label)
+                for slug, label in matching[offset : offset + limit]
+            ],
+        )
 
     async def playlist_user_list(
         self, offset: int = 0, limit: int = 25

@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 class KalinkaPluginJamendo(InputModulePlugin):
-    # 1.2 introduced the shared text embedder (context.embedder) that
-    # ai_search's query encoding depends on. Keep in sync with pyproject's
-    # kalinka-plugin-sdk pin.
-    REQUIRES_SDK = ">=2,<3"
+    # 3 replaced the genre API with the filter contract this module
+    # declares. Keep in sync with pyproject's kalinka-plugin-sdk pin.
+    REQUIRES_SDK = ">=3,<4"
     PLUGIN_ID = "jamendo"
     CONFIG_MODEL = JamendoConfig
 

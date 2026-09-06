@@ -155,7 +155,7 @@ class _FakeModule:
         self._children = children
         self._covers = cover_bytes_by_resource or {}
 
-    async def browse(self, entity_id, offset=0, limit=10, genre_ids=None):
+    async def browse(self, entity_id, offset=0, limit=10, filter=None):
         return BrowseItemList(
             offset=0, limit=limit, total=len(self._children), items=self._children
         )
