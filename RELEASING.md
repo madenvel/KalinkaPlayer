@@ -36,6 +36,23 @@ no effect.
 
 ---
 
+## When to release
+
+SemVer picks the digit, the calendar picks the date. Keep those two decisions apart: a week that produced one feature is still a MINOR even if it merged the day after a release, and a week of nothing but fixes is still a PATCH even when the window comes round. The moment the calendar starts choosing the number, the number stops meaning anything.
+
+| Line | How often |
+|------|-----------|
+| **App bundle** (`kalinka-v*`) | At most weekly. Finished work waits for the window. |
+| **Renderer** (`kalinka-renderer-v*`) | Only when renderer code changes — no schedule. |
+| **SDK** | Not a release at all: bump it in the commit that changes the API. |
+
+- **App bundle — a weekly ceiling, not a weekly quota.** Every release is an `install-release.sh` run for every user, so four releases in a week is four interruptions carrying value they would have taken in one. Nothing says you must ship each week; the rule only caps how often. Between windows `main` accumulates unreleased work, which is fine as long as `main` stays releasable — that is the standing cost of holding the line.
+- **A defect that is hurting users in the field ships immediately**, as a PATCH, window or no window. Having that escape hatch is exactly what makes the weekly ceiling comfortable to hold for everything else.
+- **The renderer is deliberately rarer.** Upgrading it restarts playback on the device, so it moves only when its own code changes and never merely to keep pace with a server release. When a change spans both, release the renderer first so no renderer is left talking to a server it cannot understand.
+- **The SDK is a contract identifier, not a shipping event.** It costs one line and triggers no CI, so batching bumps saves nothing and risks the one thing the number is for: `make build-all-deb` publishes `kalinka-plugin-sdk_<version>_all.deb` on every app release, and shipping two different APIs under one version leaves plugin authors unable to pin the difference. Bumping in the same commit as the API change also means it can never be forgotten.
+
+---
+
 ## Release the app bundle (server + plugins)
 
 1. Make sure `main` is at the commit you want to ship and the working tree is
@@ -141,7 +158,7 @@ so you never edit the version in two places.
 ### Minor or patch (backwards compatible — e.g. `1.0.0` → `1.1.0`)
 Added an API, fixed a bug, nothing removed/changed:
 
-1. Edit `__version__` in `_version.py`.
+1. Edit `__version__` in `_version.py` — in the same commit as the API change, not as a later release chore ([When to release](#when-to-release)).
 2. Done. Consumers pin `>=1,<2`, which already accepts it — **no plugin
    changes, no re-pinning, no rebuild required**. Existing plugins keep working.
 
@@ -206,6 +223,7 @@ make build-all-deb
 
 - **One tag per app release** (`kalinka-v*`). Never tag individual packages —
   the renderer is the one exception, with its own `kalinka-renderer-v*` train.
+- **SemVer picks the digit, the calendar picks the date** — see [When to release](#when-to-release).
 - **Clean tree on the tagged commit**, or the version carries a dev/dirty suffix.
 - **SDK = one constant.** Minor/patch touches only `_version.py`; major also
   widens the four `>=1,<2` consumer pins.
