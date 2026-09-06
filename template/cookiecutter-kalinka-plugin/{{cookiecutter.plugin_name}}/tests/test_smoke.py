@@ -175,7 +175,7 @@ def test_module_setup_constants():
         "get_favorite_ids",
         "add_to_favorite",
         "remove_from_favorite",
-        "list_genre",
+        "list_filter_values",
         "get",
         "playlist_user_list",
         "playlist_create",

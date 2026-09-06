@@ -3,6 +3,7 @@ import re
 import shutil
 import sqlite3
 import logging
+from dataclasses import dataclass
 from typing import List, Dict, Optional, Any, Tuple
 import time
 from pathlib import Path
@@ -36,6 +37,110 @@ def _sql_fold(value: Optional[str]) -> str:
     """SQLite-callable match-fold (see :func:`fold_for_match`). Registered as a
     deterministic ``fold`` function on every connection."""
     return fold_for_match(value)
+
+
+# Tag writers separate multiple genres with any of these.
+_GENRE_SPLIT_RE = re.compile(r"[,;/|]")
+
+
+def split_genres(value: Optional[str]) -> List[str]:
+    """The genres a tag string holds, folded to their match form.
+
+    One definition serves both the vocabulary and the matching, so a value the
+    filter list offers is always a value the filter can find.
+    """
+    if not value:
+        return []
+    parts = (fold_for_match(part) for part in _GENRE_SPLIT_RE.split(value))
+    return [part for part in parts if part]
+
+
+def _sql_has_genre(value: Optional[str], wanted: str) -> int:
+    """SQLite-callable ``genre`` membership, registered as ``has_genre``.
+    A substring ``LIKE`` would match ``rock`` inside ``rocksteady``."""
+    return 1 if wanted in split_genres(value) else 0
+
+
+@dataclass(frozen=True)
+class _KindQuery:
+    """How one entity kind is listed.
+
+    One description drives that kind's own page, its count, and its slice of
+    the library's mixed listing, so the three can never disagree about what
+    the kind is or what narrows it.
+
+    ``genre_predicate`` holds exactly one ``?`` testing a single genre against
+    the row; a kind that carries no genre still consumes the parameter and
+    matches nothing.
+    """
+
+    columns: str
+    source: str
+    id_expr: str
+    ts_expr: str
+    text_fields: Tuple[str, ...]
+    genre_predicate: str
+
+
+KINDS: Dict[str, _KindQuery] = {
+    "track": _KindQuery(
+        columns=(
+            "t.*, a.title as album_title, a.genre as album_genre,"
+            " ar.name as artist_name"
+        ),
+        source=(
+            "tracks t JOIN albums a ON t.album_id = a.id"
+            " JOIN artists ar ON t.artist_id = ar.id"
+        ),
+        id_expr="t.id",
+        ts_expr="t.last_updated",
+        text_fields=("fold(t.title)", "fold(a.title)", "fold(ar.name)"),
+        genre_predicate="has_genre(a.genre, ?)",
+    ),
+    "album": _KindQuery(
+        columns="a.*, ar.name as artist_name",
+        source="albums a JOIN artists ar ON a.artist_id = ar.id",
+        id_expr="a.id",
+        ts_expr="a.last_updated",
+        text_fields=("fold(a.title)", "fold(ar.name)"),
+        genre_predicate="has_genre(a.genre, ?)",
+    ),
+    "artist": _KindQuery(
+        columns="ar.*",
+        source="artists ar",
+        id_expr="ar.id",
+        ts_expr="ar.last_updated",
+        text_fields=("fold(ar.name)",),
+        # An artist carries no genre of its own: theirs is their albums'.
+        genre_predicate=(
+            "EXISTS (SELECT 1 FROM albums alg"
+            " WHERE alg.artist_id = ar.id AND has_genre(alg.genre, ?))"
+        ),
+    ),
+    "playlist": _KindQuery(
+        columns="p.*",
+        source="playlists p",
+        id_expr="p.id",
+        ts_expr="p.last_updated",
+        text_fields=("fold(p.name)", "fold(p.description)"),
+        genre_predicate="has_genre(NULL, ?)",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ListingFilter:
+    """What a browse asked a listing to narrow to.
+
+    Stated in this layer's own terms rather than the SDK's, so the query layer
+    stays a query layer and the module translates once. Genre values are match
+    forms (see :func:`split_genres`).
+    """
+
+    text: str = ""
+    genre_any: Tuple[str, ...] = ()
+    genre_all: Tuple[str, ...] = ()
+    genre_none: Tuple[str, ...] = ()
 
 
 class LocalFilesInputModuleDb:
@@ -186,6 +291,7 @@ class LocalFilesInputModuleDb:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.create_function("fold", 1, _sql_fold, deterministic=True)
+        conn.create_function("has_genre", 2, _sql_has_genre, deterministic=True)
         return conn
 
     def _is_database_functional(self) -> Dict[str, Any]:
@@ -452,6 +558,85 @@ class LocalFilesInputModuleDb:
         params = [f"%{t}%" for t in tokens for _ in fields]
         return clause, params
 
+    @staticmethod
+    def _genre_where(filter: ListingFilter, predicate: str) -> Tuple[str, List[str]]:
+        """WHERE clause for the genre part of ``filter``.
+
+        ``predicate`` is a SQL fragment holding one ``?`` that tests a single
+        genre against the row — ``has_genre(a.genre, ?)`` for a listing that
+        joins albums, an EXISTS over albums for one that does not."""
+        clauses: List[str] = []
+        params: List[str] = []
+        if filter.genre_any:
+            clauses.append(
+                "(" + " OR ".join(predicate for _ in filter.genre_any) + ")"
+            )
+            params.extend(filter.genre_any)
+        for genre in filter.genre_all:
+            clauses.append(predicate)
+            params.append(genre)
+        if filter.genre_none:
+            clauses.append(
+                "NOT (" + " OR ".join(predicate for _ in filter.genre_none) + ")"
+            )
+            params.extend(filter.genre_none)
+        if not clauses:
+            return "1=1", []
+        return " AND ".join(clauses), params
+
+    @classmethod
+    def _listing_where(
+        cls,
+        filter: ListingFilter,
+        text_fields: Tuple[str, ...],
+        genre_predicate: str,
+    ) -> Tuple[str, List[str]]:
+        """WHERE clause narrowing a listing to ``filter``: every constraint
+        must hold, which is what makes a filtered listing's COUNT the same
+        query as its page."""
+        text_clause, params = cls._token_where(filter.text, text_fields)
+        genre_clause, genre_params = cls._genre_where(filter, genre_predicate)
+        return f"({text_clause}) AND ({genre_clause})", params + genre_params
+
+    def list_album_genres(
+        self, offset: int = 0, limit: int = 50, q: str = ""
+    ) -> Tuple[List[Tuple[str, str, int]], int]:
+        """The library's own genre vocabulary: (match form, display name, album
+        count), most albums first.
+
+        Uncurated by design — the values are the user's tags, so ``Electro`` and
+        ``Electronic`` stay two entries. The display name is the spelling most
+        albums use."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT genre FROM albums WHERE genre IS NOT NULL AND genre != ''"
+            )
+            counts: Dict[str, int] = {}
+            spellings: Dict[str, Dict[str, int]] = {}
+            for row in cursor.fetchall():
+                raw_parts = _GENRE_SPLIT_RE.split(row["genre"])
+                for raw in raw_parts:
+                    folded = fold_for_match(raw)
+                    if not folded:
+                        continue
+                    counts[folded] = counts.get(folded, 0) + 1
+                    seen = spellings.setdefault(folded, {})
+                    display = raw.strip()
+                    seen[display] = seen.get(display, 0) + 1
+        finally:
+            conn.close()
+
+        needle = fold_for_match(q)
+        values = [
+            (folded, max(spellings[folded].items(), key=lambda kv: kv[1])[0], count)
+            for folded, count in counts.items()
+            if not needle or needle in folded
+        ]
+        values.sort(key=lambda value: (-value[2], value[0]))
+        return values[offset : offset + limit], len(values)
+
     def search_tracks(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> Tuple[List[Dict], int]:
@@ -563,86 +748,113 @@ class LocalFilesInputModuleDb:
         finally:
             conn.close()
 
-    def get_all_albums(
-        self, offset: int = 0, limit: int = 50
+    def list_kind(
+        self,
+        kind: str,
+        offset: int = 0,
+        limit: int = 50,
+        filter: Optional[ListingFilter] = None,
     ) -> Tuple[List[Dict], int]:
-        """Get all albums"""
+        """One page of a single kind's listing, and how many it has in all.
+
+        The page and the count come from one WHERE, which is what keeps
+        pagination meaningful under a filter. Ties on the timestamp are broken
+        by id so a row cannot cross pages between requests.
+        """
+        query = KINDS[kind]
+        where, params = self._listing_where(
+            filter or ListingFilter(), query.text_fields, query.genre_predicate
+        )
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-
-            # Get total count
-            cursor.execute("SELECT COUNT(*) as count FROM albums")
+            cursor.execute(
+                f"SELECT COUNT(*) as count FROM {query.source} WHERE {where}",
+                params,
+            )
             total = cursor.fetchone()["count"]
 
-            # Get results
             cursor.execute(
-                """
-                SELECT a.*, ar.name as artist_name
-                FROM albums a
-                JOIN artists ar ON a.artist_id = ar.id
-                ORDER BY a.last_updated DESC
+                f"""
+                SELECT {query.columns} FROM {query.source}
+                WHERE {where}
+                ORDER BY {query.ts_expr} DESC, {query.id_expr}
                 LIMIT ? OFFSET ?
-            """,
-                (limit, offset),
+                """,
+                (*params, limit, offset),
             )
-
             return [dict(row) for row in cursor.fetchall()], total
         finally:
             conn.close()
 
-    def get_all_artists(
-        self, offset: int = 0, limit: int = 50
-    ) -> Tuple[List[Dict], int]:
-        """Get all artists"""
+    def get_kind_total(self, kind: str, filter: Optional[ListingFilter] = None) -> int:
+        """How many of ``kind`` the filter leaves, fetching no rows."""
+        return self.list_kind(kind, 0, 0, filter)[1]
+
+    def get_library_listing(
+        self,
+        kinds: Tuple[str, ...] = (),
+        offset: int = 0,
+        limit: int = 50,
+        filter: Optional[ListingFilter] = None,
+    ) -> Tuple[List[Tuple[str, Dict]], int]:
+        """The library as one listing: every kind in ``kinds`` interleaved by
+        recency, newest first, as ``(kind, row)`` pairs. Empty ``kinds`` means
+        all of them.
+
+        Each kind is narrowed by the same filter in its own terms, so one text
+        query reaches a track's title, an album's title and an artist's name at
+        once. Ordering across kinds needs no full rows, so identity is paged
+        first and only the page is materialised.
+        """
+        wanted = tuple(kinds) or tuple(KINDS)
+        filter = filter or ListingFilter()
+
+        branches: List[str] = []
+        params: List[Any] = []
+        for kind in wanted:
+            query = KINDS[kind]
+            where, where_params = self._listing_where(
+                filter, query.text_fields, query.genre_predicate
+            )
+            branches.append(
+                f"SELECT ? AS kind, {query.id_expr} AS id,"
+                f" {query.ts_expr} AS ts FROM {query.source} WHERE {where}"
+            )
+            params.append(kind)
+            params.extend(where_params)
+        union = " UNION ALL ".join(branches)
+
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-
-            # Get total count
-            cursor.execute("SELECT COUNT(*) as count FROM artists")
+            cursor.execute(f"SELECT COUNT(*) as count FROM ({union})", params)
             total = cursor.fetchone()["count"]
 
-            # Get results
             cursor.execute(
-                """
-                SELECT * FROM artists
-                ORDER BY last_updated DESC
-                LIMIT ? OFFSET ?
-            """,
-                (limit, offset),
+                f"{union} ORDER BY ts DESC, kind, id LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             )
+            page = [(row["kind"], row["id"]) for row in cursor.fetchall()]
 
-            return [dict(row) for row in cursor.fetchall()], total
-        finally:
-            conn.close()
+            rows: Dict[Tuple[str, str], Dict] = {}
+            for kind in wanted:
+                ids = [id for k, id in page if k == kind]
+                if not ids:
+                    continue
+                query = KINDS[kind]
+                placeholders = ",".join("?" for _ in ids)
+                cursor.execute(
+                    f"SELECT {query.columns} FROM {query.source}"
+                    f" WHERE {query.id_expr} IN ({placeholders})",
+                    ids,
+                )
+                for row in cursor.fetchall():
+                    rows[(kind, row["id"])] = dict(row)
 
-    def get_recently_added_tracks(
-        self, offset: int = 0, limit: int = 50
-    ) -> Tuple[List[Dict], int]:
-        """Get recently added tracks"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-
-            # Get total count
-            cursor.execute("SELECT COUNT(*) as count FROM tracks")
-            total = cursor.fetchone()["count"]
-
-            # Get results
-            cursor.execute(
-                """
-                SELECT t.*, a.title as album_title, a.genre as album_genre, ar.name as artist_name
-                FROM tracks t
-                JOIN albums a ON t.album_id = a.id
-                JOIN artists ar ON t.artist_id = ar.id
-                ORDER BY t.last_updated DESC
-                LIMIT ? OFFSET ?
-            """,
-                (limit, offset),
-            )
-
-            return [dict(row) for row in cursor.fetchall()], total
+            return [
+                (kind, rows[(kind, id)]) for kind, id in page if (kind, id) in rows
+            ], total
         finally:
             conn.close()
 
@@ -823,55 +1035,6 @@ class LocalFilesInputModuleDb:
             cursor.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
-        finally:
-            conn.close()
-
-    def get_all_playlists(
-        self, offset: int = 0, limit: int = 50, filter_text: Optional[str] = None
-    ) -> Tuple[List[Dict], int]:
-        """Get all playlists, optionally filtered by text in name or description."""
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-
-            if filter_text:
-                filter_value = f"%{filter_text.lower()}%"
-                # Get total count with filter
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) as count FROM playlists
-                    WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?
-                    """,
-                    (filter_value, filter_value),
-                )
-                total = cursor.fetchone()["count"]
-
-                # Get results with filter
-                cursor.execute(
-                    """
-                    SELECT * FROM playlists
-                    WHERE LOWER(name) LIKE ? OR LOWER(description) LIKE ?
-                    ORDER BY last_updated DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    (filter_value, filter_value, limit, offset),
-                )
-            else:
-                # Get total count
-                cursor.execute("SELECT COUNT(*) as count FROM playlists")
-                total = cursor.fetchone()["count"]
-
-                # Get results
-                cursor.execute(
-                    """
-                    SELECT * FROM playlists
-                    ORDER BY last_updated DESC
-                    LIMIT ? OFFSET ?
-                    """,
-                    (limit, offset),
-                )
-
-            return [dict(row) for row in cursor.fetchall()], total
         finally:
             conn.close()
 

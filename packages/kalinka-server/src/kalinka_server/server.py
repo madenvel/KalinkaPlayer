@@ -26,7 +26,6 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
     FavoriteIds,
-    GenreList,
     PlaybackState,
     PlayerStateEnum,
 )
@@ -51,6 +50,7 @@ from .config_schema_processor import (
 )
 from .ai_search import assemble_ai_search
 from .catalog_art_service import CatalogArtService
+from .browse_route import register_browse_routes
 from .content_route import register_content_route
 from .query_router import CatalogRouter
 from .suggestions import SuggestionEngine, SuggestionList
@@ -599,7 +599,6 @@ async def create_app(
                             id=entity_id,
                             title=display_title,
                             image=None,  # Placeholder for catalog image
-                            can_genre_filter=False,
                             description="Kalinka Input Module",
                         ),
                     )
@@ -607,41 +606,12 @@ async def create_app(
 
         return result.model_dump(exclude_unset=True)
 
-    @app.get("/browse/{id}")
-    async def browse_entity(
-        id: str,
-        offset: int = 0,
-        limit: int = 10,
-        genre_ids: List[str] = Query([]),
-    ):
-        """Browse an entity by its ID."""
-        entity_id = parse_entity_id(id)
-
-        try:
-            genre_ids_obj = []
-            for genre_id_str in genre_ids:
-                genre_id_obj = parse_entity_id(genre_id_str)
-                if genre_id_obj.type != EntityType.GENRE:
-                    raise ValueError(
-                        f"Invalid genre_id type: {genre_id_obj.type}, expected GENRE"
-                    )
-                genre_ids_obj.append(genre_id_obj)
-
-            input_module = input_module_from_id(entity_id)
-            result = await input_module.browse(
-                entity_id, offset=offset, limit=limit, genre_ids=genre_ids_obj
-            )
-            app.state.catalog_art.decorate(result)
-            return result.model_dump(exclude_unset=True)
-        except HTTPException:
-            # Re-raise HTTP exceptions as-is
-            raise
-        except Exception as e:
-            # repr, not str: httpx timeout exceptions stringify to "".
-            logger.error(f"Error browsing entity {id}: {e!r}")
-            raise HTTPException(
-                status_code=500, detail=f"Internal server error: {str(e)}"
-            )
+    register_browse_routes(
+        app,
+        input_module_from_id,
+        parse_entity_id,
+        app.state.catalog_art.decorate,
+    )
 
     @app.get("/catalog/art/{file_name}")
     async def get_catalog_art(file_name: str):
@@ -872,21 +842,6 @@ async def create_app(
         input_modules: list[InputModule] = extract_modules(source)
 
         return await get_favorite_ids_merged(modules=input_modules)
-
-    @app.get("/genre/list")
-    async def list_genre(
-        source: Optional[str] = None, offset: int = 0, limit: int = 25
-    ) -> GenreList:
-        genre_list = GenreList(offset=offset, limit=limit, total=0, items=[])
-        for module_name in modules.enabled_input_modules:
-            if (source is not None) and (source != module_name):
-                continue
-            module = modules.prepared_input_modules[module_name]
-            if isinstance(module.interface, InputModule):
-                result = await module.interface.list_genre(offset=offset, limit=limit)
-                genre_list.items.extend(result.items)
-                genre_list.total += result.total
-        return genre_list
 
     @app.get("/get/{entity_id}")
     async def entity_get(entity_id: str):

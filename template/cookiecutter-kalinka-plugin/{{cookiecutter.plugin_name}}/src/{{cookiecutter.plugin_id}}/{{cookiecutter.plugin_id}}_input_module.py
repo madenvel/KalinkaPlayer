@@ -4,9 +4,9 @@ from kalinka_plugin_sdk.datamodel import (
     BrowseItemList,
     EntityId,
     FavoriteIds,
-    GenreList,
     Playlist,
 )
+from kalinka_plugin_sdk.filters import FilterQuery, FilterValueList
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType, TrackInfo
 
 from .config_model import {{ cookiecutter.plugin_class_prefix }}Config
@@ -29,7 +29,7 @@ class {{ cookiecutter.plugin_class_prefix }}InputModule(InputModule):
         entity_id: EntityId,
         offset: int = 0,
         limit: int = 50,
-        genre_ids: List[EntityId] = [],
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
         raise NotImplementedError
 
@@ -50,7 +50,14 @@ class {{ cookiecutter.plugin_class_prefix }}InputModule(InputModule):
     def remove_from_favorite(self, id: str):
         raise NotImplementedError
 
-    def list_genre(self, offset: int, limit: int) -> GenreList:
+    def list_filter_values(
+        self,
+        catalog_id: EntityId,
+        field: str,
+        offset: int = 0,
+        limit: int = 50,
+        q: str = "",
+    ) -> FilterValueList:
         raise NotImplementedError
 
     def get(self, entity_id: EntityId) -> BrowseItem:

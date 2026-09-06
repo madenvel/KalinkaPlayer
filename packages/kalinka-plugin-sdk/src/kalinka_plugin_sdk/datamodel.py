@@ -8,6 +8,8 @@ from pydantic import (
 )
 from enum import Enum
 
+from .filters import FilterSpec
+
 
 class EntityType(str, Enum):
     """
@@ -181,8 +183,11 @@ class PreviewType(str, Enum):
 
 class PreviewContentType(str, Enum):
     """
-    A hint to the UI about the type of content being displayed in the preview section.
-    This helps UI to choose appropriate size, icons and placeholders for the content.
+    What a preview section's items are.
+
+    Consumers use it to size cards, pick placeholders while the items load,
+    and to tell which kind a shelf stands for. Leave it unset where a listing
+    mixes kinds rather than naming one of them.
     """
 
     ALBUM = "album"
@@ -412,7 +417,11 @@ class Catalog(BaseModel):
         id (EntityId): Unique identifier for the catalog
         title (str): Display title for the catalog section
         image (Optional[CoverImage]): Representative image for the catalog
-        can_genre_filter (bool): Whether genre filtering is available
+        filters (List[FilterSpec]): The fields this catalog can be filtered by.
+            Empty means it offers no filtering. A field absent here is one a
+            caller must not send: the module answers such a query with
+            :class:`~kalinka_plugin_sdk.filters.UnsupportedFilter` rather than
+            listing unfiltered.
         description (Optional[str]): Description of the catalog content
         preview_config (Optional[Preview]): Configuration for preview display
         role (Optional[CatalogRole]): Hint for how home/discovery surfaces
@@ -429,7 +438,7 @@ class Catalog(BaseModel):
     id: EntityId
     title: str
     image: Optional[CoverImage] = None
-    can_genre_filter: bool = False
+    filters: List[FilterSpec] = []
     description: Optional[str] = ""
     preview_config: Optional[Preview] = None
     role: Optional[CatalogRole] = None
@@ -478,7 +487,13 @@ class BrowseItem(BaseModel):
         catalog (Optional[Catalog]): Catalog data if this represents a catalog section
         track (Optional[Track]): Track data if this represents a track
         timestamp (NonNegativeInt): Used for sorting/merging items by time
-        sections (Optional[List[BrowseItem]]): Related content sections
+        sections (Optional[List[BrowseItem]]): Related content shown alongside
+            this item — "Similar albums", or the shelves a catalog is made of.
+            A section carrying a ``catalog`` is a pointer: browse its id for
+            the items, which is what lets a consumer show one shelf per kind
+            and fill each lazily. A section carrying anything else is an item
+            to render inline. Browsing the owning catalog itself answers
+            items, never these sections.
 
     Examples:
         # Track item
@@ -527,9 +542,6 @@ class BrowseItem(BaseModel):
     # Used for merging multiple items into a single view
     timestamp: NonNegativeInt = 0
 
-    # Used for additional catalog sections to display alongside the current item
-    # Examples: "Similar albums", "From the same artist", "Recommended" etc.
-    # Not to be used for preview content in the root catalog
     sections: Optional[List["BrowseItem"]] = None
 
 
@@ -585,23 +597,6 @@ class FavoriteIds(BaseModel):
     artists: List[EntityId] = []
     tracks: List[EntityId] = []
     playlists: List[EntityId] = []
-
-
-class GenreList(BaseModel):
-    """
-    Paginated list of genre items.
-
-    Attributes:
-        offset (int): Starting position in the full genre list
-        limit (int): Maximum number of genres in this response
-        total (int): Total number of genres available
-        items (List[Genre]): The genre items for this page
-    """
-
-    offset: int
-    limit: int
-    total: int
-    items: List[Genre]
 
 
 class VolumeBackend(str, Enum):

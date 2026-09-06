@@ -118,7 +118,7 @@ def _format_root_status(
 
 
 class KalinkaPluginLocalFiles(InputModulePlugin):
-    REQUIRES_SDK = ">=2,<3"
+    REQUIRES_SDK = ">=3,<4"
     PLUGIN_ID = "localfiles"
     CONFIG_MODEL = LocalFilesConfig
     OPTIONAL_PACKAGES: ClassVar[dict[str, OptionalPackageSpec]] = OPTIONAL_PACKAGES

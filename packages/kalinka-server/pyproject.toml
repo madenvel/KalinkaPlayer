@@ -51,9 +51,9 @@ dependencies = [
     # Renderer protocol (renderer_ws_handler.py). The committed generated
     # bindings (renderer_proto/) pin the runtime floor; `make proto` regenerates.
     "protobuf>=7.35,<8",
-    # >=2.0.0: a track names a TrackSource — a module-owned asset this server
-    # serves, or a direct URL — where it used to carry a URL of its own.
-    "kalinka-plugin-sdk>=2.0.0,<3",
+    # >=3.0.0: browse takes a filter document and a catalog declares the
+    # fields it accepts, replacing the genre endpoint this server exposed.
+    "kalinka-plugin-sdk>=3.0.0,<4",
 ]
 dynamic = ["version"]
 

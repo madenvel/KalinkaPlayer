@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "kalinka-plugin-sdk>=2,<3",
+    "kalinka-plugin-sdk>=3,<4",
 ]
 
 [project.optional-dependencies]

@@ -76,7 +76,7 @@ class RoutableModule(FakeModule):
     def display_name(self) -> str:
         return self._display
 
-    async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
+    async def browse(self, entity_id, offset=0, limit=50, filter=None):
         if entity_id.id == "root":
             items = list(self._shelves)
         else:
@@ -234,7 +234,7 @@ async def test_empty_shelf_is_dropped():
     # A shelf that browses empty (e.g. an empty library) carries no preview,
     # so it must not be returned as a blank card the feed would drop anyway.
     class EmptyPreviewModule(RoutableModule):
-        async def browse(self, entity_id, offset=0, limit=50, genre_ids=[]):
+        async def browse(self, entity_id, offset=0, limit=50, filter=None):
             if entity_id.id == "root":
                 return await super().browse(entity_id, offset, limit)
             return BrowseItemList(offset=offset, limit=limit, total=0, items=[])

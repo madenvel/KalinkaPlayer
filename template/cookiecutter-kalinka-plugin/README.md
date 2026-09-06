@@ -152,7 +152,7 @@ Edit `src/your_plugin/your_plugin_input_module.py` and implement:
 - `get_favorite_ids()` - Get all favorite IDs
 - `add_to_favorite()` - Add items to favorites
 - `remove_from_favorite()` - Remove items from favorites
-- `list_genre()` - List available genres
+- `list_filter_values()` - List the values of one catalog filter field
 - `get()` - Get specific entity by ID
 - `playlist_user_list()` - List user playlists
 - `playlist_create()` - Create new playlist

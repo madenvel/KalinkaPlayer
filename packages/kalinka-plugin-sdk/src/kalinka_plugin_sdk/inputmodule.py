@@ -11,9 +11,9 @@ from .datamodel import (
     Track,
     BrowseItemList,
     FavoriteIds,
-    GenreList,
     EmptyList,
 )
+from .filters import FilterQuery, FilterValueList
 
 
 class SourceUnavailableError(RuntimeError):
@@ -150,7 +150,7 @@ class InputModule(Protocol):
     - Managing user favorites
     - Handling playlists
     - Providing track metadata and playback sources
-    - Managing genres and categorization
+    - Declaring what its catalogs can be filtered by, and honouring it
 
     Latency contract: every call into this interface serves a real-time
     request, and the server enforces a hard per-call timeout (3 seconds) on
@@ -226,7 +226,7 @@ class InputModule(Protocol):
         entity_id: EntityId,
         offset: PositiveInt = 0,
         limit: PositiveInt = 50,
-        genre_ids: List[EntityId] = [],
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
         """
         Browse content within a specific entity (e.g., album contents, artist's albums).
@@ -236,10 +236,20 @@ class InputModule(Protocol):
                                  to access the root level of the module.
             offset (PositiveInt, optional): Number of results to skip for pagination. Defaults to 0.
             limit (PositiveInt, optional): Maximum number of results to return. Defaults to 50.
-            genre_ids (List[EntityId], optional): List of genre IDs to filter by. Defaults to [].
+            filter (FilterQuery, optional): Constraints to satisfy, addressed by
+                the field ids this entity's Catalog declared in ``filters``.
+                Defaults to unconstrained.
 
         Returns:
-            BrowseItemList: A list of items contained within the specified entity
+            BrowseItemList: A list of items contained within the specified entity,
+                narrowed by ``filter``. ``total`` counts the filtered listing, so
+                pagination stays meaningful under a filter.
+
+        Raises:
+            UnsupportedFilter: If ``filter`` carries a field this entity did not
+                declare, or an operation this source cannot honour. Never drop a
+                constraint instead — a listing that looks filtered but is not is
+                worse than an error.
 
         Must complete within the server's per-call timeout (see the
         class docstring's latency contract).
@@ -332,16 +342,38 @@ class InputModule(Protocol):
         """
         ...
 
-    async def list_genre(self, offset: int, limit: int) -> GenreList:
+    async def list_filter_values(
+        self,
+        catalog_id: EntityId,
+        field: str,
+        offset: int = 0,
+        limit: int = 50,
+        q: str = "",
+    ) -> FilterValueList:
         """
-        List available genres in this input module.
+        List the vocabulary of one VALUES field of one catalog.
+
+        Called when a filter control is opened, not when a catalog is listed —
+        a vocabulary may run to hundreds of entries, so it is fetched only when
+        something is about to show it.
 
         Args:
-            offset (int): Number of results to skip for pagination
-            limit (int): Maximum number of results to return
+            catalog_id (EntityId): The catalog whose field is being filled. A
+                module with one vocabulary may ignore it.
+            field (str): The field id, as declared in that catalog's ``filters``.
+            offset (int, optional): Number of values to skip. Defaults to 0.
+            limit (int, optional): Maximum number of values to return. Defaults to 50.
+            q (str, optional): Narrows the vocabulary by label, for type-ahead
+                over a large one. Defaults to no narrowing.
 
         Returns:
-            GenreList: A list of available genres
+            FilterValueList: One page of the field's vocabulary
+
+        Raises:
+            UnsupportedFilter: If the catalog declares no such VALUES field.
+
+        Must complete within the server's per-call timeout (see the
+        class docstring's latency contract).
         """
         ...
 

@@ -4,7 +4,8 @@ import multiprocessing
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple
 import mimetypes
 
 from fastapi import HTTPException
@@ -37,19 +38,158 @@ from kalinka_plugin_sdk.datamodel import (
     CatalogRole,
     FavoriteIds,
     Genre,
-    GenreList,
     Owner,
+)
+from kalinka_plugin_sdk.filters import (
+    TEXT_FIELD,
+    TYPE_FIELD,
+    FilterKind,
+    FilterOp,
+    FilterQuery,
+    FilterSpec,
+    FilterValue,
+    FilterValueList,
+    UnsupportedFilter,
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
 from .utils.mount_status import await_root_available, root_of
 from .utils.name_utils import expand_music_folders, path_within_roots
-from .input_module_db import LocalFilesInputModuleDb
+from .input_module_db import ListingFilter, LocalFilesInputModuleDb
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 # A hard NFS mount can otherwise block a stat indefinitely.
 STAT_TIMEOUT_S = 5.0
+
+GENRE_FILTER = FilterSpec(
+    id="genre",
+    kind=FilterKind.VALUES,
+    label="Genre",
+    ops=[FilterOp.ANY, FilterOp.ALL, FilterOp.NONE],
+)
+
+TYPE_FILTER = FilterSpec(
+    id=TYPE_FIELD,
+    kind=FilterKind.VALUES,
+    label="Type",
+    ops=[FilterOp.ANY],
+)
+
+
+def _text_filter(what: str) -> FilterSpec:
+    """The label is where this source says what its text matches — each shelf
+    searches the fields its own rows have."""
+    return FilterSpec(id=TEXT_FIELD, kind=FilterKind.TEXT, label=f"Search {what}")
+
+
+ALBUM_SHELF_FILTERS = [_text_filter("albums and artists"), GENRE_FILTER]
+ARTIST_SHELF_FILTERS = [_text_filter("artists"), GENRE_FILTER]
+TRACK_SHELF_FILTERS = [_text_filter("titles, artists and albums"), GENRE_FILTER]
+PLAYLIST_SHELF_FILTERS = [_text_filter("names and descriptions"), GENRE_FILTER]
+LIBRARY_FILTERS = [_text_filter("your library"), TYPE_FILTER, GENRE_FILTER]
+
+LIBRARY_ENDPOINT = "library"
+
+
+@dataclass(frozen=True)
+class _LibrarySection:
+    """One kind's shelf within the library.
+
+    The library and its sections are two addresses for one listing: browsing
+    the library under ``type: [kind]`` and browsing the section answer the
+    same rows. The section exists so a consumer can preview each kind without
+    knowing how to write that constraint.
+    """
+
+    kind: str
+    endpoint: str
+    title: str
+    noun: str
+    content_type: PreviewContentType
+    filters: List[FilterSpec]
+
+
+LIBRARY_SECTIONS = (
+    _LibrarySection(
+        kind="artist",
+        endpoint="artists",
+        title="Artists",
+        noun="artists",
+        content_type=PreviewContentType.ARTIST,
+        filters=ARTIST_SHELF_FILTERS,
+    ),
+    _LibrarySection(
+        kind="album",
+        endpoint="albums",
+        title="Albums",
+        noun="albums",
+        content_type=PreviewContentType.ALBUM,
+        filters=ALBUM_SHELF_FILTERS,
+    ),
+    _LibrarySection(
+        kind="track",
+        endpoint="tracks",
+        title="Tracks",
+        noun="tracks",
+        content_type=PreviewContentType.TRACK,
+        filters=TRACK_SHELF_FILTERS,
+    ),
+    _LibrarySection(
+        kind="playlist",
+        endpoint="playlists",
+        title="Playlists",
+        noun="playlists",
+        content_type=PreviewContentType.PLAYLIST,
+        filters=PLAYLIST_SHELF_FILTERS,
+    ),
+)
+
+SECTION_BY_ENDPOINT = {section.endpoint: section for section in LIBRARY_SECTIONS}
+TYPE_VALUES = tuple(section.kind for section in LIBRARY_SECTIONS)
+
+SHELF_FILTERS = {
+    LIBRARY_ENDPOINT: LIBRARY_FILTERS,
+    **{section.endpoint: section.filters for section in LIBRARY_SECTIONS},
+}
+
+
+def _filtered_kinds(filter: FilterQuery) -> Tuple[str, ...]:
+    """The kinds a library listing holds, given its ``type`` constraint.
+
+    An unknown value is refused rather than matched by nothing: ``type`` has a
+    closed vocabulary, so a value outside it is a caller's mistake, and a
+    listing that silently held no tracks would hide it.
+    """
+    selector = filter.values(TYPE_FIELD)
+    if selector is None:
+        return ()
+    if selector.all or selector.none:
+        raise UnsupportedFilter(TYPE_FIELD, "only `any` is supported")
+    unknown = [value for value in selector.any if value not in TYPE_VALUES]
+    if unknown:
+        raise UnsupportedFilter(
+            TYPE_FIELD, f"unknown value(s): {', '.join(unknown)}"
+        )
+    # Deduplicated: a kind named twice would otherwise list its rows twice.
+    return tuple(dict.fromkeys(selector.any))
+
+
+def _listing_filter(filter: FilterQuery, declared: List[FilterSpec]) -> ListingFilter:
+    """Translate a browse's filter into the query layer's terms, refusing what
+    this catalog never offered."""
+    declared_ids = {spec.id for spec in declared}
+    filter.reject_undeclared(declared_ids)
+
+    genres = (
+        filter.values(GENRE_FILTER.id) if GENRE_FILTER.id in declared_ids else None
+    )
+    return ListingFilter(
+        text=filter.text() if TEXT_FIELD in declared_ids else "",
+        genre_any=tuple(genres.any) if genres else (),
+        genre_all=tuple(genres.all) if genres else (),
+        genre_none=tuple(genres.none) if genres else (),
+    )
 
 
 def artist_id(id: str) -> EntityId:
@@ -272,24 +412,26 @@ class LocalFilesInputModule(InputModule):
         entity_id: EntityId,
         offset: int = 0,
         limit: int = 50,
-        genre_ids: List[EntityId] = [],
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
         """Browse items based on the entity ID"""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
             return EmptyList(offset, limit)
 
+        if entity_id.type == EntityType.CATALOG:
+            return await self.browse_catalog(
+                entity_id.id, offset=offset, limit=limit, filter=filter
+            )
+
+        # These listings declare no filters, so a field sent to one is refused.
+        filter.reject_undeclared(())
         if entity_id.type == EntityType.ALBUM:
             return self._browse_album(entity_id.id, offset, limit)
         elif entity_id.type == EntityType.ARTIST:
             return self._browse_artist(entity_id.id, offset, limit)
         elif entity_id.type == EntityType.PLAYLIST:
             return self._browse_playlist(entity_id.id, offset, limit)
-        elif entity_id.type == EntityType.CATALOG:
-            return await self.browse_catalog(
-                entity_id.id, offset=offset, limit=limit, genre_ids=genre_ids
-            )
-
         return EmptyList(offset, limit)
 
     async def browse_catalog(
@@ -297,164 +439,99 @@ class LocalFilesInputModule(InputModule):
         endpoint: str,
         offset: int = 0,
         limit: int = 50,
-        genre_ids: List[EntityId] = [],
+        filter: FilterQuery = FilterQuery({}),
     ) -> BrowseItemList:
         """Browse the catalog endpoints"""
+        # Translated before anything is listed, so an undeclared field is
+        # refused rather than dropped.
+        listing = _listing_filter(filter, SHELF_FILTERS.get(endpoint, []))
+
         if endpoint == "root":
             return self._browse_root(offset, limit)
-        elif endpoint == "recent":
-            return self._browse_recently_added(offset, limit)
-        elif endpoint == "albums":
-            return self._browse_albums(offset, limit)
-        elif endpoint == "artists":
-            return self._browse_artists(offset, limit)
-        elif endpoint == "playlists":
-            return self._browse_playlists(offset, limit)
-        else:
-            ep = endpoint.split("-")
-            if len(ep) == 2 and ep[0] == "tracks":
-                return self._browse_artist_tracks(ep[1], offset, limit)
-            else:
-                logger.warning(f"Unknown catalog endpoint: {endpoint}")
-                return EmptyList(offset, limit)
+        if endpoint == LIBRARY_ENDPOINT:
+            return self._browse_library(
+                _filtered_kinds(filter), offset, limit, listing
+            )
+        section = SECTION_BY_ENDPOINT.get(endpoint)
+        if section is not None:
+            return self._browse_kind(section.kind, offset, limit, listing)
+
+        ep = endpoint.split("-")
+        if len(ep) == 2 and ep[0] == "tracks":
+            return self._browse_artist_tracks(ep[1], offset, limit)
+        logger.warning(f"Unknown catalog endpoint: {endpoint}")
+        return EmptyList(offset, limit)
+
+    def _library_catalog(self) -> Catalog:
+        return Catalog(
+            id=catalog_id(LIBRARY_ENDPOINT),
+            title="My Library",
+            filters=LIBRARY_FILTERS,
+            description="Everything in your music folders",
+            preview_config=Preview(
+                type=PreviewType.TILE,
+                icon="library",
+                items_count=10,
+                rows_count=1,
+                card_size=CardSize.SMALL,
+            ),
+            role=CatalogRole.LIBRARY,
+        )
+
+    def _section_card(self, section: _LibrarySection) -> Optional[BrowseItem]:
+        """The section as a browsable shelf, or None when it holds nothing."""
+        total = self.db_manager.get_kind_total(section.kind)
+        if total == 0:
+            return None
+
+        id = catalog_id(section.endpoint)
+        return BrowseItem(
+            id=id,
+            name=section.title,
+            can_browse=True,
+            can_add=False,
+            subname=f"{total} {section.noun}",
+            catalog=Catalog(
+                id=id,
+                title=section.title,
+                filters=section.filters,
+                description=f"Your {section.noun}",
+                preview_config=Preview(
+                    type=PreviewType.IMAGE_TEXT,
+                    content_type=section.content_type,
+                    icon=section.kind,
+                    # Few enough that the next shelf stays on screen.
+                    items_count=3,
+                    rows_count=1,
+                    card_size=CardSize.SMALL,
+                ),
+                role=CatalogRole.LIBRARY,
+            ),
+        )
 
     def _browse_root(self, offset: int, limit: int) -> BrowseItemList:
-        """Return the root catalog with main sections"""
+        """The module's one catalog: the library, with a shelf per kind it holds."""
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
             return EmptyList(0, 0)
 
-        recent_tracks, recent_total = self.db_manager.get_recently_added_tracks(0, 10)
-        albums, albums_total = self.db_manager.get_all_albums(0, 10)
-        artists, artists_total = self.db_manager.get_all_artists(0, 10)
-        playlists, playlists_total = self.db_manager.get_all_playlists(0, 10)
+        cards = (self._section_card(section) for section in LIBRARY_SECTIONS)
+        sections = [card for card in cards if card is not None]
+        if not sections:
+            return EmptyList(offset, limit)
 
-        # Create the main sections
-        items = []
-
-        # Recently Added section
-        if recent_total > 0:
-            preview = Preview(
-                type=PreviewType.TILE,
-                content_type=PreviewContentType.TRACK,
-                icon="recent",
-                items_count=10,  # Fixed value: maximum number of items to display in preview
-                rows_count=1,
-                card_size=CardSize.SMALL,
-            )
-
-            catalog = Catalog(
-                id=catalog_id("recent"),
-                title="Recently Added",
-                can_genre_filter=False,
-                description="Recently added tracks",
-                preview_config=preview,
-                role=CatalogRole.LIBRARY,
-            )
-
-            recent_section = BrowseItem(
-                id=catalog_id("recent"),
-                name="Recently Added",
+        catalog = self._library_catalog()
+        items = [
+            BrowseItem(
+                id=catalog.id,
+                name=catalog.title,
                 can_browse=True,
                 can_add=False,
+                subname=catalog.description,
                 catalog=catalog,
-                subname=f"{recent_total} tracks",
+                sections=sections,
             )
-
-            items.append(recent_section)
-
-        # Albums section
-        if albums_total > 0:
-            preview = Preview(
-                type=PreviewType.IMAGE_TEXT,
-                content_type=PreviewContentType.ALBUM,
-                icon="album",
-                items_count=10,  # Fixed value: maximum number of items to display in preview
-                rows_count=1,
-                card_size=CardSize.SMALL,
-            )
-
-            catalog = Catalog(
-                id=catalog_id("albums"),
-                title="My Albums",
-                can_genre_filter=False,
-                description="Browse your album collection",
-                preview_config=preview,
-                role=CatalogRole.LIBRARY,
-            )
-
-            album_section = BrowseItem(
-                id=catalog_id("albums"),
-                name="My Albums",
-                can_browse=True,
-                can_add=False,
-                catalog=catalog,
-                subname=f"{albums_total} albums",
-            )
-
-            items.append(album_section)
-
-        # Artists section
-        if artists_total > 0:
-            preview = Preview(
-                type=PreviewType.IMAGE_TEXT,
-                content_type=PreviewContentType.ARTIST,
-                icon="artist",
-                items_count=10,  # Fixed value: maximum number of items to display in preview
-                rows_count=1,
-                card_size=CardSize.SMALL,
-            )
-
-            catalog = Catalog(
-                id=catalog_id("artists"),
-                title="My Artists",
-                can_genre_filter=False,
-                description="Browse your artist collection",
-                preview_config=preview,
-                role=CatalogRole.LIBRARY,
-            )
-
-            artist_section = BrowseItem(
-                id=catalog_id("artists"),
-                name="My Artists",
-                can_browse=True,
-                can_add=False,
-                catalog=catalog,
-                subname=f"{artists_total} artists",
-            )
-
-            items.append(artist_section)
-
-        # Playlists section
-        if playlists_total > 0:
-            preview = Preview(
-                type=PreviewType.IMAGE_TEXT,
-                content_type=PreviewContentType.PLAYLIST,
-                icon="playlist",
-                items_count=10,
-                rows_count=1,
-                card_size=CardSize.SMALL,
-            )
-
-            catalog = Catalog(
-                id=catalog_id("playlists"),
-                title="My Playlists",
-                can_genre_filter=False,
-                description="Browse your playlists",
-                preview_config=preview,
-                role=CatalogRole.LIBRARY,
-            )
-
-            playlist_section = BrowseItem(
-                id=catalog_id("playlists"),
-                name="My Playlists",
-                can_browse=True,
-                can_add=False,
-                catalog=catalog,
-                subname=f"{playlists_total} playlists",
-            )
-
-            items.append(playlist_section)
+        ]
 
         return BrowseItemList(
             offset=offset,
@@ -463,34 +540,39 @@ class LocalFilesInputModule(InputModule):
             items=items[offset : offset + limit],
         )
 
-    def _browse_recently_added(self, offset: int, limit: int) -> BrowseItemList:
-        """Browse recently added tracks"""
-        tracks, total = self.db_manager.get_recently_added_tracks(offset, limit)
+    def _create_kind_browse_item(self, kind: str, row: Dict) -> BrowseItem:
+        return {
+            "track": self._create_track_browse_item,
+            "album": self._create_album_browse_item,
+            "artist": self._create_artist_browse_item,
+            "playlist": self._create_playlist_browse_item,
+        }[kind](row)
 
-        items = []
-        for track in tracks:
-            items.append(self._create_track_browse_item(track))
-
+    def _browse_kind(
+        self, kind: str, offset: int, limit: int, filter: Optional[ListingFilter] = None
+    ) -> BrowseItemList:
+        """One kind of the library, newest first."""
+        rows, total = self.db_manager.list_kind(kind, offset, limit, filter)
+        items = [self._create_kind_browse_item(kind, row) for row in rows]
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
-    def _browse_albums(self, offset: int, limit: int) -> BrowseItemList:
-        """Browse all albums"""
-        albums, total = self.db_manager.get_all_albums(offset, limit)
+    def _browse_library(
+        self,
+        kinds: Tuple[str, ...],
+        offset: int,
+        limit: int,
+        filter: Optional[ListingFilter] = None,
+    ) -> BrowseItemList:
+        """The library as one listing, every kind interleaved by recency.
 
-        items = []
-        for album in albums:
-            items.append(self._create_album_browse_item(album))
-
-        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
-
-    def _browse_artists(self, offset: int, limit: int) -> BrowseItemList:
-        """Browse all artists"""
-        artists, total = self.db_manager.get_all_artists(offset, limit)
-
-        items = []
-        for artist in artists:
-            items.append(self._create_artist_browse_item(artist))
-
+        This is what a consumer with no interest in the sections sees — a home
+        shelf's preview, the card art collage — so it must be items, never the
+        section cards.
+        """
+        rows, total = self.db_manager.get_library_listing(
+            kinds, offset, limit, filter
+        )
+        items = [self._create_kind_browse_item(kind, row) for kind, row in rows]
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
     def _browse_artist_tracks(
@@ -508,16 +590,6 @@ class LocalFilesInputModule(InputModule):
         items = []
         for track in tracks:
             items.append(self._create_track_browse_item(track))
-
-        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
-
-    def _browse_playlists(self, offset: int, limit: int) -> BrowseItemList:
-        """Browse all playlists"""
-        playlists, total = self.db_manager.get_all_playlists(offset, limit)
-
-        items = []
-        for playlist in playlists:
-            items.append(self._create_playlist_browse_item(playlist))
 
         return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
 
@@ -737,8 +809,8 @@ class LocalFilesInputModule(InputModule):
 
         if type == SearchType.playlist:
             # Return all user playlists as favorites
-            playlists, total = self.db_manager.get_all_playlists(
-                offset, limit, filter_text=filter
+            playlists, total = self.db_manager.list_kind(
+                "playlist", offset, limit, ListingFilter(text=filter or "")
             )
 
             items = []
@@ -762,9 +834,59 @@ class LocalFilesInputModule(InputModule):
         """Remove from favorites (not supported)"""
         logger.warning("Favorites are not supported in local files input module")
 
-    async def list_genre(self, offset: int = 0, limit: int = 25) -> GenreList:
-        """List genres (not implemented yet)"""
-        return GenreList(total=0, offset=offset, limit=limit, items=[])
+    async def list_filter_values(
+        self,
+        catalog_id: EntityId,
+        field: str,
+        offset: int = 0,
+        limit: int = 50,
+        q: str = "",
+    ) -> FilterValueList:
+        """The vocabulary of one of this catalog's VALUES fields."""
+        declared = {spec.id for spec in SHELF_FILTERS.get(catalog_id.id, [])}
+        if field not in declared:
+            raise UnsupportedFilter(field, "not filterable here")
+
+        if field == TYPE_FIELD:
+            return self._type_values(offset, limit, q)
+        if field == GENRE_FILTER.id:
+            return self._genre_values(offset, limit, q)
+        raise UnsupportedFilter(field, "has no vocabulary")
+
+    def _genre_values(self, offset: int, limit: int, q: str) -> FilterValueList:
+        values, total = self.db_manager.list_album_genres(offset, limit, q)
+        return FilterValueList(
+            offset=offset,
+            limit=limit,
+            total=total,
+            items=[
+                FilterValue(id=id, name=name, count=count)
+                for id, name, count in values
+            ],
+        )
+
+    def _type_values(self, offset: int, limit: int, q: str) -> FilterValueList:
+        """The kinds the library holds, in the order its sections appear.
+
+        A kind holding nothing is left out, so the vocabulary and the sections
+        agree on what the library contains.
+        """
+        wanted = q.strip().casefold()
+        values = []
+        for section in LIBRARY_SECTIONS:
+            if wanted not in section.title.casefold():
+                continue
+            total = self.db_manager.get_kind_total(section.kind)
+            if total:
+                values.append(
+                    FilterValue(id=section.kind, name=section.title, count=total)
+                )
+        return FilterValueList(
+            offset=offset,
+            limit=limit,
+            total=len(values),
+            items=values[offset : offset + limit],
+        )
 
     async def get(self, entity_id: EntityId) -> BrowseItem:
         """Get details for a specific entity by ID"""
@@ -844,7 +966,7 @@ class LocalFilesInputModule(InputModule):
             logger.warning("Database is not initialized or corrupted")
             return EmptyList(0, 0)
 
-        playlists, total = self.db_manager.get_all_playlists(offset, limit)
+        playlists, total = self.db_manager.list_kind("playlist", offset, limit)
 
         items = []
         for playlist in playlists:
@@ -1133,7 +1255,6 @@ class LocalFilesInputModule(InputModule):
                 catalog=Catalog(
                     id=album_id(album["id"]),
                     title=album["title"],
-                    can_genre_filter=False,
                     preview_config=Preview(
                         type=PreviewType.TILE_NUMBERED,
                         content_type=PreviewContentType.TRACK,
@@ -1177,7 +1298,6 @@ class LocalFilesInputModule(InputModule):
                 catalog=Catalog(
                     id=catalog_id(f"tracks-{artist['id']}"),
                     title=artist["name"],
-                    can_genre_filter=False,
                     preview_config=Preview(
                         type=PreviewType.TILE,
                         content_type=PreviewContentType.TRACK,
@@ -1195,7 +1315,6 @@ class LocalFilesInputModule(InputModule):
                 catalog=Catalog(
                     id=artist_id(artist["id"]),
                     title=artist["name"],
-                    can_genre_filter=False,
                     preview_config=Preview(
                         type=PreviewType.IMAGE_TEXT,
                         content_type=PreviewContentType.ALBUM,
@@ -1244,7 +1363,6 @@ class LocalFilesInputModule(InputModule):
                 catalog=Catalog(
                     id=playlist_id(playlist["id"]),
                     title=playlist["name"],
-                    can_genre_filter=False,
                     preview_config=Preview(
                         type=PreviewType.TILE,
                         content_type=PreviewContentType.TRACK,
