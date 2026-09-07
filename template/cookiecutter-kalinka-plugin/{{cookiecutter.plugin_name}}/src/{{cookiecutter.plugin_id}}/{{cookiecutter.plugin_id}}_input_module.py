@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from kalinka_plugin_sdk.datamodel import (
     BrowseItem,
     BrowseItemList,
@@ -19,38 +19,38 @@ class {{ cookiecutter.plugin_class_prefix }}InputModule(InputModule):
     def module_name(self) -> str:
         return "{{ cookiecutter.plugin_display_name }}"
 
-    def search(
+    async def search(
         self, type: SearchType, query: str, offset=0, limit=50
     ) -> BrowseItemList:
         raise NotImplementedError
 
-    def browse(
+    async def browse(
         self,
         entity_id: EntityId,
         offset: int = 0,
         limit: int = 50,
-        filter: FilterQuery = FilterQuery({}),
+        filter: Optional[FilterQuery] = None,
     ) -> BrowseItemList:
         raise NotImplementedError
 
-    def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
+    async def get_track_info(self, track_ids: List[str]) -> List[TrackInfo]:
         raise NotImplementedError
 
-    def list_favorite(
+    async def list_favorite(
         self, type: SearchType, filter: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         raise NotImplementedError
 
-    def get_favorite_ids(self) -> FavoriteIds:
+    async def get_favorite_ids(self) -> FavoriteIds:
         raise NotImplementedError
 
-    def add_to_favorite(self, id: str):
+    async def add_to_favorite(self, id: str):
         raise NotImplementedError
 
-    def remove_from_favorite(self, id: str):
+    async def remove_from_favorite(self, id: str):
         raise NotImplementedError
 
-    def list_filter_values(
+    async def list_filter_values(
         self,
         catalog_id: EntityId,
         field: str,
@@ -60,32 +60,32 @@ class {{ cookiecutter.plugin_class_prefix }}InputModule(InputModule):
     ) -> FilterValueList:
         raise NotImplementedError
 
-    def get(self, entity_id: EntityId) -> BrowseItem:
+    async def get(self, entity_id: EntityId) -> BrowseItem:
         raise NotImplementedError
 
-    def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
+    async def playlist_user_list(self, offset: int = 0, limit: int = 25) -> BrowseItemList:
         raise NotImplementedError
 
-    def playlist_create(self, name: str, description: str) -> Playlist:
+    async def playlist_create(self, name: str, description: str) -> Playlist:
         raise NotImplementedError
 
-    def playlist_update(
+    async def playlist_update(
         self, id: str, name: str | None, description: str | None
     ) -> Playlist:
         raise NotImplementedError
 
-    def playlist_delete(self, id: str):
+    async def playlist_delete(self, id: str):
         raise NotImplementedError
 
-    def playlist_add_tracks(
+    async def playlist_add_tracks(
         self, id: str, track_ids: List[str], allow_duplicates: bool
     ) -> Playlist:
         raise NotImplementedError
 
-    def playlist_remove_tracks(
+    async def playlist_remove_tracks(
         self, id: str, playlist_track_ids: List[str]
     ) -> Playlist:
         raise NotImplementedError
 
-    def get_resource_path(self, id: str) -> str | None:
+    async def get_resource_path(self, id: str) -> str | None:
         raise NotImplementedError

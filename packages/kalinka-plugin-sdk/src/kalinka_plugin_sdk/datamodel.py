@@ -298,7 +298,8 @@ class Album(BaseModel):
         track_count (Optional[int]): Number of tracks in the album
         image (Optional[CoverImage]): Album cover art in different sizes
         label (Optional[Label]): Record label that released the album
-        genre (Optional[Genre]): Primary genre classification
+        genres (List[Genre]): The genres it is filed under, in the order the
+            source names them; empty when it names none
         artist (Optional[Artist]): Primary artist/performer
     """
 
@@ -308,7 +309,7 @@ class Album(BaseModel):
     track_count: Optional[int] = None
     image: Optional[CoverImage] = None
     label: Optional[Label] = None
-    genre: Optional[Genre] = None
+    genres: List[Genre] = []
     artist: Optional[Artist] = None
 
 

@@ -43,15 +43,20 @@ def _sql_fold(value: Optional[str]) -> str:
 _GENRE_SPLIT_RE = re.compile(r"[,;/|]")
 
 
+def genre_parts(value: Optional[str]) -> List[str]:
+    """The genres a tag string names, as written."""
+    if not value:
+        return []
+    return [part.strip() for part in _GENRE_SPLIT_RE.split(value) if part.strip()]
+
+
 def split_genres(value: Optional[str]) -> List[str]:
-    """The genres a tag string holds, folded to their match form.
+    """[genre_parts] folded to their match form.
 
     One definition serves both the vocabulary and the matching, so a value the
     filter list offers is always a value the filter can find.
     """
-    if not value:
-        return []
-    parts = (fold_for_match(part) for part in _GENRE_SPLIT_RE.split(value))
+    parts = (fold_for_match(part) for part in genre_parts(value))
     return [part for part in parts if part]
 
 

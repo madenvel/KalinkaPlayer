@@ -41,6 +41,7 @@ from kalinka_plugin_sdk.datamodel import (
     Owner,
 )
 from kalinka_plugin_sdk.filters import (
+    or_unfiltered,
     TEXT_FIELD,
     TYPE_FIELD,
     FilterKind,
@@ -55,7 +56,12 @@ from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
 from .utils.mount_status import await_root_available, root_of
 from .utils.name_utils import expand_music_folders, path_within_roots
-from .input_module_db import ListingFilter, LocalFilesInputModuleDb
+from .input_module_db import (
+    ListingFilter,
+    LocalFilesInputModuleDb,
+    fold_for_match,
+    genre_parts,
+)
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -412,9 +418,10 @@ class LocalFilesInputModule(InputModule):
         entity_id: EntityId,
         offset: int = 0,
         limit: int = 50,
-        filter: FilterQuery = FilterQuery({}),
+        filter: Optional[FilterQuery] = None,
     ) -> BrowseItemList:
         """Browse items based on the entity ID"""
+        filter = or_unfiltered(filter)
         if not self.db_manager.is_good():
             logger.warning("Database is not initialized or corrupted")
             return EmptyList(offset, limit)
@@ -439,9 +446,10 @@ class LocalFilesInputModule(InputModule):
         endpoint: str,
         offset: int = 0,
         limit: int = 50,
-        filter: FilterQuery = FilterQuery({}),
+        filter: Optional[FilterQuery] = None,
     ) -> BrowseItemList:
         """Browse the catalog endpoints"""
+        filter = or_unfiltered(filter)
         # Translated before anything is listed, so an undeclared field is
         # refused rather than dropped.
         listing = _listing_filter(filter, SHELF_FILTERS.get(endpoint, []))
@@ -1171,14 +1179,13 @@ class LocalFilesInputModule(InputModule):
             ),
         )
 
-        # Enriched genre, when the query joined it in (album_genre). Carried
+        # Enriched genres, when the query joined them in (album_genre). Carried
         # on the card so clients — and the server's suggestion attestation —
         # can see what the track is without another lookup.
-        if track.get("album_genre"):
-            album.genre = Genre(
-                id=genre_id(track["album_genre"].lower()),
-                name=track["album_genre"],
-            )
+        album.genres = [
+            Genre(id=genre_id(fold_for_match(part)), name=part)
+            for part in genre_parts(track.get("album_genre"))
+        ]
 
         # Album image, else the track's own cover (singles on unknown_album).
         cover_path = self._get_album_image_urls(
@@ -1289,7 +1296,7 @@ class LocalFilesInputModule(InputModule):
         if image_path:
             artist_obj.image = image_path
 
-        sections_obj = sections = [
+        sections_obj = [
             BrowseItem(
                 id=catalog_id(f"tracks-{artist['id']}"),
                 name="Recent Tracks",

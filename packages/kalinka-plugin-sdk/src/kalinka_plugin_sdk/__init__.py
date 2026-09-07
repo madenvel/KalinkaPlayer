@@ -38,6 +38,7 @@ from .datamodel import (
     VolumeBackend,
 )
 from .filters import (
+    or_unfiltered,
     TEXT_FIELD,
     TYPE_FIELD,
     FilterKind,
@@ -109,6 +110,7 @@ __all__ = [
     "VolumeBackend",
     # Filtering
     "TEXT_FIELD",
+    "or_unfiltered",
     "TYPE_FIELD",
     "FilterKind",
     "FilterOp",

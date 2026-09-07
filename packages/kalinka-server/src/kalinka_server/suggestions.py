@@ -512,9 +512,9 @@ class SuggestionEngine:
             parts = [t.title]
             if t.album is not None:
                 parts.append(t.album.title)
-                if t.album.genre is not None:
+                if t.album.genres:
                     genre_known += 1
-                    parts.append(t.album.genre.name)
+                    parts.extend(genre.name for genre in t.album.genres)
             if t.performer is not None:
                 parts.append(t.performer.name)
                 artists.add(t.performer.id.to_string)

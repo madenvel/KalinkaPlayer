@@ -78,6 +78,12 @@ class RangeSelector(BaseModel):
 Selector = Union[TextSelector, ValuesSelector, RangeSelector]
 
 
+def or_unfiltered(filter: "Optional[FilterQuery]") -> "FilterQuery":
+    """``filter`` as given, or the unconstrained query for None: what every
+    ``browse`` accepts, so no implementation shares a default instance."""
+    return FilterQuery({}) if filter is None else filter
+
+
 class FilterQuery(RootModel[Dict[str, Selector]]):
     """What a caller asked a browse to satisfy: field id → selector.
 

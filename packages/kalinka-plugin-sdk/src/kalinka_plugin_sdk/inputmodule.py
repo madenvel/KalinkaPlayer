@@ -226,7 +226,7 @@ class InputModule(Protocol):
         entity_id: EntityId,
         offset: PositiveInt = 0,
         limit: PositiveInt = 50,
-        filter: FilterQuery = FilterQuery({}),
+        filter: Optional[FilterQuery] = None,
     ) -> BrowseItemList:
         """
         Browse content within a specific entity (e.g., album contents, artist's albums).
@@ -238,7 +238,7 @@ class InputModule(Protocol):
             limit (PositiveInt, optional): Maximum number of results to return. Defaults to 50.
             filter (FilterQuery, optional): Constraints to satisfy, addressed by
                 the field ids this entity's Catalog declared in ``filters``.
-                Defaults to unconstrained.
+                None is the unconstrained listing.
 
         Returns:
             BrowseItemList: A list of items contained within the specified entity,

@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import ValidationError
 
-from kalinka_plugin_sdk.datamodel import BrowseItemList, EntityId
+from kalinka_plugin_sdk.datamodel import BrowseItemList, EntityId, EntityType
 from kalinka_plugin_sdk.filters import FilterQuery, FilterValueList, UnsupportedFilter
 from kalinka_plugin_sdk.inputmodule import InputModule
 
@@ -100,6 +100,10 @@ def register_browse_routes(
         is wanted only when a control is about to show it.
         """
         entity_id = parse_entity_id(id)
+        if entity_id.type is not EntityType.CATALOG:
+            raise HTTPException(
+                status_code=422, detail={"field": "id", "reason": "not a catalog"}
+            )
 
         try:
             input_module = resolve_module(entity_id)
