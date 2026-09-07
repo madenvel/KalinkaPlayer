@@ -33,6 +33,8 @@ from .datamodel import (
     EntityType,
     EntityId,
     DeviceVolume,
+    MatchTier,
+    NameMatch,
     VolumeBackend,
 )
 from .filters import (
@@ -102,6 +104,8 @@ __all__ = [
     "EntityType",
     "EntityId",
     "DeviceVolume",
+    "MatchTier",
+    "NameMatch",
     "VolumeBackend",
     # Filtering
     "TEXT_FIELD",

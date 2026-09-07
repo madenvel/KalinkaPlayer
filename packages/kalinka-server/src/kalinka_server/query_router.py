@@ -5,9 +5,8 @@ name a *place* in a module's browse tree, not a track. At startup the router
 browses every enabled module's root catalog and embeds each shelf card with
 the shared text embedder; at query time the query is embedded once and
 KNN-matched against that table. Hits are re-emitted as the module's own root
-card, prepended above the BEST MATCH / AI legs (additive — routing never
-replaces the normal search, so a false hit costs one extra card, not the
-results).
+card, prepended above the suggestion cards (additive — routing never replaces
+the normal search, so a false hit costs one extra card, not the results).
 
 False-hit control is layered, cheapest first:
 
@@ -20,9 +19,6 @@ False-hit control is layered, cheapest first:
     comparison, far more stable than an absolute cosine cut-off.
   * **Similarity floor** — a loose absolute minimum below which nothing
     routes regardless of decoys.
-  * **Name-lookup veto** — applied by the caller (ai_search assembly): when
-    the query is a near-exact match of a BEST MATCH name ("New Order" is a
-    band, not the "New Releases" shelf), routed cards are dropped.
 
 The floor/margin defaults are educated guesses pending a measured benchmark
 (labelled catalog-intent vs search-intent queries); tune via SearchConfig.
@@ -54,16 +50,8 @@ _PREVIEW_LIMIT = 10
 # they cleared the floor on shared vocabulary, not on being what was asked.
 _TOP_GAP = 0.15
 # Separates the shelf title from the source attribution on presented cards
-# ("New Releases · Jamendo"); base_title() reverses it.
+# ("New Releases · Jamendo").
 _TITLE_SEP = " · "
-
-
-def base_title(card: BrowseItem) -> str:
-    """Original shelf wording of a presented routed card, without the source
-    attribution appended by ``_present``. Used by the ai_search assembly to
-    exempt a route from the name-lookup veto when the query names the shelf
-    itself."""
-    return (card.name or "").rsplit(_TITLE_SEP, 1)[0]
 
 # Counter-intent exemplars: queries that must fall through to FTS / AI search.
 # A shelf only routes if it beats every one of these by the configured margin,
@@ -295,7 +283,7 @@ class CatalogRouter:
         the preview items and attach them inline. The search feed renders each
         section's inline ``sections`` (and drops empty ones), so a bare browse
         pointer would never show — unlike the home screen, it does not lazy-load
-        previews. Retitled with the source like BEST MATCH; ``can_browse`` stays
+        previews. Retitled with the source; ``can_browse`` stays
         so the header still opens the full shelf. None when the shelf is empty
         (nothing to preview) or the browse fails."""
         preview = route.card.catalog.preview_config if route.card.catalog else None

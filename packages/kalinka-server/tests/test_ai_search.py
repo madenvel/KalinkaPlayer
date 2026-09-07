@@ -1,20 +1,15 @@
-"""Tests for the cross-source AI-search assembler (kalinka_server.ai_search).
+"""The suggestion assembler: each source's own sections, the library first,
+and a source that fails failing the request rather than vanishing."""
 
-Covers the responsibilities that moved here from the localfiles searcher: a
-per-source BEST MATCH section from each source's ``search()``, per-source
-full-name suppression of that source's AI suggestions, one AI SUGGESTIONS card
-per source, and the derived Related Artists.
-"""
+from typing import List
 
-from typing import Dict, List, Optional
+import pytest
 
 from kalinka_plugin_sdk.datamodel import (
     Album,
-    Artist,
     BrowseItem,
     BrowseItemList,
     Catalog,
-    CoverImage,
     EntityId,
     EntityType,
     Preview,
@@ -22,72 +17,29 @@ from kalinka_plugin_sdk.datamodel import (
     PreviewType,
     Track,
 )
-from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
+from kalinka_plugin_sdk.inputmodule import InputModule
 
-from kalinka_server.ai_search import _rollup, assemble_ai_search
+from kalinka_server.ai_search import assemble_ai_search
 from kalinka_server.config_model import SearchConfig
+from kalinka_server.name_matches import SourceFailed
 
 
-# ---------------------------------------------------------------------------
-# Fixtures: BrowseItem builders + a fake input module
-# ---------------------------------------------------------------------------
-
-
-def _artist_item(source: str, local: str, name: str) -> BrowseItem:
-    aid = EntityId(id=local, type=EntityType.ARTIST, source=source)
-    return BrowseItem(id=aid, name=name, can_browse=True, artist=Artist(id=aid, name=name))
-
-
-def _album_item(
-    source: str, local: str, title: str, artist_local: str, artist_name: str
-) -> BrowseItem:
-    alid = EntityId(id=local, type=EntityType.ALBUM, source=source)
-    arid = EntityId(id=artist_local, type=EntityType.ARTIST, source=source)
-    return BrowseItem(
-        id=alid,
-        name=title,
-        can_browse=True,
-        album=Album(id=alid, title=title, artist=Artist(id=arid, name=artist_name)),
-    )
-
-
-def _track_item(source: str, local: str, title: str) -> BrowseItem:
+def _track(source, local, title):
     tid = EntityId(id=local, type=EntityType.TRACK, source=source)
-    alid = EntityId(id=f"al-{local}", type=EntityType.ALBUM, source=source)
+    album = Album(id=EntityId(id=f"al-{local}", type=EntityType.ALBUM, source=source), title="")
     return BrowseItem(
         id=tid,
         name=title,
         can_add=True,
-        track=Track(id=tid, title=title, duration=1, album=Album(id=alid, title="")),
+        track=Track(id=tid, title=title, duration=1, album=album),
     )
 
 
-def _sugg_track(source, local, title, album_local, album_title, artist_local, artist_name):
-    """A suggestion track carrying full album + artist metadata, so the server
-    can derive Related Artists from it."""
-    tid = EntityId(id=local, type=EntityType.TRACK, source=source)
-    artist = Artist(id=EntityId(id=artist_local, type=EntityType.ARTIST, source=source), name=artist_name)
-    album = Album(
-        id=EntityId(id=album_local, type=EntityType.ALBUM, source=source),
-        title=album_title,
-        artist=artist,
-    )
-    return BrowseItem(
-        id=tid,
-        name=title,
-        can_add=True,
-        track=Track(id=tid, title=title, duration=1, album=album, performer=artist),
-    )
-
-
-def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
-    """Mirror what a plugin's ai_search() returns: a source-scoped, ready-to-
-    append "AI SUGGESTIONS" card. The server appends this verbatim."""
+def _card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
     cat = EntityId(id="ai_search:tracks", type=EntityType.CATALOG, source=source)
     return BrowseItem(
         id=cat,
         name="AI SUGGESTIONS",
-        subname="Curated for your search",
         catalog=Catalog(
             id=cat,
             title="AI SUGGESTIONS",
@@ -99,551 +51,117 @@ def _ai_card(source: str, tracks: List[BrowseItem]) -> BrowseItem:
                 items_count=len(tracks),
             ),
         ),
-        sections=list(tracks),
+        sections=tracks,
     )
 
 
-class FakeModule(InputModule):
-    """An input module whose search()/ai_search() return canned BrowseItems.
-
-    Subclasses the SDK protocol, so it inherits the default ``get_all``
-    (concurrent per-id ``get()``) exactly like real modules do."""
-
-    def __init__(
-        self,
-        name: str,
-        search_results: Optional[Dict[SearchType, List[BrowseItem]]] = None,
-        ai_tracks: Optional[List[BrowseItem]] = None,
-        entities: Optional[Dict[str, BrowseItem]] = None,
-        source: Optional[str] = None,
-    ):
+class _Module(InputModule):
+    def __init__(self, name, tracks=None, failing=False):
         self._name = name
-        # EntityId source emitted on this module's cards. Real modules' source
-        # strings differ from module_name() (e.g. "jamendo" vs "Jamendo").
-        self._source = source or name
-        self._search = search_results or {}
-        self._ai = ai_tracks or []
-        self._entities = entities or {}
-        self.search_calls = 0
-        self.get_calls: List[str] = []
+        self._tracks = tracks or []
+        self._failing = failing
+        self.asked = []
 
-    def module_name(self) -> str:
+    def module_name(self):
         return self._name
 
-    def display_name(self) -> str:
-        return self._name
-
-    async def search(self, type, query, offset=0, limit=50) -> BrowseItemList:
-        self.search_calls += 1
-        items = self._search.get(type, [])
-        return BrowseItemList(
-            offset=offset, limit=limit, total=len(items), items=list(items)
-        )
-
-    async def ai_search(self, query, offset=0, limit=50) -> BrowseItemList:
-        # Plugins return a ready-made card (or nothing); the server appends it.
-        if not self._ai:
+    async def ai_search(self, query, offset=0, limit=50):
+        self.asked.append(limit)
+        if self._failing:
+            raise RuntimeError("upstream down")
+        if not self._tracks:
             return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
-        card = _ai_card(self._source, self._ai)
+        card = _card(self._name, self._tracks)
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
-    async def get(self, entity_id) -> BrowseItem:
-        self.get_calls.append(entity_id.to_string)
-        item = self._entities.get(entity_id.to_string)
-        if item is None:
-            raise ValueError(f"not found: {entity_id.to_string}")
-        return item
+
+class _Router:
+    def __init__(self, cards):
+        self._cards = cards
+
+    async def route(self, query, sources, cfg):
+        return list(self._cards)
 
 
-def _section(result: BrowseItemList, name: str) -> Optional[BrowseItem]:
-    for item in result.items:
-        if item.name == name:
-            return item
-    return None
+def _sources(result: BrowseItemList):
+    return [item.catalog.sources[0] for item in result.items]
 
 
-def _ai_cards(result: BrowseItemList) -> List[BrowseItem]:
-    return [item for item in result.items if item.name == "AI SUGGESTIONS"]
+@pytest.mark.asyncio
+async def test_one_card_per_source_never_merged():
+    jamendo = _Module("jamendo", [_track("jamendo", "j1", "Sunrise")])
+    local = _Module("localfiles", [_track("localfiles", "l1", "Sunset")])
+
+    result = await assemble_ai_search([jamendo, local], "calm evening", 0, 10)
+
+    assert _sources(result) == ["localfiles", "jamendo"]
+    tracks = [item.id.id for card in result.items for item in card.sections]
+    assert tracks == ["l1", "j1"]
 
 
-def _best_match_sections(result: BrowseItemList) -> List[BrowseItem]:
-    """The per-source BEST MATCH sections (titled 'BEST MATCH · <source>')."""
-    return [item for item in result.items if item.name.startswith("BEST MATCH")]
-
-
-# ---------------------------------------------------------------------------
-# BEST MATCH assembly
-# ---------------------------------------------------------------------------
-
-
-async def test_best_match_from_search_results():
-    module = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [_artist_item("localfiles", "arV", "Vangelis")]},
-        ai_tracks=[_track_item("localfiles", "tMJ", "Ben")],
+@pytest.mark.asyncio
+async def test_a_source_with_nothing_to_say_adds_no_section():
+    result = await assemble_ai_search(
+        [
+            _Module("jamendo"),
+            _Module("localfiles", [_track("localfiles", "l1", "Sunset")]),
+        ],
+        "calm evening",
+        0,
+        10,
     )
-
-    result = await assemble_ai_search([module], "vangelis", 0, 10)
-
-    bms = _best_match_sections(result)
-    assert [b.name for b in bms] == ["BEST MATCH · localfiles"]
-    assert [s.name for s in bms[0].sections] == ["Vangelis"]
-    # "vangelis" IS an ARTIST's whole name -> name lookup -> this source's AI hidden.
-    assert _ai_cards(result) == []
-    assert result.items[0] is bms[0]  # BEST MATCH first
+    assert _sources(result) == ["localfiles"]
 
 
-async def test_album_full_match_keeps_ai():
-    # "late night jazz" exactly names a Jamendo album, but album/playlist names
-    # are often moods — only an ARTIST full-match suppresses, so AI stays.
-    module = FakeModule(
-        "jamendo",
-        search_results={SearchType.album: [
-            _album_item("jamendo", "a1", "Late Night Jazz", "ar", "Some Artist")
-        ]},
-        ai_tracks=[_track_item("jamendo", "t1", "Blue Mood")],
+@pytest.mark.asyncio
+async def test_the_suggestion_limit_reaches_the_source():
+    module = _Module("jamendo", [_track("jamendo", "j1", "Sunrise")])
+    await assemble_ai_search(
+        [module], "calm", 0, 10, SearchConfig(ai_suggestions_limit=7)
     )
-
-    result = await assemble_ai_search([module], "late night jazz", 0, 10)
-
-    assert len(_best_match_sections(result)) == 1  # the album matched
-    assert len(_ai_cards(result)) == 1  # AI NOT hidden (album, not artist)
+    assert module.asked == [7]
 
 
-async def test_artist_dominates_album_in_best_match():
-    module = FakeModule(
-        "localfiles",
-        search_results={
-            SearchType.artist: [_artist_item("localfiles", "ar", "Miles Davis")],
-            SearchType.album: [
-                _album_item("localfiles", "al", "Miles Davis", "ar", "Miles Davis")
-            ],
-        },
-    )
-
-    result = await assemble_ai_search([module], "miles davis", 0, 10)
-
-    bms = _best_match_sections(result)
-    assert len(bms) == 1
-    # Artist out-ranks its same-named album -> only the artist survives.
-    assert [s.id.type for s in bms[0].sections] == [EntityType.ARTIST]
+@pytest.mark.asyncio
+async def test_a_failing_source_fails_the_request():
+    with pytest.raises(SourceFailed) as failure:
+        await assemble_ai_search([_Module("jamendo", failing=True)], "calm", 0, 10)
+    assert failure.value.source == "jamendo"
 
 
-async def test_best_match_is_one_section_per_source():
-    local = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [_artist_item("localfiles", "a1", "Daft Punk")]},
-    )
-    jamendo = FakeModule(
-        "jamendo",
-        search_results={SearchType.album: [
-            _album_item("jamendo", "a2", "Daft Punk", "x", "Tribute")
-        ]},
-    )
-
-    result = await assemble_ai_search([local, jamendo], "daft punk", 0, 10)
-
-    bms = _best_match_sections(result)
-    # One section per source, in module order; each holds only its own match.
-    assert [b.name for b in bms] == ["BEST MATCH · localfiles", "BEST MATCH · jamendo"]
-    assert {s.id.source for s in bms[0].sections} == {"localfiles"}
-    assert {s.id.source for s in bms[1].sections} == {"jamendo"}
-
-
-async def test_per_source_sections_are_independent_and_capped():
-    # Each source has its own BEST MATCH section, so a large catalog can't crowd
-    # out a smaller source's match (the old "jarre" regression is structural
-    # now). Each section is capped at best_match_max_results (default 3).
-    flood = FakeModule(
-        "jamendo",
-        search_results={SearchType.track: [
-            _track_item("jamendo", f"j{i}", "jarre") for i in range(8)
-        ]},
-    )
-    library = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [
-            _artist_item("localfiles", "jmj", "Jean-Michel Jarre")
-        ]},
-    )
-
-    result = await assemble_ai_search([flood, library], "jarre", 0, 10)
-
-    bms = {b.name: b for b in _best_match_sections(result)}
-    assert [s.name for s in bms["BEST MATCH · localfiles"].sections] == ["Jean-Michel Jarre"]
-    # jamendo's 8 "jarre" tracks are capped to 3; they never displace localfiles.
-    assert len(bms["BEST MATCH · jamendo"].sections) == 3
-
-
-# ---------------------------------------------------------------------------
-# AI suggestions: shown unless the query is a near-exact whole-name match
-# ---------------------------------------------------------------------------
-
-
-async def test_partial_name_match_keeps_ai():
-    # "piano guys" only partially matches "The Piano Guys" (token_sort 83 < 88,
-    # the name's "The" is leftover), so it is NOT a full-string lookup -> AI is
-    # still shown below BEST MATCH.
-    module = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [
-            _artist_item("localfiles", "pg", "The Piano Guys")
-        ]},
-        ai_tracks=[_track_item("localfiles", "tMJ", "Ben")],
-    )
-
-    result = await assemble_ai_search([module], "piano guys", 0, 10)
-
-    assert len(_best_match_sections(result)) == 1
-    assert len(_ai_cards(result)) == 1
-
-
-async def test_suppression_threshold_is_config_driven():
-    module = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [
-            _artist_item("localfiles", "jmj", "Jean-Michel Jarre")
-        ]},
-        ai_tracks=[_track_item("localfiles", "t1", "Oxygene")],
-    )
-
-    # Default threshold (88): "jean michel jarre" (full-match 94) hides AI.
-    default = await assemble_ai_search([module], "jean michel jarre", 0, 10)
-    assert _ai_cards(default) == []
-
-    # Raise the threshold above 94 via config -> the same query keeps its AI.
-    loose = await assemble_ai_search(
-        [module], "jean michel jarre", 0, 10,
-        SearchConfig(ai_suppress_full_match_score=95),
-    )
-    assert len(_best_match_sections(loose)) == 1
-    assert len(_ai_cards(loose)) == 1
-
-
-async def test_unknown_word_query_keeps_ai_even_with_best_match():
-    # "workout music": "workout" is not in our word lists, so the gate treats it
-    # as navigational and BEST MATCH finds a literal "Workout" track. But the
-    # query is not a whole-string match for "Workout" (extra "music",
-    # token_sort 70), so the AI suggestions must still be shown. The regression.
-    module = FakeModule(
-        "jamendo",
-        search_results={SearchType.track: [_track_item("jamendo", "w1", "Workout")]},
-        ai_tracks=[_track_item("jamendo", "tX", "Morning Run")],
-    )
-
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    assert len(_best_match_sections(result)) == 1  # "Workout" matched literally
-    assert len(_ai_cards(result)) == 1  # ...and the AI suggestions are NOT hidden
-
-
-async def test_mood_query_skips_best_match_and_search():
-    # A pure mood/filler phrase names nothing: no BEST MATCH, and crucially the
-    # search() fan-out is skipped entirely (only ai_search runs) — the latency fix.
-    module = FakeModule(
-        "jamendo",
-        search_results={SearchType.track: [_track_item("jamendo", "s1", "Something")]},
-        ai_tracks=[_track_item("jamendo", "tX", "Autumn In The Bog")],
-    )
-
-    result = await assemble_ai_search([module], "something melancholic for tonight", 0, 10)
-
-    assert _best_match_sections(result) == []
-    assert module.search_calls == 0  # no search() round-trips for a mood query
-    assert len(_ai_cards(result)) == 1
-
-
-# ---------------------------------------------------------------------------
-# Per-source AI SUGGESTIONS cards
-# ---------------------------------------------------------------------------
-
-
-async def test_one_ai_card_per_source_not_merged():
-    local = FakeModule("localfiles", ai_tracks=[_track_item("localfiles", "t1", "Song A")])
-    jamendo = FakeModule("jamendo", ai_tracks=[_track_item("jamendo", "t2", "Song B")])
-
-    result = await assemble_ai_search([local, jamendo], "dreamy ambient", 0, 10)
-
-    cards = _ai_cards(result)
-    assert len(cards) == 2
-    # One card per source, distinguished by its source-scoped catalog id.
-    assert {c.id.source for c in cards} == {"localfiles", "jamendo"}
-    # Each card carries only its own source's track.
-    for card in cards:
-        assert all(t.id.source == card.id.source for t in card.sections)
-
-
-async def test_empty_when_no_results():
-    module = FakeModule("localfiles")
-    result = await assemble_ai_search([module], "nothing matches here", 0, 10)
-    assert result.total == 0
-    assert result.items == []
-
-
-async def test_blank_query_returns_empty():
-    module = FakeModule("localfiles", ai_tracks=[_track_item("localfiles", "t1", "x")])
+@pytest.mark.asyncio
+async def test_blank_query_is_empty_without_asking():
+    module = _Module("jamendo", [_track("jamendo", "j1", "Sunrise")])
     result = await assemble_ai_search([module], "   ", 0, 10)
     assert result.total == 0
+    assert module.asked == []
 
 
-# ---------------------------------------------------------------------------
-# Related Artists (derived from the suggestion tracks)
-# ---------------------------------------------------------------------------
-
-
-async def test_related_artists_derived():
-    # 2 suggestions on Artist One, 1 on Artist Two.
-    module = FakeModule("localfiles", ai_tracks=[
-        _sugg_track("localfiles", "t1", "Song 1", "a1", "Album One", "ar1", "Artist One"),
-        _sugg_track("localfiles", "t2", "Song 2", "a1", "Album One", "ar1", "Artist One"),
-        _sugg_track("localfiles", "t3", "Song 3", "a2", "Album Two", "ar2", "Artist Two"),
-    ])
-
-    result = await assemble_ai_search([module], "dreamy ambient", 0, 10)
-
-    rart = _section(result, "Related Artists")
-    assert rart is not None
-    # Ranked by suggestion count: the artist with 2 tracks leads.
-    assert [s.name for s in rart.sections] == ["Artist One", "Artist Two"]
-    # Browsable cards carrying the entity.
-    assert rart.sections[0].artist is not None
-    # Order: suggestion card, then Related Artists.
-    names = [it.name for it in result.items]
-    assert names.index("AI SUGGESTIONS") < names.index("Related Artists")
-
-
-async def test_related_hidden_when_ai_suppressed():
-    # A full-name lookup hides the suggestions, so the derived rows go too.
-    module = FakeModule(
-        "localfiles",
-        search_results={SearchType.artist: [_artist_item("localfiles", "arV", "Vangelis")]},
-        ai_tracks=[
-            _sugg_track("localfiles", "t1", "Song", "a1", "Album One", "ar1", "Artist One")
-        ],
-    )
-
-    result = await assemble_ai_search([module], "vangelis", 0, 10)
-
-    assert len(_best_match_sections(result)) == 1
-    assert _ai_cards(result) == []
-    assert _section(result, "Related Artists") is None
-
-
-async def test_catalog_sources_attribute_origin():
-    """Every AI-search catalog carries its origin source(s) in ``sources``:
-    per-source sections get a single name; the cross-source Related sections
-    get the union. id.source stays "server" for the assembled ones, so this is
-    the only place the origin is recoverable (no source-id reuse/conflict)."""
-    local = FakeModule(
-        "localfiles",
-        search_results={SearchType.album: [_album_item("localfiles", "al1", "Late Night Jazz", "a1", "Chet")]},
-        ai_tracks=[_sugg_track("localfiles", "l1", "Blue", "alX", "Kind of Blue", "aMiles", "Miles Davis")],
-    )
-    jamendo = FakeModule(
-        "jamendo",
-        search_results={SearchType.album: [_album_item("jamendo", "al2", "Late Night Jazz", "a2", "Bill")]},
-        ai_tracks=[_sugg_track("jamendo", "j1", "So What", "alY", "Jazz Moods", "aBill", "Bill Evans")],
-    )
-    result = await assemble_ai_search([local, jamendo], "late night jazz", 0, 20)
-    cat = {it.name: it.catalog for it in result.items}
-
-    assert cat["BEST MATCH · localfiles"].sources == ["localfiles"]
-    assert cat["BEST MATCH · jamendo"].sources == ["jamendo"]
-    # Plugin cards carry their own source too (uniform across the response).
-    assert cat["AI SUGGESTIONS"].sources  # localfiles or jamendo card
-    # Related is rolled up across both sources -> the union.
-    assert cat["Related Artists"].sources == ["jamendo", "localfiles"]
-
-
-async def test_localfiles_sections_lead_regardless_of_module_order():
-    """The user's own library ranks first: its BEST MATCH and AI sections come
-    before Jamendo's even when Jamendo is the first module passed in."""
-    local = FakeModule(
-        "localfiles",
-        search_results={SearchType.album: [_album_item("localfiles", "al1", "Workout", "a1", "Chet")]},
-        ai_tracks=[_sugg_track("localfiles", "l1", "Blue", "alX", "Kind of Blue", "aMiles", "Miles Davis")],
-    )
-    jamendo = FakeModule(
-        "jamendo",
-        search_results={SearchType.album: [_album_item("jamendo", "al2", "Workout", "a2", "Bill")]},
-        ai_tracks=[_sugg_track("jamendo", "j1", "So What", "alY", "Jazz Moods", "aBill", "Bill Evans")],
-    )
-    # Jamendo first in the module list — ranking must still put localfiles on top.
-    result = await assemble_ai_search([jamendo, local], "workout music", 0, 20)
-
-    bm = [it.name for it in result.items if it.name.startswith("BEST MATCH")]
-    assert bm == ["BEST MATCH · localfiles", "BEST MATCH · jamendo"]
-    # And every BEST MATCH precedes every AI suggestion card.
-    names = [it.name for it in result.items]
-    assert max(i for i, n in enumerate(names) if n.startswith("BEST MATCH")) < names.index("AI SUGGESTIONS")
-
-
-# ---------------------------------------------------------------------------
-# Related Artists resolution (performer stubs -> full entities with images)
-# ---------------------------------------------------------------------------
-
-
-def _full_artist(source: str, local: str, name: str) -> BrowseItem:
-    """What a source's get() returns for an artist: the full entity, image
-    included — unlike the track.performer stub the related row starts from."""
-    aid = EntityId(id=local, type=EntityType.ARTIST, source=source)
-    return BrowseItem(
-        id=aid,
-        name=name,
+@pytest.mark.asyncio
+async def test_a_routed_shelf_leads_and_hides_the_suggestions():
+    shelf = EntityId(id="recent", type=EntityType.CATALOG, source="localfiles")
+    routed = BrowseItem(
+        id=shelf,
+        name="Recently Added",
         can_browse=True,
-        artist=Artist(
-            id=aid,
-            name=name,
-            image=CoverImage(small=f"/resource/artist/{local}_small.jpg"),
-        ),
+        catalog=Catalog(id=shelf, title="Recently Added"),
+    )
+    module = _Module("localfiles", [_track("localfiles", "l1", "Sunset")])
+
+    result = await assemble_ai_search(
+        [module], "recently added", 0, 10, router=_Router([routed])
     )
 
-
-def test_rollup_interleaves_sources_round_robin():
-    # localfiles repeats the same artists (high counts); a discovery source
-    # returns mostly distinct ones (count 1). A raw count merge would bury
-    # every jamendo artist below the whole library — round-robin must surface
-    # jamendo's picks up front instead.
-    def _art(source, local):
-        aid = EntityId(id=local, type=EntityType.ARTIST, source=source)
-        return Artist(id=aid, name=local)
-
-    pairs = (
-        [("lf:A", _art("localfiles", "A"))] * 3
-        + [("lf:B", _art("localfiles", "B"))] * 2
-        + [("jm:X", _art("jamendo", "X"))]
-        + [("jm:Y", _art("jamendo", "Y"))]
-    )
-    out = _rollup(pairs, 6)
-
-    assert [a.id.source for a in out] == ["localfiles", "jamendo", "localfiles", "jamendo"]
-    assert [a.name for a in out] == ["A", "X", "B", "Y"]
+    assert [item.name for item in result.items] == ["Recently Added"]
 
 
-async def test_related_artists_resolved_to_full_entities():
-    module = FakeModule(
-        "localfiles",
-        ai_tracks=[
-            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd")
-        ],
-        entities={
-            "kalinka:localfiles:artist:aPF": _full_artist("localfiles", "aPF", "Pink Floyd")
-        },
-    )
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    related = _section(result, "Related Artists")
-    assert related is not None
-    (card,) = related.sections
-    assert card.artist.image is not None
-    assert card.artist.image.small == "/resource/artist/aPF_small.jpg"
-    assert module.get_calls == ["kalinka:localfiles:artist:aPF"]
-
-
-async def test_related_artists_resolved_in_one_batch_per_source():
-    """The server hands each source ONE get_all() with all its artist ids —
-    a batch-capable backend (Jamendo) then pays a single round-trip."""
-    module = FakeModule(
-        "localfiles",
-        ai_tracks=[
-            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd"),
-            _sugg_track("localfiles", "t2", "Echoes", "al2", "Meddle", "aTD", "Tangerine Dream"),
-        ],
-        entities={
-            "kalinka:localfiles:artist:aPF": _full_artist("localfiles", "aPF", "Pink Floyd"),
-            "kalinka:localfiles:artist:aTD": _full_artist("localfiles", "aTD", "Tangerine Dream"),
-        },
-    )
-    batches = []
-    original = module.get_all
-
-    async def spying_get_all(entity_ids):
-        batches.append([e.to_string for e in entity_ids])
-        return await original(entity_ids)
-
-    module.get_all = spying_get_all
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    assert _section(result, "Related Artists") is not None
-    assert batches == [
-        ["kalinka:localfiles:artist:aPF", "kalinka:localfiles:artist:aTD"]
+@pytest.mark.asyncio
+async def test_sections_page():
+    modules = [
+        _Module("a", [_track("a", "a1", "One")]),
+        _Module("b", [_track("b", "b1", "Two")]),
+        _Module("c", [_track("c", "c1", "Three")]),
     ]
-
-
-async def test_related_artist_resolution_failure_keeps_stub():
-    """A failing get() (missing entity, source error) must degrade to the
-    name-only stub, never break the search response."""
-    module = FakeModule(
-        "localfiles",
-        ai_tracks=[
-            _sugg_track("localfiles", "t1", "Time", "al1", "DSOTM", "aPF", "Pink Floyd")
-        ],
-        # no entities -> get() raises
-    )
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    related = _section(result, "Related Artists")
-    (card,) = related.sections
-    assert card.name == "Pink Floyd"
-    assert card.artist.image is None
-
-
-async def test_related_resolution_concurrent_via_default_get_all():
-    """A source without a batch backend resolves through the SDK's default
-    get_all: one get() per artist, run concurrently — 12 artists must not
-    take 12 sequential round-trips."""
-    import asyncio
-
-    class GaugedModule(FakeModule):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.active = 0
-            self.max_active = 0
-
-        async def get(self, entity_id) -> BrowseItem:
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
-            try:
-                await asyncio.sleep(0.01)
-                return await super().get(entity_id)
-            finally:
-                self.active -= 1
-
-    n = 12  # == default related_max_results
-    tracks = [
-        _sugg_track("localfiles", f"t{i}", f"Song {i}", f"al{i}", f"Album {i}", f"a{i}", f"Artist {i}")
-        for i in range(n)
-    ]
-    entities = {
-        f"kalinka:localfiles:artist:a{i}": _full_artist("localfiles", f"a{i}", f"Artist {i}")
-        for i in range(n)
-    }
-    module = GaugedModule("localfiles", ai_tracks=tracks, entities=entities)
-
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    related = _section(result, "Related Artists")
-    assert len(related.sections) == n
-    assert all(card.artist.image is not None for card in related.sections)
-    assert len(module.get_calls) == n
-    assert module.max_active > 1  # concurrent, not serialized
-
-
-async def test_resolution_keyed_by_entity_source_not_module_name():
-    """Jamendo's module_name() is "Jamendo" while its entities say "jamendo";
-    resolution must route by the source string on the module's own cards."""
-    module = FakeModule(
-        "Jamendo",
-        source="jamendo",
-        ai_tracks=[
-            _sugg_track("jamendo", "t1", "Hard", "al1", "Hard Stuff", "a337225", "Circles")
-        ],
-        entities={
-            "kalinka:jamendo:artist:a337225": _full_artist("jamendo", "a337225", "Circles")
-        },
-    )
-    result = await assemble_ai_search([module], "workout music", 0, 10)
-
-    related = _section(result, "Related Artists")
-    (card,) = related.sections
-    assert card.artist.image is not None
+    result = await assemble_ai_search(modules, "calm", 1, 1)
+    assert result.total == 3
+    assert _sources(result) == ["b"]

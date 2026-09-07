@@ -445,6 +445,50 @@ class Catalog(BaseModel):
     sources: List[str] = []
 
 
+class MatchTier(str, Enum):
+    """
+    How closely a search hit's name answers the query, best first.
+
+    Assigned by the server's name ranking, so a consumer holding hits from
+    several sources can merge them by tier and then by
+    :attr:`NameMatch.score` without ranking anything itself.
+
+    Values:
+        EXACT: The name, once case, diacritics and punctuation are set aside.
+        EQUIVALENT: The name once a leading article and an edition suffix
+            ("Deluxe Edition", "2009 Remaster") are set aside too.
+        CLOSE: A near miss on the whole name — a typo away.
+        PARTIAL: The query is a prefix of the name or contained in it, or
+            the name is contained in the query.
+        CONTEXTUAL: Matched not on the name but on its context — an album's
+            or track's artist, or a track's album.
+        WEAK: Returned by the source, but its name explains little of the
+            query.
+    """
+
+    EXACT = "exact"
+    EQUIVALENT = "equivalent"
+    CLOSE = "close"
+    PARTIAL = "partial"
+    CONTEXTUAL = "contextual"
+    WEAK = "weak"
+
+
+class NameMatch(BaseModel):
+    """
+    Why a search hit stands where it does in its listing.
+
+    Attributes:
+        tier (MatchTier): The band the hit ranks in; every hit of a better
+            tier outranks it.
+        score (float): Whole-string similarity to the query, 0..100, ordering
+            hits within a tier. Not comparable across tiers.
+    """
+
+    tier: MatchTier
+    score: float
+
+
 class BrowseItem(BaseModel):
     """
     A universal container for any item that can be displayed in the Kalinka UI.
@@ -487,6 +531,9 @@ class BrowseItem(BaseModel):
         catalog (Optional[Catalog]): Catalog data if this represents a catalog section
         track (Optional[Track]): Track data if this represents a track
         timestamp (NonNegativeInt): Used for sorting/merging items by time
+        match (Optional[NameMatch]): How the item answers the query it was
+            searched for, set by the server's name ranking and absent
+            everywhere else.
         sections (Optional[List[BrowseItem]]): Related content shown alongside
             this item — "Similar albums", or the shelves a catalog is made of.
             A section carrying a ``catalog`` is a pointer: browse its id for
@@ -542,6 +589,7 @@ class BrowseItem(BaseModel):
     # Used for merging multiple items into a single view
     timestamp: NonNegativeInt = 0
 
+    match: Optional[NameMatch] = None
     sections: Optional[List["BrowseItem"]] = None
 
 

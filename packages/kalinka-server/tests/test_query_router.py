@@ -18,13 +18,13 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
 )
-from kalinka_plugin_sdk.inputmodule import SearchType
+from kalinka_plugin_sdk.inputmodule import InputModule
 
 from kalinka_server.ai_search import assemble_ai_search
 from kalinka_server.config_model import SearchConfig
 from kalinka_server.query_router import CatalogRouter
 
-from .test_ai_search import FakeModule, _artist_item, _track_item
+from .test_ai_search import _card, _track
 
 _DIM = 64
 
@@ -64,17 +64,31 @@ def _shelf(source: str, local: str, title: str, description=None) -> BrowseItem:
     )
 
 
-class RoutableModule(FakeModule):
-    """FakeModule that serves a root catalog of shelves, and one preview track
-    when browsed into by a shelf id (so routed cards get inline content)."""
+class RoutableModule(InputModule):
+    """A module that serves a root catalog of shelves, one preview track when
+    browsed into by a shelf id (so routed cards get inline content), and a
+    suggestion card when it has tracks to suggest."""
 
-    def __init__(self, name, shelves, display=None, **kw):
-        super().__init__(name, **kw)
+    def __init__(self, name, shelves, display=None, source=None):
+        self._name = name
         self._shelves = shelves
         self._display = display or name
+        # EntityId source emitted on this module's cards. Real modules' source
+        # strings differ from module_name() (e.g. "jamendo" vs "Jamendo").
+        self._source = source or name
+        self._ai = []
+
+    def module_name(self) -> str:
+        return self._name
 
     def display_name(self) -> str:
         return self._display
+
+    async def ai_search(self, query, offset=0, limit=50) -> BrowseItemList:
+        if not self._ai:
+            return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
+        card = _card(self._source, self._ai)
+        return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
 
     async def browse(self, entity_id, offset=0, limit=50, filter=None):
         if entity_id.id == "root":
@@ -285,7 +299,7 @@ async def test_route_hides_ai_suggestion_cards():
     # A surviving route marks the query catalog-shaped: mood-matched AI
     # suggestion cards are hidden, while without a route they show as usual.
     lib = _library()
-    lib._ai = [_track_item("localfiles", "t1", "Some Track")]
+    lib._ai = [_track("localfiles", "t1", "Some Track")]
     router = await _built_router(("localfiles", lib))
 
     routed = await assemble_ai_search(
@@ -299,48 +313,6 @@ async def test_route_hides_ai_suggestion_cards():
     assert routed_names[0] == "Recently Added · Local files"
     assert "AI SUGGESTIONS" not in routed_names, routed_names
     assert "AI SUGGESTIONS" in [it.name for it in unrouted.items]
-
-
-async def test_assemble_name_lookup_vetoes_routed_shelf():
-    # "New Order" is a band; its shelf-vocabulary words would route to the
-    # "New Releases" shelf, but the full-name BEST MATCH must suppress that.
-    jam = _jamendo()
-    jam._search = {SearchType.artist: [_artist_item("jamendo", "a1", "New Order")]}
-    router = await _built_router(("jamendo", jam))
-    # The bag-of-words fake scores this trap 0.50 where real MiniLM gives
-    # 0.58; lower the floor so the test still exercises the veto, not the
-    # floor.
-    cfg = SearchConfig(route_min_similarity=45)
-
-    # Sanity: without the veto context, the trap query really does route.
-    assert await router.route("new order", None, cfg)
-
-    result = await assemble_ai_search([jam], "new order", 0, 10, cfg, router=router)
-
-    names = [it.name for it in result.items]
-    assert not any("New Releases" in n for n in names), names
-    assert any("BEST MATCH" in n for n in names), names
-
-
-async def test_name_lookup_veto_spares_shelf_named_by_the_query():
-    # From the device log: 'new releases' routed to the New Releases shelves
-    # at 1.00, then a Qobuz playlist literally named "New Releases" set the
-    # name-lookup flag and the veto hid the routed shelves. When the query IS
-    # the shelf title, the route must survive; the AI cards stay hidden.
-    jam = _jamendo()
-    jam._search = {
-        SearchType.artist: [_artist_item("jamendo", "a1", "New Releases")]
-    }
-    jam._ai = [_track_item("jamendo", "t1", "Some Track")]
-    router = await _built_router(("jamendo", jam))
-
-    result = await assemble_ai_search(
-        [jam], "new releases", 0, 10, SearchConfig(), router=router
-    )
-
-    names = [it.name for it in result.items]
-    assert "New Releases · Jamendo" in names, names
-    assert "AI SUGGESTIONS" not in names, names
 
 
 async def test_assemble_without_router_unchanged():
