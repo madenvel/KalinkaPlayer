@@ -48,11 +48,11 @@ from .config_schema_processor import (
     get_field_value,
     set_field_value,
 )
-from .ai_search import assemble_ai_search
 from .catalog_art_service import CatalogArtService
 from .browse_route import register_browse_routes
 from .content_route import register_content_route
 from .query_router import CatalogRouter
+from .search_route import register_search_routes
 from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
@@ -644,24 +644,12 @@ async def create_app(
             limit=limit,
         )
 
-    @app.get("/ai_search")
-    async def ai_search(
-        query: str,
-        offset: int = 0,
-        limit: int = 10,
-        sources: Optional[str] = None,
-    ) -> BrowseItemList:
-        """Semantic / natural-language search across input modules.
-
-        Assembles a merged BEST MATCH block (from every source's ``search()``)
-        plus a per-source AI SUGGESTIONS card (from each ``ai_search()``); see
-        :func:`assemble_ai_search`.
-        """
-        input_modules: List[InputModule] = extract_modules(sources)
-        return await assemble_ai_search(
-            input_modules, query, offset, limit, app.state.config.search,
-            router=app.state.query_router,
-        )
+    register_search_routes(
+        app,
+        extract_modules,
+        lambda: app.state.config.search,
+        lambda: app.state.query_router,
+    )
 
     @app.get("/ai_search/suggestions")
     async def ai_search_suggestions(

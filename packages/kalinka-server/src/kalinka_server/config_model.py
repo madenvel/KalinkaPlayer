@@ -146,52 +146,19 @@ class DeviceAutomationConfig(BaseModel):
 
 
 class SearchConfig(BaseModel):
-    """Cross-source search tuning: the merged BEST MATCH block and the AI
-    suggestion cards assembled by ``kalinka_server.ai_search``."""
+    """Cross-source search tuning: the name matches ranked by
+    ``kalinka_server.name_matches`` and the suggestion cards assembled by
+    ``kalinka_server.ai_search``."""
 
-    ai_suppress_full_match_score: int = Field(
-        default=88,
-        ge=0,
-        le=100,
-        title="Hide AI suggestions on a full-name match",
-        json_schema_extra={
-            "help": (
-                "When your search is simply an artist's name, the AI "
-                "suggestions row is hidden. This sets how close the match "
-                "must be (0–100) — 100 hides it only on an exact name"
-            ),
-        },
-    )
-    best_match_min_score: int = Field(
-        default=88,
-        ge=0,
-        le=100,
-        title="BEST MATCH minimum score",
-        json_schema_extra={
-            "help": (
-                "How well a result must match your search (0–100) to appear "
-                "under BEST MATCH — higher shows fewer, more confident matches"
-            ),
-        },
-    )
-    best_match_max_results: int = Field(
-        default=3,
-        ge=1,
-        le=50,
-        title="BEST MATCH max results per source",
-        json_schema_extra={
-            "help": "How many results each source may show in its BEST MATCH section",
-        },
-    )
     candidate_limit: int = Field(
         default=50,
         ge=1,
         le=200,
-        title="BEST MATCH candidates per type",
+        title="Name-match candidates per type",
         json_schema_extra={
             "help": (
-                "How many results are considered when ranking BEST MATCH — "
-                "higher is more thorough but slower"
+                "How many results each source may return per entity type "
+                "when matching a name — higher is more thorough but slower"
             ),
         },
     )
@@ -202,15 +169,6 @@ class SearchConfig(BaseModel):
         title="AI suggestions per source",
         json_schema_extra={
             "help": "How many tracks each source shows in its AI suggestions row",
-        },
-    )
-    related_max_results: int = Field(
-        default=12,
-        ge=1,
-        le=50,
-        title="Related artists max",
-        json_schema_extra={
-            "help": "How many artists appear in the Related Artists row",
         },
     )
     suggest_min_score: int = Field(
