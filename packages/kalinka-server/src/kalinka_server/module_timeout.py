@@ -10,7 +10,7 @@ plugin failure (a failed leg, a dropped shelf, a 500 on /browse).
 Every ``InputModule`` protocol method is bound concretely in ``__init__``
 so that ``isinstance(proxy, InputModule)`` still holds. This is load-bearing:
 the server gates every module behind ``isinstance(..., InputModule)`` (browse
-root, the catalog router, source resolution), and Python 3.12 changed
+root, source resolution), and Python 3.12 changed
 ``runtime_checkable`` protocol checks to resolve members by *static* lookup,
 which does NOT trigger ``__getattr__``. A pure-``__getattr__`` proxy therefore
 silently fails the check on 3.12+ (every module skipped, empty catalog), even

@@ -35,6 +35,7 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from .config_model import SearchConfig
+from .source_failed import SourceFailed
 
 # Whole-string similarity at which a name is a typo away from the query.
 CLOSE_RATIO = 85.0
@@ -172,16 +173,6 @@ def rank(query: str, items: Iterable[BrowseItem]) -> List[BrowseItem]:
         )
     )
     return [item for _, item in ranked]
-
-
-class SourceFailed(Exception):
-    """A source could not answer: one of its legs raised. Nothing partial is
-    passed off as its listing — the caller reports the source as unavailable."""
-
-    def __init__(self, source: str, cause: BaseException):
-        self.source = source
-        self.cause = cause
-        super().__init__(f"{source}: {cause!r}")
 
 
 async def collect_name_matches(

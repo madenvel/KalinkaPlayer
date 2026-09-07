@@ -16,8 +16,8 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
 
 from kalinka_server.config_model import SearchConfig
+from kalinka_server.source_failed import SourceFailed
 from kalinka_server.name_matches import (
-    SourceFailed,
     collect_name_matches,
     equivalent_form,
     has_navigational_intent,

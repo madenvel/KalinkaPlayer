@@ -15,8 +15,8 @@ from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .ai_search import assemble_ai_search
 from .config_model import SearchConfig
-from .name_matches import SourceFailed, collect_name_matches
-from .query_router import CatalogRouter
+from .name_matches import collect_name_matches
+from .source_failed import SourceFailed
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,12 @@ def register_search_routes(
     app: FastAPI,
     resolve_modules: Callable[[Optional[str]], List[InputModule]],
     config: Callable[[], SearchConfig],
-    router: Callable[[], Optional[CatalogRouter]],
 ) -> None:
     """Mount the search endpoints on ``app``.
 
     ``resolve_modules`` turns the ``sources`` parameter into modules, raising
-    for names it does not know; ``config`` and ``router`` are read per request
-    so a settings change or a rebuilt router is seen without a restart.
+    for names it does not know; ``config`` is read per request so a settings
+    change is seen without a restart.
     """
 
     @app.get("/search/matches")
@@ -60,7 +59,6 @@ def register_search_routes(
                 offset,
                 limit,
                 config(),
-                router=router(),
             )
         except SourceFailed as e:
             raise _unavailable(e)

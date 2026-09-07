@@ -60,7 +60,7 @@ def _resolve(sources):
 @pytest.fixture
 def client():
     app = FastAPI()
-    register_search_routes(app, _resolve, SearchConfig, lambda: None)
+    register_search_routes(app, _resolve, SearchConfig)
     return TestClient(app)
 
 

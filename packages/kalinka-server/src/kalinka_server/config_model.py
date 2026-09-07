@@ -184,48 +184,6 @@ class SearchConfig(BaseModel):
             ),
         },
     )
-    # Catalog routing (query_router.py): shortcuts to browse shelves shown
-    # above the search results when the query names one ("recently added").
-    # Floor default measured against MiniLM: bare artist names score up to
-    # ~0.50 vs shelf titles ("radiohead" vs "Popular Tracks" = 0.49) while
-    # real catalog hits score 0.58+ — 55 sits in the gap between the two.
-    route_max_results: int = Field(
-        default=3,
-        ge=1,
-        le=10,
-        title="Catalog shortcuts max",
-        json_schema_extra={
-            "help": (
-                "How many browse shortcuts (like Recently Added or New "
-                "Releases) may appear above the search results"
-            ),
-        },
-    )
-    route_min_similarity: int = Field(
-        default=55,
-        ge=0,
-        le=100,
-        title="Catalog shortcut minimum similarity",
-        json_schema_extra={
-            "help": (
-                "How closely your search must match a section name (0–100) "
-                "for its shortcut to appear — higher shows fewer shortcuts"
-            ),
-        },
-    )
-    route_decoy_margin: int = Field(
-        default=5,
-        ge=0,
-        le=100,
-        title="Catalog shortcut decisiveness",
-        json_schema_extra={
-            "help": (
-                "How much better a section must fit your search than a "
-                "generic music request (0–100) — higher shows shortcuts only "
-                "for unmistakable matches"
-            ),
-        },
-    )
 
 
 class EmbeddingConfig(BaseModel):
