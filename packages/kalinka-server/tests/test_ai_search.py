@@ -21,7 +21,7 @@ from kalinka_plugin_sdk.inputmodule import InputModule
 
 from kalinka_server.ai_search import assemble_ai_search
 from kalinka_server.config_model import SearchConfig
-from kalinka_server.name_matches import SourceFailed
+from kalinka_server.source_failed import SourceFailed
 
 
 def _track(source, local, title):
@@ -73,14 +73,6 @@ class _Module(InputModule):
             return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
         card = _card(self._name, self._tracks)
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[card])
-
-
-class _Router:
-    def __init__(self, cards):
-        self._cards = cards
-
-    async def route(self, query, sources, cfg):
-        return list(self._cards)
 
 
 def _sources(result: BrowseItemList):
@@ -135,24 +127,6 @@ async def test_blank_query_is_empty_without_asking():
     result = await assemble_ai_search([module], "   ", 0, 10)
     assert result.total == 0
     assert module.asked == []
-
-
-@pytest.mark.asyncio
-async def test_a_routed_shelf_leads_and_hides_the_suggestions():
-    shelf = EntityId(id="recent", type=EntityType.CATALOG, source="localfiles")
-    routed = BrowseItem(
-        id=shelf,
-        name="Recently Added",
-        can_browse=True,
-        catalog=Catalog(id=shelf, title="Recently Added"),
-    )
-    module = _Module("localfiles", [_track("localfiles", "l1", "Sunset")])
-
-    result = await assemble_ai_search(
-        [module], "recently added", 0, 10, router=_Router([routed])
-    )
-
-    assert [item.name for item in result.items] == ["Recently Added"]
 
 
 @pytest.mark.asyncio

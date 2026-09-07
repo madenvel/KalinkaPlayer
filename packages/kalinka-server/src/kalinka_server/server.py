@@ -51,13 +51,11 @@ from .config_schema_processor import (
 from .catalog_art_service import CatalogArtService
 from .browse_route import register_browse_routes
 from .content_route import register_content_route
-from .query_router import CatalogRouter
 from .search_route import register_search_routes
 from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
 from .dynamic_field_registry import build_dynamic_field_registry
 from .options_registry import OptionsRegistry
-from .multisearch import calculate_fuzzy_score
 from .web_ui import WebUiStaticFiles
 from .optional_packages_registry import (
     build_catalog as build_optional_packages_catalog,
@@ -359,21 +357,6 @@ async def create_app(
         ),
     )
 
-    # Catalog routing table (query -> browse shelves). Built in the background
-    # — the first embed provisions/loads the model, which must not hold up
-    # startup. Until it finishes, route() just returns nothing.
-    app.state.query_router = CatalogRouter(player_context.embedder)
-    app.state.query_router_task = asyncio.create_task(
-        app.state.query_router.rebuild(
-            [
-                (name, plugin.interface)
-                for name, plugin in modules.prepared_input_modules.items()
-                if name in modules.enabled_input_modules
-                and isinstance(plugin.interface, InputModule)
-            ]
-        )
-    )
-
     # Search-suggestion engine: validated against the user's own library
     # (localfiles) when it is enabled — a discovery catalog like Jamendo has
     # everything, so validating against it proves nothing. Attestation runs
@@ -626,29 +609,10 @@ async def create_app(
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 
-    @app.get("/search/{search_type}/{query}")
-    async def search(
-        search_type: SearchType,
-        query: str,
-        offset: int = 0,
-        limit: int = 10,
-        sources: Optional[str] = None,
-    ) -> BrowseItemList:
-        """Search for items across input modules."""
-        input_modules: List[InputModule] = extract_modules(sources)
-
-        return await k_way_merge_browse_items(
-            [partial(module.search, search_type, query) for module in input_modules],
-            compared_value=lambda item: calculate_fuzzy_score(item.name, query),
-            offset=offset,
-            limit=limit,
-        )
-
     register_search_routes(
         app,
         extract_modules,
         lambda: app.state.config.search,
-        lambda: app.state.query_router,
     )
 
     @app.get("/ai_search/suggestions")
