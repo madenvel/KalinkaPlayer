@@ -136,14 +136,14 @@ def _track_item(idx: int, genre: str | None, title: str | None = None) -> Browse
         id=EntityId(id=f"al{idx}", type=EntityType.ALBUM, source="localfiles"),
         title=f"Album {idx}",
         artist=artist,
-        genre=(
+        genres=[
             Genre(
                 id=EntityId(id=genre, type=EntityType.GENRE, source="localfiles"),
                 name=genre,
             )
-            if genre
-            else None
-        ),
+        ]
+        if genre
+        else [],
     )
     track = Track(
         id=tid,

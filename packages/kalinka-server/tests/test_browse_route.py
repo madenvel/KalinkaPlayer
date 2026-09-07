@@ -186,6 +186,14 @@ def test_values_endpoint_serves_one_fields_vocabulary(client, module):
     assert (catalog_id.id, field, limit, q) == ("albums", "genre", 5, "ja")
 
 
+def test_values_for_anything_but_a_catalog_is_422_before_the_module(client, module):
+    r = client.get("/browse/kalinka:testsource:track:t1/filter/genre/values")
+
+    assert r.status_code == 422
+    assert r.json()["detail"]["field"] == "id"
+    assert module.asked == []
+
+
 def test_values_for_a_field_that_was_never_offered_is_422(client):
     r = client.get(f"/browse/{CATALOG}/filter/year/values")
 

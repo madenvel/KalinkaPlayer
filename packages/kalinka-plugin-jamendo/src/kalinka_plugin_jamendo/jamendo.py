@@ -31,6 +31,7 @@ from kalinka_plugin_sdk.datamodel import (
     Track,
 )
 from kalinka_plugin_sdk.filters import (
+    or_unfiltered,
     TEXT_FIELD,
     FilterKind,
     FilterOp,
@@ -117,18 +118,15 @@ GENRES = [
 _GENRE_LABELS = dict(GENRES)
 
 
-def _genre_of(track: dict) -> Optional[Genre]:
-    """The genres a track's musicinfo names, as the one genre the model
-    holds: labels joined for the reader, slugs joined as the ``tags`` value
-    that would require them all."""
+def _genres_of(track: dict) -> List[Genre]:
+    """The genres a track's musicinfo names, labelled from the vocabulary the
+    plugin offers; a slug outside it is shown as it came."""
     tags = (track.get("musicinfo") or {}).get("tags") or {}
-    slugs = [str(slug) for slug in tags.get("genres") or [] if slug]
-    if not slugs:
-        return None
-    return Genre(
-        id=genre_id(" ".join(slugs)),
-        name=", ".join(_GENRE_LABELS.get(slug, slug.capitalize()) for slug in slugs),
-    )
+    return [
+        Genre(id=genre_id(slug), name=_GENRE_LABELS.get(slug, slug.capitalize()))
+        for slug in tags.get("genres") or []
+        if slug
+    ]
 
 
 # ``tags`` is honoured by /tracks/ alone — /albums/, /artists/ and /playlists/
@@ -660,9 +658,10 @@ class JamendoInputModule(InputModule):
         entity_id: EntityId,
         offset: PositiveInt = 0,
         limit: PositiveInt = 50,
-        filter: FilterQuery = FilterQuery({}),
+        filter: Optional[FilterQuery] = None,
     ) -> BrowseItemList:
         limit = min(limit, MAX_LIMIT)
+        filter = or_unfiltered(filter)
         if entity_id.type == EntityType.CATALOG:
             return await self._browse_catalog(entity_id.id, offset, limit, filter)
 
@@ -740,7 +739,7 @@ class JamendoInputModule(InputModule):
         endpoint: str,
         offset: int,
         limit: int,
-        filter: FilterQuery = FilterQuery({}),
+        filter: FilterQuery,
     ) -> BrowseItemList:
         # Narrowed before anything is listed, so an undeclared field is
         # refused rather than dropped; the shelf keeps its own order either way.
@@ -1052,7 +1051,7 @@ class JamendoInputModule(InputModule):
                 title=album_name,
                 artist=performer,
                 image=_cover(image),
-                genre=_genre_of(track),
+                genres=_genres_of(track),
             ),
         )
 
