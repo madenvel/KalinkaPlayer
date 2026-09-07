@@ -102,6 +102,25 @@ async def test_search_tracks():
 
 
 @pytest.mark.asyncio
+async def test_search_tracks_ask_for_and_carry_their_genres():
+    tagged = {**TRACK, "musicinfo": {"tags": {"genres": ["rock", "indie", "triphop"]}}}
+    m = make_module([tagged])
+    res = await m.search(SearchType.track, "sunrise")
+    assert m.client.calls[0][1]["include"] == "musicinfo"
+    genre = res.items[0].track.album.genre
+    assert genre.name == "Rock, Indie, Triphop"
+    assert genre.id.id == "rock indie triphop"
+    assert genre.id.type == EntityType.GENRE
+
+
+@pytest.mark.asyncio
+async def test_a_track_without_tags_has_no_genre():
+    m = make_module([TRACK])
+    res = await m.search(SearchType.track, "sunrise")
+    assert res.items[0].track.album.genre is None
+
+
+@pytest.mark.asyncio
 async def test_search_albums_have_sections():
     m = make_module([ALBUM])
     res = await m.search(SearchType.album, "mornings")

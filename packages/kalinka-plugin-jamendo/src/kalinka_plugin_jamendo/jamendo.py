@@ -22,6 +22,7 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
     FavoriteIds,
+    Genre,
     Owner,
     Playlist,
     Preview,
@@ -113,6 +114,23 @@ GENRES = [
     ("blues", "Blues"),
 ]
 
+_GENRE_LABELS = dict(GENRES)
+
+
+def _genre_of(track: dict) -> Optional[Genre]:
+    """The genres a track's musicinfo names, as the one genre the model
+    holds: labels joined for the reader, slugs joined as the ``tags`` value
+    that would require them all."""
+    tags = (track.get("musicinfo") or {}).get("tags") or {}
+    slugs = [str(slug) for slug in tags.get("genres") or [] if slug]
+    if not slugs:
+        return None
+    return Genre(
+        id=genre_id(" ".join(slugs)),
+        name=", ".join(_GENRE_LABELS.get(slug, slug.capitalize()) for slug in slugs),
+    )
+
+
 # ``tags`` is honoured by /tracks/ alone — /albums/, /artists/ and /playlists/
 # drop it and say so in headers.warnings — and multiple tags intersect rather
 # than union, which is what ops says.
@@ -187,6 +205,10 @@ def album_id(id: str) -> EntityId:
 
 def track_id(id: str) -> EntityId:
     return EntityId(id=id, type=EntityType.TRACK, source=SOURCE)
+
+
+def genre_id(id: str) -> EntityId:
+    return EntityId(id=id, type=EntityType.GENRE, source=SOURCE)
 
 
 def playlist_id(id: str) -> EntityId:
@@ -554,6 +576,7 @@ class JamendoInputModule(InputModule):
         params = {"namesearch": query, "offset": offset, "limit": limit}
         if type == SearchType.track:
             params["audioformat"] = self.audio_format
+            params["include"] = "musicinfo"
         results = await self.client.request(endpoint, params)
 
         if type == SearchType.track:
@@ -582,8 +605,7 @@ class JamendoInputModule(InputModule):
         Returns a single AI-suggestions catalog card ("DISCOVER ON JAMENDO")
         of tracks ranked by semantic proximity to the query — the plugin owns
         this card's presentation. Independent of search(): no name matching, no
-        albums/artists. The server appends this card after the merged BEST
-        MATCH block. Empty when the mood index is unavailable.
+        albums/artists. Empty when the mood index is unavailable.
         """
         limit = min(limit, MAX_LIMIT)
         if self._mood_index is None or not query.strip():
@@ -598,7 +620,12 @@ class JamendoInputModule(InputModule):
         ids = [str(tid) for tid, _ in page]
         raw = await self.client.request(
             "tracks",
-            {"id": " ".join(ids), "audioformat": self.audio_format, "limit": len(ids)},
+            {
+                "id": " ".join(ids),
+                "audioformat": self.audio_format,
+                "include": "musicinfo",
+                "limit": len(ids),
+            },
         )
         by_id = {str(t.get("id")): t for t in raw}
         ordered = [by_id[i] for i in ids if i in by_id]
@@ -1025,6 +1052,7 @@ class JamendoInputModule(InputModule):
                 title=album_name,
                 artist=performer,
                 image=_cover(image),
+                genre=_genre_of(track),
             ),
         )
 

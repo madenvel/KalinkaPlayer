@@ -81,6 +81,7 @@ async def test_returns_tracks_in_mood_order():
         assert it.can_add is True
     # one batch metadata call to the tracks endpoint
     assert client.calls and client.calls[0][0] == "tracks"
+    assert client.calls[0][1]["include"] == "musicinfo"
 
 
 @pytest.mark.asyncio
