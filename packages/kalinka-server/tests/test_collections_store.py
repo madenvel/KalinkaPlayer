@@ -2,7 +2,7 @@
 
 import pytest
 
-from kalinka_server.collections.store import CollectionStore, EntryFilter
+from kalinka_server.collections.store import CollectionStore, EntryFilter, NewEntry
 from tests.collections_seed import seed_collection as _seed_collection
 from tests.collections_seed import seed_entry as _seed_entry
 
@@ -13,6 +13,19 @@ async def store(tmp_path):
     await store.open()
     yield store
     await store.close()
+
+
+def entry(entity_id: str, *, source="qobuz", duration=100, genres=()) -> NewEntry:
+    return NewEntry(
+        entity_id=entity_id,
+        source=source,
+        title="A Song",
+        artist="A Band",
+        album="An Album",
+        duration=duration,
+        track_json="{}",
+        genres=genres,
+    )
 
 
 class TestMakingOne:
@@ -73,6 +86,176 @@ class TestRenaming:
 
         with pytest.raises(RuntimeError):
             await store.rename_collection("c1", "Nowhere")
+
+
+class TestAdding:
+    async def test_tracks_land_at_the_end_in_the_order_given(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        await _seed_entry(path, "c1", "already", position=0)
+
+        outcome = await store.add_entries(
+            "c1", [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:b")]
+        )
+
+        rows, total = await store.list_entries("c1")
+        assert (outcome.added, outcome.already_there) == (2, 0)
+        assert total == 3
+        assert [row.entity_id for row in rows][1:] == [
+            "kalinka:qobuz:track:a",
+            "kalinka:qobuz:track:b",
+        ]
+
+    async def test_a_track_already_there_is_left_out(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        await store.add_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+        outcome = await store.add_entries(
+            "c1", [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:b")]
+        )
+
+        _, total = await store.list_entries("c1")
+        assert (outcome.added, outcome.already_there) == (1, 1)
+        assert total == 2
+
+    async def test_one_batch_naming_a_track_twice_adds_it_once(self, store, tmp_path):
+        await _seed_collection(str(tmp_path / "collections.db"), "c1", "Mixed")
+
+        outcome = await store.add_entries(
+            "c1", [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:a")]
+        )
+
+        assert (outcome.added, outcome.already_there) == (1, 1)
+
+    async def test_a_track_may_be_added_twice_when_asked_for(self, store, tmp_path):
+        await _seed_collection(str(tmp_path / "collections.db"), "c1", "Mixed")
+
+        outcome = await store.add_entries(
+            "c1",
+            [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:a")],
+            allow_duplicates=True,
+        )
+
+        rows, total = await store.list_entries("c1")
+        assert (outcome.added, outcome.already_there) == (2, 0)
+        assert total == 2
+        assert rows[0].entry_id != rows[1].entry_id
+
+    async def test_what_was_added_is_what_the_facets_count(self, store, tmp_path):
+        await _seed_collection(str(tmp_path / "collections.db"), "c1", "Mixed")
+
+        await store.add_entries(
+            "c1",
+            [
+                entry("kalinka:qobuz:track:a", genres=(("jazz", "Jazz"),)),
+                entry(
+                    "kalinka:localfiles:track:b",
+                    source="localfiles",
+                    genres=(("jazz", "JAZZ"),),
+                ),
+            ],
+        )
+
+        sources = await store.sources_of("c1")
+        genres = await store.genres_of("c1")
+        assert {value.id for value in sources} == {"qobuz", "localfiles"}
+        assert [(value.id, value.count) for value in genres] == [("jazz", 2)]
+
+    async def test_adding_counts_as_changing_it(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "First", updated_at=10)
+
+        await store.add_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+        assert (await store.get_collection("c1")).updated_at > 10
+
+    async def test_adding_to_nothing_says_so(self, store):
+        assert await store.add_entries("nobody", [entry("x")]) is None
+
+    async def test_a_file_that_will_not_open_refuses_the_add(self, tmp_path):
+        path = tmp_path / "collections.db"
+        path.write_bytes(b"not a database at all")
+        store = CollectionStore(str(path))
+        await store.open()
+
+        with pytest.raises(RuntimeError):
+            await store.add_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+
+class TestReplacing:
+    async def test_the_collection_ends_up_holding_exactly_what_was_given(
+        self, store, tmp_path
+    ):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        await _seed_entry(path, "c1", "old1", position=0)
+        await _seed_entry(path, "c1", "old2", position=1)
+
+        outcome = await store.replace_entries(
+            "c1", [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:b")]
+        )
+
+        rows, total = await store.list_entries("c1")
+        assert (outcome.added, outcome.dropped) == (2, 2)
+        assert total == 2
+        assert [row.entity_id for row in rows] == [
+            "kalinka:qobuz:track:a",
+            "kalinka:qobuz:track:b",
+        ]
+
+    async def test_what_was_dropped_takes_its_genres_with_it(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        await _seed_entry(path, "c1", "old1", genres=[("rock", "Rock")])
+
+        await store.replace_entries(
+            "c1", [entry("kalinka:qobuz:track:a", genres=(("jazz", "Jazz"),))]
+        )
+
+        assert [value.id for value in await store.genres_of("c1")] == ["jazz"]
+
+    async def test_replacing_starts_the_positions_again(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        for i in range(5):
+            await _seed_entry(path, "c1", f"old{i}", position=i)
+
+        await store.replace_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+        rows, _ = await store.list_entries("c1")
+        assert [row.position for row in rows] == [0]
+
+    async def test_another_collection_keeps_what_it_had(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "One")
+        await _seed_collection(path, "c2", "Two")
+        await _seed_entry(path, "c2", "theirs")
+
+        await store.replace_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+        _, total = await store.list_entries("c2")
+        assert total == 1
+
+    async def test_replacing_counts_as_changing_it(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "First", updated_at=10)
+
+        await store.replace_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+        assert (await store.get_collection("c1")).updated_at > 10
+
+    async def test_replacing_nothing_says_so(self, store):
+        assert await store.replace_entries("nobody", [entry("x")]) is None
+
+    async def test_a_file_that_will_not_open_refuses_the_replace(self, tmp_path):
+        path = tmp_path / "collections.db"
+        path.write_bytes(b"not a database at all")
+        store = CollectionStore(str(path))
+        await store.open()
+
+        with pytest.raises(RuntimeError):
+            await store.replace_entries("c1", [entry("kalinka:qobuz:track:a")])
 
 
 class TestCollections:

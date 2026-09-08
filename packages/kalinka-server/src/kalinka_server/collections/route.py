@@ -11,13 +11,17 @@ or the app reports a collection nobody made.
 """
 
 import logging
+from typing import Callable, Dict, List, Sequence, Tuple
 
 from fastapi import FastAPI, HTTPException
-from kalinka_plugin_sdk.datamodel import EntityId, EntityType
+from kalinka_plugin_sdk.datamodel import EntityId, EntityType, Track
+from kalinka_plugin_sdk.inputmodule import InputModule, TrackInfo
 from pydantic import BaseModel, Field
 
+from ..browse_source import BrowseSource
+from ..queue_add import track_infos_for
 from .source import SOURCE_NAME, collection_id
-from .store import CollectionStore
+from .store import CollectionStore, NewEntry
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -38,6 +42,19 @@ class CollectionEdit(BaseModel):
     name: str = Field(max_length=MAX_NAME)
 
 
+class EntryIds(BaseModel):
+    """The tracks a write is about, named by their ids — or by the ids of
+    anything holding them, which the owning source expands."""
+
+    items: List[str] = Field(min_length=1)
+
+
+class NewEntries(EntryIds):
+    """What adding takes."""
+
+    allow_duplicates: bool = False
+
+
 class CollectionRef(BaseModel):
     """A collection the client can now go to: its browse id and its name.
 
@@ -47,6 +64,20 @@ class CollectionRef(BaseModel):
 
     id: str
     name: str
+
+
+class EntriesAdded(BaseModel):
+    """How an add went, so the client can say so without refetching."""
+
+    added: int
+    already_there: int
+
+
+class EntriesReplaced(BaseModel):
+    """How a replace went: what the collection holds now, and what it lost."""
+
+    added: int
+    dropped: int
 
 
 def _required_name(raw: str) -> str:
@@ -72,8 +103,61 @@ def _local_id(entity_id: str) -> str:
     return parsed.id
 
 
-def register_collection_routes(app: FastAPI, store: CollectionStore) -> None:
-    """Mount the collections write endpoints on `app`."""
+def _genres_of(track: Track) -> Tuple[Tuple[str, str], ...]:
+    """The genres a facet counts this track under, keyed by its folded name
+    rather than by the source's own id: a collection is mixed, and two sources
+    number the same genre differently."""
+    by_key: Dict[str, str] = {}
+    for genre in track.album.genres:
+        name = genre.name.strip()
+        if name:
+            by_key.setdefault(name.casefold(), name)
+    return tuple(by_key.items())
+
+
+def _entry_of(track: Track) -> NewEntry:
+    """A track as the row a collection keeps."""
+    performer = track.performer or track.album.artist
+    return NewEntry(
+        entity_id=track.id.to_string,
+        source=track.id.source,
+        title=track.title,
+        artist=performer.name if performer else "",
+        album=track.album.title,
+        duration=track.duration,
+        # Membership is of the collection it joins; the read side fills it in.
+        track_json=track.model_copy(
+            update={"playlist_track_id": None}
+        ).model_dump_json(),
+        genres=_genres_of(track),
+    )
+
+
+def _snapshots(infos: Sequence[TrackInfo]) -> List[NewEntry]:
+    """The rows to write for what a source handed back, leaving out anything
+    it described no further — a row with no snapshot never reads back."""
+    entries = [_entry_of(info.metadata) for info in infos if info.metadata is not None]
+    if len(entries) != len(infos):
+        logger.warning(
+            "Collections write: %d of %d tracks came back without metadata",
+            len(infos) - len(entries),
+            len(infos),
+        )
+    return entries
+
+
+def register_collection_routes(
+    app: FastAPI,
+    store: CollectionStore,
+    browse_source_for: Callable[[EntityId], BrowseSource],
+    module_for: Callable[[str], InputModule],
+) -> None:
+    """Mount the collections write endpoints on `app`.
+
+    Adding expands containers through the resolvers rather than through the
+    store: what a client may add is whatever it may queue, so both go through
+    the one helper that knows how to turn an id into tracks.
+    """
 
     @app.post("/collections", status_code=201)
     async def create_collection(payload: NewCollection) -> CollectionRef:
@@ -101,3 +185,41 @@ def register_collection_routes(app: FastAPI, store: CollectionStore) -> None:
         if row is None:
             raise HTTPException(status_code=404, detail="No such collection")
         return CollectionRef(id=collection_id(row.id).to_string, name=row.name)
+
+    async def rows_for(items: List[str]) -> List[NewEntry]:
+        """What ``items`` comes to, as rows to store."""
+        try:
+            infos = await track_infos_for(items, browse_source_for, module_for)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=f"Nothing to add: {e}")
+        return _snapshots(infos)
+
+    @app.post("/collections/{entity_id}/entries")
+    async def add_entries(entity_id: str, payload: NewEntries) -> EntriesAdded:
+        """Put tracks at the end of a collection, expanding what holds them."""
+        local_id = _local_id(entity_id)
+        rows = await rows_for(payload.items)
+        try:
+            outcome = await store.add_entries(
+                local_id, rows, allow_duplicates=payload.allow_duplicates
+            )
+        except RuntimeError as e:
+            logger.error("Could not add to %s: %s", entity_id, e)
+            raise HTTPException(status_code=503, detail="Collections unavailable")
+        if outcome is None:
+            raise HTTPException(status_code=404, detail="No such collection")
+        return EntriesAdded(added=outcome.added, already_there=outcome.already_there)
+
+    @app.put("/collections/{entity_id}/entries")
+    async def replace_entries(entity_id: str, payload: EntryIds) -> EntriesReplaced:
+        """Make a collection hold exactly these tracks, and nothing it held."""
+        local_id = _local_id(entity_id)
+        rows = await rows_for(payload.items)
+        try:
+            outcome = await store.replace_entries(local_id, rows)
+        except RuntimeError as e:
+            logger.error("Could not replace %s: %s", entity_id, e)
+            raise HTTPException(status_code=503, detail="Collections unavailable")
+        if outcome is None:
+            raise HTTPException(status_code=404, detail="No such collection")
+        return EntriesReplaced(added=outcome.added, dropped=outcome.dropped)
