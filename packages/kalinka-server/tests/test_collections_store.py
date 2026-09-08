@@ -44,6 +44,37 @@ class TestMakingOne:
             await store.create_collection("Nowhere")
 
 
+class TestRenaming:
+    async def test_a_renamed_collection_reads_back_under_its_new_name(self, store):
+        row = await store.create_collection("Night Drive")
+
+        renamed = await store.rename_collection(row.id, "Night Drives")
+
+        assert renamed.name == "Night Drives"
+        assert (await store.get_collection(row.id)).name == "Night Drives"
+
+    async def test_renaming_counts_as_changing_it(self, store, tmp_path):
+        """What a listing orders by, so a renamed collection leads it."""
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "First", updated_at=10)
+
+        renamed = await store.rename_collection("c1", "First, renamed")
+
+        assert renamed.updated_at > 10
+
+    async def test_renaming_nothing_says_so(self, store):
+        assert await store.rename_collection("nobody", "Ghost") is None
+
+    async def test_a_file_that_will_not_open_refuses_the_rename(self, tmp_path):
+        path = tmp_path / "collections.db"
+        path.write_bytes(b"not a database at all")
+        store = CollectionStore(str(path))
+        await store.open()
+
+        with pytest.raises(RuntimeError):
+            await store.rename_collection("c1", "Nowhere")
+
+
 class TestCollections:
     async def test_the_most_recently_changed_leads(self, store, tmp_path):
         path = str(tmp_path / "collections.db")
