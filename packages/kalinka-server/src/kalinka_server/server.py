@@ -706,7 +706,9 @@ async def create_app(
         lambda: app.state.config.search,
     )
 
-    register_collection_routes(app, app.state.collections)
+    register_collection_routes(
+        app, app.state.collections, browse_source_from_id, enabled_input_module
+    )
 
     @app.get("/ai_search/suggestions")
     async def ai_search_suggestions(

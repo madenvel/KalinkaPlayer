@@ -101,6 +101,8 @@ The app keys everything on the two flags the server sends and never on a source 
 - **`builtin` on a module** decides placement. The Discover root shows the built-in source's playlist shelf as YOUR COLLECTIONS above the EXPLORE CATALOGS rule, with its first few as rows, the count, and VIEW ALL; the catalog cards below skip built-in sources, and a built-in source carries no badge, like the local library. With no collections yet the section shows what a collection is and a live CREATE COLLECTION action. With no built-in source at all — an older server — there is no section.
 - **`can_edit` on an item** decides what it is. On a row it means a collection: it unrolls with its own cover and summary rather than a source playlist's. On the open page it means the Collections screen itself, whose head carries `New` and `Edit`, and where the invitation stands when there are none. A write to that listing restarts it, the same way a filter change does.
 
+The queue's own overflow is where a queue becomes a collection, and it is the one thing there that makes something rather than unmaking it: a card among plain rows, lettered in leaf green against the red of `Clear queue` below it, carrying how many tracks would be saved. The two ways of losing the queue moved under their own `CLEAN UP` heading, so the section that keeps is not read as part of the section that discards.
+
 The Discover rows are shortcuts, not a second place to unroll: tapping one opens the Collections screen, scrolls to that collection, unrolls it and marks it briefly, so the jump reads as having landed somewhere; VIEW ALL opens the same screen at its top with everything closed; the play button on a row starts the collection without going anywhere. Returning to Discover restores the scroll it was left at. The root has to keep a settled height, which is the reason the shelf itself never expands.
 
 An unrolled collection carries the same `Play all` / `Enqueue` pair a section of search results carries — one action reads the same everywhere, so both surfaces use the same two chips — and the pair stays through a selection: a header that came and went would move every row under it. What changes is its line, which reports how many of the container's tracks the selection holds instead of the tap-to-play hint that is no longer true. A collection row long-presses into the selection like every other container row, so a set can be gathered across collections and played or queued in one go.
@@ -117,6 +119,14 @@ Inside a session, staged and reversible: the toolbar becomes `EDITING · N CHANG
 
 **Dragging a track from one collection into another is deliberately not built.** No mainstream music app does it on a phone — Spotify, Apple Music and YouTube Music all use a "move to" sheet on touch and keep drag for a desktop sidebar that cannot scroll away. The reasons apply here: the destination scrolls out of view mid-gesture, and one gesture would carry two meanings (reorder within, move between) decided by a few pixels at the drop. The sheet says which collection it is going to, out loud, and costs one tap.
 
+Adding is a single write too, and it is offered where the tracks are rather than from inside a collection: the queue's own overflow carries one `Save this queue`, which opens a **destination sheet** — the collections to choose from, `+ CREATE NEW COLLECTION` above them, a field to narrow a long list, and one action that says how much is going where. That sheet is the same one `MOVE` will open, so it takes what is being added rather than knowing where it came from, and every later entry point — a selection, an album, one track's overflow — reuses it by describing itself.
+
+**Adding and replacing are one entry and a mode inside the sheet, not two entries in the overflow** (reversed 2026-09-08 after the first shape was built). The menu asks one question — where does this go — and the sheet asks the rest, which is the order the decision is actually made in: you pick the collection, and only then does it matter what becomes of what it holds. Two menu entries made the user commit to a verb before seeing a single collection name.
+
+What made two entries look safer was that the same button in the same place would otherwise mean two very different things, one of them destructive. What carries that instead is that **replacing is an opt-in rather than a mode**: a single unticked box, `Replace collection contents`, which reddens when ticked and says under itself exactly what it costs — *Remove all 20 tracks from Night Drive first*. Adding is what saving means until the box is ticked, and the box starts clear every time the sheet opens, so a replace is never inherited from the last time. Ticking it renames the button to `REPLACE WITH 30 TRACKS`, and a replace onto a collection that holds anything still confirms by name before it lands. A collection created from the sheet is always filled rather than replaced, whatever the box says — there is nothing in it to drop.
+
+A two-segment `ADD TO END | REPLACE` control was built first and replaced by the box: two segments made the additive case a choice to be made rather than the default it is, and gave equal weight to the one that destroys.
+
 Renaming and deleting a collection are single writes and do not belong in a staged session. Renaming is a pencil at the trailing end of an unrolled collection's action row, set apart from `Play all` and `Enqueue` because it acts on the list rather than on its music; deleting will join it there. It is deliberately not a control on every row at rest — renaming is rare, and a second button beside the chevron would compete with it for the same thumb while adding chrome to a listing that is mostly read. Reordering the collections themselves is out for now: the shelf orders by most recently changed and the table has no position column, so it is a schema change rather than a control.
 
 ## 8. Writes
@@ -124,8 +134,9 @@ Renaming and deleting a collection are single writes and do not belong in a stag
 ```
 POST   /collections                  create                      (done)
 PATCH  /collections/{id}             rename                      (done)
+POST   /collections/{id}/entries     add ids of any kind                     (done)
+PUT    /collections/{id}/entries     replace with ids of any kind            (done)
 DELETE /collections/{id}             delete
-POST   /collections/{id}/entries     add ids of any kind; containers expanded by owner
 DELETE /collections/{id}/entries     remove by entry id
 PUT    /collections/{id}/order       reorder by entry id
 ```
@@ -134,7 +145,11 @@ PUT    /collections/{id}/order       reorder by entry id
 
 `PATCH /collections/{id}` takes a name under the same rules and answers the same reference. Its path carries the browse id, as every other id-taking route does, so an id belonging to another source is a 404 rather than a refusal — it names nothing here. A rename counts as a change to the collection, which therefore leads a listing ordered by when things last changed; a name that comes back unchanged is not sent at all.
 
-Adding takes ids of any kind and expands containers through the same helper the queue uses, taking each snapshot from the browsed track. Duplicates are skipped unless asked for, and the answer says how many were added and how many were already there. Any id that is not a collection is a 404.
+`POST /collections/{id}/entries` takes ids of any kind and expands containers through the same helper the queue uses — what a client may add is whatever it may queue, and one helper knows how to turn an id into tracks. Each row keeps the track as the owning source last described it, minus its membership of wherever it was taken from. Genres are filed under the track's folded genre *name* rather than under the source's own id for it: a collection is mixed, two sources number the same genre differently, and the facet exists to gather them.
+
+Tracks land at the end, in the order they were asked for. One the collection already holds is left out unless `allow_duplicates` says otherwise, a batch naming the same track twice counts as holding it from its first row on, and the answer says how many landed and how many were already there — enough to report the add without refetching. A track the source will not describe is left out rather than stored as a row that could never be read back. An id that is not a collection's, and a collection that is not there, are both a 404.
+
+`PUT` on the same path means the collection ends up holding exactly what was sent and nothing it held: emptying and refilling are one transaction, since a write that failed halfway would leave the collection holding neither what it had nor what was asked for. It expands, snapshots and de-duplicates by the same rules as the `POST`, so the two differ only in what happens to what was there; the answer says how many it now holds and how many it dropped. Replacing with nothing is refused — emptying a collection is `DELETE`, not a replace with an empty list.
 
 A move between collections is a remove and an add of the same entry, and the staged session in §7 commits a batch of them at once, so it needs one request that either lands whole or not at all rather than a sequence a dropped connection can halve.
 

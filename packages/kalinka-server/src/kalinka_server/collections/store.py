@@ -18,7 +18,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import aiosqlite
 
@@ -48,6 +48,39 @@ class EntryRow:
     entity_id: str
     position: int
     track_json: str
+
+
+@dataclass(frozen=True)
+class NewEntry:
+    """A track on its way into a collection: the columns a listing queries,
+    beside the snapshot it will be read back from."""
+
+    entity_id: str
+    source: str
+    title: str
+    artist: str
+    album: str
+    duration: int
+    track_json: str
+    genres: Tuple[Tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class AddOutcome:
+    """What an add left behind: the rows it wrote, and the ones it did not
+    because the collection already held that track."""
+
+    added: int
+    already_there: int
+
+
+@dataclass(frozen=True)
+class ReplaceOutcome:
+    """What a replace left behind: the rows the collection now holds, and the
+    ones it dropped to make room."""
+
+    added: int
+    dropped: int
 
 
 @dataclass(frozen=True)
@@ -240,6 +273,134 @@ class CollectionStore:
             return None
         logger.info("Renamed collection %s to %s", collection_id, name)
         return await self.get_collection(collection_id)
+
+    async def add_entries(
+        self,
+        collection_id: str,
+        entries: Sequence[NewEntry],
+        allow_duplicates: bool = False,
+    ) -> Optional[AddOutcome]:
+        """Append ``entries`` to a collection and say how that went, or None
+        when there is no such collection.
+
+        A track the collection already holds is left out unless
+        ``allow_duplicates`` says otherwise, and a batch that names one twice
+        counts as holding it from its first row on.
+        """
+        if not self._readable():
+            raise RuntimeError("Collections file is unavailable")
+        if await self.get_collection(collection_id) is None:
+            return None
+
+        held: Optional[Set[str]] = None
+        if not allow_duplicates:
+            cursor = await self._conn.execute(
+                "SELECT entity_id FROM entries WHERE collection_id = ?",
+                (collection_id,),
+            )
+            held = {row["entity_id"] for row in await cursor.fetchall()}
+
+        cursor = await self._conn.execute(
+            "SELECT COALESCE(MAX(position), -1) FROM entries WHERE collection_id = ?",
+            (collection_id,),
+        )
+        row = await cursor.fetchone()
+
+        now = int(time.time())
+        added = await self._insert(
+            collection_id, entries, int(row[0]) + 1, held, now
+        )
+        await self._touch(collection_id, now)
+        logger.info("Added %d tracks to collection %s", added, collection_id)
+        return AddOutcome(added=added, already_there=len(entries) - added)
+
+    async def replace_entries(
+        self, collection_id: str, entries: Sequence[NewEntry]
+    ) -> Optional[ReplaceOutcome]:
+        """Make a collection hold exactly ``entries``, or None when there is
+        no such collection.
+
+        Emptying and refilling are one transaction: a write that failed
+        halfway would leave the collection holding neither what it had nor
+        what was asked for.
+        """
+        if not self._readable():
+            raise RuntimeError("Collections file is unavailable")
+        if await self.get_collection(collection_id) is None:
+            return None
+
+        cursor = await self._conn.execute(
+            "DELETE FROM entries WHERE collection_id = ?", (collection_id,)
+        )
+        dropped = cursor.rowcount
+        now = int(time.time())
+        added = await self._insert(collection_id, entries, 0, set(), now)
+        await self._touch(collection_id, now)
+        logger.info(
+            "Collection %s now holds %d tracks, dropping %d",
+            collection_id,
+            added,
+            dropped,
+        )
+        return ReplaceOutcome(added=added, dropped=dropped)
+
+    async def _insert(
+        self,
+        collection_id: str,
+        entries: Sequence[NewEntry],
+        position: int,
+        held: Optional[Set[str]],
+        now: int,
+    ) -> int:
+        """Write ``entries`` from ``position`` on and answer how many rows
+        that came to.
+
+        ``held`` names what the collection must not end up holding twice, and
+        grows as rows are written; None writes every entry as it comes.
+        Uncommitted: the caller decides what else belongs in the transaction.
+        """
+        added = 0
+        for entry in entries:
+            if held is not None:
+                if entry.entity_id in held:
+                    continue
+                held.add(entry.entity_id)
+            entry_id = uuid.uuid4().hex
+            await self._conn.execute(
+                "INSERT INTO entries (entry_id, collection_id, position, entity_id,"
+                " source, title, artist, album, duration, track_json, added_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry_id,
+                    collection_id,
+                    position,
+                    entry.entity_id,
+                    entry.source,
+                    entry.title,
+                    entry.artist,
+                    entry.album,
+                    entry.duration,
+                    entry.track_json,
+                    now,
+                ),
+            )
+            for genre_id, genre_name in entry.genres:
+                await self._conn.execute(
+                    "INSERT OR IGNORE INTO entry_genres (entry_id, genre_id,"
+                    " genre_name) VALUES (?, ?, ?)",
+                    (entry_id, genre_id, genre_name),
+                )
+            position += 1
+            added += 1
+        return added
+
+    async def _touch(self, collection_id: str, now: int) -> None:
+        """Mark the collection changed and commit what led here."""
+        await self._conn.execute(
+            "UPDATE collections SET updated_at = ? WHERE id = ?",
+            (now, collection_id),
+        )
+        await self._conn.commit()
 
     async def list_collections(
         self, offset: int = 0, limit: int = 50, text: str = ""
