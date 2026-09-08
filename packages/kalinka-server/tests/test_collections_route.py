@@ -320,6 +320,25 @@ async def test_replacing_leaves_only_what_was_sent(client):
     assert [row.entity_id for row in rows] == ["kalinka:qobuz:track:t2"]
 
 
+async def test_a_replace_may_be_asked_to_keep_duplicates(client):
+    http, store = client
+    made = http.post("/collections", json={"name": "Night Drive"}).json()
+
+    response = http.put(
+        f"/collections/{made['id']}/entries",
+        json={
+            "items": ["kalinka:qobuz:track:t1", "kalinka:qobuz:track:t1"],
+            "allow_duplicates": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"added": 2, "dropped": 0}
+    rows, total = await store.list_entries(made["id"].split(":")[-1])
+    assert total == 2
+    assert rows[0].entry_id != rows[1].entry_id
+
+
 async def test_replacing_what_is_not_there_is_a_miss(client):
     http, _ = client
 

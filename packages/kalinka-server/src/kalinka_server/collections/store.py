@@ -315,10 +315,16 @@ class CollectionStore:
         return AddOutcome(added=added, already_there=len(entries) - added)
 
     async def replace_entries(
-        self, collection_id: str, entries: Sequence[NewEntry]
+        self,
+        collection_id: str,
+        entries: Sequence[NewEntry],
+        allow_duplicates: bool = False,
     ) -> Optional[ReplaceOutcome]:
         """Make a collection hold exactly ``entries``, or None when there is
         no such collection.
+
+        Nothing survives to be duplicated, so ``allow_duplicates`` decides
+        only whether a batch naming a track twice writes it twice.
 
         Emptying and refilling are one transaction: a write that failed
         halfway would leave the collection holding neither what it had nor
@@ -334,7 +340,8 @@ class CollectionStore:
         )
         dropped = cursor.rowcount
         now = int(time.time())
-        added = await self._insert(collection_id, entries, 0, set(), now)
+        held: Optional[Set[str]] = None if allow_duplicates else set()
+        added = await self._insert(collection_id, entries, 0, held, now)
         await self._touch(collection_id, now)
         logger.info(
             "Collection %s now holds %d tracks, dropping %d",

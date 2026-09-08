@@ -42,16 +42,17 @@ class CollectionEdit(BaseModel):
     name: str = Field(max_length=MAX_NAME)
 
 
-class EntryIds(BaseModel):
-    """The tracks a write is about, named by their ids — or by the ids of
-    anything holding them, which the owning source expands."""
+class EntriesWrite(BaseModel):
+    """What a write to a collection's entries takes.
+
+    The tracks are named by their ids — or by the ids of anything holding
+    them, which the owning source expands. ``allow_duplicates`` says whether
+    the collection may end up holding one of them twice; each row keeps its
+    own entry id either way, so a write can still address one of two
+    identical tracks.
+    """
 
     items: List[str] = Field(min_length=1)
-
-
-class NewEntries(EntryIds):
-    """What adding takes."""
-
     allow_duplicates: bool = False
 
 
@@ -195,7 +196,7 @@ def register_collection_routes(
         return _snapshots(infos)
 
     @app.post("/collections/{entity_id}/entries")
-    async def add_entries(entity_id: str, payload: NewEntries) -> EntriesAdded:
+    async def add_entries(entity_id: str, payload: EntriesWrite) -> EntriesAdded:
         """Put tracks at the end of a collection, expanding what holds them."""
         local_id = _local_id(entity_id)
         rows = await rows_for(payload.items)
@@ -211,12 +212,16 @@ def register_collection_routes(
         return EntriesAdded(added=outcome.added, already_there=outcome.already_there)
 
     @app.put("/collections/{entity_id}/entries")
-    async def replace_entries(entity_id: str, payload: EntryIds) -> EntriesReplaced:
+    async def replace_entries(
+        entity_id: str, payload: EntriesWrite
+    ) -> EntriesReplaced:
         """Make a collection hold exactly these tracks, and nothing it held."""
         local_id = _local_id(entity_id)
         rows = await rows_for(payload.items)
         try:
-            outcome = await store.replace_entries(local_id, rows)
+            outcome = await store.replace_entries(
+                local_id, rows, allow_duplicates=payload.allow_duplicates
+            )
         except RuntimeError as e:
             logger.error("Could not replace %s: %s", entity_id, e)
             raise HTTPException(status_code=503, detail="Collections unavailable")

@@ -204,6 +204,33 @@ class TestReplacing:
             "kalinka:qobuz:track:b",
         ]
 
+    async def test_one_batch_naming_a_track_twice_writes_it_once(
+        self, store, tmp_path
+    ):
+        await _seed_collection(str(tmp_path / "collections.db"), "c1", "Mixed")
+
+        outcome = await store.replace_entries(
+            "c1", [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:a")]
+        )
+
+        _, total = await store.list_entries("c1")
+        assert outcome.added == 1
+        assert total == 1
+
+    async def test_a_track_may_be_written_twice_when_asked_for(self, store, tmp_path):
+        await _seed_collection(str(tmp_path / "collections.db"), "c1", "Mixed")
+
+        outcome = await store.replace_entries(
+            "c1",
+            [entry("kalinka:qobuz:track:a"), entry("kalinka:qobuz:track:a")],
+            allow_duplicates=True,
+        )
+
+        rows, total = await store.list_entries("c1")
+        assert outcome.added == 2
+        assert total == 2
+        assert rows[0].entry_id != rows[1].entry_id
+
     async def test_what_was_dropped_takes_its_genres_with_it(self, store, tmp_path):
         path = str(tmp_path / "collections.db")
         await _seed_collection(path, "c1", "Mixed")
