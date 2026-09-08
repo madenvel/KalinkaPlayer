@@ -1,8 +1,13 @@
-"""Composed background art for catalog cards. Pure, synchronous Pillow/NumPy.
+"""Composed art for browse items. Pure, synchronous Pillow/NumPy.
 
-Renders the whole tile the app displays full-bleed: a generated background (a
-non-linear diagonal gradient with seeded concentric geometry drawn over it, plus
-film grain) with an album cascade on the right when covers are available.
+Two shapes, one per :class:`ArtStyle`. :func:`render_playlist_cover` gives a
+list of tracks the square cover such a list has always had — a 2x2 mosaic of
+its albums, or a single album when there are not four to mosaic.
+
+:func:`render_catalog_art` renders the whole tile the app displays full-bleed:
+a generated background (a non-linear diagonal gradient with seeded concentric
+geometry drawn over it, plus film grain) with an album cascade on the right
+when covers are available.
 No text, chevron or frame — the app draws the icon/title/description column on
 the left and strokes a source-coloured frame around the tile. The gradient key
 colour is derived from the artwork (dominant cover colour, or a seeded hue for
@@ -17,15 +22,27 @@ import colorsys
 import hashlib
 import io
 import math
+from enum import Enum
 from typing import Sequence
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-STYLE_VERSION = 2
+STYLE_VERSION = 3
 
 CANVAS_W = 1200
 CANVAS_H = 400  # 3:1
+
+COVER_SIDE = 640
+
+
+class ArtStyle(Enum):
+    """What an item's art is: the wide background behind a catalog card, or
+    the square cover of a list of tracks."""
+
+    CARD = "card"
+    COVER = "cover"
+
 
 # Background palette.
 _BASE = (16, 16, 20)          # near-black ground under the gradient
@@ -239,6 +256,24 @@ def render_catalog_art(
     return _grain(out, rng, _GRAIN)
 
 
+def render_playlist_cover(
+    covers: Sequence[Image.Image], *, side: int = COVER_SIDE
+) -> Image.Image:
+    """Square cover for a list of tracks: a 2x2 mosaic of four album covers,
+    or the first album alone below four — a half-filled grid reads as a
+    mistake rather than as a cover. Needs at least one cover."""
+    cell = side // 2
+    if len(covers) >= 4:
+        mosaic = Image.new("RGB", (cell * 2, cell * 2))
+        for index, cover in enumerate(covers[:4]):
+            mosaic.paste(
+                _fit_cover(cover.convert("RGB"), cell, cell),
+                ((index % 2) * cell, (index // 2) * cell),
+            )
+        return mosaic
+    return _fit_cover(covers[0].convert("RGB"), side, side)
+
+
 def encode_jpeg(image: Image.Image, quality: int = 85) -> bytes:
     buffer = io.BytesIO()
     image.convert("RGB").save(
@@ -248,11 +283,15 @@ def encode_jpeg(image: Image.Image, quality: int = 85) -> bytes:
 
 
 def content_fingerprint(
-    cover_bytes: Sequence[bytes], names: Sequence[str], seed: str
+    cover_bytes: Sequence[bytes],
+    names: Sequence[str],
+    seed: str,
+    style: ArtStyle = ArtStyle.CARD,
 ) -> str:
     """Content identity (style version + inputs); unchanged -> cache is current."""
     hasher = hashlib.sha1()
     hasher.update(f"style:{STYLE_VERSION}".encode())
+    hasher.update(f"shape:{style.value}".encode())
     hasher.update(f"seed:{seed}".encode())
     for blob in cover_bytes:
         hasher.update(b"cover:")

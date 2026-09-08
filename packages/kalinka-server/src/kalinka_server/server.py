@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from fastapi import (
     FastAPI,
@@ -50,7 +50,12 @@ from .config_schema_processor import (
 )
 from .catalog_art_service import CatalogArtService
 from .browse_route import register_browse_routes
+from .browse_source import BrowseSource, BrowseSourceRegistry, RegisteredSource
+from .collections.route import register_collection_routes
+from .collections.source import CollectionsSource
+from .collections.store import CollectionStore
 from .content_route import register_content_route
+from .queue_add import track_infos_for
 from .search_route import register_search_routes
 from .suggestions import SuggestionEngine, SuggestionList
 from .merge_utils import get_favorite_ids_merged, k_way_merge_browse_items
@@ -112,6 +117,8 @@ from .server_identity import get_server_id
 async def lifespan(app: FastAPI):
     sd = None
     try:
+        await app.state.collections.open()
+
         sd = ServiceDiscovery(app.state.config, bind_host=app.state.bind_host)
         await sd.register_service()
 
@@ -153,6 +160,9 @@ async def lifespan(app: FastAPI):
         art = getattr(app.state, "catalog_art", None)
         if art is not None:
             await art.close()
+        collections = getattr(app.state, "collections", None)
+        if collections is not None:
+            await collections.close()
         # Finalize sessions and fire their close callbacks. uvicorn has already
         # closed the renderer sockets by now, so the renderer itself only
         # learns the session is gone from the STALE reconciliation at its next
@@ -194,6 +204,45 @@ def parse_entity_id(id: str) -> EntityId:
         raise HTTPException(
             status_code=400, detail=f"Invalid entity ID format: {str(e)}"
         )
+
+
+_browse_registry: Optional[BrowseSourceRegistry] = None
+
+
+def browse_registry() -> BrowseSourceRegistry:
+    """Every source a read request may reach. Built once the plugins are
+    scanned, so nothing routes before there is something to route to."""
+    if _browse_registry is None:
+        raise HTTPException(status_code=500, detail="No browse sources available")
+    return _browse_registry
+
+
+def browse_source_from_id(entity_id: str | EntityId) -> BrowseSource:
+    """The source that answers for `entity_id`, whether a plugin provides it
+    or the server does."""
+    parsed = (
+        EntityId.from_string(entity_id) if isinstance(entity_id, str) else entity_id
+    )
+    entry = browse_registry().get(parsed.source)
+    if entry is None:
+        raise HTTPException(
+            status_code=404, detail=f"Source '{parsed.source}' is not available"
+        )
+    return entry.source
+
+
+def extract_browse_sources(sources: Optional[str]) -> List[BrowseSource]:
+    """The browse sources named by `sources`, or every one of them."""
+    entries = browse_registry().entries()
+    if not sources:
+        return [entry.source for entry in entries]
+
+    wanted = sources.split(",")
+    by_name = {entry.name: entry.source for entry in entries}
+    matched = [by_name[name] for name in wanted if name in by_name]
+    if not matched:
+        raise HTTPException(status_code=404, detail="No matching sources found")
+    return matched
 
 
 def input_module(name: str) -> InputModule:
@@ -292,10 +341,23 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
             if isinstance(interface, InputModule):
                 input_modules.append(interface)
 
-    if not input_modules:
+    if not input_modules and not _all_browsable(sources_split):
         raise HTTPException(status_code=404, detail="No matching input modules found")
 
     return input_modules
+
+
+def _all_browsable(names: Sequence[str]) -> bool:
+    """True when every name is a source the server knows.
+
+    A source that browses but streams nothing — collections — has no leg in
+    suggestions or favourites, so asking for it there is an empty answer
+    rather than a missing module.
+    """
+    registry = _browse_registry
+    if registry is None:
+        return False
+    return all(registry.get(name) is not None for name in names)
 
 
 async def create_app(
@@ -374,9 +436,58 @@ async def create_app(
         app.state.suggestions.refresh_loop()
     )
 
+    # Collections are the server's own source: browsable and searchable by
+    # name, with no audio of its own. Writes have their own API.
+    app.state.collections = CollectionStore(
+        os.path.join(paths.state_dir(), "collections.db")
+    )
+
+    def _plugin_sources() -> List[RegisteredSource]:
+        entries: List[RegisteredSource] = []
+        for name in modules.enabled_input_modules:
+            plugin = modules.prepared_input_modules[name]
+            if not isinstance(plugin.interface, InputModule):
+                continue
+            # The title /server/modules shows — reads the Pydantic `title`
+            # declared on the config's `name` field, so a source is named the
+            # same wherever it appears.
+            config = plugin.plugin_context.config
+            entries.append(
+                RegisteredSource(
+                    name=name,
+                    title=config.__class__.model_fields["name"].title or config.name,
+                    source=plugin.interface,
+                )
+            )
+        return entries
+
+    def _source_title(name: str) -> str:
+        entry = _browse_registry.get(name) if _browse_registry else None
+        return entry.title if entry is not None else name
+
+    global _browse_registry
+    collections_source = CollectionsSource(app.state.collections, _source_title)
+    _browse_registry = BrowseSourceRegistry(
+        _plugin_sources,
+        [
+            RegisteredSource(
+                name=collections_source.module_name(),
+                title=collections_source.display_name(),
+                source=collections_source,
+                builtin=True,
+            )
+        ],
+    )
+
     # Composed catalog-card backgrounds, generated lazily off the browse path.
-    # The resolver returns None for disabled/absent sources (no raise).
-    def _art_module_resolver(entity_id: EntityId) -> Optional[InputModule]:
+    # Both resolvers return None for absent sources (no raise): the first
+    # browses the catalog being drawn, the second reads a child's cover off
+    # disk, which only a plugin can do.
+    def _art_browse_resolver(entity_id: EntityId) -> Optional[BrowseSource]:
+        entry = _browse_registry.get(entity_id.source) if _browse_registry else None
+        return entry.source if entry is not None else None
+
+    def _art_resource_resolver(entity_id: EntityId) -> Optional[InputModule]:
         source = entity_id.source
         if source not in modules.enabled_input_modules:
             return None
@@ -386,7 +497,8 @@ async def create_app(
 
     app.state.catalog_art = CatalogArtService(
         os.path.join(paths.cache_dir(), "catalog_art"),
-        _art_module_resolver,
+        _art_browse_resolver,
+        _art_resource_resolver,
     )
     app.state.catalog_art_task = asyncio.create_task(app.state.catalog_art.run())
 
@@ -499,20 +611,9 @@ async def create_app(
 
     @app.post("/queue/add")
     async def add_entity_to_queue(ids: list[str], index: Optional[int] = None):
-        items: list[TrackInfo] = []
-        for entity_id in ids:
-            entity_id_obj = EntityId.from_string(entity_id)
-            module = input_module_from_id(entity_id)
-            if entity_id_obj.type != EntityType.TRACK:
-                browse_list = await module.browse(entity_id_obj, offset=0, limit=5000)
-                track_ids = [
-                    item.id.id
-                    for item in browse_list.items
-                    if item.id.type == EntityType.TRACK
-                ]
-                items.extend(await module.get_track_info(track_ids))
-            else:
-                items.extend(await module.get_track_info([entity_id_obj.id]))
+        items: list[TrackInfo] = await track_infos_for(
+            ids, browse_source_from_id, enabled_input_module
+        )
 
         await player_context.playqueue.add(items, index)
         return {"message": "Items added to queue", "count": len(items)}
@@ -551,47 +652,36 @@ async def create_app(
     def browse_root(offset: int = 0, limit: int = 10):
         """Browse the root catalog."""
 
-        result = BrowseItemList(
-            offset=offset,
-            limit=limit,
-            total=len(modules.enabled_input_modules),
-            items=[],
-        )
-
-        for module_name in sorted(modules.enabled_input_modules):
-            module = modules.prepared_input_modules[module_name]
-            if isinstance(module.interface, InputModule):
-                entity_id = EntityId(
-                    id="root", type=EntityType.CATALOG, source=module_name
-                )
-                # Match the display title used by /server/modules — reads the
-                # Pydantic `title` declared on the config's `name` field, so the
-                # browse root agrees with source badges shown elsewhere.
-                config = module.plugin_context.config
-                display_title = (
-                    config.__class__.model_fields["name"].title or config.name
-                )
-                result.items.append(
-                    BrowseItem(
+        items = []
+        for entry in browse_registry().entries():
+            entity_id = EntityId(
+                id="root", type=EntityType.CATALOG, source=entry.name
+            )
+            items.append(
+                BrowseItem(
+                    id=entity_id,
+                    name=entry.title,
+                    url=f"/browse/{entity_id.to_string}",
+                    can_browse=True,
+                    can_add=False,
+                    catalog=Catalog(
                         id=entity_id,
-                        name=display_title,
-                        url=f"/browse/{entity_id.to_string}",
-                        can_browse=True,
-                        can_add=False,
-                        catalog=Catalog(
-                            id=entity_id,
-                            title=display_title,
-                            image=None,  # Placeholder for catalog image
-                            description="Kalinka Input Module",
+                        title=entry.title,
+                        description=(
+                            "" if entry.builtin else "Kalinka Input Module"
                         ),
-                    )
+                    ),
                 )
+            )
 
+        result = BrowseItemList(
+            offset=offset, limit=limit, total=len(items), items=items
+        )
         return result.model_dump(exclude_unset=True)
 
     register_browse_routes(
         app,
-        input_module_from_id,
+        browse_source_from_id,
         parse_entity_id,
         app.state.catalog_art.decorate,
     )
@@ -611,9 +701,12 @@ async def create_app(
 
     register_search_routes(
         app,
+        extract_browse_sources,
         extract_modules,
         lambda: app.state.config.search,
     )
+
+    register_collection_routes(app, app.state.collections)
 
     @app.get("/ai_search/suggestions")
     async def ai_search_suggestions(
@@ -801,7 +894,7 @@ async def create_app(
             entity_id_obj = EntityId.from_string(entity_id)
 
             return (
-                await input_module_from_id(entity_id).get(entity_id_obj)
+                await browse_source_from_id(entity_id_obj).get(entity_id_obj)
             ).model_dump(exclude_unset=True)
 
         except (ValueError, Exception) as e:
@@ -847,10 +940,10 @@ async def create_app(
     async def playlist_user_list(
         sources: Optional[str] = None, offset: int = 0, limit: int = 25
     ):
-        modules: list[InputModule] = extract_modules(sources)
+        listings: list[BrowseSource] = extract_browse_sources(sources)
 
         return await k_way_merge_browse_items(
-            [module.playlist_user_list for module in modules],
+            [source.playlist_user_list for source in listings],
             compared_value=lambda item: item.timestamp,
             offset=offset,
             limit=limit,
@@ -1219,6 +1312,7 @@ async def create_app(
             "state": prepared.health_state.value,
             "error_message": prepared.error_message,
             "missing_packages": [],
+            "builtin": False,
         }
         if (
             prepared.health_state == ModuleHealthState.READY
@@ -1242,6 +1336,27 @@ async def create_app(
                 )
         return entry
 
+    def _builtin_entries() -> List[Dict[str, Any]]:
+        """Sources the server provides itself.
+
+        They carry no config, no packages and no failure of their own, and are
+        listed so a client can browse and search them — and skip the planes
+        they do not have.
+        """
+        return [
+            {
+                "name": entry.name,
+                "title": entry.title,
+                "enabled": True,
+                "state": ModuleHealthState.READY.value,
+                "error_message": None,
+                "missing_packages": [],
+                "builtin": True,
+            }
+            for entry in browse_registry().entries()
+            if entry.builtin
+        ]
+
     @app.get("/server/modules")
     async def list_modules():
         input_entries = [
@@ -1251,7 +1366,10 @@ async def create_app(
         device_entries = [
             await _module_entry(d) for d in modules.prepared_devices.values()
         ]
-        return {"input_modules": input_entries, "devices": device_entries}
+        return {
+            "input_modules": [*input_entries, *_builtin_entries()],
+            "devices": device_entries,
+        }
 
     @app.put("/server/config")
     async def set_config_fields(payload: Dict[str, Any]):

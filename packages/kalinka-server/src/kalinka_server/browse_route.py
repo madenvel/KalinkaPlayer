@@ -14,7 +14,8 @@ from pydantic import ValidationError
 
 from kalinka_plugin_sdk.datamodel import BrowseItemList, EntityId, EntityType
 from kalinka_plugin_sdk.filters import FilterQuery, FilterValueList, UnsupportedFilter
-from kalinka_plugin_sdk.inputmodule import InputModule
+
+from .browse_source import BrowseSource
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def _parse_filter(raw: Optional[str]) -> FilterQuery:
 
 def register_browse_routes(
     app: FastAPI,
-    resolve_module: Callable[[EntityId], InputModule],
+    resolve_module: Callable[[EntityId], BrowseSource],
     parse_entity_id: Callable[[str], EntityId],
     decorate: Callable[[BrowseItemList], None] = lambda result: None,
 ) -> None:

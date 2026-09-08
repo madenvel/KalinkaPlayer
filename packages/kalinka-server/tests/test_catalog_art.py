@@ -1,4 +1,4 @@
-"""Tests for the catalog-card art renderer and generation service."""
+"""Tests for the browse-item art renderers and the generation service."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from kalinka_plugin_sdk.datamodel import (
     CoverImage,
     EntityId,
     EntityType,
+    Owner,
+    Playlist,
 )
 
 from kalinka_server import catalog_art_render as render
@@ -29,7 +31,7 @@ def _solid_cover(color, size=120):
     return Image.new("RGB", (size, size), color)
 
 
-def test_render_covers_variant_is_deterministic():
+def test_render_card_with_covers_is_deterministic():
     covers = [_solid_cover((200, 40, 40)), _solid_cover((40, 200, 40))]
     a = render.render_catalog_art(covers, [], "seed:x", width=320, height=180)
     b = render.render_catalog_art(covers, [], "seed:x", width=320, height=180)
@@ -69,6 +71,37 @@ def test_fingerprint_changes_with_style_version(monkeypatch):
     assert fp1 != fp2
 
 
+def test_fingerprint_tells_the_two_shapes_apart():
+    card = render.content_fingerprint([b"a"], [], "seed", render.ArtStyle.CARD)
+    cover = render.content_fingerprint([b"a"], [], "seed", render.ArtStyle.COVER)
+    assert card != cover
+
+
+def test_playlist_cover_mosaics_four_albums():
+    colors = [(200, 30, 30), (30, 200, 30), (30, 30, 200), (200, 200, 30)]
+    cover = render.render_playlist_cover([_solid_cover(c) for c in colors], side=200)
+
+    assert cover.size == (200, 200)
+    quadrants = [(50, 50), (150, 50), (50, 150), (150, 150)]
+    assert [cover.getpixel(point) for point in quadrants] == colors
+
+
+def test_playlist_cover_takes_one_album_below_four():
+    covers = [_solid_cover((200, 30, 30)), _solid_cover((30, 200, 30))]
+    cover = render.render_playlist_cover(covers, side=200)
+
+    assert cover.size == (200, 200)
+    # The whole square is the first album — no half-filled grid.
+    assert cover.getpixel((50, 50)) == cover.getpixel((150, 150)) == (200, 30, 30)
+
+
+def test_playlist_cover_squares_an_oblong_album():
+    cover = render.render_playlist_cover(
+        [Image.new("RGB", (400, 100), (10, 20, 30))], side=120
+    )
+    assert cover.size == (120, 120)
+
+
 # --------------------------------------------------------------------------
 # Service — inline decoration
 # --------------------------------------------------------------------------
@@ -100,8 +133,12 @@ def _album_child(local, *, with_image=True):
     )
 
 
-def _service(tmp_path, resolver=lambda eid: None):
-    return CatalogArtService(str(tmp_path / "catalog_art"), resolver)
+def _service(tmp_path, resolver=lambda eid: None, resource_resolver=None):
+    """The fake plays both roles unless a test wants them apart — a source
+    that browses need not be one that can serve a file."""
+    return CatalogArtService(
+        str(tmp_path / "catalog_art"), resolver, resource_resolver or resolver
+    )
 
 
 def test_decorate_enqueues_and_does_not_block(tmp_path):
@@ -111,6 +148,63 @@ def test_decorate_enqueues_and_does_not_block(tmp_path):
     # No file yet → image stays empty, but a job is queued.
     assert result.items[0].catalog.image is None
     assert svc._queue.qsize() == 1
+
+
+def _collection_item(local, *, track_count):
+    """A collection as the collections source lists it: one id, a playlist
+    payload for rows and a catalog payload for the page."""
+    eid = EntityId(id=local, type=EntityType.PLAYLIST, source="collections")
+    owner = Owner(name="You", id=EntityId(id="you", type=EntityType.USER, source="collections"))
+    return BrowseItem(
+        id=eid,
+        name=local,
+        can_browse=True,
+        can_add=True,
+        can_edit=True,
+        playlist=Playlist(
+            id=eid, name=local, owner=owner, description="", track_count=track_count
+        ),
+        catalog=Catalog(id=eid, title=local),
+    )
+
+
+def test_a_collection_with_tracks_carries_its_art_on_both_payloads(tmp_path):
+    svc = _service(tmp_path)
+    item = _collection_item("c1", track_count=3)
+    svc._entries[item.id.to_string] = {"file": "abc.jpg", "next_check_at": 1e12}
+
+    svc.decorate(BrowseItemList(offset=0, limit=10, total=1, items=[item]))
+
+    assert item.catalog.image is not None
+    assert item.playlist.image == item.catalog.image
+
+
+def test_a_collection_asks_for_a_cover_and_a_catalog_for_a_card(tmp_path):
+    svc = _service(tmp_path)
+    items = [_collection_item("c1", track_count=3), _catalog_item("albums")]
+
+    svc.decorate(BrowseItemList(offset=0, limit=10, total=2, items=items))
+
+    queued = {}
+    while not svc._queue.empty():
+        cat_id, style, _ = svc._queue.get_nowait()
+        queued[cat_id] = style
+    assert queued == {
+        items[0].id.to_string: render.ArtStyle.COVER,
+        items[1].id.to_string: render.ArtStyle.CARD,
+    }
+
+
+def test_an_empty_collection_gets_no_art_and_asks_for_none(tmp_path):
+    svc = _service(tmp_path)
+    item = _collection_item("c1", track_count=0)
+    svc._entries[item.id.to_string] = {"file": "abc.jpg", "next_check_at": 0.0}
+
+    svc.decorate(BrowseItemList(offset=0, limit=10, total=1, items=[item]))
+
+    assert item.catalog.image is None
+    assert item.playlist.image is None
+    assert svc._queue.empty()
 
 
 def test_decorate_skips_items_with_own_image(tmp_path):
@@ -164,21 +258,25 @@ class _FakeModule:
         return self._covers.get(resource)
 
 
-async def test_process_generates_cover_variant(tmp_path):
-    # Two album children with on-disk covers.
+def _covers_on_disk(tmp_path, *locals_, color=(200, 50, 50)):
+    """Album covers a resource resolver can hand back, keyed the way the child
+    items reference them."""
     covers = {}
-    for local in ("a1", "a2"):
-        blob = render.encode_jpeg(_solid_cover((200, 50, 50)))
+    for local in locals_:
         path = tmp_path / f"{local}.jpg"
-        path.write_bytes(blob)
+        path.write_bytes(render.encode_jpeg(_solid_cover(color)))
         covers[f"album/{local}_large.jpg"] = str(path)
+    return covers
 
+
+async def test_process_generates_a_card_with_covers(tmp_path):
+    covers = _covers_on_disk(tmp_path, "a1", "a2")
     children = [_album_child("a1"), _album_child("a2")]
     module = _FakeModule(children, covers)
     svc = _service(tmp_path, resolver=lambda eid: module)
 
     cat_id = "kalinka:localfiles:catalog:albums"
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
 
     entry = svc._entries[cat_id]
     assert entry["file"]
@@ -186,10 +284,57 @@ async def test_process_generates_cover_variant(tmp_path):
     # Served name validates and re-fetch with unchanged inputs reuses the file.
     assert svc.art_file(entry["file"]) is not None
     first_file = entry["file"]
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
     assert svc._entries[cat_id]["file"] == first_file
     # Atomic writes must not leave temp litter behind.
     assert list(svc._dir.glob("*.tmp")) == []
+
+
+async def test_a_collection_is_rendered_as_a_square_cover(tmp_path):
+    names = ("a1", "a2", "a3", "a4")
+    module = _FakeModule(
+        [_album_child(local) for local in names], _covers_on_disk(tmp_path, *names)
+    )
+    svc = _service(tmp_path, resolver=lambda eid: module)
+
+    cat_id = "kalinka:collections:playlist:c1"
+    await svc._process(cat_id, render.ArtStyle.COVER, textual=False)
+
+    with Image.open(svc._dir / svc._entries[cat_id]["file"]) as image:
+        assert image.width == image.height
+
+
+async def test_a_collection_takes_covers_from_the_sources_that_own_them(tmp_path):
+    """Collections browse but own no bytes: a child's cover belongs to whatever
+    source that track came from, so it is the resource resolver — not the
+    browsed source — that has to serve it."""
+    owner = _FakeModule([], _covers_on_disk(tmp_path, "a1"))
+    svc = _service(
+        tmp_path,
+        resolver=lambda eid: _FakeModule([_album_child("a1")]),
+        resource_resolver=lambda eid: owner,
+    )
+
+    cat_id = "kalinka:collections:playlist:c1"
+    await svc._process(cat_id, render.ArtStyle.COVER, textual=False)
+
+    assert svc._entries[cat_id]["file"]
+
+
+async def test_a_collection_with_no_reachable_cover_ships_nothing(tmp_path):
+    """A mosaic is its albums and nothing else: with none of them to hand
+    there is no art to make, and the client's own tile stands in."""
+    svc = _service(
+        tmp_path,
+        resolver=lambda eid: _FakeModule([_album_child("a1")]),
+        resource_resolver=lambda eid: None,
+    )
+
+    cat_id = "kalinka:collections:playlist:c1"
+    await svc._process(cat_id, render.ArtStyle.COVER, textual=False)
+
+    assert svc._entries[cat_id].get("file") is None
+    assert list(svc._dir.glob("*.jpg")) == []
 
 
 async def test_process_textual_when_children_are_catalogs(tmp_path):
@@ -203,7 +348,7 @@ async def test_process_textual_when_children_are_catalogs(tmp_path):
     module = _FakeModule(children)
     svc = _service(tmp_path, resolver=lambda eid: module)
     cat_id = "kalinka:localfiles:catalog:genres"
-    await svc._process(cat_id, textual=True)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=True)
     # Cover-less catalogs still get a background-only tile.
     assert (svc._dir / svc._entries[cat_id]["file"]).is_file()
 
@@ -214,7 +359,7 @@ async def test_process_empty_page_still_makes_background_tile(tmp_path):
     module = _FakeModule([])
     svc = _service(tmp_path, resolver=lambda eid: module)
     cat_id = "kalinka:localfiles:catalog:albums"
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
     entry = svc._entries[cat_id]
     assert entry["file"] and (svc._dir / entry["file"]).is_file()
     assert entry["provisional"] is True
@@ -227,7 +372,7 @@ async def test_process_browse_error_still_makes_background_tile(tmp_path):
 
     svc = _service(tmp_path, resolver=lambda eid: _Boom())
     cat_id = "kalinka:jamendo:catalog:popular-tracks"
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
     entry = svc._entries[cat_id]
     assert entry["file"] and (svc._dir / entry["file"]).is_file()
     assert entry["provisional"] is True
@@ -237,7 +382,7 @@ async def test_provisional_tile_upgrades_when_covers_arrive(tmp_path):
     # First pass: no covers -> provisional background tile.
     svc = _service(tmp_path, resolver=lambda eid: _FakeModule([]))
     cat_id = "kalinka:jamendo:catalog:popular-tracks"
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
     bg_file = svc._entries[cat_id]["file"]
     assert svc._entries[cat_id]["provisional"] is True
 
@@ -256,7 +401,7 @@ async def test_provisional_tile_upgrades_when_covers_arrive(tmp_path):
             [_album_child("a1"), _album_child("a2")], covers
         ),
     )
-    await svc2._process(cat_id, textual=False)
+    await svc2._process(cat_id, render.ArtStyle.CARD, textual=False)
     entry = svc2._entries[cat_id]
     assert entry["file"] != bg_file
     assert entry["provisional"] is False
@@ -277,13 +422,13 @@ async def test_transient_failure_keeps_existing_full_tile(tmp_path):
         ),
     )
     cat_id = "kalinka:jamendo:catalog:popular-tracks"
-    await svc._process(cat_id, textual=False)
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
     full_file = svc._entries[cat_id]["file"]
     assert svc._entries[cat_id]["provisional"] is False
 
     # Upstream goes flaky (empty) -> keep the good tile, don't downgrade it.
     svc2 = _service(tmp_path, resolver=lambda eid: _FakeModule([]))
-    await svc2._process(cat_id, textual=False)
+    await svc2._process(cat_id, render.ArtStyle.CARD, textual=False)
     assert svc2._entries[cat_id]["file"] == full_file
     assert (svc2._dir / full_file).is_file()
 

@@ -1,0 +1,64 @@
+"""Which half of a source a request reaches.
+
+Reading goes to every browsable source, the server's own included; anything
+that needs audio goes only to the modules that have it. A source that browses
+but streams nothing is empty on those planes, never a missing module.
+"""
+
+import pytest
+from fastapi import HTTPException
+
+from kalinka_server import server
+from kalinka_server.browse_source import BrowseSourceRegistry, RegisteredSource
+
+
+class _Source:
+    def __init__(self, name):
+        self._name = name
+
+    def module_name(self):
+        return self._name
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    """A server whose only browsable source is the built-in one."""
+    entry = RegisteredSource(
+        name="collections",
+        title="Collections",
+        source=_Source("collections"),
+        builtin=True,
+    )
+    registry = BrowseSourceRegistry(lambda: [], [entry])
+    monkeypatch.setattr(server, "_browse_registry", registry)
+    return registry
+
+
+def test_a_builtin_answers_for_its_own_ids(registry):
+    source = server.browse_source_from_id("kalinka:collections:playlist:c1")
+
+    assert source.module_name() == "collections"
+
+
+def test_an_unknown_source_is_404(registry):
+    with pytest.raises(HTTPException) as failure:
+        server.browse_source_from_id("kalinka:nope:track:1")
+
+    assert failure.value.status_code == 404
+
+
+def test_asking_for_everything_reaches_the_builtin(registry):
+    assert [s.module_name() for s in server.extract_browse_sources(None)] == [
+        "collections"
+    ]
+
+
+def test_asking_a_browsable_source_for_suggestions_is_empty_not_missing(registry):
+    assert server.extract_modules("collections") == []
+
+
+def test_asking_for_a_source_nobody_knows_is_still_404(registry):
+    with pytest.raises(HTTPException) as failure:
+        server.extract_modules("nope")
+
+    assert failure.value.status_code == 404
