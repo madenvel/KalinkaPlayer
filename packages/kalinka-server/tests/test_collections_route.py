@@ -74,3 +74,49 @@ async def test_an_unavailable_file_says_so_rather_than_lying(tmp_path):
         response = http.post("/collections", json={"name": "Nowhere"})
 
     assert response.status_code == 503
+
+
+async def test_renaming_answers_with_the_name_that_stuck(client):
+    http, store = client
+    made = http.post("/collections", json={"name": "Night Drive"}).json()
+
+    response = http.patch(
+        f"/collections/{made['id']}", json={"name": "  Night Drives  "}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": made["id"], "name": "Night Drives"}
+    rows, _ = await store.list_collections()
+    assert rows[0].name == "Night Drives"
+
+
+async def test_renaming_what_is_not_there_is_a_miss(client):
+    http, _ = client
+
+    response = http.patch(
+        "/collections/kalinka:collections:playlist:nobody", json={"name": "Ghost"}
+    )
+
+    assert response.status_code == 404
+
+
+async def test_an_id_from_another_source_names_no_collection(client):
+    http, store = client
+    http.post("/collections", json={"name": "Night Drive"})
+    rows, _ = await store.list_collections()
+
+    response = http.patch(
+        f"/collections/kalinka:qobuz:playlist:{rows[0].id}", json={"name": "Theirs"}
+    )
+
+    assert response.status_code == 404
+    assert (await store.get_collection(rows[0].id)).name == "Night Drive"
+
+
+async def test_renaming_to_nothing_is_refused(client):
+    http, _ = client
+    made = http.post("/collections", json={"name": "Night Drive"}).json()
+
+    response = http.patch(f"/collections/{made['id']}", json={"name": "  "})
+
+    assert response.status_code == 422

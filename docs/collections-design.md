@@ -103,7 +103,9 @@ The app keys everything on the two flags the server sends and never on a source 
 
 The Discover rows are shortcuts, not a second place to unroll: tapping one opens the Collections screen, scrolls to that collection, unrolls it and marks it briefly, so the jump reads as having landed somewhere; VIEW ALL opens the same screen at its top with everything closed; the play button on a row starts the collection without going anywhere. Returning to Discover restores the scroll it was left at. The root has to keep a settled height, which is the reason the shelf itself never expands.
 
-An unrolled collection carries the same `Play all` / `Enqueue` pair a section of search results carries — one action reads the same everywhere, so both surfaces use the same two chips. A row says what the collection holds in one line — how many tracks, how many sources they came from, how long it runs — from `Playlist.track_count`, `Catalog.sources` and `Playlist.duration`; an empty one says so instead of counting to zero. A collection with no mosaic yet gets the generated rings with the playlist glyph over them, the same tile the empty states use, and an empty one gets that tile even where stale art exists.
+An unrolled collection carries the same `Play all` / `Enqueue` pair a section of search results carries — one action reads the same everywhere, so both surfaces use the same two chips — and the pair stays through a selection: a header that came and went would move every row under it. What changes is its line, which reports how many of the container's tracks the selection holds instead of the tap-to-play hint that is no longer true. A collection row long-presses into the selection like every other container row, so a set can be gathered across collections and played or queued in one go.
+
+A row says what the collection holds in one line — how many tracks, how long it runs — from `Playlist.track_count` and `Playlist.duration`, with the sources it draws on standing beside it as their own coloured letters from `Catalog.sources` rather than counted. The local library is lettered here, where every other row in the app leaves it unmarked as the default: what a mixed list is made of is the point of the line. An empty one says so instead of counting to zero. A collection with no mosaic yet gets the generated rings with the playlist glyph over them, the same tile the empty states use, and an empty one gets that tile even where stale art exists.
 
 The "OR" left the divider: a section may sit between the entry and the rule, and the label has to read the same whether one does or not.
 
@@ -115,13 +117,13 @@ Inside a session, staged and reversible: the toolbar becomes `EDITING · N CHANG
 
 **Dragging a track from one collection into another is deliberately not built.** No mainstream music app does it on a phone — Spotify, Apple Music and YouTube Music all use a "move to" sheet on touch and keep drag for a desktop sidebar that cannot scroll away. The reasons apply here: the destination scrolls out of view mid-gesture, and one gesture would carry two meanings (reorder within, move between) decided by a few pixels at the drop. The sheet says which collection it is going to, out loud, and costs one tap.
 
-Renaming and deleting a collection are single writes and do not belong in a staged session; they hang off the collection's own overflow, always available. Reordering the collections themselves is out for now: the shelf orders by most recently changed and the table has no position column, so it is a schema change rather than a control.
+Renaming and deleting a collection are single writes and do not belong in a staged session. Renaming is a pencil at the trailing end of an unrolled collection's action row, set apart from `Play all` and `Enqueue` because it acts on the list rather than on its music; deleting will join it there. It is deliberately not a control on every row at rest — renaming is rare, and a second button beside the chevron would compete with it for the same thumb while adding chrome to a listing that is mostly read. Reordering the collections themselves is out for now: the shelf orders by most recently changed and the table has no position column, so it is a schema change rather than a control.
 
 ## 8. Writes
 
 ```
 POST   /collections                  create                      (done)
-PATCH  /collections/{id}             rename, describe
+PATCH  /collections/{id}             rename                      (done)
 DELETE /collections/{id}             delete
 POST   /collections/{id}/entries     add ids of any kind; containers expanded by owner
 DELETE /collections/{id}/entries     remove by entry id
@@ -129,6 +131,8 @@ PUT    /collections/{id}/order       reorder by entry id
 ```
 
 `POST /collections` takes a name (trimmed; blank is a 422 naming the field) and an optional description, and answers with the browse id to go to and the name as stored — not the whole item, since the listing is refetched anyway and a new collection has no cover until something is in it. Names are not identifiers: two collections may share one. A write cannot degrade the way a listing does, so a file that will not open is a 503 rather than a success reporting a collection nobody made.
+
+`PATCH /collections/{id}` takes a name under the same rules and answers the same reference. Its path carries the browse id, as every other id-taking route does, so an id belonging to another source is a 404 rather than a refusal — it names nothing here. A rename counts as a change to the collection, which therefore leads a listing ordered by when things last changed; a name that comes back unchanged is not sent at all.
 
 Adding takes ids of any kind and expands containers through the same helper the queue uses, taking each snapshot from the browsed track. Duplicates are skipped unless asked for, and the answer says how many were added and how many were already there. Any id that is not a collection is a 404.
 

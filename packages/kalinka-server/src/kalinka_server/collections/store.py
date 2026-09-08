@@ -220,6 +220,27 @@ class CollectionStore:
         logger.info("Created collection %s (%s)", row.id, row.name)
         return row
 
+    async def rename_collection(
+        self, collection_id: str, name: str
+    ) -> Optional[CollectionRow]:
+        """Give a collection another name and return it as it now reads, or
+        None when there is no such collection.
+
+        A rename is a change to the collection like any other, so it moves to
+        the front of a listing ordered by when things last changed.
+        """
+        if not self._readable():
+            raise RuntimeError("Collections file is unavailable")
+        cursor = await self._conn.execute(
+            "UPDATE collections SET name = ?, updated_at = ? WHERE id = ?",
+            (name, int(time.time()), collection_id),
+        )
+        await self._conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        logger.info("Renamed collection %s to %s", collection_id, name)
+        return await self.get_collection(collection_id)
+
     async def list_collections(
         self, offset: int = 0, limit: int = 50, text: str = ""
     ) -> Tuple[List[CollectionRow], int]:
