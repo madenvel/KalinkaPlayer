@@ -32,8 +32,9 @@ from kalinka_plugin_sdk.datamodel import (
     MatchTier,
     NameMatch,
 )
-from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
+from kalinka_plugin_sdk.inputmodule import SearchType
 
+from .browse_source import BrowseSource
 from .config_model import SearchConfig
 from .source_failed import SourceFailed
 
@@ -176,7 +177,7 @@ def rank(query: str, items: Iterable[BrowseItem]) -> List[BrowseItem]:
 
 
 async def collect_name_matches(
-    modules: Sequence[InputModule], query: str, cfg: SearchConfig
+    sources: Sequence[BrowseSource], query: str, cfg: SearchConfig
 ) -> BrowseItemList:
     """Every hit the given sources return for ``query``, ranked as one list.
 
@@ -189,27 +190,27 @@ async def collect_name_matches(
         SourceFailed: a source's leg raised; its hits are not silently the
             ones that survived.
     """
-    if not query.strip() or not modules or not has_navigational_intent(query):
+    if not query.strip() or not sources or not has_navigational_intent(query):
         return EmptyList(0, 0)
 
     per_source = await asyncio.gather(
-        *(_search_all_kinds(module, query, cfg.candidate_limit) for module in modules)
+        *(_search_all_kinds(source, query, cfg.candidate_limit) for source in sources)
     )
     ranked = rank(query, (item for items in per_source for item in items))
     return BrowseItemList(offset=0, limit=len(ranked), total=len(ranked), items=ranked)
 
 
 async def _search_all_kinds(
-    module: InputModule, query: str, limit: int
+    source: BrowseSource, query: str, limit: int
 ) -> List[BrowseItem]:
     legs = await asyncio.gather(
-        *(module.search(kind, query, 0, limit) for kind in _CANDIDATE_TYPES),
+        *(source.search(kind, query, 0, limit) for kind in _CANDIDATE_TYPES),
         return_exceptions=True,
     )
     items: List[BrowseItem] = []
     for leg in legs:
         if isinstance(leg, BaseException):
-            raise SourceFailed(module.module_name(), leg)
+            raise SourceFailed(source.module_name(), leg)
         items.extend(leg.items)
     return items
 

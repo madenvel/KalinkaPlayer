@@ -367,6 +367,8 @@ class Playlist(BaseModel):
         image (Optional[CoverImage]): Playlist cover art
         description (Optional[str]): Playlist description
         track_count (int): Number of tracks in the playlist
+        duration (Optional[int]): Total playing time in seconds, where the
+            source knows it without loading the tracks
     """
 
     id: EntityId
@@ -375,6 +377,7 @@ class Playlist(BaseModel):
     image: Optional[CoverImage] = None
     description: Optional[str]
     track_count: int
+    duration: Optional[int] = None
 
 
 class Preview(BaseModel):
@@ -525,6 +528,11 @@ class BrowseItem(BaseModel):
         url (Optional[str]): Direct URL for web-based content
         can_browse (bool): Whether this item can be browsed into (has children)
         can_add (bool): Whether this item can be added to playlists/queues
+        can_edit (bool): Whether the server accepts writes that change what
+            this item holds — a hint that lets a client offer editing without
+            knowing which source owns it. Advisory: the write API is the
+            authority and refuses an id it does not own, whatever a client
+            believed.
         subname (Optional[str]): Secondary display text (subtitle, artist, etc.)
         album (Optional[Album]): Album data if this represents an album
         artist (Optional[Artist]): Artist data if this represents an artist
@@ -580,6 +588,7 @@ class BrowseItem(BaseModel):
     url: Optional[str] = None
     can_browse: bool = False
     can_add: bool = False
+    can_edit: bool = False
     subname: Optional[str] = None
     album: Optional[Album] = None
     artist: Optional[Artist] = None

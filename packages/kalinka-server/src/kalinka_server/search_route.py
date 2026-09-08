@@ -14,6 +14,7 @@ from kalinka_plugin_sdk.datamodel import BrowseItemList
 from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .ai_search import assemble_ai_search
+from .browse_source import BrowseSource
 from .config_model import SearchConfig
 from .name_matches import collect_name_matches
 from .source_failed import SourceFailed
@@ -23,14 +24,17 @@ logger = logging.getLogger(__name__)
 
 def register_search_routes(
     app: FastAPI,
+    resolve_browse_sources: Callable[[Optional[str]], List[BrowseSource]],
     resolve_modules: Callable[[Optional[str]], List[InputModule]],
     config: Callable[[], SearchConfig],
 ) -> None:
     """Mount the search endpoints on ``app``.
 
-    ``resolve_modules`` turns the ``sources`` parameter into modules, raising
-    for names it does not know; ``config`` is read per request so a settings
-    change is seen without a restart.
+    Two resolvers, because the endpoints reach different halves of a source:
+    a name is matched against everything browsable, while suggestions come
+    only from a module that has audio to suggest. Both turn the ``sources``
+    parameter into sources, raising for names neither knows. ``config`` is
+    read per request so a settings change is seen without a restart.
     """
 
     @app.get("/search/matches")
@@ -40,7 +44,9 @@ def register_search_routes(
         """Every hit the sources return for a name, ranked as one list — each
         annotated with why it stands where it does."""
         try:
-            return await collect_name_matches(resolve_modules(sources), query, config())
+            return await collect_name_matches(
+                resolve_browse_sources(sources), query, config()
+            )
         except SourceFailed as e:
             raise _unavailable(e)
 

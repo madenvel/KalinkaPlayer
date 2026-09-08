@@ -60,7 +60,7 @@ def _resolve(sources):
 @pytest.fixture
 def client():
     app = FastAPI()
-    register_search_routes(app, _resolve, SearchConfig)
+    register_search_routes(app, _resolve, _resolve, SearchConfig)
     return TestClient(app)
 
 
@@ -95,3 +95,27 @@ def test_an_unknown_source_is_404(client):
         "/search/matches", params={"query": "the beatles", "sources": "nope"}
     )
     assert response.status_code == 404
+
+
+def test_a_name_reaches_a_source_that_suggests_nothing():
+    """Collections are searched by name but have no audio to suggest: the
+    suggestion leg answers empty rather than reporting a missing source."""
+    app = FastAPI()
+    register_search_routes(
+        app,
+        lambda sources: [_Module("collections")],
+        lambda sources: [],
+        SearchConfig,
+    )
+    client = TestClient(app)
+
+    matches = client.get(
+        "/search/matches", params={"query": "the beatles", "sources": "collections"}
+    )
+    suggestions = client.get(
+        "/ai_search", params={"query": "the beatles", "sources": "collections"}
+    )
+
+    assert matches.json()["total"] == 1
+    assert suggestions.status_code == 200
+    assert suggestions.json()["total"] == 0

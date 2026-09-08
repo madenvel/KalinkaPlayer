@@ -1,9 +1,11 @@
-"""Server-generated background art for catalog cards.
+"""Server-generated art for browse items that have none of their own.
 
 ``decorate()`` runs inline on every ``/browse`` response: for each imageless
 catalog item it fills in the URL of ready art or enqueues generation, never
-blocking. A single worker drains the queue — browsing the catalog's first
-page, rendering via :mod:`catalog_art_render`, and writing the JPEG under
+blocking. What it generates depends on what the item is — a card background
+for a category, a square mosaic cover for a list of tracks. A single worker
+drains the queue — browsing the item's first page, rendering via
+:mod:`catalog_art_render`, and writing the JPEG under
 ``<prefix>/var/cache/kalinka/catalog_art/``. File names embed a content
 fingerprint, so a card's URL changes only when its content does; the worker
 re-checks every ``REFRESH_SECONDS`` but re-renders only on a fingerprint move.
@@ -36,11 +38,14 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.inputmodule import InputModule
 
+from .browse_source import BrowseSource
 from .catalog_art_render import (
     STYLE_VERSION,
+    ArtStyle,
     content_fingerprint,
     encode_jpeg,
     render_catalog_art,
+    render_playlist_cover,
 )
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -53,6 +58,9 @@ REFRESH_SECONDS = 24 * 3600
 FAIL_RETRY_SECONDS = 10 * 60
 FETCH_LIMIT = 8  # one upstream page per card
 MAX_COVERS = 3
+#: A mosaic wants four distinct albums, so it looks further down the list.
+COVER_FETCH_LIMIT = 24
+COVER_TILES = 4
 MAX_COVER_BYTES = 8 * 1024 * 1024
 
 _FILE_RE = re.compile(r"^[0-9a-f]{16}-[0-9a-f]{8}\.jpg$")
@@ -81,6 +89,12 @@ def _has_image(item: BrowseItem) -> bool:
     if catalog is None or catalog.image is None:
         return False
     return bool(catalog.image.large or catalog.image.small or catalog.image.thumbnail)
+
+
+def _style_of(item: BrowseItem) -> ArtStyle:
+    """A browse item that is itself a list of tracks wants a cover; a category
+    of them wants the wide card background."""
+    return ArtStyle.COVER if item.playlist is not None else ArtStyle.CARD
 
 
 def _textual_hint(item: BrowseItem) -> bool:
@@ -117,11 +131,15 @@ class CatalogArtService:
     def __init__(
         self,
         cache_dir: str,
-        module_resolver: Callable[[EntityId], Optional[InputModule]],
+        browse_resolver: Callable[[EntityId], Optional[BrowseSource]],
+        resource_resolver: Callable[[EntityId], Optional[InputModule]],
     ) -> None:
         self._dir = Path(cache_dir)
-        self._resolver = module_resolver
-        self._queue: asyncio.Queue[tuple[str, bool]] = asyncio.Queue(maxsize=128)
+        self._browse = browse_resolver
+        self._resource = resource_resolver
+        self._queue: asyncio.Queue[tuple[str, ArtStyle, bool]] = asyncio.Queue(
+            maxsize=128
+        )
         self._pending: set[str] = set()
         self._http: Optional[httpx.AsyncClient] = None
         # catalog id -> {"file": str|None, "fingerprint": str, "next_check_at": float}
@@ -186,21 +204,28 @@ class CatalogArtService:
         for item in result.items:
             if item.catalog is None or not item.can_browse or _has_image(item):
                 continue
+            # A list with nothing in it has nothing to compose; its cover is
+            # the client's to draw.
+            if item.playlist is not None and item.playlist.track_count == 0:
+                continue
             cat_id = item.id.to_string if isinstance(item.id, EntityId) else str(item.id)
             entry = self._entries.get(cat_id)
             if entry and entry.get("file"):
                 url = f"{ART_URL_PREFIX}/{entry['file']}"
-                item.catalog.image = CoverImage(
-                    small=url, thumbnail=url, large=url
-                )
+                image = CoverImage(small=url, thumbnail=url, large=url)
+                item.catalog.image = image
+                # The art is the entity's, not one payload's: read as a
+                # playlist, the item shows it too.
+                if item.playlist is not None:
+                    item.playlist.image = image
             if entry is None or time.time() >= entry.get("next_check_at", 0.0):
-                self._schedule(cat_id, _textual_hint(item))
+                self._schedule(cat_id, _style_of(item), _textual_hint(item))
 
-    def _schedule(self, cat_id: str, textual: bool) -> None:
+    def _schedule(self, cat_id: str, style: ArtStyle, textual: bool) -> None:
         if cat_id in self._pending:
             return
         try:
-            self._queue.put_nowait((cat_id, textual))
+            self._queue.put_nowait((cat_id, style, textual))
             self._pending.add(cat_id)
         except asyncio.QueueFull:
             logger.debug("Catalog art queue full; skipping %s", cat_id)
@@ -223,9 +248,9 @@ class CatalogArtService:
     async def run(self) -> None:
         """Drain the generation queue for the server's lifetime."""
         while True:
-            cat_id, textual = await self._queue.get()
+            cat_id, style, textual = await self._queue.get()
             try:
-                await self._process(cat_id, textual)
+                await self._process(cat_id, style, textual)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -245,16 +270,21 @@ class CatalogArtService:
         entry["next_check_at"] = time.time() + FAIL_RETRY_SECONDS
         self._save_index()
 
-    async def _process(self, cat_id: str, textual: bool) -> None:
+    async def _process(self, cat_id: str, style: ArtStyle, textual: bool) -> None:
         entity_id = EntityId.from_string(cat_id)
-        module = self._resolver(entity_id)
+        module = self._browse(entity_id)
         if module is None:
             self._record_failure(cat_id)
             return
 
+        cover_style = style is ArtStyle.COVER
         items: list[BrowseItem] = []
         try:
-            children = await module.browse(entity_id, offset=0, limit=FETCH_LIMIT)
+            children = await module.browse(
+                entity_id,
+                offset=0,
+                limit=COVER_FETCH_LIMIT if cover_style else FETCH_LIMIT,
+            )
             items = children.items or []
         except Exception as exc:
             # The source is flaky (Jamendo especially); fall through with no
@@ -262,12 +292,13 @@ class CatalogArtService:
             logger.debug("Catalog art browse failed for %s: %r", cat_id, exc)
 
         catalog_children = sum(1 for item in items if item.catalog is not None)
-        textual = textual or catalog_children > len(items) / 2
+        textual = not cover_style and (textual or catalog_children > len(items) / 2)
 
         covers: list[Image.Image] = []
         cover_bytes: list[bytes] = []
         wanted_covers = False
         if items and not textual:
+            wanted = COVER_TILES if cover_style else MAX_COVERS
             seen: set[str] = set()
             for item in items:
                 path = _item_image_path(item)
@@ -285,8 +316,15 @@ class CatalogArtService:
                     continue
                 covers.append(cover)
                 cover_bytes.append(blob)
-                if len(covers) >= MAX_COVERS:
+                if len(covers) >= wanted:
                     break
+
+        # A cover is its albums and nothing else, so with none to compose there
+        # is no art to ship — the client draws its own stand-in. Try again soon
+        # in case the source was merely down.
+        if cover_style and not covers:
+            self._record_failure(cat_id)
+            return
 
         # "Provisional" = a cover catalog we couldn't get any covers for (empty
         # page or every fetch failed). Still ship a background-only tile now so
@@ -306,13 +344,16 @@ class CatalogArtService:
             self._save_index()
             return
 
-        fingerprint = content_fingerprint(cover_bytes, [], cat_id)
+        fingerprint = content_fingerprint(cover_bytes, [], cat_id, style)
         if entry and entry.get("fingerprint") == fingerprint and have_file:
             entry["next_check_at"] = time.time() + next_check
             self._save_index()
             return
 
-        image = await asyncio.to_thread(render_catalog_art, covers, [], cat_id)
+        if cover_style:
+            image = await asyncio.to_thread(render_playlist_cover, covers)
+        else:
+            image = await asyncio.to_thread(render_catalog_art, covers, [], cat_id)
         data = await asyncio.to_thread(encode_jpeg, image)
 
         file_name = (
@@ -334,7 +375,8 @@ class CatalogArtService:
         }
         self._save_index()
         logger.info(
-            "Generated catalog art for %s (%s, %d covers%s)",
+            "Generated %s art for %s (%s, %d covers%s)",
+            style.value,
             cat_id,
             file_name,
             len(covers),
@@ -365,7 +407,7 @@ class CatalogArtService:
             if isinstance(item.id, EntityId)
             else EntityId.from_string(str(item.id))
         )
-        module = self._resolver(item_id)
+        module = self._resource(item_id)
         if module is None:
             return None
         try:
