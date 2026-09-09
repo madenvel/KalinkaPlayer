@@ -1,5 +1,7 @@
 """The collections file: what a listing narrows to, and the facets behind it."""
 
+import asyncio
+
 import pytest
 
 from kalinka_server.collections.store import (
@@ -671,3 +673,50 @@ async def test_a_file_that_cannot_be_opened_leaves_the_store_empty(tmp_path):
     assert await store.list_entries("c1") == ([], 0)
     assert await store.sources_of("c1") == []
     assert await store.genres_of("c1") == []
+
+
+class TestConcurrentWrites:
+    """One connection carries one transaction, so two writes that interleave
+    have one committing the other's half-written work. Each of these fails
+    without the store's write lock."""
+
+    async def test_two_appends_do_not_land_on_the_same_positions(self, store):
+        row = await store.create_collection("Night Drive")
+
+        await asyncio.gather(
+            store.add_entries(row.id, [entry(f"a{i}") for i in range(6)]),
+            store.add_entries(row.id, [entry(f"b{i}") for i in range(6)]),
+        )
+
+        held = (await store.list_entries(row.id, 0, 50, EntryFilter()))[0]
+        positions = [item.position for item in held]
+        assert len(held) == 12
+        assert sorted(positions) == list(range(12)), "positions overlapped"
+
+    async def test_a_write_waits_for_the_one_in_flight(self, store, monkeypatch):
+        """Held for the whole span, not just the first statement — a write
+        that let another in between its DELETE and its INSERTs would have the
+        other commit the gap."""
+        row = await store.create_collection("Night Drive")
+        reached = asyncio.Event()
+        release = asyncio.Event()
+        insert = store._insert
+
+        async def wait_there(*args, **kwargs):
+            reached.set()
+            await release.wait()
+            return await insert(*args, **kwargs)
+
+        monkeypatch.setattr(store, "_insert", wait_there)
+        first = asyncio.create_task(store.add_entries(row.id, [entry("a")]))
+        await reached.wait()
+
+        second = asyncio.create_task(store.rename_collection(row.id, "Renamed"))
+        # Long enough that an unserialised rename would have run to
+        # completion, which is what it does without the lock.
+        done, _ = await asyncio.wait([second], timeout=0.1)
+        assert not done, "a second write ran inside the first"
+
+        release.set()
+        await asyncio.gather(first, second)
+        assert (await store.get_collection(row.id)).name == "Renamed"

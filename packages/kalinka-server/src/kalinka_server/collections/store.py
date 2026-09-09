@@ -13,6 +13,7 @@ stays a query layer and the module above translates once.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -174,15 +175,29 @@ class CollectionStore:
     """The collections file: what a listing reads back, and what a write
     leaves behind.
 
-    One connection for the process: SQLite serialises writers anyway, and a
-    connection per request would buy nothing at this size. Open it once at
-    startup and close it at shutdown.
+    One connection for the process, opened once at startup and closed at
+    shutdown; a connection per request would buy nothing at this size.
+
+    That one connection carries one transaction, so a write holds
+    ``_writing`` for its whole span. SQLite serialises writers per
+    statement, which is not what a write here needs: each is several
+    statements across as many awaits, and letting two interleave has one
+    commit the other's half-written work — a collection emptied by
+    :meth:`replace_entries` and not yet refilled, committed by whatever ran
+    next. The lock is what makes the single transaction those methods
+    promise true.
+
+    Reads are not held: they run on the same connection, so one that lands
+    mid-write sees that write's uncommitted rows. That window costs a stale
+    listing, never a wrong file, and closing it would take a connection of
+    its own.
     """
 
     def __init__(self, path: str):
         self._path = path
         self._db: Optional[aiosqlite.Connection] = None
         self._opened = False
+        self._writing = asyncio.Lock()
 
     async def open(self) -> None:
         """Create the file and its schema if absent, then hold the connection.
@@ -249,24 +264,26 @@ class CollectionStore:
         """
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        now = int(time.time())
-        row = CollectionRow(
-            id=uuid.uuid4().hex[:12],
-            name=name,
-            description=description,
-            created_at=now,
-            updated_at=now,
-            track_count=0,
-            duration=0,
-        )
-        await self._conn.execute(
-            "INSERT INTO collections (id, name, description, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (row.id, row.name, row.description, row.created_at, row.updated_at),
-        )
-        await self._conn.commit()
-        logger.info("Created collection %s (%s)", row.id, row.name)
-        return row
+        async with self._writing:
+            now = int(time.time())
+            row = CollectionRow(
+                id=uuid.uuid4().hex[:12],
+                name=name,
+                description=description,
+                created_at=now,
+                updated_at=now,
+                track_count=0,
+                duration=0,
+            )
+            await self._conn.execute(
+                "INSERT INTO collections"
+                " (id, name, description, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (row.id, row.name, row.description, row.created_at, row.updated_at),
+            )
+            await self._conn.commit()
+            logger.info("Created collection %s (%s)", row.id, row.name)
+            return row
 
     async def rename_collection(
         self, collection_id: str, name: str
@@ -279,15 +296,16 @@ class CollectionStore:
         """
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        cursor = await self._conn.execute(
-            "UPDATE collections SET name = ?, updated_at = ? WHERE id = ?",
-            (name, int(time.time()), collection_id),
-        )
-        await self._conn.commit()
-        if cursor.rowcount == 0:
-            return None
-        logger.info("Renamed collection %s to %s", collection_id, name)
-        return await self.get_collection(collection_id)
+        async with self._writing:
+            cursor = await self._conn.execute(
+                "UPDATE collections SET name = ?, updated_at = ? WHERE id = ?",
+                (name, int(time.time()), collection_id),
+            )
+            await self._conn.commit()
+            if cursor.rowcount == 0:
+                return None
+            logger.info("Renamed collection %s to %s", collection_id, name)
+            return await self.get_collection(collection_id)
 
     async def delete_collection(self, collection_id: str) -> bool:
         """Remove a collection and everything in it, answering whether there
@@ -295,14 +313,15 @@ class CollectionStore:
         cascade rather than by three statements that could half-run."""
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        cursor = await self._conn.execute(
-            "DELETE FROM collections WHERE id = ?", (collection_id,)
-        )
-        await self._conn.commit()
-        if cursor.rowcount == 0:
-            return False
-        logger.info("Deleted collection %s", collection_id)
-        return True
+        async with self._writing:
+            cursor = await self._conn.execute(
+                "DELETE FROM collections WHERE id = ?", (collection_id,)
+            )
+            await self._conn.commit()
+            if cursor.rowcount == 0:
+                return False
+            logger.info("Deleted collection %s", collection_id)
+            return True
 
     async def add_entries(
         self,
@@ -319,30 +338,32 @@ class CollectionStore:
         """
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        if await self.get_collection(collection_id) is None:
-            return None
+        async with self._writing:
+            if await self.get_collection(collection_id) is None:
+                return None
 
-        held: Optional[Set[str]] = None
-        if not allow_duplicates:
+            held: Optional[Set[str]] = None
+            if not allow_duplicates:
+                cursor = await self._conn.execute(
+                    "SELECT entity_id FROM entries WHERE collection_id = ?",
+                    (collection_id,),
+                )
+                held = {row["entity_id"] for row in await cursor.fetchall()}
+
             cursor = await self._conn.execute(
-                "SELECT entity_id FROM entries WHERE collection_id = ?",
+                "SELECT COALESCE(MAX(position), -1) FROM entries"
+                " WHERE collection_id = ?",
                 (collection_id,),
             )
-            held = {row["entity_id"] for row in await cursor.fetchall()}
+            row = await cursor.fetchone()
 
-        cursor = await self._conn.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM entries WHERE collection_id = ?",
-            (collection_id,),
-        )
-        row = await cursor.fetchone()
-
-        now = int(time.time())
-        added = await self._insert(
-            collection_id, entries, int(row[0]) + 1, held, now
-        )
-        await self._touch(collection_id, now)
-        logger.info("Added %d tracks to collection %s", added, collection_id)
-        return AddOutcome(added=added, already_there=len(entries) - added)
+            now = int(time.time())
+            added = await self._insert(
+                collection_id, entries, int(row[0]) + 1, held, now
+            )
+            await self._touch(collection_id, now)
+            logger.info("Added %d tracks to collection %s", added, collection_id)
+            return AddOutcome(added=added, already_there=len(entries) - added)
 
     async def replace_entries(
         self,
@@ -362,24 +383,25 @@ class CollectionStore:
         """
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        if await self.get_collection(collection_id) is None:
-            return None
+        async with self._writing:
+            if await self.get_collection(collection_id) is None:
+                return None
 
-        cursor = await self._conn.execute(
-            "DELETE FROM entries WHERE collection_id = ?", (collection_id,)
-        )
-        dropped = cursor.rowcount
-        now = int(time.time())
-        held: Optional[Set[str]] = None if allow_duplicates else set()
-        added = await self._insert(collection_id, entries, 0, held, now)
-        await self._touch(collection_id, now)
-        logger.info(
-            "Collection %s now holds %d tracks, dropping %d",
-            collection_id,
-            added,
-            dropped,
-        )
-        return ReplaceOutcome(added=added, dropped=dropped)
+            cursor = await self._conn.execute(
+                "DELETE FROM entries WHERE collection_id = ?", (collection_id,)
+            )
+            dropped = cursor.rowcount
+            now = int(time.time())
+            held: Optional[Set[str]] = None if allow_duplicates else set()
+            added = await self._insert(collection_id, entries, 0, held, now)
+            await self._touch(collection_id, now)
+            logger.info(
+                "Collection %s now holds %d tracks, dropping %d",
+                collection_id,
+                added,
+                dropped,
+            )
+            return ReplaceOutcome(added=added, dropped=dropped)
 
     async def edit_entries(
         self,
@@ -404,49 +426,50 @@ class CollectionStore:
         """
         if not self._readable():
             raise RuntimeError("Collections file is unavailable")
-        if await self.get_collection(collection_id) is None:
-            return None
+        async with self._writing:
+            if await self.get_collection(collection_id) is None:
+                return None
 
-        cursor = await self._conn.execute(
-            "SELECT entry_id FROM entries WHERE collection_id = ?"
-            " ORDER BY position ASC",
-            (collection_id,),
-        )
-        held = [row["entry_id"] for row in await cursor.fetchall()]
-        named = list(remove) + list(order)
-        if len(named) != len(held) or set(named) != set(held):
-            raise CollectionChanged(
-                f"{collection_id} holds {len(held)} entries, "
-                f"the edit accounts for {len(named)}"
-            )
-
-        dropped = set(remove)
-        # What the order would be if the removals were all that happened, so
-        # the count reports moves the user made rather than the shuffling up
-        # that removing a row does on its own.
-        kept = [entry_id for entry_id in held if entry_id not in dropped]
-        moved = sum(1 for was, now in zip(kept, order) if was != now)
-
-        removed = 0
-        if remove:
             cursor = await self._conn.execute(
-                "DELETE FROM entries WHERE collection_id = ? AND entry_id IN"
-                f" ({_placeholders(list(remove))})",
-                (collection_id, *remove),
+                "SELECT entry_id FROM entries WHERE collection_id = ?"
+                " ORDER BY position ASC",
+                (collection_id,),
             )
-            removed = cursor.rowcount
-        await self._conn.executemany(
-            "UPDATE entries SET position = ? WHERE entry_id = ?",
-            [(position, entry_id) for position, entry_id in enumerate(order)],
-        )
-        await self._touch(collection_id, int(time.time()))
-        logger.info(
-            "Edited collection %s: %d removed, %d moved",
-            collection_id,
-            removed,
-            moved,
-        )
-        return EditOutcome(removed=removed, moved=moved)
+            held = [row["entry_id"] for row in await cursor.fetchall()]
+            named = list(remove) + list(order)
+            if len(named) != len(held) or set(named) != set(held):
+                raise CollectionChanged(
+                    f"{collection_id} holds {len(held)} entries, "
+                    f"the edit accounts for {len(named)}"
+                )
+
+            dropped = set(remove)
+            # What the order would be if the removals were all that happened, so
+            # the count reports moves the user made rather than the shuffling up
+            # that removing a row does on its own.
+            kept = [entry_id for entry_id in held if entry_id not in dropped]
+            moved = sum(1 for was, now in zip(kept, order) if was != now)
+
+            removed = 0
+            if remove:
+                cursor = await self._conn.execute(
+                    "DELETE FROM entries WHERE collection_id = ? AND entry_id IN"
+                    f" ({_placeholders(list(remove))})",
+                    (collection_id, *remove),
+                )
+                removed = cursor.rowcount
+            await self._conn.executemany(
+                "UPDATE entries SET position = ? WHERE entry_id = ?",
+                [(position, entry_id) for position, entry_id in enumerate(order)],
+            )
+            await self._touch(collection_id, int(time.time()))
+            logger.info(
+                "Edited collection %s: %d removed, %d moved",
+                collection_id,
+                removed,
+                moved,
+            )
+            return EditOutcome(removed=removed, moved=moved)
 
     async def _insert(
         self,

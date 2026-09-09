@@ -93,3 +93,27 @@ def test_a_disabled_module_is_not_reached_by_naming_it(registry, monkeypatch):
         server.extract_modules("qobuz")
 
     assert failure.value.status_code == 404
+
+
+def test_a_blank_sources_is_not_every_source(registry):
+    """`sources=` fell through to the ask-for-everything branch, which is how
+    a client could still get the merged listing the per-source routes replaced.
+    """
+    for blank in ("", "   ", ",", "collections,"):
+        with pytest.raises(HTTPException) as failure:
+            server.extract_browse_sources(blank)
+        assert failure.value.status_code == 422, blank
+
+        with pytest.raises(HTTPException) as failure:
+            server.extract_modules(blank)
+        assert failure.value.status_code == 422, blank
+
+
+def test_a_source_nobody_knows_is_refused_not_dropped(registry):
+    """Answering with the sources that happened to be recognised is a listing
+    that looks complete and is not."""
+    with pytest.raises(HTTPException) as failure:
+        server.extract_browse_sources("collections,nope")
+
+    assert failure.value.status_code == 404
+    assert "nope" in failure.value.detail
