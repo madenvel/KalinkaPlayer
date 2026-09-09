@@ -16,6 +16,7 @@ from kalinka_plugin_sdk.datamodel import (
     EntityType,
     Owner,
     Playlist,
+    Track,
 )
 
 from kalinka_server import catalog_art_render as render
@@ -302,6 +303,119 @@ async def test_a_collection_is_rendered_as_a_square_cover(tmp_path):
 
     with Image.open(svc._dir / svc._entries[cat_id]["file"]) as image:
         assert image.width == image.height
+
+
+def _track_child(album_local, track_local):
+    """A track as a collection lists it, wearing its album's picture under a
+    URL of its own — the shape a source hands back when it stamps the track
+    into the query, as Jamendo does."""
+    album_id = EntityId(id=album_local, type=EntityType.ALBUM, source="localfiles")
+    track_id = EntityId(id=track_local, type=EntityType.TRACK, source="localfiles")
+    return BrowseItem(
+        id=track_id,
+        name=track_local,
+        can_browse=False,
+        can_add=True,
+        track=Track(
+            id=track_id,
+            title=track_local,
+            duration=100,
+            album=Album(
+                id=album_id,
+                title=album_local,
+                image=CoverImage(
+                    large=f"/resource/album/{album_local}-{track_local}.jpg"
+                ),
+            ),
+        ),
+    )
+
+
+def _album_tracks(tmp_path, resources, album_local, track_locals, color):
+    """Tracks of one album, each naming the same picture by its own URL, with
+    the bytes written where the resource resolver will find them."""
+    blob = render.encode_jpeg(_solid_cover(color))
+    children = []
+    for track_local in track_locals:
+        path = tmp_path / f"{album_local}-{track_local}.jpg"
+        path.write_bytes(blob)
+        resources[f"album/{album_local}-{track_local}.jpg"] = str(path)
+        children.append(_track_child(album_local, track_local))
+    return children
+
+
+def _cover_spy(monkeypatch):
+    """Records what each mosaic was composed from."""
+    composed: list[list] = []
+
+    def _spy(covers, **kwargs):
+        composed.append(list(covers))
+        return render.render_playlist_cover(covers, **kwargs)
+
+    monkeypatch.setattr(
+        "kalinka_server.catalog_art_service.render_playlist_cover", _spy
+    )
+    return composed
+
+
+async def test_a_mosaic_takes_four_distinct_albums_not_the_first_four(
+    tmp_path, monkeypatch
+):
+    resources: dict[str, str] = {}
+    children = (
+        _album_tracks(tmp_path, resources, "a1", ["t1", "t2", "t3"], (200, 30, 30))
+        + _album_tracks(tmp_path, resources, "a2", ["t4"], (30, 200, 30))
+        + _album_tracks(tmp_path, resources, "a3", ["t5"], (30, 30, 200))
+        + _album_tracks(tmp_path, resources, "a4", ["t6"], (200, 200, 30))
+    )
+    svc = _service(tmp_path, resolver=lambda eid: _FakeModule(children, resources))
+    composed = _cover_spy(monkeypatch)
+
+    await svc._process(
+        "kalinka:collections:playlist:c1", render.ArtStyle.COVER, textual=False
+    )
+
+    # The first three entries are one album under three URLs; the mosaic
+    # reaches past them for four pictures that differ.
+    assert len(composed[0]) == 4
+    assert len({cover.tobytes() for cover in composed[0]}) == 4
+
+
+async def test_one_album_under_many_urls_takes_the_cover_alone(tmp_path, monkeypatch):
+    resources: dict[str, str] = {}
+    children = _album_tracks(
+        tmp_path, resources, "a1", ["t1", "t2", "t3", "t4"], (200, 30, 30)
+    )
+    svc = _service(tmp_path, resolver=lambda eid: _FakeModule(children, resources))
+    composed = _cover_spy(monkeypatch)
+
+    await svc._process(
+        "kalinka:collections:playlist:c1", render.ArtStyle.COVER, textual=False
+    )
+
+    # Nothing to mosaic, so the one picture gets the whole square rather than
+    # being tiled four times.
+    assert len(composed[0]) == 1
+
+
+async def test_two_albums_wearing_one_picture_count_once(tmp_path, monkeypatch):
+    resources: dict[str, str] = {}
+    children = (
+        _album_tracks(tmp_path, resources, "a1", ["t1"], (200, 30, 30))
+        + _album_tracks(tmp_path, resources, "a2", ["t2"], (200, 30, 30))
+        + _album_tracks(tmp_path, resources, "a3", ["t3"], (30, 200, 30))
+        + _album_tracks(tmp_path, resources, "a4", ["t4"], (30, 30, 200))
+    )
+    svc = _service(tmp_path, resolver=lambda eid: _FakeModule(children, resources))
+    composed = _cover_spy(monkeypatch)
+
+    await svc._process(
+        "kalinka:collections:playlist:c1", render.ArtStyle.COVER, textual=False
+    )
+
+    # Four albums, three pictures between them: an id says two covers differ,
+    # the bytes say otherwise, and the bytes win.
+    assert len(composed[0]) == 3
 
 
 async def test_a_collection_takes_covers_from_the_sources_that_own_them(tmp_path):

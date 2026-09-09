@@ -84,6 +84,16 @@ def _item_image_path(item: BrowseItem) -> Optional[str]:
     return image.large or image.small or image.thumbnail
 
 
+def _item_album_id(item: BrowseItem) -> Optional[str]:
+    """The album a browse item's cover belongs to, where it names one. One
+    album's tracks may each carry their own cover URL — Jamendo stamps the track
+    id into the query — so a URL alone cannot tell two artworks apart."""
+    album = item.album
+    if album is None and item.track is not None:
+        album = item.track.album
+    return album.id.to_string if album is not None else None
+
+
 def _has_image(item: BrowseItem) -> bool:
     catalog = item.catalog
     if catalog is None or catalog.image is None:
@@ -299,16 +309,29 @@ class CatalogArtService:
         wanted_covers = False
         if items and not textual:
             wanted = COVER_TILES if cover_style else MAX_COVERS
-            seen: set[str] = set()
+            seen_paths: set[str] = set()
+            seen_albums: set[str] = set()
+            seen_art: set[bytes] = set()
             for item in items:
                 path = _item_image_path(item)
-                if not path or path in seen:
+                if not path:
+                    continue
+                album = _item_album_id(item)
+                if path in seen_paths or (album is not None and album in seen_albums):
                     continue
                 wanted_covers = True
-                seen.add(path)
+                seen_paths.add(path)
+                if album is not None:
+                    seen_albums.add(album)
                 blob = await self._fetch_cover(path, item)
                 if blob is None:
                     continue
+                # Two albums may still wear one picture, and the same picture
+                # twice in a mosaic reads as a fault rather than as a cover.
+                digest = hashlib.sha1(blob).digest()
+                if digest in seen_art:
+                    continue
+                seen_art.add(digest)
                 try:
                     cover = Image.open(io.BytesIO(blob))
                     cover.load()
