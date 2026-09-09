@@ -73,6 +73,14 @@ class TimeLimitedInputModule:
 
         return timed
 
+    @property
+    def wrapped(self) -> InputModule:
+        """The module underneath, for a caller that has to inspect its class
+        rather than call it. The delegates bound in ``__init__`` stand in
+        front of the wrapped class, so ``type(proxy)`` says nothing about
+        what the module actually implements."""
+        return self._inner
+
     def __getattr__(self, name):
         # Attributes beyond the InputModule protocol (e.g. get_indexer_status,
         # which the server calls via hasattr) aren't bound in __init__, so they

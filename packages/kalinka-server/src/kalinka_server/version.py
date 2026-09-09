@@ -45,7 +45,11 @@ def get_version() -> str:
 # and whether they can install a release of themselves (upgrade_supported),
 # which POST /renderer/{id}/upgrade asks them to do; playback state names
 # the URL the renderer is fetching (stream_url).
-REST_API_VERSION = "0.5"
+# 0.6: search is asked one source at a time — `sources` is required on
+# /search/matches and /ai_search, /ai_search takes a single source and no
+# longer pages, and module records name the optional calls they answer
+# (capabilities).
+REST_API_VERSION = "0.6"
 
 
 def get_rest_api_version() -> str:
