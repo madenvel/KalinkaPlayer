@@ -1,5 +1,5 @@
-"""The search endpoints: a source's hits arrive annotated, and a source that
-fails is a 503 naming it."""
+"""The search endpoints: one source at a time, hits arriving annotated, and a
+source that fails answering 503 by name."""
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -22,6 +22,7 @@ class _Module(InputModule):
     def __init__(self, name, failing=False):
         self._name = name
         self._failing = failing
+        self.suggested = []
 
     def module_name(self):
         return self._name
@@ -41,6 +42,7 @@ class _Module(InputModule):
         return BrowseItemList(offset=offset, limit=limit, total=1, items=[item])
 
     async def ai_search(self, query, offset=0, limit=50):
+        self.suggested.append(limit)
         if self._failing:
             raise RuntimeError("upstream down")
         return BrowseItemList(offset=offset, limit=limit, total=0, items=[])
@@ -55,6 +57,13 @@ def _resolve(sources):
     if unknown:
         raise HTTPException(status_code=404, detail="No matching input modules found")
     return [MODULES[name] for name in names]
+
+
+def _serving(module, config=SearchConfig):
+    """A server whose every source is ``module``."""
+    app = FastAPI()
+    register_search_routes(app, lambda _: [module], lambda _: [module], config)
+    return TestClient(app)
 
 
 @pytest.fixture
@@ -88,6 +97,45 @@ def test_suggestions_fail_the_same_way(client):
     ok = client.get("/ai_search", params={"query": "calm", "sources": "localfiles"})
     down = client.get("/ai_search", params={"query": "calm", "sources": "qobuz"})
     assert (ok.status_code, down.status_code) == (200, 503)
+
+
+@pytest.mark.parametrize("route", ["/search/matches", "/ai_search"])
+def test_a_source_must_be_named(client, route):
+    """Omitting it used to mean every source at once, which is an answer no
+    client can lay out a piece at a time."""
+    assert client.get(route, params={"query": "calm"}).status_code == 422
+
+
+def test_suggestions_are_asked_of_one_source(client):
+    response = client.get(
+        "/ai_search", params={"query": "calm", "sources": "localfiles,qobuz"}
+    )
+
+    assert response.status_code == 400
+
+
+def test_the_configured_limit_is_what_reaches_the_source():
+    """The caller does not size the answer: relevance falls away past the
+    first few dozen, so there is nothing to page to."""
+    module = _Module("localfiles")
+
+    _serving(module, lambda: SearchConfig(ai_suggestions_limit=7)).get(
+        "/ai_search", params={"query": "calm", "sources": "localfiles"}
+    )
+
+    assert module.suggested == [7]
+
+
+def test_a_blank_query_asks_nothing():
+    module = _Module("localfiles")
+
+    response = _serving(module).get(
+        "/ai_search", params={"query": "   ", "sources": "localfiles"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+    assert module.suggested == []
 
 
 def test_an_unknown_source_is_404(client):

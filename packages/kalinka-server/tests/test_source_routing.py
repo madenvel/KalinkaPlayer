@@ -5,14 +5,26 @@ that needs audio goes only to the modules that have it. A source that browses
 but streams nothing is empty on those planes, never a missing module.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
+
+from kalinka_plugin_sdk.inputmodule import InputModule
 
 from kalinka_server import server
 from kalinka_server.browse_source import BrowseSourceRegistry, RegisteredSource
 
 
 class _Source:
+    def __init__(self, name):
+        self._name = name
+
+    def module_name(self):
+        return self._name
+
+
+class _Module(InputModule):
     def __init__(self, name):
         self._name = name
 
@@ -60,5 +72,24 @@ def test_asking_a_browsable_source_for_suggestions_is_empty_not_missing(registry
 def test_asking_for_a_source_nobody_knows_is_still_404(registry):
     with pytest.raises(HTTPException) as failure:
         server.extract_modules("nope")
+
+    assert failure.value.status_code == 404
+
+
+def test_a_disabled_module_is_not_reached_by_naming_it(registry, monkeypatch):
+    """The enabled check used to guard only the ask-for-everything branch,
+    which is the one nothing takes any more."""
+    module = _Module("qobuz")
+    monkeypatch.setattr(
+        server.modules,
+        "prepared_input_modules",
+        {"qobuz": SimpleNamespace(interface=module)},
+    )
+    monkeypatch.setattr(server.modules, "enabled_input_modules", {"qobuz"})
+    assert server.extract_modules("qobuz") == [module]
+
+    monkeypatch.setattr(server.modules, "enabled_input_modules", set())
+    with pytest.raises(HTTPException) as failure:
+        server.extract_modules("qobuz")
 
     assert failure.value.status_code == 404

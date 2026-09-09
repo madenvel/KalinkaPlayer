@@ -74,6 +74,7 @@ from .player_setup import (
     volume_control_modules,
 )
 from .internal_modules import internal_modules
+from .module_capabilities import capabilities_of
 from .service_discovery import ServiceDiscovery
 from . import update_check
 from .version import get_rest_api_version, get_version
@@ -336,7 +337,9 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
     sources_split = sources.split(",")
     input_modules: list[InputModule] = []
     for source in sources_split:
-        if source in modules.prepared_input_modules:
+        # Named explicitly or not, a disabled module is not one to reach:
+        # asking for it by name is how the check used to be skipped.
+        if source in modules.enabled_input_modules:
             interface = modules.prepared_input_modules[source].interface
             if isinstance(interface, InputModule):
                 input_modules.append(interface)
@@ -1315,6 +1318,7 @@ async def create_app(
             "error_message": prepared.error_message,
             "missing_packages": [],
             "builtin": False,
+            "capabilities": capabilities_of(prepared.interface),
         }
         if (
             prepared.health_state == ModuleHealthState.READY
@@ -1354,6 +1358,9 @@ async def create_app(
                 "error_message": None,
                 "missing_packages": [],
                 "builtin": True,
+                # Browsed and searched by name like any source, but with no
+                # audio of its own there is nothing for it to suggest.
+                "capabilities": [],
             }
             for entry in browse_registry().entries()
             if entry.builtin
