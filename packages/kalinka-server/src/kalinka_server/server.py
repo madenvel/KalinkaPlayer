@@ -232,18 +232,43 @@ def browse_source_from_id(entity_id: str | EntityId) -> BrowseSource:
     return entry.source
 
 
+def _named_sources(sources: str) -> List[str]:
+    """The names a ``sources`` parameter holds, refusing one that names none.
+
+    A blank value used to fall through to "every source", which is how a
+    client could still ask for the merged listing that per-source routes
+    exist to replace — and a blank segment is a client that built its
+    parameter wrong, not a source.
+    """
+    names = [name.strip() for name in sources.split(",")]
+    if any(not name for name in names):
+        raise HTTPException(
+            status_code=422, detail="`sources` must name at least one source"
+        )
+    return names
+
+
 def extract_browse_sources(sources: Optional[str]) -> List[BrowseSource]:
-    """The browse sources named by `sources`, or every one of them."""
+    """The browse sources named by `sources`, or every one of them when it is
+    absent altogether.
+
+    A name nobody knows is refused rather than dropped: a listing assembled
+    from the sources that happened to be recognised looks complete and is
+    not, which is the thing the per-source routes exist to avoid.
+    """
     entries = browse_registry().entries()
-    if not sources:
+    if sources is None:
         return [entry.source for entry in entries]
 
-    wanted = sources.split(",")
+    wanted = _named_sources(sources)
     by_name = {entry.name: entry.source for entry in entries}
-    matched = [by_name[name] for name in wanted if name in by_name]
-    if not matched:
-        raise HTTPException(status_code=404, detail="No matching sources found")
-    return matched
+    unknown = [name for name in wanted if name not in by_name]
+    if unknown:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No such source: {', '.join(unknown)}",
+        )
+    return [by_name[name] for name in wanted]
 
 
 def input_module(name: str) -> InputModule:
@@ -325,8 +350,9 @@ def default_input_module() -> InputModule:
 
 
 def extract_modules(sources: Optional[str]) -> List[InputModule]:
-    """Extract input modules based on the provided sources."""
-    if not sources:
+    """The input modules named by `sources`, or every enabled one when it is
+    absent altogether."""
+    if sources is None:
         return [
             module.interface
             for module_name, module in modules.prepared_input_modules.items()
@@ -334,7 +360,7 @@ def extract_modules(sources: Optional[str]) -> List[InputModule]:
             and isinstance(module.interface, InputModule)
         ]
 
-    sources_split = sources.split(",")
+    sources_split = _named_sources(sources)
     input_modules: list[InputModule] = []
     for source in sources_split:
         # Named explicitly or not, a disabled module is not one to reach:
