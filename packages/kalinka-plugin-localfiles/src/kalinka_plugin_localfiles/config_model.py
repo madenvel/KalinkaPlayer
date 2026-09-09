@@ -14,6 +14,10 @@ _SIMPLE: dict[str, Any] = {"importance": "simple"}
 # Independent of the tier: what the app's first-run wizard asks for.
 _PROMPT: dict[str, Any] = {"setup": "prompt"}
 
+# What this source is called wherever it is named — the settings page, a
+# search heading, a track's attribution.
+DISPLAY_NAME = "Local Library"
+
 
 class MoodConfig(BaseModel):
     """Mood (valence/arousal) ranking.
@@ -296,7 +300,7 @@ class LocalFilesConfig(ModuleConfig):
 
     name: str = Field(
         default="localfiles",
-        title="Local files",
+        title=DISPLAY_NAME,
         description=(
             "Music files on this device or a mounted share, indexed into a "
             "browsable library with artwork and metadata filled in from "
