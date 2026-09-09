@@ -2,7 +2,12 @@
 
 import pytest
 
-from kalinka_server.collections.store import CollectionStore, EntryFilter, NewEntry
+from kalinka_server.collections.store import (
+    CollectionChanged,
+    CollectionStore,
+    EntryFilter,
+    NewEntry,
+)
 from tests.collections_seed import seed_collection as _seed_collection
 from tests.collections_seed import seed_entry as _seed_entry
 
@@ -86,6 +91,47 @@ class TestRenaming:
 
         with pytest.raises(RuntimeError):
             await store.rename_collection("c1", "Nowhere")
+
+
+class TestDeleting:
+    async def test_a_deleted_collection_takes_its_entries_with_it(
+        self, store, tmp_path
+    ):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Night Drive")
+        await _seed_entry(path, "c1", "e0", genres=(("jazz", "Jazz"),))
+
+        assert await store.delete_collection("c1") is True
+
+        rows, total = await store.list_collections()
+        assert (rows, total) == ([], 0)
+        # The entry went with it, so nothing reads back under its id.
+        _, held = await store.list_entries("c1")
+        assert held == 0
+
+    async def test_another_collection_is_left_alone(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "One")
+        await _seed_collection(path, "c2", "Two")
+        await _seed_entry(path, "c2", "theirs")
+
+        await store.delete_collection("c1")
+
+        _, total = await store.list_entries("c2")
+        assert (await store.get_collection("c2")).name == "Two"
+        assert total == 1
+
+    async def test_deleting_nothing_says_so(self, store):
+        assert await store.delete_collection("nobody") is False
+
+    async def test_a_file_that_will_not_open_refuses_the_delete(self, tmp_path):
+        path = tmp_path / "collections.db"
+        path.write_bytes(b"not a database at all")
+        store = CollectionStore(str(path))
+        await store.open()
+
+        with pytest.raises(RuntimeError):
+            await store.delete_collection("c1")
 
 
 class TestAdding:
@@ -283,6 +329,132 @@ class TestReplacing:
 
         with pytest.raises(RuntimeError):
             await store.replace_entries("c1", [entry("kalinka:qobuz:track:a")])
+
+
+class TestEditing:
+    """A staged edit: what the editing session commits in one write."""
+
+    async def _four(self, tmp_path, genres=()):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "Mixed")
+        for i in range(4):
+            await _seed_entry(path, "c1", f"e{i}", position=i, genres=genres)
+        return path
+
+    async def test_what_is_removed_goes_and_the_rest_close_up(self, store, tmp_path):
+        await self._four(tmp_path)
+
+        outcome = await store.edit_entries("c1", ["e1"], ["e0", "e2", "e3"])
+
+        rows, total = await store.list_entries("c1")
+        assert (outcome.removed, outcome.moved) == (1, 0)
+        assert total == 3
+        assert [row.entry_id for row in rows] == ["e0", "e2", "e3"]
+        assert [row.position for row in rows] == [0, 1, 2]
+
+    async def test_the_order_given_is_the_order_read_back(self, store, tmp_path):
+        await self._four(tmp_path)
+
+        outcome = await store.edit_entries("c1", [], ["e3", "e0", "e2", "e1"])
+
+        rows, _ = await store.list_entries("c1")
+        assert [row.entry_id for row in rows] == ["e3", "e0", "e2", "e1"]
+        assert outcome.removed == 0
+        # e2 alone kept its place, so three of the four places changed.
+        assert outcome.moved == 3
+
+    async def test_closing_up_after_a_removal_is_not_a_move(self, store, tmp_path):
+        """Removing the first row shifts every other one up, and none of that
+        is something the user did."""
+        await self._four(tmp_path)
+
+        outcome = await store.edit_entries("c1", ["e0"], ["e1", "e2", "e3"])
+
+        assert outcome.moved == 0
+
+    async def test_one_moved_row_counts_the_places_it_disturbed(
+        self, store, tmp_path
+    ):
+        await self._four(tmp_path)
+
+        outcome = await store.edit_entries("c1", [], ["e1", "e0", "e2", "e3"])
+
+        assert (outcome.removed, outcome.moved) == (0, 2)
+
+    async def test_what_is_dropped_takes_its_genres_with_it(self, store, tmp_path):
+        await self._four(tmp_path, genres=(("jazz", "Jazz"),))
+
+        await store.edit_entries("c1", ["e0", "e1", "e2"], ["e3"])
+
+        genres = await store.genres_of("c1")
+        assert [(value.id, value.count) for value in genres] == [("jazz", 1)]
+
+    async def test_an_edit_that_leaves_an_entry_unaccounted_for_is_refused(
+        self, store, tmp_path
+    ):
+        await self._four(tmp_path)
+
+        with pytest.raises(CollectionChanged):
+            await store.edit_entries("c1", [], ["e0", "e1", "e2"])
+
+        rows, total = await store.list_entries("c1")
+        assert total == 4
+        assert [row.entry_id for row in rows] == ["e0", "e1", "e2", "e3"]
+
+    async def test_an_edit_naming_something_that_is_not_there_is_refused(
+        self, store, tmp_path
+    ):
+        await self._four(tmp_path)
+
+        with pytest.raises(CollectionChanged):
+            await store.edit_entries("c1", [], ["e0", "e1", "e2", "gone"])
+
+    async def test_an_edit_naming_one_entry_twice_is_refused(self, store, tmp_path):
+        await self._four(tmp_path)
+
+        with pytest.raises(CollectionChanged):
+            await store.edit_entries("c1", [], ["e0", "e0", "e2", "e3"])
+
+    async def test_removing_every_entry_leaves_the_collection_standing(
+        self, store, tmp_path
+    ):
+        await self._four(tmp_path)
+
+        outcome = await store.edit_entries("c1", ["e0", "e1", "e2", "e3"], [])
+
+        assert outcome.removed == 4
+        assert (await store.get_collection("c1")).track_count == 0
+
+    async def test_another_collection_is_left_alone(self, store, tmp_path):
+        path = await self._four(tmp_path)
+        await _seed_collection(path, "c2", "Two")
+        await _seed_entry(path, "c2", "theirs")
+
+        await store.edit_entries("c1", ["e0"], ["e1", "e2", "e3"])
+
+        _, total = await store.list_entries("c2")
+        assert total == 1
+
+    async def test_editing_counts_as_changing_it(self, store, tmp_path):
+        path = str(tmp_path / "collections.db")
+        await _seed_collection(path, "c1", "First", updated_at=10)
+        await _seed_entry(path, "c1", "e0", position=0)
+
+        await store.edit_entries("c1", ["e0"], [])
+
+        assert (await store.get_collection("c1")).updated_at > 10
+
+    async def test_editing_nothing_says_so(self, store):
+        assert await store.edit_entries("nobody", [], []) is None
+
+    async def test_a_file_that_will_not_open_refuses_the_edit(self, tmp_path):
+        path = tmp_path / "collections.db"
+        path.write_bytes(b"not a database at all")
+        store = CollectionStore(str(path))
+        await store.open()
+
+        with pytest.raises(RuntimeError):
+            await store.edit_entries("c1", [], [])
 
 
 class TestCollections:
