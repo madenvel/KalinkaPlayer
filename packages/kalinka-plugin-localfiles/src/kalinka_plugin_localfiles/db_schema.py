@@ -381,6 +381,14 @@ async def init_db(db_path: str) -> None:
             """
         )
 
+        # Albums by artist — the artist listing counts them per row.
+        await cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_albums_artist_id
+            ON albums (artist_id)
+            """
+        )
+
         # ---------------------------------------------------------------
         # Views
         # ---------------------------------------------------------------

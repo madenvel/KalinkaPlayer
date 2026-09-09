@@ -1287,10 +1287,12 @@ class LocalFilesInputModule(InputModule):
 
     def _create_artist_browse_item(self, artist: Dict) -> BrowseItem:
         """Create a BrowseItem for an artist"""
-        # Create artist object
+        # Zero albums reads as missing rather than "0 albums": an artist whose
+        # tracks all sit on unknown_album has none to count.
         artist_obj = Artist(
             id=artist_id(artist["id"]),
             name=artist_display_name(artist["name"]),
+            album_count=artist.get("album_count") or None,
         )
 
         # Add image if available

@@ -87,6 +87,14 @@ class _KindQuery:
     genre_predicate: str
 
 
+#: Artist row plus the albums credited to them, counted in the same statement
+#: so a page of artists costs one query rather than one per artist. Requires
+#: the row source to alias ``artists`` as ``ar``.
+ARTIST_COLUMNS = (
+    "ar.*, (SELECT COUNT(*) FROM albums al WHERE al.artist_id = ar.id)"
+    " AS album_count"
+)
+
 KINDS: Dict[str, _KindQuery] = {
     "track": _KindQuery(
         columns=(
@@ -111,7 +119,7 @@ KINDS: Dict[str, _KindQuery] = {
         genre_predicate="has_genre(a.genre, ?)",
     ),
     "artist": _KindQuery(
-        columns="ar.*",
+        columns=ARTIST_COLUMNS,
         source="artists ar",
         id_expr="ar.id",
         ts_expr="ar.last_updated",
@@ -488,7 +496,8 @@ class LocalFilesInputModuleDb:
             cursor = conn.cursor()
             placeholders = ", ".join("?" for _ in artist_ids)
             cursor.execute(
-                f"SELECT * FROM artists WHERE id IN ({placeholders})",
+                f"SELECT {ARTIST_COLUMNS} FROM artists ar"
+                f" WHERE ar.id IN ({placeholders})",
                 artist_ids,
             )
             rows_by_id = {row["id"]: dict(row) for row in cursor.fetchall()}
@@ -538,7 +547,10 @@ class LocalFilesInputModuleDb:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM artists WHERE id = ?", (artist_id,))
+            cursor.execute(
+                f"SELECT {ARTIST_COLUMNS} FROM artists ar WHERE ar.id = ?",
+                (artist_id,),
+            )
             row = cursor.fetchone()
             return dict(row) if row else None
         finally:
@@ -741,7 +753,7 @@ class LocalFilesInputModuleDb:
             # Get results
             cursor.execute(
                 f"""
-                SELECT * FROM artists
+                SELECT {ARTIST_COLUMNS} FROM artists ar
                 WHERE {where}
                 ORDER BY name
                 LIMIT ? OFFSET ?
