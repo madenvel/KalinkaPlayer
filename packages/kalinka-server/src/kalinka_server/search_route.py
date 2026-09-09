@@ -36,6 +36,7 @@ def register_search_routes(
     resolve_browse_sources: Callable[[str], List[BrowseSource]],
     resolve_modules: Callable[[str], List[InputModule]],
     config: Callable[[], SearchConfig],
+    decorate: Callable[[BrowseItemList], None] = lambda result: None,
 ) -> None:
     """Mount the search endpoints on ``app``.
 
@@ -44,6 +45,11 @@ def register_search_routes(
     only from a module that has audio to suggest. Both turn the ``sources``
     parameter into sources, raising for names neither knows. ``config`` is
     read per request so a settings change is seen without a restart.
+
+    ``decorate`` is the server's own pass over a result (catalog card art)
+    before it is serialised, the same one the browse routes take: a hit is
+    the same entity whether it was browsed to or searched for, and it
+    carries the same cover either way.
     """
 
     @app.get("/search/matches")
@@ -51,11 +57,13 @@ def register_search_routes(
         """Every hit the sources return for a name, ranked as one list — each
         annotated with why it stands where it does."""
         try:
-            return await collect_name_matches(
+            result = await collect_name_matches(
                 resolve_browse_sources(sources), query, config()
             )
         except SourceFailed as e:
             raise _unavailable(e)
+        decorate(result)
+        return result
 
     @app.get("/ai_search")
     async def ai_search(query: str, sources: str) -> BrowseItemList:

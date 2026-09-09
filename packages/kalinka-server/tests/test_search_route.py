@@ -167,3 +167,32 @@ def test_a_name_reaches_a_source_that_suggests_nothing():
     assert matches.json()["total"] == 1
     assert suggestions.status_code == 200
     assert suggestions.json()["total"] == 0
+
+
+def test_a_hit_carries_the_art_a_browse_would_have_given_it():
+    """The server composes a cover for a catalog that has none, on its way
+    out. It only ever ran on the browse path, so a collection found by name
+    arrived bare and the client drew its own."""
+    decorated = []
+
+    def decorate(result):
+        decorated.append(result)
+        for item in result.items:
+            item.name = f"{item.name} (decorated)"
+
+    app = FastAPI()
+    register_search_routes(
+        app,
+        lambda _: [_Module("collections")],
+        lambda _: [],
+        SearchConfig,
+        decorate,
+    )
+    client = TestClient(app)
+
+    body = client.get(
+        "/search/matches", params={"query": "the beatles", "sources": "collections"}
+    ).json()
+
+    assert len(decorated) == 1
+    assert body["items"][0]["name"] == "The Beatles (decorated)"
