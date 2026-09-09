@@ -11,6 +11,8 @@ from kalinka_plugin_sdk.datamodel import (
     EntityId,
     EntityType,
     MatchTier,
+    Owner,
+    Playlist,
     Track,
 )
 from kalinka_plugin_sdk.inputmodule import InputModule, SearchType
@@ -43,6 +45,23 @@ def _album(source, local, title, artist_name="Someone"):
         name=title,
         can_browse=True,
         album=Album(id=alid, title=title, artist=Artist(id=arid, name=artist_name)),
+    )
+
+
+def _playlist(source, local, name):
+    pid = EntityId(id=local, type=EntityType.PLAYLIST, source=source)
+    oid = EntityId(id=f"o-{local}", type=EntityType.ARTIST, source=source)
+    return BrowseItem(
+        id=pid,
+        name=name,
+        can_browse=True,
+        playlist=Playlist(
+            id=pid,
+            name=name,
+            owner=Owner(name="You", id=oid),
+            description=None,
+            track_count=1,
+        ),
     )
 
 
@@ -224,6 +243,12 @@ class TestIntent:
     def test_pure_filler_or_descriptor_has_none(self):
         assert not has_navigational_intent("something melancholic for tonight")
         assert not has_navigational_intent("upbeat jazz")
+        assert not has_navigational_intent("night time")
+
+    def test_a_lone_word_is_a_name_to_try(self):
+        assert has_navigational_intent("night")
+        assert has_navigational_intent("chill")
+        assert not has_navigational_intent("")
 
 
 class _Module(InputModule):
@@ -285,6 +310,17 @@ class TestCollection:
 
         assert result.total == 0
         assert module.asked == []
+
+    @pytest.mark.asyncio
+    async def test_a_lone_filler_word_still_asks(self):
+        module = _Module(
+            "collections",
+            {SearchType.playlist: [_playlist("collections", "p", "Night Drive")]},
+        )
+
+        result = await collect_name_matches([module], "night", SearchConfig())
+
+        assert [item.name for item in result.items] == ["Night Drive"]
 
     @pytest.mark.asyncio
     async def test_a_failing_leg_fails_the_source_rather_than_thinning_it(self):

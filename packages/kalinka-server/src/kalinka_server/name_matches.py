@@ -266,6 +266,13 @@ def has_navigational_intent(query: str) -> bool:
     none, so name matching is skipped: there is no name to match, and scoring
     a long phrase against short titles yields coincidental hits. Skipping it
     also spares the search() fan-out for discovery queries — the common case.
+
+    One word alone always counts. A word is filler only in the company of
+    others: "night" carries no intent in "something for tonight", but typed
+    on its own it is someone looking for a thing called Night, and a list
+    named for a time of day would otherwise be unfindable by its own name.
     """
     tokens = set(_TOKEN_RE.findall(query.lower()))
+    if len(tokens) == 1:
+        return True
     return bool(tokens - _FILLER_WORDS - _DESCRIPTOR_WORDS)
