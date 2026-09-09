@@ -9,7 +9,7 @@ from typing import List, Dict, Optional, Tuple
 import mimetypes
 
 from fastapi import HTTPException
-from .config_model import LocalFilesConfig
+from .config_model import DISPLAY_NAME, LocalFilesConfig
 from kalinka_plugin_sdk.inputmodule import (
     ContentInfo,
     InputModule,
@@ -96,6 +96,8 @@ PLAYLIST_SHELF_FILTERS = [_text_filter("names and descriptions"), GENRE_FILTER]
 LIBRARY_FILTERS = [_text_filter("your library"), TYPE_FILTER, GENRE_FILTER]
 
 LIBRARY_ENDPOINT = "library"
+
+_AI_CARD_TITLE = f"FROM {DISPLAY_NAME.upper()}"
 
 
 @dataclass(frozen=True)
@@ -276,18 +278,18 @@ class LocalFilesInputModule(InputModule):
 
     def display_name(self) -> str:
         """Human-friendly source name for section headers."""
-        return "Your Library"
+        return DISPLAY_NAME
 
     async def ai_search(
         self, query: str, offset: int = 0, limit: int = 50
     ) -> BrowseItemList:
         """Semantic search via the searcher subprocess (CLAP KNN + mood + tags).
 
-        Returns a single AI-suggestions catalog card ("FROM YOUR LIBRARY") of
-        semantically ranked tracks — the plugin owns this card's
-        presentation. BEST MATCH (literal name lookup) is assembled by the
-        server, which appends this card after it, alongside the other sources'
-        cards. The server may suppress the card for a navigational query.
+        Returns a single AI-suggestions catalog card of semantically ranked
+        tracks — the plugin owns this card's presentation. BEST MATCH
+        (literal name lookup) is assembled by the server, which appends this
+        card after it, alongside the other sources' cards. The server may
+        suppress the card for a navigational query.
         """
         if self._search_request_queue is None or self._search_response_queue is None:
             return EmptyList(offset, limit)
@@ -328,13 +330,13 @@ class LocalFilesInputModule(InputModule):
         cat = catalog_id("ai_search:tracks")
         card = BrowseItem(
             id=cat,
-            name="FROM YOUR LIBRARY",
+            name=_AI_CARD_TITLE,
             subname="Matched by mood, genre and audio features",
             can_browse=False,
             can_add=False,
             catalog=Catalog(
                 id=cat,
-                title="FROM YOUR LIBRARY",
+                title=_AI_CARD_TITLE,
                 sources=[cat.source],
                 preview_config=Preview(
                     type=PreviewType.CARD,

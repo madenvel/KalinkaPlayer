@@ -14,7 +14,7 @@ def _make_config(**overrides) -> LocalFilesConfig:
 def test_searcher_db_contract():
     """SearchWorker calls these on ``self.db``; removing any one silently
     breaks ai_search at runtime — the handler raises mid-``_do_search`` and the
-    plugin returns 0 tracks (no "FROM YOUR LIBRARY" card), which
+    plugin returns 0 tracks (no AI-suggestions card), which
     unit tests using ``Mock(spec=AsyncSearcherDb)`` do NOT catch.
     """
     required = {
