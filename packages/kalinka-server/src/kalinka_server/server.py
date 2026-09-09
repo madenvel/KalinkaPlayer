@@ -707,6 +707,7 @@ async def create_app(
         extract_browse_sources,
         extract_modules,
         lambda: app.state.config.search,
+        app.state.catalog_art.decorate,
     )
 
     register_collection_routes(
