@@ -188,6 +188,40 @@ async def test_renaming_to_nothing_is_refused(client):
     assert response.status_code == 422
 
 
+async def test_deleting_takes_the_collection_and_its_tracks(client):
+    http, store = client
+    made = http.post("/collections", json={"name": "Night Drive"}).json()
+    http.post(
+        f"/collections/{made['id']}/entries",
+        json={"items": ["kalinka:qobuz:track:t1"]},
+    )
+
+    response = http.delete(f"/collections/{made['id']}")
+
+    assert response.status_code == 204
+    rows, total = await store.list_collections()
+    assert (rows, total) == ([], 0)
+
+
+async def test_deleting_what_is_not_there_is_a_miss(client):
+    http, _ = client
+
+    response = http.delete("/collections/kalinka:collections:playlist:nobody")
+
+    assert response.status_code == 404
+
+
+async def test_deleting_another_sources_id_is_a_miss(client):
+    http, store = client
+    http.post("/collections", json={"name": "Night Drive"})
+    rows, _ = await store.list_collections()
+
+    response = http.delete(f"/collections/kalinka:qobuz:playlist:{rows[0].id}")
+
+    assert response.status_code == 404
+    assert await store.get_collection(rows[0].id) is not None
+
+
 async def test_adding_tracks_says_how_many_landed(client):
     http, store = client
     made = http.post("/collections", json={"name": "Night Drive"}).json()
@@ -337,6 +371,87 @@ async def test_a_replace_may_be_asked_to_keep_duplicates(client):
     rows, total = await store.list_entries(made["id"].split(":")[-1])
     assert total == 2
     assert rows[0].entry_id != rows[1].entry_id
+
+
+async def _stocked(http, store, names=("t1", "t2")):
+    """A collection holding `names`, with the entry ids an edit addresses."""
+    made = http.post("/collections", json={"name": "Night Drive"}).json()
+    http.post(
+        f"/collections/{made['id']}/entries",
+        json={"items": [f"kalinka:qobuz:track:{name}" for name in names]},
+    )
+    rows, _ = await store.list_entries(made["id"].split(":")[-1])
+    return made, [row.entry_id for row in rows]
+
+
+async def test_an_edit_removes_and_reorders_in_one_write(client):
+    http, store = client
+    made, entries = await _stocked(http, store, ("t1", "t2"))
+
+    response = http.patch(
+        f"/collections/{made['id']}/entries",
+        json={"remove": [entries[0]], "order": [entries[1]]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"removed": 1, "moved": 0}
+    rows, total = await store.list_entries(made["id"].split(":")[-1])
+    assert total == 1
+    assert rows[0].entity_id == "kalinka:qobuz:track:t2"
+
+
+async def test_an_edit_answers_what_the_user_moved(client):
+    http, store = client
+    made, entries = await _stocked(http, store, ("t1", "t2"))
+
+    response = http.patch(
+        f"/collections/{made['id']}/entries",
+        json={"order": [entries[1], entries[0]]},
+    )
+
+    assert response.json() == {"removed": 0, "moved": 2}
+
+
+async def test_an_edit_of_a_collection_that_moved_on_is_refused(client):
+    """The two lists are the collection as the editor read it; a track added
+    since is not in either, and dropping it would be the edit's doing."""
+    http, store = client
+    made, entries = await _stocked(http, store, ("t1",))
+    http.post(
+        f"/collections/{made['id']}/entries",
+        json={"items": ["kalinka:qobuz:track:t2"]},
+    )
+
+    response = http.patch(
+        f"/collections/{made['id']}/entries",
+        json={"remove": [], "order": entries},
+    )
+
+    assert response.status_code == 409
+    _, total = await store.list_entries(made["id"].split(":")[-1])
+    assert total == 2
+
+
+async def test_editing_what_is_not_there_is_a_miss(client):
+    http, _ = client
+
+    response = http.patch(
+        "/collections/kalinka:collections:playlist:nobody/entries",
+        json={"remove": [], "order": []},
+    )
+
+    assert response.status_code == 404
+
+
+async def test_editing_another_sources_id_is_a_miss(client):
+    http, _ = client
+
+    response = http.patch(
+        "/collections/kalinka:qobuz:playlist:p1/entries",
+        json={"remove": [], "order": []},
+    )
+
+    assert response.status_code == 404
 
 
 async def test_replacing_what_is_not_there_is_a_miss(client):

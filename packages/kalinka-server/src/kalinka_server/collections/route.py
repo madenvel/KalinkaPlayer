@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from ..browse_source import BrowseSource
 from ..queue_add import track_infos_for
 from .source import SOURCE_NAME, collection_id
-from .store import CollectionStore, NewEntry
+from .store import CollectionChanged, CollectionStore, NewEntry
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -56,6 +56,19 @@ class EntriesWrite(BaseModel):
     allow_duplicates: bool = False
 
 
+class EntriesEdit(BaseModel):
+    """What a staged edit takes: the entries to drop, and the order the rest
+    end up in — both by entry id.
+
+    Between them they name every entry the collection held when the editor
+    read it, which is what lets the server tell an edit of that collection
+    from an edit of one that has moved on since.
+    """
+
+    remove: List[str] = Field(default_factory=list)
+    order: List[str] = Field(default_factory=list)
+
+
 class CollectionRef(BaseModel):
     """A collection the client can now go to: its browse id and its name.
 
@@ -79,6 +92,14 @@ class EntriesReplaced(BaseModel):
 
     added: int
     dropped: int
+
+
+class EntriesEdited(BaseModel):
+    """How an edit went: what it dropped, and how many of the rest the user
+    actually moved."""
+
+    removed: int
+    moved: int
 
 
 def _required_name(raw: str) -> str:
@@ -187,6 +208,18 @@ def register_collection_routes(
             raise HTTPException(status_code=404, detail="No such collection")
         return CollectionRef(id=collection_id(row.id).to_string, name=row.name)
 
+    @app.delete("/collections/{entity_id}", status_code=204)
+    async def delete_collection(entity_id: str) -> None:
+        """Remove a collection and everything in it."""
+        local_id = _local_id(entity_id)
+        try:
+            gone = await store.delete_collection(local_id)
+        except RuntimeError as e:
+            logger.error("Could not delete %s: %s", entity_id, e)
+            raise HTTPException(status_code=503, detail="Collections unavailable")
+        if not gone:
+            raise HTTPException(status_code=404, detail="No such collection")
+
     async def rows_for(items: List[str]) -> List[NewEntry]:
         """What ``items`` comes to, as rows to store."""
         try:
@@ -210,6 +243,26 @@ def register_collection_routes(
         if outcome is None:
             raise HTTPException(status_code=404, detail="No such collection")
         return EntriesAdded(added=outcome.added, already_there=outcome.already_there)
+
+    @app.patch("/collections/{entity_id}/entries")
+    async def edit_entries(entity_id: str, payload: EntriesEdit) -> EntriesEdited:
+        """Drop entries and lay the rest out, in one write."""
+        local_id = _local_id(entity_id)
+        try:
+            outcome = await store.edit_entries(
+                local_id, payload.remove, payload.order
+            )
+        except CollectionChanged as e:
+            logger.info("Stale edit of %s: %s", entity_id, e)
+            raise HTTPException(
+                status_code=409, detail="This collection changed since you opened it"
+            )
+        except RuntimeError as e:
+            logger.error("Could not edit %s: %s", entity_id, e)
+            raise HTTPException(status_code=503, detail="Collections unavailable")
+        if outcome is None:
+            raise HTTPException(status_code=404, detail="No such collection")
+        return EntriesEdited(removed=outcome.removed, moved=outcome.moved)
 
     @app.put("/collections/{entity_id}/entries")
     async def replace_entries(

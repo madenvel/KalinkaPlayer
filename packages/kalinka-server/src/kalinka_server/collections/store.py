@@ -84,6 +84,21 @@ class ReplaceOutcome:
 
 
 @dataclass(frozen=True)
+class EditOutcome:
+    """What a staged edit left behind: the rows it dropped, and how many of
+    the rest ended up somewhere other than where dropping alone would have
+    left them."""
+
+    removed: int
+    moved: int
+
+
+class CollectionChanged(Exception):
+    """The collection is not the one the edit was staged against, so the edit
+    would apply to a list nobody was looking at."""
+
+
+@dataclass(frozen=True)
 class EntryFilter:
     """What a browse asked a collection's tracks to narrow to.
 
@@ -274,6 +289,21 @@ class CollectionStore:
         logger.info("Renamed collection %s to %s", collection_id, name)
         return await self.get_collection(collection_id)
 
+    async def delete_collection(self, collection_id: str) -> bool:
+        """Remove a collection and everything in it, answering whether there
+        was one. Its entries and their genres go with it, by the schema's own
+        cascade rather than by three statements that could half-run."""
+        if not self._readable():
+            raise RuntimeError("Collections file is unavailable")
+        cursor = await self._conn.execute(
+            "DELETE FROM collections WHERE id = ?", (collection_id,)
+        )
+        await self._conn.commit()
+        if cursor.rowcount == 0:
+            return False
+        logger.info("Deleted collection %s", collection_id)
+        return True
+
     async def add_entries(
         self,
         collection_id: str,
@@ -350,6 +380,73 @@ class CollectionStore:
             dropped,
         )
         return ReplaceOutcome(added=added, dropped=dropped)
+
+    async def edit_entries(
+        self,
+        collection_id: str,
+        remove: Sequence[str],
+        order: Sequence[str],
+    ) -> Optional[EditOutcome]:
+        """Drop the entries named by ``remove``, lay the rest out in
+        ``order``, and say how that went — or None when there is no such
+        collection.
+
+        ``order`` names every entry that is to survive, so the two lists
+        together are the collection as the editor last read it. Anything else
+        in it, or anything named that is not there, means the collection has
+        moved on since; the whole edit is refused with
+        :class:`CollectionChanged` rather than applied to a list nobody was
+        looking at.
+
+        Removing and reordering are one transaction: a reorder that landed
+        without its removals would leave the collection in a state nobody
+        asked for.
+        """
+        if not self._readable():
+            raise RuntimeError("Collections file is unavailable")
+        if await self.get_collection(collection_id) is None:
+            return None
+
+        cursor = await self._conn.execute(
+            "SELECT entry_id FROM entries WHERE collection_id = ?"
+            " ORDER BY position ASC",
+            (collection_id,),
+        )
+        held = [row["entry_id"] for row in await cursor.fetchall()]
+        named = list(remove) + list(order)
+        if len(named) != len(held) or set(named) != set(held):
+            raise CollectionChanged(
+                f"{collection_id} holds {len(held)} entries, "
+                f"the edit accounts for {len(named)}"
+            )
+
+        dropped = set(remove)
+        # What the order would be if the removals were all that happened, so
+        # the count reports moves the user made rather than the shuffling up
+        # that removing a row does on its own.
+        kept = [entry_id for entry_id in held if entry_id not in dropped]
+        moved = sum(1 for was, now in zip(kept, order) if was != now)
+
+        removed = 0
+        if remove:
+            cursor = await self._conn.execute(
+                "DELETE FROM entries WHERE collection_id = ? AND entry_id IN"
+                f" ({_placeholders(list(remove))})",
+                (collection_id, *remove),
+            )
+            removed = cursor.rowcount
+        await self._conn.executemany(
+            "UPDATE entries SET position = ? WHERE entry_id = ?",
+            [(position, entry_id) for position, entry_id in enumerate(order)],
+        )
+        await self._touch(collection_id, int(time.time()))
+        logger.info(
+            "Edited collection %s: %d removed, %d moved",
+            collection_id,
+            removed,
+            moved,
+        )
+        return EditOutcome(removed=removed, moved=moved)
 
     async def _insert(
         self,
