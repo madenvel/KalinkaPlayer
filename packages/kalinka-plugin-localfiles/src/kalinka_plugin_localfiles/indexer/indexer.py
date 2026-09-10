@@ -27,6 +27,15 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
+from ..filename_model import get_parser, parse_music_path
+from ..resolution.resolver import (
+    FILENAME,
+    FOLDER_NAME,
+    GUESSED,
+    LOCALLY_DERIVED,
+    OBSERVED,
+    TAG_CONSENSUS,
+)
 from ..utils.artwork_store import save_artwork_images
 from ..worker_utils import nudge
 from ..utils.mount_status import (
@@ -40,7 +49,6 @@ from ..utils.name_utils import (
     album_folder_for_path,
     clean_display_name,
     expand_music_folders,
-    parse_leading_track_number,
     path_within_roots,
     repair_tag_text,
 )
@@ -133,6 +141,40 @@ def is_supported_audio_file(filename: str) -> bool:
     """Check if the file is a supported audio format."""
     ext = os.path.splitext(filename.lower())[1]
     return ext in SUPPORTED_AUDIO_EXTENSIONS
+
+
+#: Rows many files contribute to, where a guess must not displace a tag.
+_SHARED_ENTITIES = ("artist", "album")
+#: The library-wide rows that stand in for "nobody named this".
+_PLACEHOLDER_IDS = ("unknown_artist", "unknown_album")
+
+
+def _tag_else_path(metadata: Dict, from_path, field: str):
+    """The tag's value for ``field``, or what the path said, or None."""
+    value = metadata.get(field)
+    if value is None and from_path is not None:
+        value = getattr(from_path, field)
+    return value
+
+
+def _tags_leave_a_gap(metadata: Dict, file_path: str) -> bool:
+    """Whether the file's own tags left anything the path could still supply.
+
+    Asked before parsing rather than after, because a fully tagged file would
+    have every path-derived value discarded anyway. Disc number only counts
+    inside a disc subdirectory, the one place a path can name one — most
+    single-disc rips carry no DISCNUMBER at all.
+    """
+    return (
+        not metadata.get("artist")
+        or not metadata.get("title")
+        or metadata.get("track_number") is None
+        or metadata.get("year") is None
+        or (
+            metadata.get("disc_number") is None
+            and album_folder_for_path(file_path) != os.path.dirname(file_path)
+        )
+    )
 
 
 class FileIndexer:
@@ -236,6 +278,16 @@ class FileIndexer:
         if cleanup_results["tracks"] > 0:
             logger.info(
                 "Removed stale tracks from database, proceeding with enrichment for valid tracks only"
+            )
+
+        reparsed = await self._reparse_paths_on_model_change(
+            available_folders, changed_items
+        )
+        if reparsed:
+            logger.info(
+                "Filename model changed; re-read the path for %d track(s) "
+                "nothing else had named",
+                reparsed,
             )
 
         # Group tracks into albums. Folder-first clustering (when enabled)
@@ -407,7 +459,9 @@ class FileIndexer:
         """Check if the file is a supported audio format."""
         return is_supported_audio_file(filename)
 
-    async def process_file(self, file_path: str) -> Optional[Dict[str, Optional[str]]]:
+    async def process_file(
+        self, file_path: str, force: bool = False
+    ) -> Optional[Dict[str, Optional[str]]]:
         """Process a music file and update the database. Returns changed items IDs."""
         # Access boundary: never index a file whose canonical path escapes the
         # configured music folders — e.g. a symlink sitting under a watched
@@ -490,6 +544,7 @@ class FileIndexer:
                 )
         if (
             existing_track
+            and not force
             and existing_track["modified_time"] == modified_time
             and existing_track["file_size"] == file_size
         ):
@@ -538,75 +593,43 @@ class FileIndexer:
         metadata["modified_time"] = modified_time
         metadata["last_updated"] = int(time.time())
 
-        raw_artist = self._repair_tag_text(metadata.get("artist", "Unknown Artist"))
-        artist_name = clean_display_name(raw_artist) or "Unknown Artist"
-        artist_id = generate_artist_id(artist_name)
+        # Read once per file rather than per field, and only when the tags
+        # left something for it to answer.
+        from_path = (
+            parse_music_path(file_path, root_of(file_path, self.music_folders))
+            if _tags_leave_a_gap(metadata, file_path)
+            else None
+        )
 
-        artist = await self.db_manager.get_artist_by_id(artist_id)
-        if not artist:
-            await self.db_manager.insert_artist(
-                {
-                    "id": artist_id,
-                    "name": artist_name,
-                    "enriched": 0,
-                    "last_updated": int(time.time()),
-                }
-            )
+        artist_id, created = await self._artist_for(metadata, from_path)
+        if created:
             changes["artists"] = artist_id
-
-        raw_album = self._repair_tag_text(metadata.get("album", "Unknown Album"))
-        album_title = clean_display_name(raw_album) or "Unknown Album"
-        album_id = generate_album_id(album_title, album_folder_for_path(file_path))
-
-        album = await self.db_manager.get_album_by_id(album_id)
-        if not album:
-            album_data: Dict[str, Any] = {
-                "id": album_id,
-                "title": album_title,
-                "artist_id": artist_id,
-                "enriched": 0,
-                "last_updated": int(time.time()),
-            }
-            if "year" in metadata:
-                album_data["year"] = metadata["year"]
-            if "genre" in metadata:
-                album_data["genre"] = metadata["genre"]
-            if "album_art" in metadata:
-                image_url_filename = f"{album_id}.jpg"
-                await asyncio.to_thread(
-                    self._save_images, metadata["album_art"], album_id, "album"
-                )
-                album_data["image_url"] = image_url_filename
-            await self.db_manager.insert_album(album_data)
+        album_id, created = await self._album_for(
+            metadata, from_path, file_path, artist_id
+        )
+        if created:
             changes["albums"] = album_id
 
-        # Track number: prefer the tag; otherwise parse a leading "NN." from
-        # the filename so albums sort correctly at scan time, not only after
-        # the enricher's filesystem fallback runs (same patterns, so the two
-        # agree). The fallback still fills it later when a file has neither.
-        track_number = metadata.get("track_number")
-        if track_number is None:
-            track_number = parse_leading_track_number(
-                os.path.splitext(os.path.basename(file_path))[0]
-            )
+        track_number = _tag_else_path(metadata, from_path, "track_number")
+        disc_number = _tag_else_path(metadata, from_path, "disc_number")
+
+        tagged_title = metadata.get("title")
+        # The bare filename is reached only when the model is unavailable —
+        # the parser already falls back to the stem on its own.
+        if tagged_title or from_path:
+            title = self._repair_tag_text(tagged_title or from_path.title)
+        else:
+            title = os.path.basename(file_path)
 
         track_id = generate_track_id(file_path)
         track_data: Dict[str, Any] = {
             "id": track_id,
-            # Basic fallback only: the raw filename. The enricher's
-            # FilesystemFallbackPlugin detects this (title == basename) and does
-            # the smart "Artist - Title" parsing — keep that boundary intact
-            # (only a tagged title gets the tag repairs).
-            "title": (
-                self._repair_tag_text(metadata["title"])
-                if "title" in metadata
-                else os.path.basename(file_path)
-            ),
+            "title": title,
             "album_id": album_id,
             "artist_id": artist_id,
             "duration": metadata.get("duration", 0),
             "track_number": track_number,
-            "disc_number": metadata.get("disc_number"),
+            "disc_number": disc_number,
             "file_path": file_path,
             "format": metadata.get("format", "unknown"),
             "file_size": file_size,
@@ -634,6 +657,10 @@ class FileIndexer:
             # resets to 0, so a changed file re-enriches but reuses embeddings.
             await self.db_manager.update_track(track_id, track_data)
         changes["tracks"] = track_id
+        await self._record_origin(
+            "track", track_id, "title",
+            from_tag=bool(tagged_title), path_source=FILENAME,
+        )
 
         await self.db_manager.upsert_library_file(
             track_id, file_path, file_size, modified_time, device_id, inode
@@ -661,6 +688,180 @@ class FileIndexer:
         await self.db_manager.clear_failure(file_path)
         logger.debug(f"Processed file: {file_path}")
         return changes
+
+    async def _artist_for(
+        self, metadata: Dict, from_path
+    ) -> Tuple[str, bool]:
+        """The artist row this file belongs to, and whether it was created.
+
+        A tag names the artist; failing that, a directory in the path does;
+        failing both, the file joins the ``unknown_artist`` sentinel. The
+        name is repaired and cleaned first, so two spellings of one artist
+        still collapse to one row.
+        """
+        tagged = metadata.get("artist")
+        raw = self._repair_tag_text(
+            tagged or (from_path.artist if from_path else None) or "Unknown Artist"
+        )
+        name = clean_display_name(raw) or "Unknown Artist"
+        artist_id = generate_artist_id(name)
+
+        created = await self.db_manager.get_artist_by_id(artist_id) is None
+        if created:
+            await self.db_manager.insert_artist(
+                {
+                    "id": artist_id,
+                    "name": name,
+                    "enriched": 0,
+                    "last_updated": int(time.time()),
+                }
+            )
+        await self._record_origin(
+            "artist", artist_id, "name",
+            from_tag=bool(tagged), path_source=FOLDER_NAME,
+        )
+        return artist_id, created
+
+    async def _album_for(
+        self, metadata: Dict, from_path, file_path: str, artist_id: str
+    ) -> Tuple[str, bool]:
+        """The album row this file belongs to, and whether it was created.
+
+        Only a tag titles an album here. A folder name is one folder's worth
+        of evidence and the clustering pass at the end of the scan is what
+        weighs it, so an untagged file joins ``unknown_album`` until then —
+        but a year read off that folder is kept, since nothing later supplies
+        one for a release no source could identify.
+        """
+        raw = self._repair_tag_text(metadata.get("album", "Unknown Album"))
+        title = clean_display_name(raw) or "Unknown Album"
+        album_id = generate_album_id(title, album_folder_for_path(file_path))
+
+        if await self.db_manager.get_album_by_id(album_id) is not None:
+            return album_id, False
+
+        album_data: Dict[str, Any] = {
+            "id": album_id,
+            "title": title,
+            "artist_id": artist_id,
+            "enriched": 0,
+            "last_updated": int(time.time()),
+        }
+        year = _tag_else_path(metadata, from_path, "year")
+        if year is not None:
+            album_data["year"] = year
+        if "genre" in metadata:
+            album_data["genre"] = metadata["genre"]
+        if "album_art" in metadata:
+            await asyncio.to_thread(
+                self._save_images, metadata["album_art"], album_id, "album"
+            )
+            album_data["image_url"] = f"{album_id}.jpg"
+        await self.db_manager.insert_album(album_data)
+        if year is not None:
+            await self._record_origin(
+                "album", album_id, "year",
+                from_tag=metadata.get("year") is not None,
+                path_source=FOLDER_NAME,
+            )
+        return album_id, True
+
+    async def _reparse_paths_on_model_change(
+        self, available_folders: List[str], changed_items: Dict[str, Set[str]]
+    ) -> int:
+        """Re-read the path for tracks only their path ever named.
+
+        A scan skips a file whose size and mtime are unchanged, so new model
+        weights would otherwise never reach a library that is already
+        indexed. This is the channel that replaces the enrichment
+        fingerprint, which used to re-open those rows before path parsing
+        moved out of the enricher — and it is narrower: rows a tag or an
+        external match resolved are never touched.
+        """
+        identity = json.dumps(get_parser().identity(), sort_keys=True)
+        if await self.db_manager.get_filename_model_identity() == identity:
+            return 0
+
+        tracks = await self.db_manager.get_tracks_named_by_their_path(FILENAME)
+        reparsed = 0
+        for track in tracks:
+            path = track.get("file_path")
+            if not path or root_of(path, available_folders) is None:
+                continue
+            try:
+                result = await self.process_file(path, force=True)
+            except Exception as e:
+                logger.exception(f"Error re-reading {path}: {e}")
+                continue
+            reparsed += 1
+            for key, value in (result or {}).items():
+                if value:
+                    changed_items[key].add(value)
+
+        if reparsed:
+            # A re-read may move a track onto a differently-named artist or
+            # album, leaving the old row with nothing in it.
+            await self.db_manager.delete_orphaned_albums_and_artists()
+        await self.db_manager.set_filename_model_identity(identity)
+        return reparsed
+
+    async def _record_origin(
+        self,
+        entity_type: str,
+        entity_id: str,
+        field: str,
+        *,
+        from_tag: bool,
+        path_source: str,
+    ) -> None:
+        """Say whether this scan read the value from a tag or off the path.
+
+        A guess is not allowed to displace a stronger origin on a row more
+        than one file contributes to, or the order a folder happened to be
+        walked in would decide its provenance. A track row is one file's, so
+        it always records what this scan just derived.
+        """
+        if entity_id in _PLACEHOLDER_IDS:
+            return
+        await self.db_manager.record_resolved_origin(
+            entity_type,
+            entity_id,
+            field,
+            TAG_CONSENSUS if from_tag else path_source,
+            OBSERVED if from_tag else GUESSED,
+            keep_stronger=not from_tag and entity_type in _SHARED_ENTITIES,
+        )
+
+    async def _title_is_ours_to_derive(self, album_id: str) -> bool:
+        """Whether this album's title is still locally derived.
+
+        False once an external source has resolved it — see the caller.
+        An album with no recorded origin predates provenance and is treated
+        as locally derived, which is what it was.
+        """
+        origin = await self.db_manager.get_resolved_origin(
+            "album", album_id, "title"
+        )
+        return origin is None or origin["source"] in LOCALLY_DERIVED
+
+    def _album_facts_from_path(self, folder_rows: List) -> Dict[str, Any]:
+        """What the filename model reads about the album of one folder.
+
+        Parsed from a member file rather than per track: every file in the
+        folder shares the directory the album name comes from, so the first
+        one that names an album answers for all of them.
+        """
+        for track, _ in folder_rows:
+            path = track.get("file_path")
+            if not path:
+                continue
+            parsed = parse_music_path(path, root_of(path, self.music_folders))
+            if parsed and parsed.album:
+                return {
+                    "path_album_title": parsed.album,
+                    "path_album_year": parsed.year,
+                }
+        return {}
 
     def _repair_tag_text(self, text: str) -> str:
         """Mojibake, web-entity and dotted-abbreviation repair for one tag
@@ -1028,6 +1229,7 @@ class FileIndexer:
                     folder,
                     folder_rows,
                     legacy_encoding=self.config.legacy_tag_encoding,
+                    **self._album_facts_from_path(folder_rows),
                 ).clusters
             )
         clusters = merge_disc_siblings(clusters)
@@ -1047,27 +1249,48 @@ class FileIndexer:
                     va_seeded = True
                 existing = await self.db_manager.get_album_by_id(album_id)
                 if existing is None:
-                    await self.db_manager.insert_album(
-                        {
-                            "id": album_id,
-                            "title": cluster.title or "Unknown Album",
-                            "artist_id": anchor,
-                            "enriched": 0,
-                            "last_updated": int(time.time()),
-                        }
-                    )
+                    row = {
+                        "id": album_id,
+                        "title": cluster.title or "Unknown Album",
+                        "artist_id": anchor,
+                        "enriched": 0,
+                        "last_updated": int(time.time()),
+                    }
+                    if cluster.year is not None:
+                        row["year"] = cluster.year
+                    await self.db_manager.insert_album(row)
                 else:
                     # Refresh the anchor (e.g. re-point to Various Artists) and
-                    # the title. Titles are always locally derived (MusicBrainz
-                    # never sets one), so cleaning a folder/tag-junk title here
-                    # can't clobber an external title; covers are untouched.
+                    # the title. A title an external source resolved is left
+                    # alone: this pass rebuilds one from the folder on every
+                    # scan, so re-deriving it would revert that correction
+                    # every scan. Covers are untouched either way.
                     fixes = {}
                     if existing.get("artist_id") != anchor:
                         fixes["artist_id"] = anchor
-                    if cluster.title and existing.get("title") != cluster.title:
+                    if (
+                        cluster.title
+                        and existing.get("title") != cluster.title
+                        and await self._title_is_ours_to_derive(album_id)
+                    ):
                         fixes["title"] = cluster.title
+                    # A year read off the folder only ever fills a gap: an
+                    # album some source already dated keeps that date.
+                    if cluster.year is not None and existing.get("year") is None:
+                        fixes["year"] = cluster.year
                     if fixes:
                         await self.db_manager.update_album(album_id, fixes)
+                if cluster.year is not None:
+                    await self._record_origin(
+                        "album", album_id, "year", from_tag=False,
+                        path_source=FOLDER_NAME,
+                    )
+                if cluster.title:
+                    await self._record_origin(
+                        "album", album_id, "title",
+                        from_tag=cluster.title_source == TAG_CONSENSUS,
+                        path_source=FOLDER_NAME,
+                    )
                 await cluster_db.upsert_cluster(
                     album_id,
                     primary_folder=cluster.folder,

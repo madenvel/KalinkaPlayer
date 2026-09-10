@@ -74,6 +74,8 @@ def merge_disc_siblings(clusters: List[ClusterPlan]) -> List[ClusterPlan]:
                 folder=os.path.dirname(primary.folder) or primary.folder,
                 disc_numbers=discs,
                 albumartist_key=primary.albumartist_key,
+                title_source=primary.title_source,
+                year=primary.year,
             )
         )
     return out

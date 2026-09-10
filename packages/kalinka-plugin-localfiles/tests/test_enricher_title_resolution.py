@@ -18,6 +18,11 @@ class FakeDb:
     async def record_claim(self, et, eid, field, value, source, tier):
         self.claims.append((et, eid, field, value, source, tier))
 
+    origin = None
+
+    async def get_resolved_origin(self, _et, _eid, _field):
+        return self.origin
+
     async def record_resolved_origin(self, et, eid, field, source, tier, ev=None):
         self.origins.append((et, eid, field, source, tier))
 
@@ -121,32 +126,45 @@ async def test_track_title_kept_when_claim_differs():
 
 
 @pytest.mark.asyncio
-async def test_plugin_refined_title_survives_resolution():
-    """Regression: resolution must read the local baseline from the working
-    copy, not the stale row. An untagged rip's row title is the raw basename;
-    FilesystemFallbackPlugin parses it into a real title mid-pass, and
-    resolving against the row value used to revert that parse."""
+async def test_a_refinement_made_this_pass_survives_resolution():
+    """Regression: resolution reads the local baseline from the working copy,
+    not the stale row. An album title loses its artist prefix earlier in the
+    same pass, and resolving against the row value used to restore it."""
     enr = _enricher()
-    basename = "THE BEATLES - 01.Come Together (Lennon-McCartney).flac"
-    track = {"id": "t1", "title": basename}
-    updated = {**track, "title": "Come Together (Lennon-McCartney)"}
-    changed = await enr._resolve_display_field("track", track, updated, [], "title")
+    album = {"id": "al1", "title": "The Beatles - Abbey Road"}
+    updated = {**album, "title": "Abbey Road"}
+    changed = await enr._resolve_display_field("album", album, updated, [], "title")
     assert changed is False
-    assert updated["title"] == "Come Together (Lennon-McCartney)"
+    assert updated["title"] == "Abbey Road"
     assert enr.db_manager.origins[0] == (
-        "track", "t1", "title", "tag_consensus", "observed",
+        "album", "al1", "title", "tag_consensus", "observed",
     )
 
 
 @pytest.mark.asyncio
-async def test_refined_title_not_reverted_by_differing_claim():
-    """A differing external claim must not restore the basename either — the
-    refined working-copy title is the local value the §7 rule protects."""
+async def test_a_refinement_is_not_reverted_by_a_differing_claim():
+    """A differing external claim must not restore the prefixed title either
+    — the refined working-copy value is what the §7 rule protects."""
     enr = _enricher()
-    track = {"id": "t1", "title": "ARTIST - 02.Something.flac"}
-    updated = {**track, "title": "Something"}
-    diff = {"field": "title", "value": "Something (Remastered)",
-            "source": "musicbrainz:rec-9", "tier": "inferred"}
-    changed = await enr._resolve_display_field("track", track, updated, [diff], "title")
+    album = {"id": "al1", "title": "Pink Floyd - The Wall"}
+    updated = {**album, "title": "The Wall"}
+    diff = {"field": "title", "value": "The Wall (Remastered)",
+            "source": "musicbrainz:rel-9", "tier": "inferred"}
+    changed = await enr._resolve_display_field("album", album, updated, [diff], "title")
     assert changed is False
-    assert updated["title"] == "Something"
+    assert updated["title"] == "The Wall"
+
+
+@pytest.mark.asyncio
+async def test_a_title_only_the_path_supplied_is_corrected_instead():
+    """The same claim wins once the stored origin says the local title was
+    never more than a reading of the folder name."""
+    enr = _enricher()
+    enr.db_manager.origin = {"source": "folder_name", "tier": "guessed"}
+    album = {"id": "al1", "title": "The Wall"}
+    updated = dict(album)
+    diff = {"field": "title", "value": "The Wall (Remastered)",
+            "source": "musicbrainz:rel-9", "tier": "inferred"}
+    changed = await enr._resolve_display_field("album", album, updated, [diff], "title")
+    assert changed is True
+    assert updated["title"] == "The Wall (Remastered)"

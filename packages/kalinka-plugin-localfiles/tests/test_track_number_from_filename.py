@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-The indexer parses a leading "NN." track number from the filename when the
-file has no track-number tag, so an album sorts correctly at scan time (not
-only after the enricher's filesystem fallback runs). Regression for albums
-whose tracks otherwise sorted lexicographically (1, 10, 2, 3, ...).
+The indexer reads a track number off the path when the file has no
+track-number tag, so an album sorts correctly at scan time (not only after
+the enricher's filesystem fallback runs). Regression for albums whose tracks
+otherwise sorted lexicographically (1, 10, 2, 3, ...).
+
+It goes through the same parser the fallback uses, so the two cannot report
+different numbers for one file.
 """
 
 import aiosqlite
@@ -16,34 +19,41 @@ from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.db_schema import init_db
 from kalinka_plugin_localfiles.indexer.indexer import FileIndexer
 from kalinka_plugin_localfiles.indexer.indexer_db import AsyncIndexerDb
-from kalinka_plugin_localfiles.utils.name_utils import parse_leading_track_number
+from kalinka_plugin_localfiles.filename_model import parse_music_path
+
+MUSIC_ROOT = "/home/user/Music"
 
 
-def test_parse_leading_track_number():
-    assert parse_leading_track_number("1. Итальянец (L'Italiano)") == 1
-    assert parse_leading_track_number("10. Женщина (Donna)") == 10
-    assert parse_leading_track_number("03 - Soli") == 3
-    assert parse_leading_track_number("07_ Innamorati") == 7
-    assert parse_leading_track_number("Untitled") is None
-    assert parse_leading_track_number("No Number Here") is None
+def track_number_of(stem: str):
+    parsed = parse_music_path(f"{MUSIC_ROOT}/{stem}.flac", MUSIC_ROOT)
+    return parsed.track_number if parsed else None
 
 
-def test_parse_no_space_dot_prefix():
+def test_leading_track_number():
+    assert track_number_of("1. Итальянец (L'Italiano)") == 1
+    assert track_number_of("10. Женщина (Donna)") == 10
+    assert track_number_of("03 - Soli") == 3
+    assert track_number_of("07_ Innamorati") == 7
+    assert track_number_of("Untitled") is None
+    assert track_number_of("No Number Here") is None
+
+
+def test_no_space_dot_prefix():
     # "N.Title" with no space after the dot (common in ripped folders).
-    assert parse_leading_track_number("1.Кончится лето") == 1
-    assert parse_leading_track_number("12.Track") == 12
-    # A year prefix must never be eaten as a track number (>2 digits).
-    assert parse_leading_track_number("1985.Some Song") is None
-    assert parse_leading_track_number("2001.A Space Odyssey") is None
+    assert track_number_of("1.Кончится лето") == 1
+    assert track_number_of("12.Track") == 12
+    # A year prefix must never be eaten as a track number.
+    assert track_number_of("1985.Some Song") is None
+    assert track_number_of("2001.A Space Odyssey") is None
 
 
 def test_year_prefix_not_eaten_in_spaced_forms():
-    # The spaced patterns are capped at three digits, so a 4-digit year is
-    # never a track number — while 100+ tracks on big sets still parse.
-    assert parse_leading_track_number("1985. Some Song") is None
-    assert parse_leading_track_number("1985- Some Song") is None
-    assert parse_leading_track_number("1985_ Some Song") is None
-    assert parse_leading_track_number("100. Title") == 100
+    # A four-digit year is never a track number, while 100+ tracks on big
+    # compilations still parse.
+    assert track_number_of("1985. Some Song") is None
+    assert track_number_of("1985- Some Song") is None
+    assert track_number_of("1985_ Some Song") is None
+    assert track_number_of("100. Title") == 100
 
 
 @pytest_asyncio.fixture

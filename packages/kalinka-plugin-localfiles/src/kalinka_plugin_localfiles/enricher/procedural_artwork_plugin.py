@@ -35,6 +35,10 @@ class ProceduralArtworkPlugin(EnricherPlugin):
     """
 
     ENRICHER_VERSION = 1
+    # The art is derived from the album's title, artist and genre, so it is
+    # drawn once those have resolved — not from a folder-derived title
+    # MusicBrainz is about to correct.
+    runs_after_resolution = True
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config

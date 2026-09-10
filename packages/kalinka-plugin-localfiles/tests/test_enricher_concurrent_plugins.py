@@ -108,26 +108,18 @@ class _ArtistCreatingDb:
 
 @pytest.mark.asyncio
 async def test_concurrent_tracks_resolve_one_artist_row():
-    """Tracks enriched concurrently may each derive the same artist from
-    their folder. The ID is a hash of the normalised name and the insert
-    replaces by that ID, so the racing writers converge on one row."""
-    from kalinka_plugin_localfiles.config_model import LocalFilesConfig
-    from kalinka_plugin_localfiles.enricher.filesystem_fallback_plugin import (
-        FilesystemFallbackPlugin,
-    )
+    """Tracks are enriched by a pool of workers, so several may name the same
+    artist at once. The ID is a hash of the normalised name and the insert
+    replaces by that ID, so the racing writers converge on one row.
 
+    AcoustID is the last plugin that mints an artist from a track: the
+    indexer creates them too, but processes files one at a time."""
     db = _ArtistCreatingDb()
-    plugin = FilesystemFallbackPlugin(
-        LocalFilesConfig(
-            music_folders=["/mnt/music"],
-            db_path="/tmp/x.db",
-            artwork_path="/tmp/artwork",
-        ),
-        db,
-    )
+    plugin = _acoustid_plugin()
+    plugin.db_manager = db
 
     ids = await asyncio.gather(
-        *(plugin._find_or_create_artist("В.Цой") for _ in range(5))
+        *(plugin._create_or_get_artist("В. Цой") for _ in range(5))
     )
 
     assert len(set(ids)) == 1

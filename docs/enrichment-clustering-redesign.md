@@ -809,10 +809,15 @@ for each cluster needing enrichment:
        mark folder dirty for the reconciler
 ```
 
-`FilesystemFallbackPlugin`'s parsing moves into step 1 as a claim source
-(its conservative "only fill unknowns" guards become confidence levels
-instead of write guards). Deezer/Wikidata/procedural artwork remain cover/
-image providers, unchanged in spirit.
+`FilesystemFallbackPlugin` is gone: its parsing moved into step 1, where the
+indexer reads the path whenever the tags leave a gap and records what it
+found as a `guessed` claim from `filename`/`folder_name`. Its conservative
+"only fill unknowns" write guards became exactly that provenance. Album
+titles stayed with the clustering pass, which sees a whole folder at once;
+the parse contributes one rung to its title ladder. Deezer/Wikidata/
+procedural artwork remain cover/image providers, unchanged in spirit —
+except that the generator now draws after resolution rather than inside the
+fetch chain, so it never keys art to a title about to be corrected.
 
 **"Enriched" is redefined.** A cluster is *done* when local resolution is
 complete and external matching has been attempted — a bootleg with zero
@@ -865,20 +870,22 @@ This cuts MB traffic markedly — today every track fires a global
 ### 6.3 AcoustID narrowed to identity rescue
 
 AcoustID's only job is answering "what track is this?" when local evidence
-cannot. **Rescue mode** is defined as: after all local sources are
-exhausted — tags, filename parse, folder context — the track's **artist or
-title is still completely absent**. The archetype is a generically named
-file (`track01.mp3`, `AUD_0043.mp3`) in a dump folder, but a tagged-yet-
-titleless file whose filename parse yields nothing also qualifies. For
+cannot. **Rescue mode** is defined as: no external source identified the
+track, **or** its artist or title is absent or supplied by nothing but the
+path. The second clause is what survives moving AcoustID behind the text
+sources: MusicBrainz searches with the name it was given, so when that name
+is a filename guess, a match on it proves nothing the audio cannot overturn.
+The archetype is a generically named file (`track01.mp3`, `AUD_0043.mp3`) in
+a dump folder, but a tagged-yet-titleless file whose filename parse yields
+nothing also qualifies. For
 those tracks it emits title/artist claims and a `recording_identity` row —
 and that is all. It is **not** an album-detection signal: it does not vote
 on release candidates, does not contribute to clustering, and its current
 powers to create albums, move tracks, and unconditionally overwrite titles
-(`acoustid_plugin.py:680`, `:695-718`) are removed. A track that has both
-an artist and a title from any local source is never fingerprint-looked-up
-— this differs from today's gating (fires whenever artist OR *album* is
-unknown, `acoustid_plugin.py:602-615`): a missing album no longer triggers
-AcoustID, because album identity is the cluster's job.
+(`acoustid_plugin.py:680`, `:695-718`) are removed. A track an external
+source identified *and* a tag named is never fingerprint-looked-up; a
+missing album never triggers a lookup either way, because album identity is
+the cluster's job.
 
 Two operations the current plugin conflates are kept separate: **local
 chromaprint generation** (fpcalc, no network) and **remote AcoustID
@@ -996,9 +1003,9 @@ back up and behavior-changing knobs nobody can verify:
 | tier | meaning | sources |
 |---|---|---|
 | **pinned** | user said so; never overridden, never expired | user pin |
-| **verified** | confirmed through a *direct identifier*, not similarity | user-confirmed link; a release MBID already present in the tags; barcode/catalog number + compatible tracklist; ISRC/recording-ID coverage; cue sheet |
+| **verified** | confirmed through a *direct identifier*, not similarity | user-confirmed link; a release MBID already present in the tags; barcode/catalog number + compatible tracklist; ISRC/recording-ID coverage; a rescue-mode AcoustID match (a chromaprint names the recording itself); cue sheet |
 | **observed** | directly read from the files, taken at face value | unanimous tag consensus, folder facts (structure, disc subdirs) |
-| **inferred** | derived from evidence with a real chance of being wrong | majority tag consensus, folder-name titles, library inference (§6.5), rescue-mode AcoustID, **fuzzy-accepted external matches** (title/duration/alignment scoring, however high the score) |
+| **inferred** | derived from evidence with a real chance of being wrong | majority tag consensus, folder-name titles, library inference (§6.5), a corroborating AcoustID match on an already-named track, **fuzzy-accepted external matches** (title/duration/alignment scoring, however high the score) |
 | **guessed** | last-resort fallback | filename parse, fuzzy cover-only matches |
 
 Two boundaries here carry the weight. *Verified/observed:* unanimous tags

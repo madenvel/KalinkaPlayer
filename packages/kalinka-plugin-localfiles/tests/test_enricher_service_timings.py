@@ -44,11 +44,16 @@ class FakeDb:
     async def record_claim(self, *_a, **_k):
         pass
 
+    async def get_resolved_origin(self, *_a, **_k):
+        return None
+
     async def record_resolved_origin(self, *_a, **_k):
         pass
 
 
 class SlowService:
+    runs_after_resolution = False
+
     """Answers, but only after the clock has moved a long way."""
 
     def __init__(self, clock, cost):

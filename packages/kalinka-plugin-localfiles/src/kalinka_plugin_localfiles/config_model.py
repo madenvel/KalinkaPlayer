@@ -216,19 +216,6 @@ class CoverArtArchiveConfig(BaseModel):
     )
 
 
-class FilesystemConfig(BaseModel):
-    enabled: bool = Field(
-        default=True,
-        title="Use file name/path for enrichment",
-        json_schema_extra={
-            "help": (
-                "Last-resort metadata for files no online source could "
-                "identify — off means they stay untitled"
-            ),
-        },
-    )
-
-
 class ProceduralArtworkConfig(BaseModel):
     enabled: bool = Field(
         default=False,
@@ -257,10 +244,6 @@ class PluginsConfig(BaseModel):
     procedural_artwork: ProceduralArtworkConfig = Field(
         default_factory=ProceduralArtworkConfig, title="Generated album art"
     )
-    filesystem: FilesystemConfig = Field(
-        default_factory=FilesystemConfig, title="File name fallback"
-    )
-
     user_agent: str = Field(
         default="Kalinka/1.0 (https://github.com/madenvel/KalinkaPlayer)",
         title="User agent",

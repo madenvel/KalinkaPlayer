@@ -10,11 +10,12 @@ import requests
 from typing import Dict, Optional, List, Tuple
 
 from ..config_model import LocalFilesConfig
+from ..resolution.resolver import GUESSED
 from ..utils.name_utils import clean_display_name
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
-    inferred_claims,
+    verified_claims,
     raise_if_service_unavailable,
 )
 from .id_generator import generate_artist_id
@@ -32,7 +33,10 @@ _LOOKUP_TIMEOUT_S = (5, 30)
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
 
-    ENRICHER_VERSION = 2  # 2f: rescue-mode gating + fill-only writes
+    # v2: rescue-mode gating + fill-only writes.
+    # v3: the rescue keys on provenance rather than emptiness, and its match
+    # is verified rather than inferred — see enrich_track.
+    ENRICHER_VERSION = 3
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -568,41 +572,55 @@ class AcoustIdPlugin(EnricherPlugin):
         """
         return None
 
-    @staticmethod
-    def _artist_absent(track: Dict) -> bool:
-        """True when no local source resolved the track's artist."""
-        return track.get("artist_id") in (None, "", "unknown_artist")
+    async def _is_a_guess(self, entity_type: str, entity_id: str, field: str) -> bool:
+        """Whether the file's own path is all that ever supplied this value."""
+        origin = await self.db_manager.get_resolved_origin(
+            entity_type, entity_id, field
+        )
+        return bool(origin) and origin["tier"] == GUESSED
 
-    @staticmethod
-    def _title_absent(track: Dict) -> bool:
-        """True when no local source resolved the track's title."""
-        return not (track.get("title") or "").strip()
+    async def _artist_is_unresolved(self, track: Dict) -> bool:
+        """True when nothing better than the file's own path named the artist."""
+        artist_id = track.get("artist_id")
+        return artist_id in (None, "", "unknown_artist") or await self._is_a_guess(
+            "artist", artist_id, "name"
+        )
+
+    async def _title_is_unresolved(self, track: Dict) -> bool:
+        """True when nothing better than the file's own path named the track."""
+        return not (track.get("title") or "").strip() or await self._is_a_guess(
+            "track", track["id"], "title"
+        )
 
     async def enrich_track(self, track: Dict) -> Optional[Dict]:
         """
         Enrich track using audio fingerprinting (rescue mode, §6.3).
 
         This will:
-        1. Skip unless a local source left the artist or title absent
+        1. Skip a track an external source already identified *and* a tag
+           already named — see the gate below
         2. Generate fingerprint from audio file
         3. Look up fingerprint in AcoustID
-        4. Record the recording mbid and fill only the absent field(s) —
-           never overwrite a local title or repoint a known artist
+        4. Record the recording mbid and fill only the unresolved field(s) —
+           never overwrite a tagged title or repoint a known artist
         """
         try:
             # Skip if track is already enriched or no file path
             if track.get("enriched") or not track.get("file_path"):
                 return None
 
-            # Rescue mode (§6.3): fire only when local evidence left the artist
-            # or title absent. A missing *album* no longer triggers a lookup —
-            # album identity is the clustering pass's job, not a fingerprint's.
-            artist_absent = self._artist_absent(track)
-            title_absent = self._title_absent(track)
-            if not (artist_absent or title_absent):
+            # Rescue mode (§6.3): the audio is consulted when no external
+            # source identified the track, or when the only thing naming it is
+            # its own path. The latter matters because the text search that
+            # found the mbid was built *from* that path — a match on a guess
+            # proves nothing the audio cannot overturn. A missing *album* never
+            # triggers a lookup: album identity is the clustering pass's job.
+            artist_unresolved = await self._artist_is_unresolved(track)
+            title_unresolved = await self._title_is_unresolved(track)
+            if track.get("mbid") and not (artist_unresolved or title_unresolved):
                 logger.debug(
                     f"Skipping acoustid enrichment for track {track.get('title', 'Unknown')} - "
-                    f"artist and title already resolved locally"
+                    f"already identified, and named by more than its path"
                 )
                 return None
 
@@ -680,18 +698,21 @@ class AcoustIdPlugin(EnricherPlugin):
             }
 
             # Title is a resolvable display field, so it's a claim, never a
-            # direct write (resolution is the sole writer). Emitted only in the
-            # rescue case (no local title); resolution still keeps any present
-            # local title and never invents identity from a fuzzy match (§7).
-            claims = inferred_claims(
+            # direct write (resolution is the sole writer). Emitted only when
+            # nothing better than the path named the track, which is why it is
+            # verified: a fingerprint identifies the recording itself, so it
+            # outranks both the guess and the text match built on it. A tagged
+            # title yields no claim at all and is never contested.
+            claims = verified_claims(
                 f"acoustid:{match_info['recording_mbid']}",
-                {"title": match_info.get("title") if title_absent else None},
+                {"title": match_info.get("title") if title_unresolved else None},
             )
 
             changed_items = {"artists": set(), "albums": set()}
 
-            # Fill the artist only when absent; never move a track off a known one.
-            if artist_absent and match_info.get("artist_name"):
+            # Fill the artist only when unresolved; never move a track off one
+            # a tag or an external source named.
+            if artist_unresolved and match_info.get("artist_name"):
                 original_artist_id = track.get("artist_id")
                 artist_id = await self._create_or_get_artist(
                     match_info["artist_name"], match_info.get("artist_mbid")

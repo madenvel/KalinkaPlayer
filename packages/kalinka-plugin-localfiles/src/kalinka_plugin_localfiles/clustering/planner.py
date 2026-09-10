@@ -14,6 +14,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from ..resolution.resolver import FOLDER_NAME, TAG_CONSENSUS
 from ..utils.name_utils import (
     clean_display_name,
     normalize_for_id,
@@ -123,6 +124,13 @@ class ClusterPlan:
     folder: str = ""
     disc_numbers: frozenset = field(default_factory=frozenset)
     albumartist_key: Optional[str] = None
+    # Where ``title`` came from, so the caller can record its provenance: a
+    # folder-derived one is a guess an external source may later correct.
+    title_source: str = FOLDER_NAME
+    # Release year read out of the folder, for an album no tag dated. It
+    # travels with the title because it comes from the same reading of the
+    # same folder name ("1979 - The Wall").
+    year: Optional[int] = None
 
 
 @dataclass
@@ -137,12 +145,34 @@ def _dominant(values) -> Optional[str]:
     return Counter(vals).most_common(1)[0][0] if vals else None
 
 
+def _repaired(text: Optional[str], legacy_encoding: Optional[str]) -> str:
+    """Path text read as tag text.
+
+    A folder name carries the same damage a tag does — mojibake and unspaced
+    abbreviations ("В.Цой - Черный альбом") — and an album named after its
+    folder that keeps them no longer matches its own repaired artist name when
+    the enricher tries to strip the artist prefix.
+    """
+    if not text:
+        return ""
+    return clean_display_name(repair_tag_text(text, legacy_encoding))
+
+
 def plan_folder(
     folder: str,
     rows: List[Tuple[Dict, Optional[Dict]]],
     legacy_encoding: Optional[str] = None,
+    path_album_title: Optional[str] = None,
+    path_album_year: Optional[int] = None,
 ) -> FolderPlan:
-    """Plan the clusters for one folder from (track_row, evidence_row) pairs."""
+    """Plan the clusters for one folder from (track_row, evidence_row) pairs.
+
+    @param path_album_title What the filename model read as the album for this
+        folder, if anything. It sits below the tags and above the bare folder
+        name in the title ladder — the model drops a year prefix or an edition
+        suffix that the basename keeps.
+    @param path_album_year The year it read there, for an album no tag dated.
+    """
     if not rows:
         return FolderPlan(folder=folder, clusters=[], split=False)
     features = [build_features(t, e) for t, e in rows]
@@ -266,24 +296,16 @@ def plan_folder(
             )
             continue
 
-        # Title: tag consensus, else a sibling cue's disc title, else folder.
         titles = [display_by_id[i][1] for i in ids]
         cue_titles = [display_by_id[i][2] for i in ids]
+        tagged = _dominant(titles) or _dominant(cue_titles)
         title = (
-            _dominant(titles)
-            or _dominant(cue_titles)
-            # The folder name is tag text too — repair it like one, or an
-            # album named after its folder keeps mojibake and unspaced
-            # abbreviations the tagged path fixes ("В.Цой - Черный альбом"),
-            # and no longer matches its own repaired artist name when the
-            # enricher tries to strip the artist prefix.
-            or clean_display_name(
-                repair_tag_text(
-                    os.path.basename(folder.rstrip("/")), legacy_encoding
-                )
-            )
+            tagged
+            or _repaired(path_album_title, legacy_encoding)
+            or _repaired(os.path.basename(folder.rstrip("/")), legacy_encoding)
             or ""
         )
+        title_source = TAG_CONSENSUS if tagged else FOLDER_NAME
         anchor = _dominant(t.get("artist_id") for t in member_tracks) or "unknown_artist"
 
         # Multi-disc-in-one-folder: if the members' titles differ *only* by a
@@ -305,7 +327,7 @@ def plan_folder(
 
         clusters.append(
             ClusterPlan(ids, kind, title, anchor, dict(result.basis),
-                        folder, discs, aa_key)
+                        folder, discs, aa_key, title_source, path_album_year)
         )
 
     return FolderPlan(folder=folder, clusters=clusters, split=result.split)

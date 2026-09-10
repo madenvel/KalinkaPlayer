@@ -43,6 +43,9 @@ class FakeDb:
     async def record_claim(self, *_a, **_k):
         pass
 
+    async def get_resolved_origin(self, *_a, **_k):
+        return None
+
     async def record_resolved_origin(self, *_a, **_k):
         pass
 
@@ -51,6 +54,8 @@ class FakeDb:
 
 
 class OfflinePlugin:
+    runs_after_resolution = False
+
     def can_enrich_artist(self):
         return False
 
