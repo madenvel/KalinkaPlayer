@@ -32,6 +32,11 @@ dependencies = [
     "mutagen>=1.46.0",
     "sqlite-vec>=0.1.6,<0.2",
     "ftfy>=6.0",
+    # CRF runtime for the bundled filename parser; imports as "pycrfsuite".
+    # Pinned exactly, not ranged: filename_model/weights/model.crfsuite was
+    # written by this CRFsuite version, and a format change in a later one
+    # would degrade the output silently rather than fail.
+    "python-crfsuite==0.9.12",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +48,16 @@ dev = [
 
 [project.entry-points."kalinka.plugins"]
 kalinka_plugin_localfiles = "kalinka_plugin_localfiles:KalinkaPluginLocalFiles"
+
+[tool.setuptools]
+# Deliberately left on: setuptools_scm's file finder reports every git-tracked
+# file under src/, which is how procedural_artwork/README.md reaches the wheel.
+include-package-data = true
+
+[tool.setuptools.package-data]
+# Belt to that finder's braces — a build from an exported tarball has no git
+# and would otherwise ship a wheel with no model in it.
+"kalinka_plugin_localfiles.filename_model.weights" = ["*.crfsuite", "*.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -70,3 +85,15 @@ markers = [
     "smoke: smoke tests for basic functionality",
     "integration: integration tests",
 ]
+
+[tool.black]
+# Copied verbatim from kalinka-training; reformatting it would break the
+# per-file hashes that prove it is unmodified.
+extend-exclude = "src/kalinka_plugin_localfiles/filename_model/_vendor/"
+
+[tool.mypy]
+exclude = "src/kalinka_plugin_localfiles/filename_model/_vendor/"
+
+[[tool.mypy.overrides]]
+module = "pycrfsuite.*"
+ignore_missing_imports = true

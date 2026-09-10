@@ -158,3 +158,34 @@ def test_display_name_title_field_labels_local_claim():
     assert w.value == "Abbey Road"
     kept = resolve_display_name("Oxygène", [], field="title")
     assert kept.value == "Oxygène" and kept.field == "title"
+
+
+class TestPathDerivedLocalValue:
+    """A value read off the path is a guess, and a guess is correctable.
+
+    §7 protects a *tag* from a fuzzy external match. A filename is not a tag:
+    letting MusicBrainz overrule it is how a typo in a folder name gets fixed.
+    """
+
+    def test_a_guessed_local_loses_to_an_inferred_external(self):
+        ext = _ext("Jean-Michel Jarre", "inferred", mbid="r1")
+        w = resolve_display_name(
+            "Jean Michel Jarre", [ext],
+            local_source="folder_name", local_tier="guessed",
+        )
+        assert w.value == "Jean-Michel Jarre"
+        assert w.source.startswith("musicbrainz")
+
+    def test_an_observed_local_still_beats_it(self):
+        ext = _ext("Jean-Michel Jarre", "inferred", mbid="r1")
+        w = resolve_display_name("Jean Michel Jarre", [ext])
+        assert w.value == "Jean Michel Jarre"
+        assert w.tier == "observed"
+
+    def test_a_guessed_local_wins_uncontested(self):
+        w = resolve_display_name(
+            "Murder Ballads", [], field="title",
+            local_source="folder_name", local_tier="guessed",
+        )
+        assert w.value == "Murder Ballads"
+        assert (w.source, w.tier) == ("folder_name", "guessed")

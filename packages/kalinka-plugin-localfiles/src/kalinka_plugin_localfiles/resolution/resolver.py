@@ -14,6 +14,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+#: Tier for a value read from the file's own tags.
+OBSERVED = "observed"
+#: Tier for a value read off the path — a guess, and outranked by everything.
+GUESSED = "guessed"
+
+#: Source of a value read from the file's own tags.
+TAG_CONSENSUS = "tag_consensus"
+#: Sources a path-derived value is attributed to.
+FILENAME = "filename"
+FOLDER_NAME = "folder_name"
+
+#: The sources whose values this library derives for itself and may re-derive.
+#: Anything else was resolved by a source that outranks a folder name, so
+#: rebuilding it from the folder would revert that source on the next scan.
+LOCALLY_DERIVED = (TAG_CONSENSUS, FOLDER_NAME)
+
 # Tier ordering (§7). pinned = user said so; guessed = last-resort fallback.
 TIER_RANK = {
     "pinned": 5,
@@ -136,23 +152,32 @@ def _norm(s: str) -> str:
 
 
 def resolve_display_name(
-    local_value: str, external: Iterable[Claim], field: str = "name"
+    local_value: str,
+    external: Iterable[Claim],
+    field: str = "name",
+    local_source: str = TAG_CONSENSUS,
+    local_tier: str = OBSERVED,
 ) -> Claim:
     """Resolve a display-identity field (artist ``name`` / album ``title``)
     under the §7 rule that a fuzzy external match may re-format but not replace
     it.
 
-    The locally observed value wins, except: a verified/pinned external (direct
+    An observed local value wins, except: a verified/pinned external (direct
     identifier or user confirmation) replaces it outright; otherwise a same-
     value external (equal up to case/whitespace) supplies the canonical surface
-    form ("THE BEATLES" -> "The Beatles"). An external with a genuinely
-    different value never wins.
+    form ("THE BEATLES" -> "The Beatles").
+
+    ``local_source``/``local_tier`` say where the local value actually came
+    from. They default to a tag read out of the file, which is the case §7
+    protects; a value read off the *path* is a ``guessed`` claim from
+    ``filename``/``folder_name`` and does lose to a fuzzy external match —
+    correcting a filename's typos is the whole point of consulting one.
 
     ``field`` labels the synthesized local claim; both name and title resolve
     under the same local-first precedence, so it is cosmetic, but keeping it
     accurate makes the returned/recorded provenance correct per field.
     """
-    local = Claim(field, local_value, "tag_consensus", "observed")
+    local = Claim(field, local_value, local_source, local_tier)
     external = list(external)
 
     # Order-independent: pick by the resolver's (tier, source-precedence) score,
@@ -164,7 +189,8 @@ def resolve_display_name(
     matching = [c for c in external if _norm(c.value) == _norm(local_value)]
     if matching:
         return max(matching, key=_score)
-    return local
+    # Never None — the local claim is always one of the candidates.
+    return resolve_field([local, *external], current_value=local_value) or local
 
 
 def resolve_entity(

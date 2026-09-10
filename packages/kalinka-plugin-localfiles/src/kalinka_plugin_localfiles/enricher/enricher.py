@@ -10,7 +10,13 @@ import time
 from typing import NamedTuple, Optional, Tuple
 
 from ..config_model import LocalFilesConfig
-from ..resolution.resolver import Claim, resolve_display_name, resolve_field
+from ..resolution.resolver import (
+    OBSERVED,
+    TAG_CONSENSUS,
+    Claim,
+    resolve_display_name,
+    resolve_field,
+)
 from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
 from ..worker_utils import nudge
@@ -23,7 +29,6 @@ from .acoustid_plugin import AcoustIdPlugin
 from .wikidata_plugin import WikidataPlugin
 from .coverartarchive_plugin import CoverArtArchivePlugin
 from .deezer_plugin import DeezerPlugin
-from .filesystem_fallback_plugin import FilesystemFallbackPlugin
 from .enricher_db import AsyncEnricherDb
 
 logger = logging.getLogger("enricher")
@@ -124,18 +129,11 @@ class MetadataEnricher:
 
         logger.info("Initializing MetadataEnricher plugins...")
 
-        # The order of plugins matters for the enrichment process
-        # as the first one found a match will be used
-        if config.enricher.plugins.acoustid.api_key:
-            logger.info("Loading AcoustIdPlugin")
-            self.plugins.append(AcoustIdPlugin(config, self.db_manager))
-
-        # Runs early but claims little: it only fills what the online
-        # sources leave empty, so untagged files still get a title.
-        if config.enricher.plugins.filesystem.enabled:
-            logger.info("Loading FilesystemFallbackPlugin")
-            self.plugins.append(FilesystemFallbackPlugin(config, self.db_manager))
-
+        # Order is the pipeline: the metadata sources get their turn, then
+        # the fingerprint rescues whatever they could not identify, then the
+        # artwork sources fill what is left. The chain stops early once a
+        # track has every desired field, so a track MusicBrainz identifies
+        # never reaches AcoustID.
         if config.enricher.plugins.musicbrainz.enabled:
             logger.info("Loading MusicBrainzPlugin")
             self.plugins.append(MusicBrainzPlugin(config, self.db_manager))
@@ -147,6 +145,13 @@ class MetadataEnricher:
         if config.enricher.plugins.deezer.enabled:
             logger.info("Loading DeezerPlugin")
             self.plugins.append(DeezerPlugin(config, self.db_manager))
+
+        # Last of the identity sources: reading the audio is the expensive
+        # answer, and only worth paying for when the cheap ones failed or
+        # only had a filename to go on.
+        if config.enricher.plugins.acoustid.api_key:
+            logger.info("Loading AcoustIdPlugin")
+            self.plugins.append(AcoustIdPlugin(config, self.db_manager))
 
         # After the fetching sources, before the generator: it only fills
         # covers nothing else supplied, keyed by the MB release id.
@@ -332,7 +337,8 @@ class MetadataEnricher:
         return self._backoff.next_retry_in()
 
     async def _run_plugin_chain(
-        self, entity_id, updated, claims, can_enrich, enrich, is_complete
+        self, entity_id, updated, claims, can_enrich, enrich, is_complete,
+        after_resolution: bool = False,
     ) -> Tuple[bool, bool]:
         """Run the plugin chain for one entity, isolating service outages.
 
@@ -345,10 +351,16 @@ class MetadataEnricher:
         Returns ``(had_updates, deferred)``. ``deferred`` means some service
         never answered for this entity, so the caller must not record a
         verdict on it — the row stays pending for a later retry.
+
+        ``after_resolution`` selects which half of the chain to run: the
+        fetching plugins, or the ones that derive from the resolved entity
+        (see ``EnricherPlugin.runs_after_resolution``). The two never mix.
         """
         had_updates = False
         deferred = False
         for plugin in self.plugins:
+            if plugin.runs_after_resolution != after_resolution:
+                continue
             if not can_enrich(plugin):
                 continue
 
@@ -547,6 +559,24 @@ class MetadataEnricher:
         if had_updates:
             await self.db_manager.update_artist(artist["id"], updated_artist)
 
+    async def _local_origin(
+        self, entity_type: str, entity_id: str, field: str
+    ) -> Tuple[str, str]:
+        """How strongly the row's current value is held, as (source, tier).
+
+        A value the indexer read off the path is a ``guessed`` claim from
+        ``filename``/``folder_name`` and an external source may correct it;
+        one read from a tag is ``observed`` and may not. A row with no
+        recorded origin predates provenance and is treated as a tag, which is
+        what it was.
+        """
+        origin = await self.db_manager.get_resolved_origin(
+            entity_type, entity_id, field
+        )
+        if not origin:
+            return TAG_CONSENSUS, OBSERVED
+        return origin["source"], origin["tier"]
+
     async def _resolve_display_field(
         self, entity_type: str, entity: dict, updated: dict,
         emitted_claims: list, field: str,
@@ -557,15 +587,21 @@ class MetadataEnricher:
         match (§7 — display identity is locally derived). Provenance lands in
         resolved_origin. Returns True if the value changed.
 
-        The local baseline is read from ``updated``, not ``entity``: local
-        plugins refine it via direct writes (FilesystemFallbackPlugin parses
-        "Artist - Title" out of a filename-echo title), and resolving against
-        the stale row would revert that refinement."""
+        How strongly the local value is held comes from that same table. A
+        value the indexer read off the path is a guess, and correcting a
+        filename's typos is precisely what consulting an external source is
+        for; a value read from a tag keeps §7's protection. The baseline is
+        read from ``updated`` rather than ``entity`` because this pass can
+        still refine it first (an album title loses its artist prefix), and
+        resolving against the stale row would revert that."""
         local_value = updated.get(field)
         if not local_value:
             return False
 
         entity_id = entity["id"]
+        local_source, local_tier = await self._local_origin(
+            entity_type, entity_id, field
+        )
         external = []
         for c in emitted_claims:
             if c.get("field") != field:
@@ -578,7 +614,10 @@ class MetadataEnricher:
                       c.get("evidence_ref"))
             )
 
-        winner = resolve_display_name(local_value, external, field=field)
+        winner = resolve_display_name(
+            local_value, external, field=field,
+            local_source=local_source, local_tier=local_tier,
+        )
         await self.db_manager.record_resolved_origin(
             entity_type, entity_id, field, winner.source, winner.tier,
             winner.evidence_ref,
@@ -624,14 +663,20 @@ class MetadataEnricher:
             local_value = overrides.get(field, entity.get(field))
             claims = []
             if local_value not in (None, ""):
-                claims.append(
-                    Claim(field, local_value, "tag_consensus", "observed")
-                )
                 if field in overrides:
+                    # Genuine tag evidence, so it is persisted as a claim.
+                    source, tier = TAG_CONSENSUS, OBSERVED
                     await self.db_manager.record_claim(
-                        entity_type, entity_id, field, local_value,
-                        "tag_consensus", "observed",
+                        entity_type, entity_id, field, local_value, source, tier,
                     )
+                else:
+                    # The row's own value, which the indexer may have read off
+                    # the path — a year in a folder name is a guess, and MB's
+                    # year should correct it.
+                    source, tier = await self._local_origin(
+                        entity_type, entity_id, field
+                    )
+                claims.append(Claim(field, local_value, source, tier))
             for c in externals:
                 await self.db_manager.record_claim(
                     entity_type, entity_id, field, c["value"], c["source"], c["tier"]
@@ -751,6 +796,21 @@ class MetadataEnricher:
             local_overrides=consensus,
         ):
             had_updates = True
+
+        # Now that title and genre have settled, the plugins that draw from
+        # them get their turn. Nothing here completes the entity, so this pass
+        # has no early break.
+        derived_updates, derived_deferred = await self._run_plugin_chain(
+            album.get("title", album["id"]),
+            updated_album,
+            emitted_claims,
+            lambda p: p.can_enrich_album(),
+            lambda p, e: p.enrich_album(e),
+            lambda e: False,
+            after_resolution=True,
+        )
+        had_updates = had_updates or derived_updates
+        deferred = deferred or derived_deferred
 
         # Status decision (Phase 2e): an album whose required local fields
         # (title + artist_id) resolved is ENRICHED even without an external

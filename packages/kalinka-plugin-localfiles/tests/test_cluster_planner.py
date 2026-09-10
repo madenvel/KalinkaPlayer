@@ -313,3 +313,62 @@ def test_plan_two_albums_split():
     assert len(plan.clusters) == 2
     titles = {c.title for c in plan.clusters}
     assert titles == {"Alpha", "Beta"}
+
+
+class TestThePathTitleRung:
+    """The filename model sits between the tags and the bare folder name.
+
+    A folder name is not an album name: it carries year prefixes and edition
+    suffixes the model reads out and the basename keeps. It stays below the
+    tags, which are evidence rather than a reading of a directory.
+    """
+
+    def test_it_beats_the_bare_folder_name(self):
+        rows = [(_track("t1"), _ev()), (_track("t2", track_number=2), _ev())]
+        plan = plan_folder(
+            "/music/Pink Floyd/1979 - The Wall",
+            rows,
+            path_album_title="The Wall",
+        )
+        assert [c.title for c in plan.clusters] == ["The Wall"]
+
+    def test_the_folder_name_still_answers_when_it_reads_nothing(self):
+        rows = [(_track("t1"), _ev()), (_track("t2", track_number=2), _ev())]
+        plan = plan_folder("/music/Pink Floyd/The Wall", rows)
+        assert [c.title for c in plan.clusters] == ["The Wall"]
+
+    def test_the_tags_still_outrank_it(self):
+        rows = [
+            (_track("t1"), _ev(album="Wish You Were Here")),
+            (_track("t2", track_number=2), _ev(album="Wish You Were Here")),
+        ]
+        plan = plan_folder(
+            "/music/Pink Floyd/1979 - The Wall",
+            rows,
+            path_album_title="The Wall",
+        )
+        assert [c.title for c in plan.clusters] == ["Wish You Were Here"]
+
+    def test_a_path_derived_title_is_marked_as_a_guess(self):
+        """Which is what lets MusicBrainz correct it later, and what keeps
+        the next scan from rebuilding the correction away."""
+        rows = [(_track("t1"), _ev()), (_track("t2", track_number=2), _ev())]
+        guessed = plan_folder("/music/Pink Floyd/The Wall", rows).clusters[0]
+        tagged = plan_folder(
+            "/music/Pink Floyd/The Wall",
+            [(_track("t1"), _ev(album="The Wall")),
+             (_track("t2", track_number=2), _ev(album="The Wall"))],
+        ).clusters[0]
+        assert (guessed.title_source, tagged.title_source) == (
+            "folder_name", "tag_consensus",
+        )
+
+    def test_a_year_read_off_the_folder_travels_with_the_title(self):
+        rows = [(_track("t1"), _ev()), (_track("t2", track_number=2), _ev())]
+        plan = plan_folder(
+            "/music/Pink Floyd/1979 - The Wall",
+            rows,
+            path_album_title="The Wall",
+            path_album_year=1979,
+        )
+        assert [c.year for c in plan.clusters] == [1979]

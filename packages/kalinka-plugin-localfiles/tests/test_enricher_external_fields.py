@@ -24,6 +24,9 @@ class FakeDb:
     async def record_claim(self, et, eid, field, value, source, tier):
         self.claims.append((et, eid, field, value, source, tier))
 
+    async def get_resolved_origin(self, _et, _eid, _field):
+        return None
+
     async def record_resolved_origin(self, et, eid, field, source, tier, ev=None):
         self.origins.append((et, eid, field, source, tier))
 

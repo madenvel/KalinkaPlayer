@@ -166,7 +166,6 @@ def _minimal_config(tmp_path) -> LocalFilesConfig:
     cfg.enricher.plugins.acoustid.api_key = ""
     cfg.enricher.plugins.wikidata.enabled = False
     cfg.enricher.plugins.deezer.enabled = False
-    cfg.enricher.plugins.filesystem.enabled = False
     return cfg
 
 

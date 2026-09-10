@@ -49,11 +49,16 @@ class FakeDb:
     async def record_claim(self, *_a, **_k):
         pass
 
+    async def get_resolved_origin(self, *_a, **_k):
+        return None
+
     async def record_resolved_origin(self, *_a, **_k):
         pass
 
 
 class DownService:
+    runs_after_resolution = False
+
     """Never answers."""
 
     def __init__(self):
@@ -74,6 +79,8 @@ class DownService:
 
 
 class WorkingService:
+    runs_after_resolution = False
+
     """Answers, filling one field."""
 
     def __init__(self):
@@ -194,6 +201,8 @@ async def test_recovered_service_enriches_normally_again():
     """When the service comes back, rows complete without a restart."""
 
     class FlakyOnce:
+        runs_after_resolution = False
+
         def __init__(self):
             self.calls = 0
 

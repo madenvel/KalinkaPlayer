@@ -33,7 +33,9 @@ BARE_DISC_RE = re.compile(
 # The names a compilation uses instead of an artist, in one place: as a
 # folder prefix ("VA - Best of 90s") and standing alone (the artist half of
 # "Various Artists - Best of 90s").
-_VA_NAME = r"va|v\.\s*a\.|various(?:\s+artists?)?"
+# The trailing dot is optional: a span carved out of "V.A. - Hits 1995"
+# arrives as "V.A", the dot having been trimmed as a separator edge.
+_VA_NAME = r"va|v\.\s*a\.?|various(?:\s+artists?)?"
 VA_PREFIX_RE = re.compile(rf"^(?:{_VA_NAME})\s*[-–—]\s*", re.IGNORECASE)
 _VA_NAME_RE = re.compile(rf"^(?:{_VA_NAME})$", re.IGNORECASE)
 

@@ -8,13 +8,14 @@ from typing import List, Dict, Optional, Any, Tuple
 
 
 from ..config_model import LocalFilesConfig
+from ..resolution.provenance_db import ProvenanceDb
 from ..worker_utils import retry_db_locked
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
 
 @retry_db_locked
-class AsyncIndexerDb:
+class AsyncIndexerDb(ProvenanceDb):
     """
     Asynchronous database manager specifically for the file indexer.
     Handles operations required for scanning and indexing music files.
@@ -529,6 +530,51 @@ class AsyncIndexerDb:
             row = await cursor.fetchone()
         return row[0] if row and row[0] else None
 
+    async def set_filename_model_identity(self, identity: str) -> None:
+        """Remember which filename model produced the library's guessed
+        values, so new weights can be noticed and those rows re-read."""
+        async with self._open() as conn:
+            await conn.execute(
+                "INSERT OR REPLACE INTO indexer_state (key, value) "
+                "VALUES ('filename_model', ?)",
+                (identity,),
+            )
+            await conn.commit()
+
+    async def get_filename_model_identity(self) -> Optional[str]:
+        """The identity stored by :meth:`set_filename_model_identity`, or
+        None on a library indexed before it was recorded."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT value FROM indexer_state WHERE key = 'filename_model'"
+            )
+            row = await cursor.fetchone()
+        return row[0] if row and row[0] else None
+
+    async def get_tracks_named_by_their_path(self, source: str) -> List[Dict]:
+        """Tracks whose title nothing but their own path ever supplied.
+
+        These are the only rows a new model may re-derive: a tag or an
+        external match resolved every other title, and re-deriving one of
+        those would undo it.
+        """
+        async with self._open() as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT t.* FROM tracks t
+                JOIN resolved_origin o
+                  ON o.entity_type = 'track'
+                 AND o.entity_id = t.id
+                 AND o.field = 'title'
+                WHERE o.source = ?
+                """,
+                (source,),
+            )
+            return [dict(r) for r in await cursor.fetchall()]
+
     async def get_scan_progress(self) -> Optional[Dict]:
         """Read the scan progress published by :meth:`set_scan_progress`.
         Returns None when absent or unreadable."""
@@ -545,8 +591,26 @@ class AsyncIndexerDb:
         except (ValueError, TypeError):
             return None
 
+    async def _forget_provenance(self, cursor, entity_type: str, ids: List[str]):
+        """Drop the claims and origins of entities that no longer exist.
+
+        Neither table has a foreign key, so a deleted row's provenance would
+        otherwise outlive it — and entity ids are content-derived, so nothing
+        ever reclaims one and cleans it up by accident.
+        """
+        if not ids:
+            return
+        holes = ", ".join(["?"] * len(ids))
+        for table in ("resolved_origin", "metadata_claims"):
+            await cursor.execute(
+                f"DELETE FROM {table} WHERE entity_type = ? "
+                f"AND entity_id IN ({holes})",
+                [entity_type, *ids],
+            )
+
     async def delete_orphaned_albums_and_artists(self) -> Tuple[int, int]:
-        """Delete albums and artists that have no tracks referencing them.
+        """Delete albums and artists that have no tracks referencing them,
+        and the provenance recorded against them.
         Returns tuple of (deleted_albums_count, deleted_artists_count)"""
         async with self._open() as conn:
             cursor = await conn.cursor()
@@ -571,6 +635,7 @@ class AsyncIndexerDb:
                     orphaned_albums,
                 )
                 deleted_albums = cursor.rowcount
+                await self._forget_provenance(cursor, "album", orphaned_albums)
 
             # Get artists with no tracks or albums. ``unknown_artist``
             # is excluded as the only sentinel — every other artist
@@ -595,6 +660,7 @@ class AsyncIndexerDb:
                     orphaned_artists,
                 )
                 deleted_artists = cursor.rowcount
+                await self._forget_provenance(cursor, "artist", orphaned_artists)
 
             await conn.commit()
             return deleted_albums, deleted_artists

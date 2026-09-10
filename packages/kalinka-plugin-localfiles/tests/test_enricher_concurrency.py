@@ -49,11 +49,16 @@ class FakeDb:
     async def record_claim(self, *_a, **_k):
         pass
 
+    async def get_resolved_origin(self, *_a, **_k):
+        return None
+
     async def record_resolved_origin(self, *_a, **_k):
         pass
 
 
 class OverlapPlugin:
+    runs_after_resolution = False
+
     """Records how many enrichments are in flight at once."""
 
     def __init__(self, delay=0.02):
@@ -124,6 +129,8 @@ async def test_concurrency_of_one_keeps_the_serial_behaviour():
 
 
 class FlakyPlugin(OverlapPlugin):
+    runs_after_resolution = False
+
     """Fails one nominated track transiently; the rest succeed."""
 
     def __init__(self, failing_id):

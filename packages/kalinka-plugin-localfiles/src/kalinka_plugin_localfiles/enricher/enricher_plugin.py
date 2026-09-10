@@ -36,17 +36,32 @@ def raise_if_service_unavailable(status_code: int, service: str) -> None:
         )
 
 
+def _claims(source: str, fields: Dict[str, object], tier: str) -> List[Dict]:
+    return [
+        {"field": field, "value": value, "source": source, "tier": tier}
+        for field, value in fields.items()
+        if value
+    ]
+
+
 def inferred_claims(source: str, fields: Dict[str, object]) -> List[Dict]:
     """Build the enricher's claim dicts for each non-empty field, attributed to
     ``source`` at the ``inferred`` tier — the shape every plugin emits and the
     enricher resolves. Centralised so the plugin→enricher claim contract lives
     in one place rather than being hand-built per plugin.
     """
-    return [
-        {"field": field, "value": value, "source": source, "tier": "inferred"}
-        for field, value in fields.items()
-        if value
-    ]
+    return _claims(source, fields, "inferred")
+
+
+def verified_claims(source: str, fields: Dict[str, object]) -> List[Dict]:
+    """The same, at the tier that may replace a display value outright.
+
+    Reserved for a direct identifier — a fingerprint that names the recording
+    itself, not a text search that ranked some candidates. A fuzzy match must
+    stay ``inferred`` however high it scored: a score is how a source earns its
+    verdict, never a claim to authority over another source.
+    """
+    return _claims(source, fields, "verified")
 
 
 class EnricherPlugin(abc.ABC):
@@ -60,6 +75,13 @@ class EnricherPlugin(abc.ABC):
     # plugin, so bumping a plugin the user has *disabled* changes
     # nothing — it never enters the fingerprint.
     ENRICHER_VERSION: int = 1
+
+    #: True for a plugin that *derives* from the entity's resolved identity
+    #: rather than fetching something keyed on an identifier — generated art
+    #: is drawn from the album's title, artist and genre, so it must not run
+    #: before resolution has settled them. Such a plugin runs in a second pass
+    #: after resolution, and any claim it emitted would be too late to resolve.
+    runs_after_resolution: bool = False
 
     def config_signature(self) -> Dict:
         """Config fields that affect match *outcomes*, folded into the

@@ -8,6 +8,7 @@ import time
 from typing import List, Dict, Optional, Any, Tuple
 
 from ..config_model import LocalFilesConfig
+from ..resolution.provenance_db import ProvenanceDb
 from ..worker_utils import retry_db_locked, stage_status
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -17,7 +18,7 @@ ENRICHMENT_FINGERPRINT_KEY = "enrichment_fingerprint"
 
 
 @retry_db_locked
-class AsyncEnricherDb:
+class AsyncEnricherDb(ProvenanceDb):
     """
     Asynchronous database manager specifically for the metadata enricher.
     Handles operations required for enrichment of music metadata.
@@ -263,57 +264,6 @@ class AsyncEnricherDb:
             )
             await conn.commit()
         return counts
-
-    async def count_distinct_artists_in_folder(self, parent_dir: str) -> int:
-        """Return the number of distinct real artists with at least one
-        track whose ``file_path`` is in ``parent_dir`` (non-recursive).
-
-        ``unknown_artist`` is excluded so it doesn't deflate or inflate
-        the count depending on how many untagged tracks happen to be
-        in the folder. Used by ``filesystem_fallback`` to decide
-        whether to leave a track in ``unknown_album`` (V/A folder) or
-        anchor it to a derived album (single-artist folder).
-        """
-        if not parent_dir:
-            return 0
-        # Match "<parent_dir>/<file>" but NOT "<parent_dir>/<subdir>/<file>"
-        # so siblings of the same album folder count but disc subdirs
-        # don't double-count tracks from a separate logical folder.
-        prefix = parent_dir.rstrip("/") + "/"
-        async with self._open() as conn:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                """
-                SELECT COUNT(DISTINCT artist_id) FROM tracks
-                WHERE file_path LIKE ? AND file_path NOT LIKE ?
-                  AND artist_id != 'unknown_artist'
-                """,
-                (prefix + "%", prefix + "%/%"),
-            )
-            row = await cursor.fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
-
-    async def count_tracks_in_folder(self, parent_dir: str) -> int:
-        """Return the number of tracks whose ``file_path`` is directly
-        in ``parent_dir`` (non-recursive). Companion to
-        ``count_distinct_artists_in_folder`` — together they let
-        callers compute the unique-artist-per-track ratio used by the
-        V/A detection criteria.
-        """
-        if not parent_dir:
-            return 0
-        prefix = parent_dir.rstrip("/") + "/"
-        async with self._open() as conn:
-            cursor = await conn.cursor()
-            await cursor.execute(
-                """
-                SELECT COUNT(*) FROM tracks
-                WHERE file_path LIKE ? AND file_path NOT LIKE ?
-                """,
-                (prefix + "%", prefix + "%/%"),
-            )
-            row = await cursor.fetchone()
-            return int(row[0]) if row and row[0] is not None else 0
 
     async def get_album_track_titles(self, album_id: str) -> List[str]:
         """Titles of an album's tracks in disc/track order.
@@ -589,77 +539,6 @@ class AsyncEnricherDb:
     async def update_track(self, track_id: str, data: Dict[str, Any]) -> None:
         """Update track information"""
         await self._update("tracks", track_id, data)
-
-    async def record_claim(
-        self,
-        entity_type: str,
-        entity_id: str,
-        field: str,
-        value: str | int,
-        source: str,
-        tier: str,
-    ) -> None:
-        """Record one field-level claim (upsert per entity/field/source).
-
-        ``value`` is str for text fields, int for numeric origin/era fields
-        (year, original_year); SQLite stores it in the TEXT column either way.
-        """
-        async with self._open() as conn:
-            await conn.execute(
-                """
-                INSERT INTO metadata_claims
-                    (entity_type, entity_id, field, value, source, tier, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(entity_type, entity_id, field, source) DO UPDATE SET
-                    value = excluded.value,
-                    tier = excluded.tier,
-                    created_at = excluded.created_at
-                """,
-                (entity_type, entity_id, field, value, source, tier,
-                 int(time.time())),
-            )
-            await conn.commit()
-
-    async def get_claims(
-        self, entity_type: str, entity_id: str, field: str
-    ) -> List[Dict[str, Any]]:
-        """All claims for one entity field."""
-        async with self._open() as conn:
-            conn.row_factory = aiosqlite.Row
-            cur = await conn.execute(
-                "SELECT value, source, tier FROM metadata_claims "
-                "WHERE entity_type=? AND entity_id=? AND field=?",
-                (entity_type, entity_id, field),
-            )
-            return [dict(r) for r in await cur.fetchall()]
-
-    async def record_resolved_origin(
-        self,
-        entity_type: str,
-        entity_id: str,
-        field: str,
-        source: str,
-        tier: str,
-        evidence_ref: Optional[str] = None,
-    ) -> None:
-        """Record where a resolved field value came from (upsert per field)."""
-        async with self._open() as conn:
-            await conn.execute(
-                """
-                INSERT INTO resolved_origin
-                    (entity_type, entity_id, field, source, tier, evidence_ref,
-                     resolved_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(entity_type, entity_id, field) DO UPDATE SET
-                    source = excluded.source,
-                    tier = excluded.tier,
-                    evidence_ref = excluded.evidence_ref,
-                    resolved_at = excluded.resolved_at
-                """,
-                (entity_type, entity_id, field, source, tier, evidence_ref,
-                 int(time.time())),
-            )
-            await conn.commit()
 
     async def update_album_stats(self, album_id: str) -> None:
         """Update album statistics (track count and duration).
