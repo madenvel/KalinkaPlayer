@@ -97,7 +97,7 @@ class Claim:
     evidence_ref: Optional[str] = None
 
 
-def _source_base(source: str) -> str:
+def source_base(source: str) -> str:
     """Strip the id suffix: "musicbrainz:0d7f…" -> "musicbrainz"."""
     return source.split(":", 1)[0]
 
@@ -111,7 +111,7 @@ def _source_rank(field: str, source: str) -> int:
     ones (but above nothing), so an unrecognised emitter never outranks a
     known one merely by being unlisted."""
     order = _precedence(field)
-    base = _source_base(source)
+    base = source_base(source)
     if base in order:
         # Invert index so earlier-in-tuple = higher rank.
         return len(order) - order.index(base)

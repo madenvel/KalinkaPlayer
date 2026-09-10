@@ -1,6 +1,8 @@
 import abc
 from typing import Dict, List, Optional
 
+from ..resolution.resolver import LOCALLY_DERIVED, TIER_RANK, source_base
+
 
 class TransientEnrichmentError(Exception):
     """The service never gave a verdict about the entity — DNS failure,
@@ -34,6 +36,42 @@ def raise_if_service_unavailable(status_code: int, service: str) -> None:
         raise TransientEnrichmentError(
             f"{service} is unavailable: HTTP {status_code}"
         )
+
+
+async def best_search_name(
+    db_manager, entity_type: str, entity_id: str, field: str, fallback: str
+) -> str:
+    """The name most likely to find this entity in another catalogue.
+
+    What is displayed is not always what to search with. Resolution keeps a
+    name the library observed in a tag over a merely-inferred external claim,
+    so a name a legacy fixed-width field cut short — "Иванушки Int" — stays
+    cut short on the row, and a provider asked for that finds nothing or
+    scores it away. A source that already identified this entity recorded the
+    whole name as a claim, and that is the one to ask with.
+
+    @return The highest-tier external claim's value, or ``fallback`` when
+        nothing but the library's own reading of the files exists.
+    """
+    claims = await db_manager.get_claims(entity_type, entity_id, field)
+    external = [
+        c
+        for c in claims
+        if c.get("value") and source_base(c.get("source") or "") not in LOCALLY_DERIVED
+    ]
+    if not external:
+        return fallback
+    return max(external, key=lambda c: TIER_RANK.get(c.get("tier"), 0))["value"]
+
+
+def has_real_cover(album: Dict) -> bool:
+    """Whether an album already carries artwork a real source supplied.
+
+    A generated placeholder fills ``image_url`` like any other cover, so
+    testing that column alone reports every album as illustrated and stops
+    the fetching sources from ever being asked again.
+    """
+    return bool(album.get("image_url")) and not album.get("image_generated")
 
 
 def _claims(source: str, fields: Dict[str, object], tier: str) -> List[Dict]:

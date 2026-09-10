@@ -1,20 +1,22 @@
 import logging
 from pathlib import Path
 import httpx
-import difflib
-import re
 from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
 from ..utils.artwork_store import save_artwork_images
 from ..utils.name_utils import (
+    name_similarity,
     repair_mojibake,
     space_dotted_abbreviations,
+    truncated_name_similarity,
     unescape_web_entities,
 )
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
+    best_search_name,
+    has_real_cover,
     inferred_claims,
     raise_if_service_unavailable,
 )
@@ -36,6 +38,15 @@ _TIMEOUT = httpx.Timeout(5.0, pool=120.0)
 # Fuzzy matching threshold for album and artist matching
 FUZZY_MATCH_THRESHOLD = 0.8
 
+# Deezer's structured search honours only *quoted* values — an unquoted
+# multi-word artist or album returns nothing at all. The free-text fallback
+# has to name the artist too: searching the title alone returns other
+# people's records, and no amount of scoring recovers from that.
+_ALBUM_QUERIES = (
+    'artist:"{artist}" album:"{title}"',
+    "{artist} {title}",
+)
+
 
 class DeezerPlugin(EnricherPlugin):
     """
@@ -47,7 +58,11 @@ class DeezerPlugin(EnricherPlugin):
     distributed software without proper licensing from Deezer.
     """
 
-    ENRICHER_VERSION = 1
+    # 2: the structured search finally sends quoted values (unquoted found
+    # nothing for any multi-word name), the fallback query names the artist,
+    # and candidates rank on the weaker of title/artist rather than title
+    # alone — so rows this plugin silently could not match re-open.
+    ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -78,66 +93,38 @@ class DeezerPlugin(EnricherPlugin):
     def can_enrich_track(self) -> bool:
         return False
 
-    def _fuzzy_match_score(self, text1: str, text2: str) -> float:
-        """Calculate fuzzy match score between two strings using difflib"""
-        if not text1 or not text2:
-            return 0.0
-
-        # Normalize strings for comparison
-        text1_norm = text1.lower().strip()
-        text2_norm = text2.lower().strip()
-
-        # Use SequenceMatcher for fuzzy matching
-        matcher = difflib.SequenceMatcher(None, text1_norm, text2_norm)
-        return matcher.ratio()
-
-    def _remove_text_in_braces(self, text: str) -> str:
-        """Remove text in braces (parentheses, square brackets, curly braces) from album title"""
-        # Remove text in parentheses, square brackets, and curly braces
-        # This handles cases like "Album Name (Vinyl)", "Album Name [Remaster]", "Album Name {Special Edition}"
-        cleaned = re.sub(r"\s*[\(\[\{].*?[\)\]\}]\s*", " ", text)
-        # Clean up multiple spaces and strip
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        return cleaned
-
     def _find_best_album_match(
         self, albums: list, target_title: str, target_artist: str
     ) -> Optional[tuple]:
-        """Find the best matching album from a list using fuzzy matching
+        """The candidate that matches on both title and artist, or None.
 
-        Returns: tuple of (album_dict, title_score, artist_score) or None
+        Ranking on the title alone lets a covers act with an identical title
+        outrank the real release, which the artist test then rejects — so the
+        weaker of the two scores both ranks the candidates and decides
+        whether the best one is good enough.
+
+        Returns ``(album, title_score, artist_score)``.
         """
-        best_match = None
-        best_score = 0.0
-
-        for album in albums:
-            if not album.get("title"):
+        best = None
+        for candidate in albums:
+            if not candidate.get("title"):
                 continue
-
-            # Calculate album title match score
-            title_score = self._fuzzy_match_score(album["title"], target_title)
-
-            # Calculate artist match score if artist info is available
-            artist_score = 0.0
-            if album.get("artist") and album["artist"].get("name"):
-                artist_score = self._fuzzy_match_score(
-                    album["artist"]["name"], target_artist
-                )
-
-            # For step 1: only consider album title score
-            # For step 2: consider both album and artist scores
-            album_score = title_score
+            candidate_artist = (candidate.get("artist") or {}).get("name", "")
+            title_score = name_similarity(candidate["title"], target_title)
+            artist_score = truncated_name_similarity(candidate_artist, target_artist)
+            combined = min(title_score, artist_score)
 
             logger.debug(
-                f"Album '{album['title']}' by '{album.get('artist', {}).get('name', 'Unknown')}' "
-                f"- Title score: {title_score:.2f}, Artist score: {artist_score:.2f}"
+                f"Deezer candidate '{candidate['title']}' by "
+                f"'{candidate_artist or 'Unknown'}' - title {title_score:.2f}, "
+                f"artist {artist_score:.2f}"
             )
+            if best is None or combined > best[0]:
+                best = (combined, candidate, title_score, artist_score)
 
-            if album_score > best_score:
-                best_score = album_score
-                best_match = (album, title_score, artist_score)
-
-        return best_match
+        if best is None or best[0] < FUZZY_MATCH_THRESHOLD:
+            return None
+        return best[1], best[2], best[3]
 
     async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """
@@ -160,7 +147,13 @@ class DeezerPlugin(EnricherPlugin):
             # "&amp;" find nothing as-is.
             search_name = space_dotted_abbreviations(
                 unescape_web_entities(
-                    repair_mojibake(artist["name"], self.config.legacy_tag_encoding)
+                    repair_mojibake(
+                        await best_search_name(
+                            self.db_manager, "artist", artist["id"], "name",
+                            artist["name"],
+                        ),
+                        self.config.legacy_tag_encoding,
+                    )
                 )
             )
             search_url = "https://api.deezer.com/search/artist"
@@ -188,8 +181,7 @@ class DeezerPlugin(EnricherPlugin):
                 if not deezer_artist.get("name"):
                     continue
 
-                # Calculate artist name match score
-                name_score = self._fuzzy_match_score(
+                name_score = truncated_name_similarity(
                     deezer_artist["name"], search_name
                 )
 
@@ -265,18 +257,15 @@ class DeezerPlugin(EnricherPlugin):
         )
 
     async def enrich_album(self, album: Dict) -> Optional[Dict]:
-        """
-        Enrich album with cover artwork from Deezer API using improved 3-step search
+        """Fill an album's cover from Deezer, or leave it alone.
 
-        Uses a three-step approach:
-        1. Structured search with fuzzy matching on title only
-        2. Simple search with fuzzy matching on both album and artist
-        3. Cleaned search (removing braces) with fuzzy matching on both
+        The structured query is tried first because it is the precise one;
+        the free-text query then catches records whose title differs in
+        wording from the local tag. Both are scored the same way.
         """
-        # Skip if album is already enriched or has an image_url
-        if album.get("enriched") or album.get("image_url"):
+        if has_real_cover(album):
             logger.debug(
-                f"Album {album['title']} already has cover art or is enriched, skipping Deezer lookup"
+                f"Album {album['title']} already has cover art, skipping Deezer lookup"
             )
             return None
 
@@ -291,18 +280,27 @@ class DeezerPlugin(EnricherPlugin):
                 f"Searching for album cover on Deezer: {album['title']} by {artist_name}"
             )
 
-            # Try each search step in order
-            result = await self._search_step_1_structured(album, artist_name)
-            if result:
-                return result
-
-            result = await self._search_step_2_simple(album, artist_name)
-            if result:
-                return result
-
-            result = await self._search_step_3_cleaned(album, artist_name)
-            if result:
-                return result
+            for template in _ALBUM_QUERIES:
+                query = template.format(artist=artist_name, title=album["title"])
+                match = self._find_best_album_match(
+                    await self._search_albums(query), album["title"], artist_name
+                )
+                if not match:
+                    continue
+                deezer_album, title_score, artist_score = match
+                logger.info(
+                    f"Deezer matched '{album['title']}' by '{artist_name}' to "
+                    f"'{deezer_album['title']}' by "
+                    f"'{deezer_album['artist']['name']}' "
+                    f"(title {title_score:.2f}, artist {artist_score:.2f})"
+                )
+                # A match with no cover is no use here; the next query may
+                # find the same record on a release that has one.
+                processed = await self._process_album_match(
+                    deezer_album, album, artist_name
+                )
+                if processed:
+                    return processed
 
             logger.info(
                 f"No good matches found for album: {album['title']} by {artist_name}"
@@ -320,191 +318,31 @@ class DeezerPlugin(EnricherPlugin):
             return None
 
     async def _get_artist_name(self, album: Dict) -> Optional[str]:
-        """Get artist name from album data"""
-        if "artist_name" in album:
-            return album["artist_name"]
-        elif "artist_id" in album:
-            artist = await self.db_manager.get_artist_by_id(album["artist_id"])
-            if artist and "name" in artist:
-                return artist["name"]
-        return None
-
-    async def _search_step_1_structured(
-        self, album: Dict, artist_name: str
-    ) -> Optional[Dict]:
-        """Step 1: Structured search with fuzzy matching on title only"""
-        logger.debug(
-            f"Step 1: Structured search for '{album['title']}' by '{artist_name}'"
+        """The album artist's name, as an external catalogue would spell it."""
+        name = album.get("artist_name")
+        artist_id = album.get("artist_id")
+        if not name and artist_id:
+            artist = await self.db_manager.get_artist_by_id(artist_id)
+            name = (artist or {}).get("name")
+        if not name:
+            return None
+        if not artist_id:
+            return name
+        return await best_search_name(
+            self.db_manager, "artist", artist_id, "name", name
         )
 
-        search_url = "https://api.deezer.com/search/album"
+    async def _search_albums(self, query: str) -> list:
+        """One album search against Deezer; ``[]`` when it has nothing to say."""
         response = await self.async_client.get(
-            search_url,
-            params={
-                "q": f"artist:{artist_name} album:{album['title']}",
-                "limit": 5,
-            },
+            "https://api.deezer.com/search/album",
+            params={"q": query, "limit": 10},
         )
         raise_if_service_unavailable(response.status_code, "Deezer")
-
         if response.status_code != 200:
-            logger.error(
-                f"Step 1: Failed to search Deezer for album {album['title']}: {response.status_code}"
-            )
-            return None
-
-        data = response.json()
-        if not ("data" in data and data["data"]):
-            return None
-
-        # Find best match using fuzzy matching
-        best_match = self._find_best_album_match(
-            data["data"], album["title"], artist_name
-        )
-
-        if not best_match:
-            return None
-
-        deezer_album, title_score, artist_score = best_match
-
-        # If title score is > 0.9, use this result
-        if title_score > FUZZY_MATCH_THRESHOLD:
-            logger.info(
-                f"Step 1: Found good match for '{album['title']}' - "
-                f"'{deezer_album['title']}' (score: {title_score:.2f})"
-            )
-            return await self._process_album_match(deezer_album, album, artist_name)
-
-        return None
-
-    async def _search_step_2_simple(
-        self, album: Dict, artist_name: str
-    ) -> Optional[Dict]:
-        """Step 2: Simple search with fuzzy matching on both album and artist"""
-        logger.debug(f"Step 2: Simple search for '{album['title']}'")
-
-        search_url = "https://api.deezer.com/search/album"
-        response = await self.async_client.get(
-            search_url,
-            params={
-                "q": album["title"],
-                "limit": 10,
-            },
-        )
-        raise_if_service_unavailable(response.status_code, "Deezer")
-
-        if response.status_code != 200:
-            logger.error(
-                f"Step 2: Failed simple search on Deezer for album {album['title']}: {response.status_code}"
-            )
-            return None
-
-        data = response.json()
-        if not ("data" in data and data["data"]):
-            return None
-
-        # Find best match considering both album and artist scores
-        for deezer_album in data["data"]:
-            if not deezer_album.get("title"):
-                continue
-
-            title_score = self._fuzzy_match_score(deezer_album["title"], album["title"])
-            artist_score = 0.0
-
-            if deezer_album.get("artist") and deezer_album["artist"].get("name"):
-                artist_score = self._fuzzy_match_score(
-                    deezer_album["artist"]["name"], artist_name
-                )
-
-            logger.debug(
-                f"Step 2: Album '{deezer_album['title']}' by '{deezer_album.get('artist', {}).get('name', 'Unknown')}' "
-                f"- Title: {title_score:.2f}, Artist: {artist_score:.2f}"
-            )
-
-            # Both scores need to be >= 0.9
-            if (
-                title_score >= FUZZY_MATCH_THRESHOLD
-                and artist_score >= FUZZY_MATCH_THRESHOLD
-            ):
-                logger.info(
-                    f"Step 2: Found excellent match for '{album['title']}' by '{artist_name}' - "
-                    f"'{deezer_album['title']}' by '{deezer_album['artist']['name']}' "
-                    f"(title: {title_score:.2f}, artist: {artist_score:.2f})"
-                )
-                return await self._process_album_match(deezer_album, album, artist_name)
-
-        return None
-
-    async def _search_step_3_cleaned(
-        self, album: Dict, artist_name: str
-    ) -> Optional[Dict]:
-        """Step 3: Search with cleaned album title (removing text in braces)"""
-        cleaned_album_title = self._remove_text_in_braces(album["title"])
-
-        # Only try step 3 if the cleaned title is different from the original
-        if cleaned_album_title == album["title"] or not cleaned_album_title.strip():
-            return None
-
-        logger.debug(
-            f"Step 3: Cleaned title search for '{cleaned_album_title}' (original: '{album['title']}')"
-        )
-
-        search_url = "https://api.deezer.com/search/album"
-        response = await self.async_client.get(
-            search_url,
-            params={
-                "q": cleaned_album_title,
-                "limit": 15,
-            },
-        )
-        raise_if_service_unavailable(response.status_code, "Deezer")
-
-        if response.status_code != 200:
-            logger.error(
-                f"Step 3: Failed cleaned search on Deezer for album {album['title']}: {response.status_code}"
-            )
-            return None
-
-        data = response.json()
-        if not ("data" in data and data["data"]):
-            return None
-
-        # Find best match considering both album and artist scores with cleaned title
-        for deezer_album in data["data"]:
-            if not deezer_album.get("title"):
-                continue
-
-            # Compare with cleaned titles for both
-            cleaned_deezer_title = self._remove_text_in_braces(deezer_album["title"])
-            title_score = self._fuzzy_match_score(
-                cleaned_deezer_title, cleaned_album_title
-            )
-            artist_score = 0.0
-
-            if deezer_album.get("artist") and deezer_album["artist"].get("name"):
-                artist_score = self._fuzzy_match_score(
-                    deezer_album["artist"]["name"], artist_name
-                )
-
-            logger.debug(
-                f"Step 3: Album '{deezer_album['title']}' (cleaned: '{cleaned_deezer_title}') "
-                f"by '{deezer_album.get('artist', {}).get('name', 'Unknown')}' "
-                f"- Title: {title_score:.2f}, Artist: {artist_score:.2f}"
-            )
-
-            # Both scores need to be > 0.9
-            if (
-                title_score > FUZZY_MATCH_THRESHOLD
-                and artist_score > FUZZY_MATCH_THRESHOLD
-            ):
-                logger.info(
-                    f"Step 3: Found excellent match with cleaned title for '{album['title']}' by '{artist_name}' - "
-                    f"'{deezer_album['title']}' by '{deezer_album['artist']['name']}' "
-                    f"(cleaned title: {title_score:.2f}, artist: {artist_score:.2f})"
-                )
-                return await self._process_album_match(deezer_album, album, artist_name)
-
-        return None
+            logger.error(f"Deezer album search failed: {response.status_code}")
+            return []
+        return response.json().get("data") or []
 
     async def _process_album_match(
         self, deezer_album: Dict, album: Dict, artist_name: str

@@ -84,6 +84,24 @@ class _Pacer:
 _pacer = _Pacer(_MIN_INTERVAL, _MAX_IN_FLIGHT)
 
 
+def set_user_agent(user_agent: str) -> None:
+    """Identify this client to MusicBrainz, which rejects anonymous callers.
+
+    musicbrainzngs keeps the identification on the module, so whichever
+    plugin is constructed first supplies it for every caller. Each plugin
+    that reaches MusicBrainz sets it, rather than relying on another plugin
+    being enabled.
+
+    @param user_agent A ``name/version (contact)`` string, split into the
+        three parts musicbrainzngs takes separately.
+    """
+    name, _, rest = user_agent.partition("/")
+    version, _, contact = rest.partition(" ")
+    musicbrainzngs.set_useragent(
+        name.strip() or "Kalinka", version.strip() or "1.0", contact.strip("() ")
+    )
+
+
 async def mb_call(fn, *args, **kwargs):
     """Await one paced MusicBrainz call, executed off the event loop.
 

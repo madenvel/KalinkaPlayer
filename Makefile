@@ -145,6 +145,11 @@ test:
 	@cd packages/kalinka-plugin-sdk && python -m pytest tests/ -v
 	@cd packages/kalinka-server && python -m pytest ../../tests/ -v
 
+## Catch names that do not exist before a user does
+lint:
+	@echo "Checking for undefined names..."
+	@python -m flake8 --select=F821,F822 packages/*/src
+
 ## Helper function to move debs to debs directory
 copy-debs:
 	@rm -rf debs
@@ -200,5 +205,6 @@ help:
 	@echo "  build-all-deb     Build all deb packages (server, plugins, renderer) and move to debs/"
 	@echo "  copy-debs         Move built deb packages to debs/ directory"
 	@echo "  test              Run all tests"
+	@echo "  lint              Check for undefined names (F821)"
 	@echo "  clean             Clean build artifacts"
 	@echo "  help              Show this help message"

@@ -1,0 +1,153 @@
+"""Pick an album's cover from the image files sitting beside its audio.
+
+A rip often ships its sleeve as ordinary files in the album folder — the scan
+its owner made, or the cover a downloader saved — and for a vinyl needledrop
+that is the most authoritative art available: a photograph of the object that
+was actually played, needing no network and no match.
+
+Their names rarely say which is the front (``beatles_abbey_1.jpg`` beside
+``beatles_abbey_d1.jpg``), so the choice is made from what the files *are*,
+with the name only breaking ties.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from typing import List, NamedTuple, Optional
+
+from PIL import Image
+
+#: A cheap pre-filter on the *name*, so most files are ruled out without
+#: being opened; the real format is whatever the header turns out to say,
+#: and rips do misname things (a "pic.gif" holding a JPEG). Archival
+#: extensions are left out deliberately: TIFF sits beside a rip only rarely
+#: and one sleeve scan can run to hundreds of megabytes.
+_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif")
+
+#: The memory guard, applied to the directory entry before the file is
+#: opened at all. Real cover art does not come close; archival scans do.
+_MAX_BYTES = 32 * 1024 * 1024
+#: Pillow refuses to decode beyond this, so anything larger is declined here
+#: rather than raised over later. A 600 dpi scan of a 12" sleeve is ~53 Mpx
+#: and stays comfortably inside it.
+_MAX_PIXELS = Image.MAX_IMAGE_PIXELS or 89_478_485
+
+_PREFERRED_RE = re.compile(r"(cover|front|folder|albumart|album[ _-]?art|sleeve)", re.I)
+_REJECTED_RE = re.compile(
+    r"(back|rear|inlay|inside|booklet|disc|cd\d|label|obi|tray|spine|matrix|thumb)",
+    re.I,
+)
+_ORDINAL_RE = re.compile(r"(\d+)\s*$")
+
+#: A sleeve and a disc label scanned at one resolution differ by their real
+#: sizes — a 31 cm sleeve against a 10 cm label is about three to one — and
+#: both are square, so nothing else separates them. Half the largest is a
+#: generous floor that keeps the sleeve and drops the label.
+_MIN_RELATIVE_SIDE = 0.5
+
+#: Covers are square give or take a scan border. This only has to exclude
+#: shapes that cannot be one: a spine, a panorama, an open booklet spread.
+_MIN_ASPECT, _MAX_ASPECT = 0.5, 2.0
+
+
+class _Candidate(NamedTuple):
+    path: str
+    width: int
+    height: int
+
+    @property
+    def longest_side(self) -> int:
+        return max(self.width, self.height)
+
+    @property
+    def ordinal(self) -> int:
+        """The number the name ends with, or 0. Scan sets run front-first."""
+        match = _ORDINAL_RE.search(_stem(self.path))
+        return int(match.group(1)) if match else 0
+
+
+def _stem(path: str) -> str:
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def _directories(folder: str) -> List[str]:
+    """``folder`` and its immediate subdirectories, in a stable order.
+
+    Scans are often filed under PIC/, Artwork/ or Scans/ rather than beside
+    the audio, so one level down is searched too — but no further, to keep a
+    deep tree of unrelated images out.
+    """
+    try:
+        children = sorted(os.listdir(folder))
+    except OSError:
+        return []
+    return [folder] + [
+        os.path.join(folder, name)
+        for name in children
+        if os.path.isdir(os.path.join(folder, name))
+    ]
+
+
+def _image_paths(folder: str) -> List[str]:
+    """Admissible image files, cheaply filtered — no file is opened here."""
+    paths: List[str] = []
+    for directory in _directories(folder):
+        try:
+            entries = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in entries:
+            if not name.lower().endswith(_EXTENSIONS):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                if not os.path.isfile(path) or os.path.getsize(path) > _MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            paths.append(path)
+    return paths
+
+
+def _measure(path: str) -> Optional[_Candidate]:
+    """Dimensions read from the header, or None when the file is unusable."""
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except Exception:
+        return None
+    if not width or not height or width * height > _MAX_PIXELS:
+        return None
+    return _Candidate(path, width, height)
+
+
+def find_folder_cover(folder: str) -> Optional[str]:
+    """The image in ``folder`` most likely to be its front cover, or None.
+
+    @param folder The album's directory; its immediate subdirectories are
+        searched too.
+    @return A path to an existing image, or None when the folder offers
+        nothing that could be a cover.
+    """
+    if not folder:
+        return None
+    candidates = [c for c in map(_measure, _image_paths(folder)) if c is not None]
+
+    # A name that says "cover" settles it, whatever the shape.
+    named = [c for c in candidates if _PREFERRED_RE.search(_stem(c.path))]
+    if named:
+        return max(named, key=lambda c: (c.longest_side, c.path)).path
+
+    candidates = [
+        c
+        for c in candidates
+        if not _REJECTED_RE.search(_stem(c.path))
+        and _MIN_ASPECT <= c.width / c.height <= _MAX_ASPECT
+    ]
+    if not candidates:
+        return None
+
+    floor = max(c.longest_side for c in candidates) * _MIN_RELATIVE_SIDE
+    sleeves = [c for c in candidates if c.longest_side >= floor]
+    return min(sleeves, key=lambda c: (c.ordinal, -c.longest_side, c.path)).path

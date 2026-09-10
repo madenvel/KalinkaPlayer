@@ -158,6 +158,27 @@ class AsyncIndexerDb(ProvenanceDb):
             )
             return [(row[0], row[1]) for row in await cursor.fetchall()]
 
+    async def get_albums_without_cover(self) -> List[Tuple[str, str]]:
+        """(album_id, one member file_path) for albums with no real cover.
+
+        Unlike :meth:`get_albums_missing_art` this asks nothing of the files:
+        a folder's sleeve scan is there whether or not any track embeds a
+        picture, so gating on ``art_phash`` would hide exactly the albums
+        this is for.
+        """
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT a.id, MIN(t.file_path) FROM albums a
+                JOIN tracks t ON t.album_id = a.id
+                WHERE (a.image_url IS NULL OR a.image_generated = 1)
+                  AND a.id != 'unknown_album'
+                GROUP BY a.id
+                """
+            )
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+
     async def get_singles_missing_art(self) -> List[Tuple[str, str]]:
         """(track_id, file_path) for unknown_album tracks whose file embeds a
         cover (evidence art_phash) but that carry no track-level image yet."""

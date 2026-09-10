@@ -7,7 +7,7 @@ import importlib.util
 import json
 import logging
 import time
-from typing import NamedTuple, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 from ..config_model import LocalFilesConfig
 from ..resolution.resolver import (
@@ -21,7 +21,7 @@ from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
 from ..worker_utils import nudge
 
-from .enricher_plugin import TransientEnrichmentError
+from .enricher_plugin import TransientEnrichmentError, has_real_cover
 from .service_backoff import ServiceBackoff
 from .service_timings import ServiceTimings
 from .musicbrainz_plugin import MusicBrainzPlugin
@@ -62,6 +62,14 @@ TRACK_DESIRED_FIELDS = [
 # they must not gate whether we keep calling fetch plugins — only these do. The
 # full DESIRED set still gates the top-level "already done, skip the pass" check.
 ALBUM_FETCH_FIELDS = ["title", "artist_id", "mbid", "image_url"]
+
+
+def _album_has(album: Dict, field: str) -> bool:
+    """One desired field's presence, counting a generated cover as absent."""
+    if field == "image_url":
+        return has_real_cover(album)
+    return bool(album.get(field))
+
 
 # Origin/era fields resolved external-first (Phase 2d slice 3). A local tag
 # value is an `observed` claim; a fuzzy MB match is `inferred`, so for
@@ -747,7 +755,7 @@ class MetadataEnricher:
         # Desired = full target set (external id, cover, year, genre). Reaching
         # it lets us skip the plugins; not reaching it is fine (see the tail).
         is_desired_complete = all(
-            updated_album.get(field) for field in ALBUM_DESIRED_FIELDS
+            _album_has(updated_album, field) for field in ALBUM_DESIRED_FIELDS
         )
         if is_desired_complete:
             logger.debug(f"Album {album['id']} already has all desired fields")
@@ -776,7 +784,7 @@ class MetadataEnricher:
             emitted_claims,
             lambda p: p.can_enrich_album(),
             lambda p, e: p.enrich_album(e),
-            lambda e: all(e.get(f) for f in ALBUM_FETCH_FIELDS),
+            lambda e: all(_album_has(e, f) for f in ALBUM_FETCH_FIELDS),
         )
         had_updates = had_updates or chain_updates
 

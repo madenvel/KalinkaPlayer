@@ -182,6 +182,7 @@ class AsyncEnricherDb(ProvenanceDb):
         cleared: a changed setup may now find a real cover the generated one
         would mask (art plugins skip albums whose ``image_url`` is set). If
         nothing better turns up, the generator re-derives the identical cover.
+
         """
         counts: Dict[str, int] = {"artists": 0, "albums": 0, "tracks": 0}
         await cursor.execute(
@@ -241,6 +242,15 @@ class AsyncEnricherDb(ProvenanceDb):
         Read, reset and store run in a single transaction so a crash
         can't leave the fingerprint advanced while the rows stay FAILED.
 
+        Artists that ended up with no picture are re-opened here too, and
+        only here. An artist MusicBrainz identified is ENRICHED and carries
+        an mbid, so none of the shared rules reaches it — which made a
+        broken image source permanent, closing every artist it was asked
+        about for good. Unlike a generated album cover, there is nothing to
+        clear that would stop the rule matching again, so it belongs on the
+        one path that fires once per change of setup rather than on the
+        unconditional sweep.
+
         Returns the per-entity reset counts when a reset happened, or
         ``None`` when the fingerprint was unchanged and FAILED rows were
         left intact.
@@ -257,6 +267,12 @@ class AsyncEnricherDb(ProvenanceDb):
                 return None
 
             counts = await self._reset_failed_rows(cursor)
+            await cursor.execute(
+                "UPDATE artists SET enriched = 0 WHERE enriched != 0 "
+                "AND (image_url IS NULL OR image_url = '') "
+                "AND id != 'unknown_artist'"
+            )
+            counts["artists"] += cursor.rowcount or 0
             await cursor.execute(
                 "INSERT INTO enricher_state (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -356,6 +372,24 @@ class AsyncEnricherDb(ProvenanceDb):
                 ],
             )
             await conn.commit()
+
+    async def get_release_group_for_release(self, release_id: str) -> Optional[str]:
+        """The release-group mbid recorded for a release, or None.
+
+        Keyed on the release rather than the album's accepted candidate: a
+        candidate is only marked accepted at ``TRACKLIST_ACCEPT_COVERAGE``,
+        while the album's ``mbid`` is committed regardless — so an album can
+        carry a release id that no accepted row mentions.
+        """
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT rg_id FROM release_candidates "
+                "WHERE release_id = ? AND rg_id IS NOT NULL LIMIT 1",
+                (release_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
 
     async def get_accepted_release_candidate(self, album_id: str) -> Optional[Dict]:
         """The album's accepted release candidate with its ``track_map`` decoded,

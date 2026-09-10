@@ -27,7 +27,7 @@ from .match_utils import (
     tracklist_coverage_bonus,
 )
 from .keyed_lock import KeyedLock
-from .mb_client import mb_call
+from .mb_client import mb_call, set_user_agent
 from .tracklist_align import Alignment, align_tracklist
 
 logger = logging.getLogger(__name__.split(".")[-1])
@@ -55,6 +55,47 @@ def _same_release_group(a: Dict, b: Dict) -> bool:
     return bool(a_id and b_id and a_id == b_id)
 
 
+def _has_front_art(release: Dict) -> bool:
+    """Whether the Cover Art Archive holds a front cover for this release.
+
+    MusicBrainz reports this on every release lookup, so reading it costs no
+    request of its own.
+
+    @note The values arrive as the strings ``"true"``/``"false"``, both of
+        which are truthy, so they are compared rather than tested.
+    """
+    return (release.get("cover-art-archive") or {}).get("front") == "true"
+
+
+def _prefer_illustrated(scored: List[tuple]) -> List[tuple]:
+    """Promote a release that has cover art over an equally-scoring one.
+
+    The album score saturates at its ceiling on anything well catalogued, so
+    several pressings of one sleeve routinely tie and the winner is settled
+    by whatever order MusicBrainz replied in. Where the choice is that
+    arbitrary, take the pressing that can actually be illustrated.
+
+    Only ever reorders releases of one release group, so it never trades one
+    album for another, and the caller has already decided to commit.
+    """
+    top_cand, top_score = scored[0][0], scored[0][1]
+    if _has_front_art(scored[0][3]):
+        return scored
+    illustrated = next(
+        (
+            t
+            for t in scored[1:]
+            if top_score - t[1] < ALBUM_MATCH_MIN_MARGIN
+            and _same_release_group(top_cand, t[0])
+            and _has_front_art(t[3])
+        ),
+        None,
+    )
+    if illustrated is None:
+        return scored
+    return [illustrated, *[t for t in scored if t is not illustrated]]
+
+
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
@@ -62,7 +103,10 @@ class MusicBrainzPlugin(EnricherPlugin):
     # mis-recorded before re-open on this bump.
     # 3: similarity judged against MB aliases too, so rows the whole-name
     # floor rejected (curated short forms) re-open.
-    ENRICHER_VERSION = 3
+    # 4: releases that tie within the ambiguity margin now prefer one the
+    # Cover Art Archive can illustrate, so albums that matched an
+    # unphotographed pressing re-open.
+    ENRICHER_VERSION = 4
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -99,12 +143,7 @@ class MusicBrainzPlugin(EnricherPlugin):
         self._release_locks = KeyedLock()
         self._accepted_map_locks = KeyedLock()
 
-        # Set up MusicBrainz API
-        musicbrainzngs.set_useragent(
-            self.user_agent.split("/")[0],
-            self.user_agent.split("/")[1].split(" ")[0],
-            self.user_agent.split(" ", 1)[1].strip("()"),
-        )
+        set_user_agent(self.user_agent)
 
     def config_signature(self) -> Dict:
         # Thresholds and the string-similarity floor decide whether a
@@ -603,6 +642,10 @@ class MusicBrainzPlugin(EnricherPlugin):
                     best_score - runner_up_score < ALBUM_MATCH_MIN_MARGIN
                     and not _same_release_group(best, runner_up_cand)
                 )
+
+            if not held:
+                scored = _prefer_illustrated(scored)
+                best, best_score, best_similarity, mb_release_data = scored[0]
 
             release_mbid = best["id"]
 
