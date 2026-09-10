@@ -36,7 +36,8 @@ from ..resolution.resolver import (
     OBSERVED,
     TAG_CONSENSUS,
 )
-from ..utils.artwork_store import save_artwork_images
+from ..utils.artwork_store import save_artwork_from_path, save_artwork_images
+from ..utils.folder_art import find_folder_cover
 from ..worker_utils import nudge
 from ..utils.mount_status import (
     RootStatus,
@@ -317,6 +318,13 @@ class FileIndexer:
             logger.info(
                 "Embedded art restored for %d album(s) and %d single(s)",
                 backfilled["albums"], backfilled["tracks"],
+            )
+
+        from_folders = await self.backfill_folder_art(available_folders)
+        if from_folders["albums"]:
+            logger.info(
+                "Cover taken from the album folder for %d album(s)",
+                from_folders["albums"],
             )
 
         # If anything changed and we have an enricher callback, notify it
@@ -1179,6 +1187,44 @@ class FileIndexer:
                     track_id, {"image_url": f"{track_id}.jpg"}
                 )
                 counts["tracks"] += 1
+        return counts
+
+    async def backfill_folder_art(
+        self, available_folders: List[str]
+    ) -> Dict[str, int]:
+        """Take covers from image files sitting in the album's own folder.
+
+        Runs after the embedded-art pass, so a picture inside the file still
+        wins: it is unambiguously this record's, while a folder may hold a
+        whole sleeve set. What is left is the case nothing else covers — a
+        needledrop or a download whose art was saved beside the audio rather
+        than tagged into it, which no online source can improve on.
+
+        Costs one directory listing plus a header read per candidate image,
+        for albums that have no real cover yet; a recorded ``image_url``
+        stops repeats.
+        """
+        counts = {"albums": 0}
+        for album_id, file_path in await self.db_manager.get_albums_without_cover():
+            if root_of(file_path, available_folders) is None:
+                continue
+            folder = album_folder_for_path(file_path)
+            cover = await asyncio.to_thread(find_folder_cover, folder)
+            if not cover:
+                continue
+            if not await asyncio.to_thread(
+                save_artwork_from_path,
+                self.artwork_path,
+                cover,
+                album_id,
+                "album",
+            ):
+                continue
+            await self.db_manager.update_album(
+                album_id, {"image_url": f"{album_id}.jpg", "image_generated": 0}
+            )
+            counts["albums"] += 1
+            logger.info(f"Cover for album {album_id} taken from {cover}")
         return counts
 
     async def _restore_embedded_art(

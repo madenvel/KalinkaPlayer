@@ -107,13 +107,21 @@ def test_musicbrainz_exhausted_rate_limit_is_transient():
         raise_musicbrainz_unreachable(error)
 
 
+class _NoClaims:
+    """A library that has learned nothing about these entities yet, so every
+    lookup falls back to the name on the row."""
+
+    async def get_claims(self, entity_type, entity_id, field):
+        return []
+
+
 def _deezer(tmp_path):
     config = LocalFilesConfig(
         music_folders=[str(tmp_path)],
         db_path=str(tmp_path / "localfiles.db"),
         artwork_path=str(tmp_path / "artwork"),
     )
-    return DeezerPlugin(config, db_manager=None)
+    return DeezerPlugin(config, db_manager=_NoClaims())
 
 
 @pytest.mark.asyncio

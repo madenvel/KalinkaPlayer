@@ -9,6 +9,7 @@ from ..utils.artwork_store import save_artwork_images
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
+    has_real_cover,
     raise_if_service_unavailable,
 )
 
@@ -22,6 +23,10 @@ _TIMEOUT = httpx.Timeout(15.0, pool=120.0)
 # The archive's pre-rendered thumbnail closest above our largest stored size
 # (600px): full-resolution scans can run to many megabytes.
 _FRONT_URL = "https://coverartarchive.org/release/{mbid}/front-1200"
+# Cover art is a property of the artwork, not of one pressing, so the group
+# answers for releases nobody has photographed. MusicBrainz frequently picks
+# an obscure pressing out of dozens that share a sleeve.
+_GROUP_FRONT_URL = "https://coverartarchive.org/release-group/{mbid}/front-1200"
 
 
 class CoverArtArchivePlugin(EnricherPlugin):
@@ -35,7 +40,9 @@ class CoverArtArchivePlugin(EnricherPlugin):
     that MusicBrainz nonetheless catalogues.
     """
 
-    ENRICHER_VERSION = 1
+    # 2: a release with no cover of its own falls back to its release
+    # group, which is where a sleeve shared by dozens of pressings lives.
+    ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -63,15 +70,14 @@ class CoverArtArchivePlugin(EnricherPlugin):
     async def enrich_track(self, track: Dict) -> Optional[Dict]:
         return None
 
-    async def enrich_album(self, album: Dict) -> Optional[Dict]:
-        if album.get("image_url") and not album.get("image_generated"):
-            return None
-        mbid = album.get("mbid")
-        if not mbid:
-            return None
+    async def _fetch(self, url: str, mbid: str) -> Optional[httpx.Response]:
+        """The archive's answer for one URL, or None when it has no art.
 
+        A 404 is an answer — this entity has no cover — while a throttle or
+        server fault is not, and is raised so the row stays pending.
+        """
         try:
-            response = await self.async_client.get(_FRONT_URL.format(mbid=mbid))
+            response = await self.async_client.get(url)
         except httpx.HTTPError as e:
             raise TransientEnrichmentError(
                 f"Cover Art Archive is unreachable: {e}"
@@ -79,13 +85,31 @@ class CoverArtArchivePlugin(EnricherPlugin):
 
         raise_if_service_unavailable(response.status_code, "Cover Art Archive")
         if response.status_code == 404:
-            logger.debug(f"No archived cover for release {mbid}")
+            logger.debug(f"No archived cover for {mbid}")
             return None
         if response.status_code != 200:
             logger.warning(
                 f"Cover Art Archive returned {response.status_code} for {mbid}"
             )
             return None
+        return response
+
+    async def enrich_album(self, album: Dict) -> Optional[Dict]:
+        if has_real_cover(album):
+            return None
+        mbid = album.get("mbid")
+        if not mbid:
+            return None
+
+        response = await self._fetch(_FRONT_URL.format(mbid=mbid), mbid)
+        if response is None:
+            # This pressing has no cover of its own; ask what the sleeve is.
+            rg_id = await self.db_manager.get_release_group_for_release(mbid)
+            if not rg_id:
+                return None
+            response = await self._fetch(_GROUP_FRONT_URL.format(mbid=rg_id), rg_id)
+            if response is None:
+                return None
 
         if not save_artwork_images(
             self.artwork_path, response.content, album["id"], "album"

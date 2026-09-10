@@ -32,9 +32,12 @@ import gc
 import logging
 import os
 import urllib.request
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:  # imported lazily at the call site; heavy to load
+    import soundfile
 
 from ..embedding_utils import VA_HEAD_VERSION
 

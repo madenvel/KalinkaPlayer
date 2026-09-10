@@ -7,10 +7,11 @@ from typing import Dict, Optional
 
 from ..config_model import LocalFilesConfig
 from ..utils.artwork_store import save_artwork_images
-from .mb_client import mb_call
+from .mb_client import mb_call, set_user_agent
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
+    raise_if_service_unavailable,
     raise_musicbrainz_unreachable,
 )
 
@@ -31,15 +32,22 @@ _TIMEOUT = httpx.Timeout(5.0, pool=120.0)
 class WikidataPlugin(EnricherPlugin):
     """Wikidata enrichment plugin for artist images"""
 
-    ENRICHER_VERSION = 1
+    # 2: image lookups never completed at all — the module called
+    # raise_if_service_unavailable without importing it — so every artist
+    # this plugin was asked about deserves another attempt.
+    ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
         self.db_manager = db_manager
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
 
-        # Set a proper User-Agent to avoid 403 errors from Wikimedia
+        # Wikimedia answers an unidentified client with 403, and MusicBrainz
+        # — reached here for the Wikidata link — refuses it outright. The
+        # latter is module-wide state, so it cannot be left to whether the
+        # MusicBrainz plugin happens to be enabled.
         user_agent = config.enricher.plugins.user_agent
+        set_user_agent(user_agent)
 
         # The connection cap is the rate limit now that entities are enriched
         # concurrently: requests past it queue rather than hitting Wikimedia

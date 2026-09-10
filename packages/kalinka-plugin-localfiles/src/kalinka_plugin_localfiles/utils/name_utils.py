@@ -19,6 +19,10 @@ Three concerns live here:
   folder-bounded: same album in two quality folders produces two
   distinct album IDs, while ``Disc 1`` and ``Disc 2`` of one set merge.
 
+- ``fold_for_provider_match`` / ``name_similarity``: comparison-only
+  normalization and scoring, used when asking an external catalogue whether
+  it holds the same record. Never stored.
+
 Keeping these in one place avoids drift between the indexer's
 ``id_generator.py`` and the enricher's copy.
 """
@@ -31,6 +35,8 @@ import re
 import unicodedata
 
 import ftfy
+from rapidfuzz import fuzz
+
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Optional
@@ -258,3 +264,84 @@ def normalize_for_id(name: str) -> str:
     n = _NON_WORD_RE.sub("", n)
     n = _WHITESPACE_RUN_RE.sub(" ", n).strip()
     return n
+
+
+# Bracketed qualifiers a catalogue adds to the same record. Matching has to
+# see through them; ``normalize_album_title`` deliberately keeps descriptive
+# parentheticals, so this is a separate, comparison-only fold.
+_EDITION_WORDS = (
+    "remaster|remastered|deluxe|expanded|edition|anniversary|reissue|"
+    "mono|stereo|version|bonus|remix|explicit|clean"
+)
+_EDITION_PAREN_RE = re.compile(
+    rf"\s*[\(\[\{{][^)\]\}}]*(?:{_EDITION_WORDS})[^)\]\}}]*[\)\]\}}]",
+    re.IGNORECASE,
+)
+_ROMAN_TAIL_RE = re.compile(
+    r"(?<=\S)\s+(II|III|IV|VI|VII|VIII|IX|V|X)$", re.IGNORECASE
+)
+_ROMAN_VALUES = {
+    "ii": "2", "iii": "3", "iv": "4", "v": "5",
+    "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
+}
+
+# A tag field cut short is only evidence of the same name when enough of it
+# survives: a six-character floor and a 40% ratio keep "Int" from matching
+# every name it happens to begin.
+_MIN_TRUNCATED_CHARS = 6
+_MIN_TRUNCATED_RATIO = 0.4
+
+
+def fold_for_provider_match(text: str) -> str:
+    """Normalize a title or name for comparison against an external catalogue.
+
+    Providers list one record under edition-qualified names ("Abbey Road
+    (Remastered)") and spell sequels in roman numerals where a local tag
+    uses digits, so both are folded away before similarity is measured.
+    Comparison only — the result is never stored or shown.
+    """
+    if not text:
+        return ""
+    folded = _EDITION_PAREN_RE.sub(" ", text)
+    folded = _WHITESPACE_RUN_RE.sub(" ", folded).strip()
+    # Only a trailing numeral that follows a word: an album actually titled
+    # "X" or "V" must survive untouched.
+    match = _ROMAN_TAIL_RE.search(folded)
+    if match:
+        folded = folded[: match.start()] + " " + _ROMAN_VALUES[match.group(1).lower()]
+    return _WHITESPACE_RUN_RE.sub(" ", folded).strip().casefold()
+
+
+def name_similarity(left: str, right: str) -> float:
+    """Similarity of two names in 0..1, after the provider fold."""
+    a, b = fold_for_provider_match(left), fold_for_provider_match(right)
+    if not a or not b:
+        return 0.0
+    return fuzz.ratio(a, b) / 100.0
+
+
+def truncated_name_similarity(left: str, right: str) -> float:
+    """As :func:`name_similarity`, but tolerant of a name cut short.
+
+    Legacy fixed-width tag fields truncate mid-word — "Иванушки Int" for
+    "Иванушки International" — and a symmetric ratio counts the missing tail
+    against the match, scoring 0.71 where the evidence is actually strong.
+    When one folded name is a prefix of the other and enough of it survives,
+    the shared prefix decides instead.
+
+    @note Meant for artist names. Album titles are not scored this way: a
+        prefix there is as likely to be a different record in a series
+        ("Fairytale" against "Fairytale II") as a truncation.
+    """
+    a, b = fold_for_provider_match(left), fold_for_provider_match(right)
+    if not a or not b:
+        return 0.0
+    ratio = fuzz.ratio(a, b) / 100.0
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if (
+        longer.startswith(shorter)
+        and len(shorter) >= _MIN_TRUNCATED_CHARS
+        and len(shorter) / len(longer) >= _MIN_TRUNCATED_RATIO
+    ):
+        return max(ratio, fuzz.partial_ratio(a, b) / 100.0)
+    return ratio

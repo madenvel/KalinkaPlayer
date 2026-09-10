@@ -22,12 +22,24 @@ from kalinka_plugin_localfiles.enricher.enricher_plugin import (
 )
 
 
-def _plugin(tmp_path) -> CoverArtArchivePlugin:
+class _FakeDb:
+    """Only what the plugin asks of the database: a release's group, if known."""
+
+    def __init__(self, rg_id=None):
+        self.rg_id = rg_id
+        self.asked_for: list[str] = []
+
+    async def get_release_group_for_release(self, release_id):
+        self.asked_for.append(release_id)
+        return self.rg_id
+
+
+def _plugin(tmp_path, rg_id=None) -> CoverArtArchivePlugin:
     config = LocalFilesConfig(
         db_path=str(tmp_path / "db.sqlite"),
         artwork_path=str(tmp_path / "artwork"),
     )
-    return CoverArtArchivePlugin(config, db_manager=None)
+    return CoverArtArchivePlugin(config, db_manager=_FakeDb(rg_id))
 
 
 def _jpeg() -> bytes:
@@ -53,6 +65,21 @@ class FakeClient:
         if self._error is not None:
             raise self._error
         return self._response
+
+
+class RoutedClient:
+    """Answers per URL substring, so a release 404 and a group 200 coexist."""
+
+    def __init__(self, routes: dict):
+        self.routes = routes
+        self.requested: list[str] = []
+
+    async def get(self, url):
+        self.requested.append(url)
+        for fragment, response in self.routes.items():
+            if fragment in url:
+                return response
+        return FakeResponse(404)
 
 
 ALBUM = {"id": "album_1", "title": "Autumn prelude", "mbid": "mbid-1"}
@@ -132,3 +159,52 @@ async def test_undecodable_image_returns_no_update(tmp_path):
     p.async_client = FakeClient(FakeResponse(200, b"not an image"))
 
     assert await p.enrich_album(dict(ALBUM)) is None
+
+
+@pytest.mark.asyncio
+async def test_a_pressing_without_art_falls_back_to_its_release_group(tmp_path):
+    """MusicBrainz often matches an obscure pressing of a well-photographed
+    sleeve. The cover belongs to the artwork, so the group answers for it."""
+    p = _plugin(tmp_path, rg_id="rg-9")
+    p.async_client = RoutedClient(
+        {"/release/": FakeResponse(404), "/release-group/": FakeResponse(200, _jpeg())}
+    )
+
+    result = await p.enrich_album(dict(ALBUM))
+
+    assert result == {"updates": {"image_url": "album_1", "image_generated": 0}}
+    assert p.async_client.requested == [
+        "https://coverartarchive.org/release/mbid-1/front-1200",
+        "https://coverartarchive.org/release-group/rg-9/front-1200",
+    ]
+    assert p.db_manager.asked_for == ["mbid-1"]
+
+
+@pytest.mark.asyncio
+async def test_the_group_is_not_consulted_when_the_release_has_art(tmp_path):
+    p = _plugin(tmp_path, rg_id="rg-9")
+    p.async_client = RoutedClient({"/release/": FakeResponse(200, _jpeg())})
+
+    assert await p.enrich_album(dict(ALBUM)) is not None
+    assert p.db_manager.asked_for == []
+
+
+@pytest.mark.asyncio
+async def test_no_art_anywhere_stays_a_quiet_no(tmp_path):
+    p = _plugin(tmp_path, rg_id="rg-9")
+    p.async_client = RoutedClient({})  # every URL 404s
+
+    assert await p.enrich_album(dict(ALBUM)) is None
+    assert len(p.async_client.requested) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_album_whose_release_group_is_unknown_stops_at_the_release(tmp_path):
+    """A release id no candidate row mentions leaves nothing to fall back to."""
+    p = _plugin(tmp_path, rg_id=None)
+    p.async_client = RoutedClient({})
+
+    assert await p.enrich_album(dict(ALBUM)) is None
+    assert p.async_client.requested == [
+        "https://coverartarchive.org/release/mbid-1/front-1200"
+    ]
