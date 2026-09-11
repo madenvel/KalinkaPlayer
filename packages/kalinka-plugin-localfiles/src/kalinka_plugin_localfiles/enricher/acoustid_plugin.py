@@ -41,7 +41,7 @@ class AcoustIdPlugin(EnricherPlugin):
     # v3: the rescue keys on provenance rather than emptiness, and its match
     # is verified rather than inferred — see enrich_track.
     # v4: an album that names its own tracks is left to name them.
-    ENRICHER_VERSION = 4
+    ENRICHER_VERSION = 3
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config

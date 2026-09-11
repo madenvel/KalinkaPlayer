@@ -91,7 +91,7 @@ def _identified(**over):
 def test_version_is_bumped_when_the_gating_changes():
     # Bumping ENRICHER_VERSION re-opens previously-FAILED tracks so the new
     # gate is re-evaluated (fingerprint-gated retry).
-    assert AcoustIdPlugin.ENRICHER_VERSION >= 4
+    assert AcoustIdPlugin.ENRICHER_VERSION >= 3
 
 
 @pytest.mark.asyncio

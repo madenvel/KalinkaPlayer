@@ -106,7 +106,7 @@ class MusicBrainzPlugin(EnricherPlugin):
     # 4: releases that tie within the ambiguity margin now prefer one the
     # Cover Art Archive can illustrate, so albums that matched an
     # unphotographed pressing re-open.
-    ENRICHER_VERSION = 4
+    ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
