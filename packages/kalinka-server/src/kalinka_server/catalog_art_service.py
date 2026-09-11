@@ -56,6 +56,10 @@ ART_URL_PREFIX = "/catalog/art"
 REFRESH_SECONDS = 24 * 3600
 #: After a failed attempt (module down, remote cache warming) retry sooner.
 FAIL_RETRY_SECONDS = 10 * 60
+#: A card short of the covers it wanted is a real result rather than a failure,
+#: so its tile stands — but a day is too long to hold one composed while the
+#: library was still acquiring artwork.
+PARTIAL_RETRY_SECONDS = 60 * 60
 FETCH_LIMIT = 8  # one upstream page per card
 MAX_COVERS = 3
 #: A mosaic wants four distinct albums, so it looks further down the list.
@@ -168,10 +172,13 @@ class CatalogArtService:
         try:
             raw = json.loads(self._index_path.read_text())
             self._entries = dict(raw.get("entries", {}))
-            if raw.get("style_version") != STYLE_VERSION:
-                # New look: re-render every card at the next browse.
-                for entry in self._entries.values():
-                    entry["next_check_at"] = 0.0
+            # Nothing reports a catalog being replaced wholesale — a library
+            # rebuilt, a module reconfigured — and a restart is what follows
+            # such a change, so every card is due again. The existing tile
+            # stands until the check is done, and an unmoved one renders
+            # nothing.
+            for entry in self._entries.values():
+                entry["next_check_at"] = 0.0
         except FileNotFoundError:
             self._entries = {}
         except (OSError, ValueError) as exc:
@@ -304,11 +311,11 @@ class CatalogArtService:
         catalog_children = sum(1 for item in items if item.catalog is not None)
         textual = not cover_style and (textual or catalog_children > len(items) / 2)
 
+        wanted = COVER_TILES if cover_style else MAX_COVERS
         covers: list[Image.Image] = []
         cover_bytes: list[bytes] = []
         wanted_covers = False
         if items and not textual:
-            wanted = COVER_TILES if cover_style else MAX_COVERS
             seen_paths: set[str] = set()
             seen_albums: set[str] = set()
             seen_art: set[bytes] = set()
@@ -353,7 +360,12 @@ class CatalogArtService:
         # page or every fetch failed). Still ship a background-only tile now so
         # the card isn't blank, and retry soon to add the cascade.
         provisional = (not textual) and (not items or (wanted_covers and not covers))
-        next_check = FAIL_RETRY_SECONDS if provisional else REFRESH_SECONDS
+        if provisional:
+            next_check = FAIL_RETRY_SECONDS
+        elif not textual and len(covers) < wanted:
+            next_check = PARTIAL_RETRY_SECONDS
+        else:
+            next_check = REFRESH_SECONDS
 
         entry = self._entries.get(cat_id)
         have_file = bool(

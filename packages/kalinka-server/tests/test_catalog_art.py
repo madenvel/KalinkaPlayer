@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 
 from PIL import Image
 
@@ -20,7 +21,13 @@ from kalinka_plugin_sdk.datamodel import (
 )
 
 from kalinka_server import catalog_art_render as render
-from kalinka_server.catalog_art_service import ART_URL_PREFIX, CatalogArtService
+from kalinka_server.catalog_art_service import (
+    ART_URL_PREFIX,
+    FAIL_RETRY_SECONDS,
+    PARTIAL_RETRY_SECONDS,
+    REFRESH_SECONDS,
+    CatalogArtService,
+)
 
 
 # --------------------------------------------------------------------------
@@ -579,3 +586,138 @@ async def test_style_version_bump_forces_recheck(tmp_path, monkeypatch):
     reloaded = _service(tmp_path)
     entry = reloaded._entries["kalinka:localfiles:catalog:albums"]
     assert entry["next_check_at"] == 0.0
+
+
+# --------------------------------------------------------------------------
+# When to look again
+# --------------------------------------------------------------------------
+
+
+def _distinct_covers(tmp_path, *locals_):
+    """Covers that differ in content — identical bytes are deduplicated, so a
+    mosaic built from one repeated picture would collapse to a single tile."""
+    covers = {}
+    for index, local in enumerate(locals_):
+        covers.update(
+            _covers_on_disk(tmp_path, local, color=(40 * (index + 1), 70, 110))
+        )
+    return covers
+
+
+def _due_in(svc, cat_id):
+    return svc._entries[cat_id]["next_check_at"] - time.time()
+
+
+async def test_a_card_short_of_covers_is_looked_at_again_within_the_hour(tmp_path):
+    """The regression this exists for: a card built while the library was
+    still acquiring artwork gets a thinner mosaic than it asked for. That is
+    a real result rather than a failure, so the tile stands — but holding it
+    for a day strands the card on art that was only ever momentary."""
+    module = _FakeModule(
+        [_album_child("a1"), _album_child("a2"), _album_child("a3")],
+        _distinct_covers(tmp_path, "a1"),
+    )
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:library"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert svc._entries[cat_id]["provisional"] is False
+    assert _due_in(svc, cat_id) <= PARTIAL_RETRY_SECONDS
+
+
+async def test_a_card_with_every_cover_it_wanted_keeps_the_long_refresh(tmp_path):
+    """The common case must not start polling hourly for nothing."""
+    module = _FakeModule(
+        [_album_child(n) for n in ("a1", "a2", "a3")],
+        _distinct_covers(tmp_path, "a1", "a2", "a3"),
+    )
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:albums"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert _due_in(svc, cat_id) > PARTIAL_RETRY_SECONDS
+    assert _due_in(svc, cat_id) <= REFRESH_SECONDS
+
+
+async def test_a_card_with_no_covers_at_all_still_retries_fastest(tmp_path):
+    """A thin mosaic is not a failure; no mosaic still is."""
+    module = _FakeModule([_album_child("a1")], {})
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:albums"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert svc._entries[cat_id]["provisional"] is True
+    assert _due_in(svc, cat_id) <= FAIL_RETRY_SECONDS
+
+
+async def test_a_textual_card_is_not_treated_as_short_of_covers(tmp_path):
+    """It never wanted covers, so it must keep the long refresh."""
+    module = _FakeModule([_catalog_item("albums"), _catalog_item("artists")], {})
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:library"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=True)
+
+    assert _due_in(svc, cat_id) > PARTIAL_RETRY_SECONDS
+
+
+class TestARestartRevalidates:
+    """A card is a picture of what a catalog holds. Nothing tells the service
+    when those contents are replaced — a rebuilt library wipes the module's
+    own database and artwork, but this cache lives elsewhere and survived,
+    leaving a banner composed from a library that no longer exists. A restart
+    is the one moment that can be relied on to follow such a change.
+    """
+
+    def _index_with(self, tmp_path, due_in):
+        svc = _service(tmp_path)
+        svc._dir.mkdir(parents=True, exist_ok=True)
+        (svc._dir / "abc.jpg").write_bytes(render.encode_jpeg(_solid_cover((1, 2, 3))))
+        svc._entries["kalinka:localfiles:catalog:library"] = {
+            "file": "abc.jpg",
+            "fingerprint": "stale",
+            "next_check_at": time.time() + due_in,
+            "provisional": False,
+        }
+        svc._save_index()
+        return svc
+
+    def test_a_card_not_due_for_hours_is_checked_again_after_a_restart(
+        self, tmp_path
+    ):
+        self._index_with(tmp_path, due_in=REFRESH_SECONDS)
+
+        restarted = _service(tmp_path)  # reads the index from disk
+
+        entry = restarted._entries["kalinka:localfiles:catalog:library"]
+        assert entry["next_check_at"] == 0.0
+
+    def test_the_existing_tile_is_kept_so_no_card_goes_blank(self, tmp_path):
+        """Re-checking must not mean discarding: the client keeps showing the
+        old picture until a better one is actually rendered."""
+        self._index_with(tmp_path, due_in=REFRESH_SECONDS)
+
+        restarted = _service(tmp_path)
+
+        entry = restarted._entries["kalinka:localfiles:catalog:library"]
+        assert entry["file"] == "abc.jpg"
+        assert (restarted._dir / "abc.jpg").is_file()
+
+    def test_a_due_card_is_enqueued_on_the_first_browse(self, tmp_path):
+        self._index_with(tmp_path, due_in=REFRESH_SECONDS)
+        restarted = _service(tmp_path)
+        item = _catalog_item("library")
+        item.id = EntityId(
+            id="library", type=EntityType.CATALOG, source="localfiles"
+        )
+
+        restarted.decorate(
+            BrowseItemList(offset=0, limit=10, total=1, items=[item])
+        )
+
+        assert restarted._queue.qsize() == 1
+        # and it still carries the old art meanwhile
+        assert item.catalog.image is not None
