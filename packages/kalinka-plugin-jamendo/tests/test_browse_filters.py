@@ -39,12 +39,21 @@ def _query(document) -> FilterQuery:
 
 
 
+async def _declared_filters(module):
+    """Every catalog the root offers, its shelves included, by slug."""
+    root = await module.browse(_catalog("root"))
+    catalogs = {}
+    for item in root.items:
+        for entry in [item, *(item.sections or [])]:
+            catalogs[entry.catalog.id.id] = entry.catalog.filters
+    return catalogs
+
+
 async def test_only_the_track_shelf_offers_genre():
     module, _ = _module()
-    root = await module.browse(_catalog("root"))
     declared = {
-        item.catalog.id.id: {spec.id for spec in item.catalog.filters}
-        for item in root.items
+        slug: {spec.id for spec in specs}
+        for slug, specs in (await _declared_filters(module)).items()
     }
 
     assert declared["popular-tracks"] == {"q", "genre"}
@@ -52,13 +61,14 @@ async def test_only_the_track_shelf_offers_genre():
     assert declared["new-releases"] == {"q"}
     assert declared["popular-artists"] == {"q"}
     assert declared["featured-playlists"] == {"q"}
+    # Popular itself keeps genre: its own listing can be narrowed to tracks.
+    assert declared["popular"] == {"q", "type", "genre"}
 
 
 async def test_genre_declares_the_intersection_the_api_actually_does():
     module, _ = _module()
-    root = await module.browse(_catalog("root"))
-    tracks = next(i for i in root.items if i.catalog.id.id == "popular-tracks")
-    genre = next(spec for spec in tracks.catalog.filters if spec.id == "genre")
+    declared = await _declared_filters(module)
+    genre = next(spec for spec in declared["popular-tracks"] if spec.id == "genre")
 
     assert genre.kind is FilterKind.VALUES
     assert genre.ops == [FilterOp.ALL]
@@ -66,12 +76,10 @@ async def test_genre_declares_the_intersection_the_api_actually_does():
 
 async def test_a_text_field_says_which_name_it_matches():
     module, _ = _module()
-    root = await module.browse(_catalog("root"))
+    declared = await _declared_filters(module)
     labels = {
-        item.catalog.id.id: next(
-            spec.label for spec in item.catalog.filters if spec.id == "q"
-        )
-        for item in root.items
+        slug: next(spec.label for spec in specs if spec.id == "q")
+        for slug, specs in declared.items()
     }
 
     assert labels["popular-tracks"] == "Search track names"

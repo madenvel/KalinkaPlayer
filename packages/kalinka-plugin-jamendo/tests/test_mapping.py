@@ -143,8 +143,8 @@ async def test_root_catalog():
     m = make_module([])
     root = jm.catalog_id("root")
     res = await m.browse(root)
-    slugs = {i.id.id for i in res.items}
-    assert {"popular-tracks", "new-releases", "popular-artists"} <= slugs
+    slugs = [i.id.id for i in res.items]
+    assert slugs == ["popular", "new-releases", "featured-playlists"]
     # Root is built locally, no API call.
     assert m.client.calls == []
 
