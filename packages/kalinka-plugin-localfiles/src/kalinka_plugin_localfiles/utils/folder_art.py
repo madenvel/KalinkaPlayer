@@ -25,6 +25,13 @@ from PIL import Image
 #: and one sleeve scan can run to hundreds of megabytes.
 _EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif")
 
+#: Wider than what the indexer reads: a folder of music is another album's
+#: folder whether or not this library can play the format.
+_AUDIO_EXTENSIONS = (
+    ".flac", ".mp3", ".m4a", ".wav", ".aiff", ".aif", ".ape", ".wv",
+    ".ogg", ".opus", ".wma", ".dsf", ".dff", ".mpc", ".alac",
+)
+
 #: The memory guard, applied to the directory entry before the file is
 #: opened at all. Real cover art does not come close; archival scans do.
 _MAX_BYTES = 32 * 1024 * 1024
@@ -101,21 +108,35 @@ def _stem(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
 
+def _holds_audio(directory: str) -> bool:
+    """Whether a directory has music of its own directly in it."""
+    try:
+        return any(
+            name.lower().endswith(_AUDIO_EXTENSIONS) for name in os.listdir(directory)
+        )
+    except OSError:
+        return False
+
+
 def _directories(folder: str) -> List[str]:
-    """``folder`` and its immediate subdirectories, in a stable order.
+    """``folder`` and the subdirectories that hold artwork rather than music.
 
     Scans are often filed under PIC/, Artwork/ or Scans/ rather than beside
-    the audio, so one level down is searched too — but no further, to keep a
-    deep tree of unrelated images out.
+    the audio, so one level down is searched too — and no further, to keep a
+    deep tree of unrelated images out. A subdirectory with music of its own
+    is another album's folder rather than this one's scans: a loose track
+    sitting among album folders would otherwise be handed a neighbour's
+    sleeve.
     """
     try:
         children = sorted(os.listdir(folder))
     except OSError:
         return []
+    subdirectories = (os.path.join(folder, name) for name in children)
     return [folder] + [
-        os.path.join(folder, name)
-        for name in children
-        if os.path.isdir(os.path.join(folder, name))
+        path
+        for path in subdirectories
+        if os.path.isdir(path) and not _holds_audio(path)
     ]
 
 

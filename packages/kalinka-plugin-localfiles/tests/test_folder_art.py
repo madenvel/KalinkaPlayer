@@ -196,3 +196,66 @@ class TestAFoldedInlay:
 
         assert _name(cover) == "front cover.jpg"
         assert cover.box is None
+
+
+class TestASubfolderThatIsAnotherAlbum:
+    """A loose track's folder is whatever it happens to sit in. Where that is
+    a dump shared with whole album folders, descending into them hands the
+    track a stranger's sleeve — a single Bach file was given The Piano Guys'
+    cover because theirs was the biggest scan in the neighbourhood.
+    """
+
+    def _loose_track_among_albums(self, tmp_path):
+        (tmp_path / "bach.flac").write_bytes(b"audio")
+        neighbour = tmp_path / "The Piano Guys"
+        neighbour.mkdir()
+        (neighbour / "01.flac").write_bytes(b"audio")
+        _image(str(neighbour / "sleeve.jpg"), (3000, 3000))
+
+    def test_an_album_folders_art_is_not_taken_by_its_neighbour(self, tmp_path):
+        self._loose_track_among_albums(tmp_path)
+        assert find_folder_cover(str(tmp_path)) is None
+
+    def test_a_cover_beside_the_loose_track_is_still_used(self, tmp_path):
+        """Only the neighbour is out of bounds, not the folder itself."""
+        self._loose_track_among_albums(tmp_path)
+        _image(str(tmp_path / "cover.jpg"), (600, 600))
+
+        assert _name(find_folder_cover(str(tmp_path))) == "cover.jpg"
+
+    def test_a_scan_folder_is_still_searched(self, tmp_path):
+        """The distinction is music, not depth: PIC/ holds no audio."""
+        (tmp_path / "01.flac").write_bytes(b"audio")
+        _image(str(tmp_path / "PIC" / "abbey_1.jpg"), (3000, 3000))
+
+        assert _name(find_folder_cover(str(tmp_path))) == "abbey_1.jpg"
+
+    @pytest.mark.parametrize("audio", ["01.dsf", "01.ape", "01.m4a", "01.wv"])
+    def test_music_this_library_cannot_play_still_marks_a_folder(
+        self, tmp_path, audio
+    ):
+        """A folder is somebody's album whether or not we can read it."""
+        other = tmp_path / "Another Album"
+        other.mkdir()
+        (other / audio).write_bytes(b"audio")
+        _image(str(other / "front.jpg"), (3000, 3000))
+
+        assert find_folder_cover(str(tmp_path)) is None
+
+    def test_an_unreadable_subfolder_does_not_break_the_search(
+        self, tmp_path, monkeypatch
+    ):
+        """One directory refusing to be listed must not cost the album the
+        cover sitting beside its own audio."""
+        _image(str(tmp_path / "cover.jpg"), (600, 600))
+        (tmp_path / "locked").mkdir()
+        real_listdir = os.listdir
+
+        def listdir(path):
+            if str(path).endswith("locked"):
+                raise OSError("permission denied")
+            return real_listdir(path)
+
+        monkeypatch.setattr(os, "listdir", listdir)
+
+        assert _name(find_folder_cover(str(tmp_path))) == "cover.jpg"
