@@ -31,37 +31,25 @@ class MoodConfig(BaseModel):
     weight: float = Field(
         default=0.6, ge=0.0, le=1.0, title="Mood weight",
         json_schema_extra={
-            "help": (
-                "How strongly mood matching influences results for mood-style "
-                "searches — searches without a mood are unaffected"
-            ),
+            "help": "How strongly mood affects ranking; other searches are unaffected",
         },
     )
     candidates: int = Field(
         default=200, title="Mood candidates before re-ranking",
         json_schema_extra={
-            "help": (
-                "How many tracks are considered when ranking by mood — "
-                "higher is more thorough but slower"
-            ),
+            "help": "Tracks considered when ranking by mood — higher is slower",
         },
     )
     nn_fallback: bool = Field(
         default=True, title="CLAP-text nearest-neighbour fallback",
         json_schema_extra={
-            "help": (
-                "Guess the intended mood when the search doesn't contain a "
-                "known mood word — turn off to match only literal mood words"
-            ),
+            "help": "Guess the mood when the search has no known mood word",
         },
     )
     nn_threshold: float = Field(
         default=0.3, ge=0.0, le=1.0, title="NN fallback confidence threshold",
         json_schema_extra={
-            "help": (
-                "How confident the mood guess must be before it affects "
-                "ranking — below this, results are ranked normally"
-            ),
+            "help": "Minimum confidence for a mood guess to affect ranking",
         },
     )
     nn_top_k: int = Field(
@@ -70,7 +58,7 @@ class MoodConfig(BaseModel):
     backfill_batch: int = Field(
         default=256, title="Mood backfill batch size",
         json_schema_extra={
-            "help": "Tracks processed per pass when computing mood data for the library",
+            "help": "Tracks processed per pass when computing mood data",
         },
     )
 
@@ -92,10 +80,8 @@ class AiSearchConfig(BaseModel):
         json_schema_extra={
             "help": (
                 "Search by mood, genre and how the music sounds rather than "
-                "by name. Costs about 500 MB of memory while the server runs "
-                "and around 750 MB while it indexes, plus hours of CPU to "
-                "index a large library the first time. Figures are "
-                "approximate and change with the model."
+                "by name. Needs roughly 500 MB of memory, more while indexing, "
+                "and hours of CPU to index a large library the first time."
             ),
             **_SIMPLE,
             **_PROMPT,
@@ -126,8 +112,8 @@ class AiSearchConfig(BaseModel):
         title="Audio model idle timeout",
         json_schema_extra={
             "help": (
-                "Free memory by unloading the AI indexing model after this "
-                "long with nothing to index (0 = keep loaded)"
+                "Unload the AI indexing model after this long idle "
+                "(0 = keep loaded)"
             ),
             "constraints": {"unit": "s"},
         },
@@ -146,8 +132,7 @@ class AiSearchConfig(BaseModel):
         # Expected contents: clap_audio_encoder.onnx, clap_text_encoder.onnx,
         # clap_tokenizer.json.
         description=(
-            "Folder containing a custom CLAP model. Leave empty to use the "
-            "standard model from the model directory."
+            "Folder holding a custom CLAP model. Leave empty for the standard one."
         ),
         json_schema_extra={"widget": "path"},
     )
@@ -186,8 +171,8 @@ class AcoustIDConfig(BaseModel):
         title="AcoustID API key",
         json_schema_extra={
             "help": (
-                "Lets Kalinka identify tracks by their audio fingerprint — "
-                "get a free key at [acoustid.org](https://acoustid.org/)"
+                "Identifies tracks by their audio fingerprint — free key at "
+                "[acoustid.org](https://acoustid.org/)"
             ),
             "widget": "password",
             **_SIMPLE,
@@ -208,10 +193,7 @@ class CoverArtArchiveConfig(BaseModel):
         default=True,
         title="Enable Cover Art Archive",
         json_schema_extra={
-            "help": (
-                "Fetch album covers from the MusicBrainz Cover Art Archive "
-                "for matched releases no other source has art for"
-            ),
+            "help": "Fetch album covers for releases no other source has art for",
         },
     )
 
@@ -221,11 +203,7 @@ class ProceduralArtworkConfig(BaseModel):
         default=False,
         title="Generate missing album art",
         json_schema_extra={
-            "help": (
-                "Draw deterministic abstract cover art for albums that still "
-                "have no artwork after all other sources have been tried — "
-                "needs the `numpy` package (installed on demand)"
-            ),
+            "help": "Draw abstract cover art for albums left without artwork",
             **_SIMPLE,
         },
     )
@@ -261,10 +239,8 @@ class EnricherConfig(BaseModel):
         title="Parallel lookups",
         json_schema_extra={
             "help": (
-                "How many artists, albums or tracks to look up at once. "
-                "Higher values hide the wait between metadata requests, but "
-                "each service still enforces its own rate limit, so raising "
-                "this past a handful buys little."
+                "Metadata lookups to run at once. Services rate-limit anyway, "
+                "so high values buy little."
             ),
             "constraints": {"min": 1, "max": 16},
         },
@@ -285,9 +261,8 @@ class LocalFilesConfig(ModuleConfig):
         default="localfiles",
         title=DISPLAY_NAME,
         description=(
-            "Music files on this device or a mounted share, indexed into a "
-            "browsable library with artwork and metadata filled in from "
-            "MusicBrainz and friends."
+            "Music on this device or a mounted share, indexed into a browsable "
+            "library with artwork and metadata filled in online."
         ),
         frozen=True,
         exclude=True,
@@ -328,10 +303,9 @@ class LocalFilesConfig(ModuleConfig):
         title="Folder-first album grouping",
         json_schema_extra={
             "help": (
-                "Group albums from the folder and multiple signals rather than "
-                "one album tag per track, so tag variance and untagged rips no "
-                "longer fragment an album. Re-clusters the library on the next "
-                "scan."
+                "Group albums by folder and several signals rather than the "
+                "album tag alone, so tag variance doesn't fragment an album. "
+                "Re-clusters on the next scan."
             ),
             **_PROMPT,
         },
@@ -341,9 +315,8 @@ class LocalFilesConfig(ModuleConfig):
         title="Legacy tag encoding",
         json_schema_extra={
             "help": (
-                "Codepage that repairs garbled tags written by old taggers, "
-                "e.g. cp1251 for Cyrillic ('ÐÓÊÈ ÂÂÅÐÕ' -> 'РУКИ ВВЕРХ'). "
-                "Leave empty to disable; UTF-8 mojibake is always repaired."
+                "Codepage that repairs tags garbled by old taggers. Leave "
+                "empty to disable; UTF-8 mojibake is always repaired."
             ),
             **_SIMPLE,
         },
@@ -353,8 +326,8 @@ class LocalFilesConfig(ModuleConfig):
         title="Upload quiescence window",
         json_schema_extra={
             "help": (
-                "Wait until a file has stopped changing for this long before "
-                "indexing it, so half-copied uploads aren't picked up"
+                "Wait for a file to stop changing before indexing it, so "
+                "half-copied uploads are skipped"
             ),
             "constraints": {"unit": "s"},
         },
@@ -367,10 +340,9 @@ class LocalFilesConfig(ModuleConfig):
         title="Rebuild library on next restart",
         json_schema_extra={
             "help": (
-                "Purge the index and artwork cache and rescan all files on the "
-                "next server restart. Finished AI audio analysis is kept and "
-                "reused; it re-runs only when the AI model changes. Resets "
-                "itself once done."
+                "Purge the index and artwork cache and rescan everything on "
+                "the next restart. Finished AI analysis is kept. Resets itself "
+                "once done."
             ),
             # One-shot trigger: the framework resets this (persist-first)
             # before the plugin acts, so it fires at most once per arming.
