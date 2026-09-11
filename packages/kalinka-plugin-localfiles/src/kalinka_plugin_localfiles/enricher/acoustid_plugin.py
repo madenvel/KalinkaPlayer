@@ -106,11 +106,12 @@ class AcoustIdPlugin(EnricherPlugin):
             cmd = ["fpcalc", "-json", file_path]
             logger.debug(f"Running command: {' '.join(cmd)}")
 
+            # A damaged file makes fpcalc exit non-zero after it has already
+            # printed the fingerprint it built, and that is worth keeping.
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                check=True,
                 timeout=30,  # Timeout after 30 seconds
             )
 
@@ -130,8 +131,11 @@ class AcoustIdPlugin(EnricherPlugin):
         except subprocess.SubprocessError as e:
             logger.error(f"Error running fpcalc on {file_path}: {str(e)}")
             return None, None
-        except json.JSONDecodeError as e:
-            logger.error(f"Error parsing fpcalc JSON output for {file_path}: {str(e)}")
+        except json.JSONDecodeError:
+            logger.error(
+                f"fpcalc produced no usable output for {file_path} "
+                f"(exit {result.returncode}): {result.stderr.strip()}"
+            )
             return None, None
         except Exception as e:
             logger.error(
