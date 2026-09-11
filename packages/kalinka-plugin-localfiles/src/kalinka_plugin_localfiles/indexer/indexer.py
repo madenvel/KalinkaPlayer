@@ -1215,16 +1215,18 @@ class FileIndexer:
             if not await asyncio.to_thread(
                 save_artwork_from_path,
                 self.artwork_path,
-                cover,
+                cover.path,
                 album_id,
                 "album",
+                cover.box,
             ):
                 continue
             await self.db_manager.update_album(
                 album_id, {"image_url": f"{album_id}.jpg", "image_generated": 0}
             )
             counts["albums"] += 1
-            logger.info(f"Cover for album {album_id} taken from {cover}")
+            panel = " (front panel)" if cover.box else ""
+            logger.info(f"Cover for album {album_id} taken from {cover.path}{panel}")
         return counts
 
     async def _restore_embedded_art(

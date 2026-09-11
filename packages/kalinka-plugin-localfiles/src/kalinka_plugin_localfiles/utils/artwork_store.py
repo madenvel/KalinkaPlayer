@@ -15,7 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import os
-from typing import Union
+from typing import Optional, Tuple, Union
 
 from PIL import Image
 
@@ -49,6 +49,7 @@ def save_artwork_from_path(
     source_path: Union[str, os.PathLike],
     entity_id: str,
     entity_type: str,
+    box: Optional[Tuple[float, float, float, float]] = None,
 ) -> bool:
     """As :func:`save_artwork_images`, for a cover that is already a file.
 
@@ -56,14 +57,38 @@ def save_artwork_from_path(
     decoder is asked for a reduced scale up front: nothing here needs more
     than the largest stored size, and a 3000px scan then costs a sixteenth
     of the memory. ``draft`` is a no-op for formats that cannot do it.
+
+    @param box The part of the image to keep, as ``(left, top, right,
+        bottom)`` fractions — the whole image when omitted. Fractions
+        because ``draft`` has already changed what the pixels measure.
     """
     try:
         with Image.open(source_path) as img:
             img.draft("RGB", (_LARGEST, _LARGEST))
-            return _save_resized(img, artwork_path, entity_id, entity_type)
+            return _save_resized(
+                _cropped(img, box), artwork_path, entity_id, entity_type
+            )
     except Exception as e:  # noqa: BLE001 - callers treat art as best-effort
         logger.error(f"Error saving artwork for {entity_type} {entity_id}: {e}")
         return False
+
+
+def _cropped(
+    img: Image.Image, box: Optional[Tuple[float, float, float, float]]
+) -> Image.Image:
+    """``img`` reduced to ``box``, or unchanged when there is nothing to cut."""
+    if not box:
+        return img
+    width, height = img.size
+    left, top, right, bottom = box
+    return img.crop(
+        (
+            int(left * width),
+            int(top * height),
+            int(right * width),
+            int(bottom * height),
+        )
+    )
 
 
 def _save_resized(

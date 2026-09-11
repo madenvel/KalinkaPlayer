@@ -168,3 +168,32 @@ async def test_an_unavailable_root_is_not_touched(indexer):
 
     assert (await fi.backfill_folder_art([]))["albums"] == 0
     assert (await db.get_album_by_id(album_id))["image_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_folded_inlay_is_stored_as_its_front_panel(indexer):
+    """The saved cover must be the right half, not the whole spread. The two
+    halves are painted differently so the stored image says which was kept.
+    """
+    fi, db, music_dir, _ = indexer
+    folder = music_dir / "Nick Cave - Murder Ballads"
+    folder.mkdir()
+    _write_flac(
+        folder / "01 Stagger Lee.flac",
+        {"title": "Stagger Lee", "artist": "Nick Cave", "album": "Murder Ballads"},
+    )
+    spread = Image.new("RGB", (3110, 1692), (10, 10, 200))      # back: blue
+    spread.paste(Image.new("RGB", (1555, 1692), (200, 10, 10)), (1555, 0))  # front: red
+    spread.save(folder / "cover.jpg")
+    changes = await fi.process_file(str(folder / "01 Stagger Lee.flac"))
+    album_id = changes["albums"]
+
+    assert (await fi.backfill_folder_art([str(music_dir)]))["albums"] == 1
+
+    with Image.open(fi.artwork_path / "album" / f"{album_id}_large.jpg") as saved:
+        # One panel, not the 1.84 spread: the right half is 1555x1692.
+        assert saved.width / saved.height < 1.2
+        red, _, blue = saved.convert("RGB").getpixel(
+            (saved.width // 2, saved.height // 2)
+        )
+    assert red > 150 and blue < 100  # the front panel, not the back

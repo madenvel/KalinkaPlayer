@@ -22,8 +22,12 @@ def _image(path, size=(1000, 1000)):
     return path
 
 
-def _name(path):
-    return os.path.basename(path) if path else None
+def _name(cover):
+    return os.path.basename(cover.path) if cover else None
+
+
+def _box(cover):
+    return cover.box if cover else None
 
 
 class TestWhatIsAdmissible:
@@ -147,3 +151,48 @@ class TestSubdirectories:
     def test_two_levels_down_is_too_far(self, tmp_path):
         _image(str(tmp_path / "extras" / "scans" / "front.jpg"))
         assert find_folder_cover(str(tmp_path)) is None
+
+
+class TestAFoldedInlay:
+    """A CD inlay is often scanned unfolded in one pass: back panel on the
+    left, front on the right. Used whole it shows the back beside the front,
+    squashed; the front is the right half. Real rips measure 1.57 to 1.86
+    rather than a clean 2:1, because the back tray is shorter than the front
+    is wide.
+    """
+
+    @pytest.mark.parametrize("size", [(3110, 1692), (3110, 1977), (3071, 1654)])
+    def test_a_two_panel_scan_keeps_only_its_right_half(self, tmp_path, size):
+        _image(str(tmp_path / "cover.jpg"), size)
+        assert _box(find_folder_cover(str(tmp_path))) == (0.5, 0.0, 1.0, 1.0)
+
+    @pytest.mark.parametrize("size", [(1420, 1420), (2047, 1657), (2094, 1657)])
+    def test_a_single_panel_is_used_whole(self, tmp_path, size):
+        """A square cover, a tray inlay and a back are all one panel; the
+        widest of them is 1.26, comfortably clear of the fold band."""
+        _image(str(tmp_path / "cover.jpg"), size)
+        assert _box(find_folder_cover(str(tmp_path))) is None
+
+    def test_an_unnamed_fold_is_still_admissible(self, tmp_path):
+        """The shape filter must not drop a fold for being too wide before
+        the fold rule ever sees it."""
+        _image(str(tmp_path / "img_1.jpg"), (3110, 1692))
+        cover = find_folder_cover(str(tmp_path))
+        assert _name(cover) == "img_1.jpg"
+        assert cover.box == (0.5, 0.0, 1.0, 1.0)
+
+    def test_a_panorama_is_still_not_a_cover(self, tmp_path):
+        """Widening the band for folds must not let a spine back in."""
+        _image(str(tmp_path / "img_1.jpg"), (2400, 200))
+        assert find_folder_cover(str(tmp_path)) is None
+
+    def test_a_dedicated_front_beats_a_fold_it_would_be_cut_from(self, tmp_path):
+        """Zero-project's Darkness Falls ships both; the one that is already
+        the front needs no guess about where to cut."""
+        _image(str(tmp_path / "full cover.jpg"), (3071, 1654))
+        _image(str(tmp_path / "front cover.jpg"), (1417, 1417))
+
+        cover = find_folder_cover(str(tmp_path))
+
+        assert _name(cover) == "front cover.jpg"
+        assert cover.box is None
