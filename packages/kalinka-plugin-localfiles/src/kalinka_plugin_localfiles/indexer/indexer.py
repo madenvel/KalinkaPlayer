@@ -792,9 +792,13 @@ class FileIndexer:
 
         tracks = await self.db_manager.get_tracks_named_by_their_path(FILENAME)
         reparsed = 0
+        unreached = False
         for track in tracks:
             path = track.get("file_path")
-            if not path or root_of(path, available_folders) is None:
+            if not path:
+                continue
+            if root_of(path, available_folders) is None:
+                unreached = True
                 continue
             try:
                 result = await self.process_file(path, force=True)
@@ -810,7 +814,10 @@ class FileIndexer:
             # A re-read may move a track onto a differently-named artist or
             # album, leaving the old row with nothing in it.
             await self.db_manager.delete_orphaned_albums_and_artists()
-        await self.db_manager.set_filename_model_identity(identity)
+        # Recording it now would close the door on the tracks whose root was
+        # not mounted; they are re-read once a scan can reach them.
+        if not unreached:
+            await self.db_manager.set_filename_model_identity(identity)
         return reparsed
 
     async def _record_origin(

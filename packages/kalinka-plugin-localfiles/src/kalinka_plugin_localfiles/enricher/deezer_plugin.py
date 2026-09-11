@@ -380,7 +380,10 @@ class DeezerPlugin(EnricherPlugin):
         # left to resolution (a local tag or MB outranks it).
         image_data = image_response.content
         if self._save_images(image_data, album["id"], "album"):
+            # Cleared alongside the URL: this cover replaces a generated one,
+            # and a row still flagged generated is wiped by the art sweep.
             updates["image_url"] = album["id"]
+            updates["image_generated"] = 0
             logger.info(
                 f"Added cover image from Deezer for album: {album['title']} by {artist_name}"
             )

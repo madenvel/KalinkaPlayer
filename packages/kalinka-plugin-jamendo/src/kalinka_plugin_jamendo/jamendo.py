@@ -975,13 +975,19 @@ class JamendoInputModule(InputModule):
 
         if len(sections) == 1:
             items = await self._section_items(sections[0], offset, limit, narrowing)
+            more = bool(limit) and len(items) >= limit
         else:
-            items = await self._interleaved_items(sections, offset, limit, narrowing)
+            items, more = await self._interleaved_items(
+                sections, offset, limit, narrowing
+            )
 
+        # Not _estimated_total: a page left short by one exhausted section
+        # still has the others behind it, and a total that stopped here would
+        # take their remaining rows with it.
         return BrowseItemList(
             offset=offset,
             limit=limit,
-            total=_estimated_total(offset, limit, len(items)),
+            total=offset + len(items) + (limit if more else 0),
             items=items,
         )
 
@@ -1020,12 +1026,15 @@ class JamendoInputModule(InputModule):
         offset: int,
         limit: int,
         narrowing: dict,
-    ) -> List[BrowseItem]:
+    ) -> Tuple[List[BrowseItem], bool]:
         """Popular with no kind chosen: the sections round-robined into one
         listing, which is what a consumer that cannot show shelves gets.
 
         Position ``i`` always holds section ``i % n``'s row ``i // n``, so
         paging neither repeats nor skips a row when one section runs short.
+
+        Also answers whether any section filled its span, since an exhausted
+        one leaves gaps and the page alone can no longer say.
         """
         n = len(sections)
         end = offset + limit
@@ -1048,7 +1057,11 @@ class JamendoInputModule(InputModule):
             row = position // n - start
             if row < len(rows):
                 items.append(rows[row])
-        return items
+
+        more = any(
+            count and len(rows) >= count for rows, (_, count) in zip(pages, spans)
+        )
+        return items, more
 
     def _root_catalog(self, offset: int, limit: int) -> BrowseItemList:
         all_items = [
