@@ -96,6 +96,28 @@ class TestTruncationTolerance:
             "Tangerin", "Tangerine Dream Orchestral Collection Volume Two"
         ) < THRESHOLD
 
+    def test_a_whole_name_another_act_begins_with_is_not_a_truncation(self):
+        """A fixed-width field stops mid-word. "The Beatles" is a finished
+        name that other acts merely start with, and scoring those a perfect
+        match hands an artist a tribute band's photograph."""
+        assert truncated_name_similarity(
+            "The Beatles", "The Beatles Revival Band"
+        ) < THRESHOLD
+        assert truncated_name_similarity(
+            "The Beatles", "The Beatles Piano Covers"
+        ) < THRESHOLD
+        assert truncated_name_similarity("Queen", "Queen Latifah") < THRESHOLD
+
+    def test_the_cut_must_land_inside_a_word(self):
+        """Dropping whole words cannot be told from a shorter name, so only
+        an unfinished word counts as evidence of truncation."""
+        assert truncated_name_similarity(
+            "Иванушки Int", "Иванушки International"
+        ) >= THRESHOLD          # cut mid-word
+        assert truncated_name_similarity(
+            "Иванушки", "Иванушки International"
+        ) < THRESHOLD           # cut at a word boundary
+
     def test_a_name_that_merely_contains_another_is_not_a_truncation(self):
         assert truncated_name_similarity("Maiden", "Iron Maiden") < THRESHOLD
 

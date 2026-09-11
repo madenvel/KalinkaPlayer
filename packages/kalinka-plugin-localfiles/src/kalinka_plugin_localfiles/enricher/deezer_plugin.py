@@ -38,6 +38,11 @@ _TIMEOUT = httpx.Timeout(5.0, pool=120.0)
 # Fuzzy matching threshold for album and artist matching
 FUZZY_MATCH_THRESHOLD = 0.8
 
+#: Deezer marks "no photograph" with the MD5 of the empty string. Only the
+#: empty-segment form redirects; the spelled-out one answers 200 with the
+#: grey silhouette, so the status code cannot be what decides.
+_NO_PICTURE_HASHES = ("d41d8cd98f00b204e9800998ecf8427e", "/artist//")
+
 # Deezer's structured search honours only *quoted* values — an unquoted
 # multi-word artist or album returns nothing at all. The free-text fallback
 # has to name the artist too: searching the title alone returns other
@@ -46,6 +51,11 @@ _ALBUM_QUERIES = (
     'artist:"{artist}" album:"{title}"',
     "{artist} {title}",
 )
+
+
+def _is_placeholder_picture(url: str) -> bool:
+    """Whether a Deezer image URL is the "no photograph" stand-in."""
+    return any(marker in url for marker in _NO_PICTURE_HASHES)
 
 
 class DeezerPlugin(EnricherPlugin):
@@ -173,49 +183,50 @@ class DeezerPlugin(EnricherPlugin):
                 logger.debug(f"No Deezer results found for artist: {artist['name']}")
                 return None
 
-            # Find the best matching artist using fuzzy matching
-            best_match = None
-            best_score = 0.0
-
-            for deezer_artist in data["data"]:
-                if not deezer_artist.get("name"):
-                    continue
-
-                name_score = truncated_name_similarity(
-                    deezer_artist["name"], search_name
-                )
-
+            scored = [
+                (truncated_name_similarity(candidate["name"], search_name), candidate)
+                for candidate in data["data"]
+                if candidate.get("name")
+            ]
+            for name_score, candidate in scored:
                 logger.debug(
-                    f"Artist '{deezer_artist['name']}' - Name score: {name_score:.2f}"
+                    f"Artist '{candidate['name']}' - Name score: {name_score:.2f}"
                 )
 
-                if name_score > best_score and name_score > FUZZY_MATCH_THRESHOLD:
-                    best_score = name_score
-                    best_match = deezer_artist
-
-            # If no good match found
-            if not best_match:
+            best_score = max((score for score, _ in scored), default=0.0)
+            if best_score <= FUZZY_MATCH_THRESHOLD:
                 logger.debug(
                     f"No artist with score > {FUZZY_MATCH_THRESHOLD} found for: {artist['name']}"
                 )
                 return None
 
-            deezer_artist = best_match
+            # Two acts can share a name outright, and nothing here can tell
+            # which one a library holds — so decline rather than guess, and
+            # leave the artist to a source that works from its identity.
+            tied = [candidate for score, candidate in scored if score == best_score]
+            if len(tied) > 1:
+                logger.info(
+                    f"Deezer has {len(tied)} artists named "
+                    f"'{tied[0]['name']}'; declining to guess for {artist['name']}"
+                )
+                return None
+
+            deezer_artist = tied[0]
             logger.debug(
                 f"Best artist match for '{artist['name']}': '{deezer_artist['name']}' (score: {best_score:.2f})"
             )
 
             # Check if the artist has an image
-            if "picture_xl" not in deezer_artist or not deezer_artist["picture_xl"]:
+            picture = deezer_artist.get("picture_xl")
+            if not picture or _is_placeholder_picture(picture):
                 logger.debug(
                     f"No image available for artist on Deezer: {deezer_artist['name']}"
                 )
                 return None
 
-            # Download the image. A redirect is the CDN pointing at its
-            # generic placeholder ("no real photo") — skipping it leaves the
-            # artist open for a later source, so it's not an error.
-            image_response = await self.async_client.get(deezer_artist["picture_xl"])
+            # A redirect still means the placeholder, for any form of it the
+            # URL check above does not know.
+            image_response = await self.async_client.get(picture)
             raise_if_service_unavailable(image_response.status_code, "Deezer")
             if image_response.is_redirect:
                 logger.debug(
