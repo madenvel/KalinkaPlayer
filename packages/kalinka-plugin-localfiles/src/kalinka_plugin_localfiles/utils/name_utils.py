@@ -339,9 +339,26 @@ def truncated_name_similarity(left: str, right: str) -> float:
     ratio = fuzz.ratio(a, b) / 100.0
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
     if (
-        longer.startswith(shorter)
-        and len(shorter) >= _MIN_TRUNCATED_CHARS
+        len(shorter) >= _MIN_TRUNCATED_CHARS
         and len(shorter) / len(longer) >= _MIN_TRUNCATED_RATIO
+        and _cut_mid_word(shorter, longer)
     ):
         return max(ratio, fuzz.partial_ratio(a, b) / 100.0)
     return ratio
+
+
+def _cut_mid_word(shorter: str, longer: str) -> bool:
+    """Whether ``shorter`` reads as ``longer`` with its tail cut off.
+
+    Being a prefix is not enough — "The Beatles" also begins "The Beatles
+    Revival Band". A fixed-width field stops mid-word and drops nothing
+    else, so the last surviving word must be unfinished and nothing may
+    follow it.
+    """
+    short_words, long_words = shorter.split(), longer.split()
+    if not short_words or len(short_words) != len(long_words):
+        return False
+    if short_words[:-1] != long_words[:-1]:
+        return False
+    last_short, last_long = short_words[-1], long_words[-1]
+    return last_short != last_long and last_long.startswith(last_short)
