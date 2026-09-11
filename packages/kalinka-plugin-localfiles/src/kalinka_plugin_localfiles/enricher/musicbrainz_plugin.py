@@ -99,13 +99,10 @@ def _prefer_illustrated(scored: List[tuple]) -> List[tuple]:
 class MusicBrainzPlugin(EnricherPlugin):
     """MusicBrainz metadata enrichment plugin"""
 
-    # 2: network outages no longer record an outcome, and rows they
-    # mis-recorded before re-open on this bump.
-    # 3: similarity judged against MB aliases too, so rows the whole-name
-    # floor rejected (curated short forms) re-open.
-    # 4: releases that tie within the ambiguity margin now prefer one the
-    # Cover Art Archive can illustrate, so albums that matched an
-    # unphotographed pressing re-open.
+    # 2: outages record no outcome; similarity is judged against MB aliases;
+    # and a tie within the ambiguity margin prefers a release the Cover Art
+    # Archive can illustrate. Rows any of those would now answer differently
+    # re-open on this bump.
     ENRICHER_VERSION = 2
 
     def __init__(self, config: LocalFilesConfig, db_manager):

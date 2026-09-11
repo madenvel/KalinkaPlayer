@@ -378,7 +378,9 @@ class MetadataEnricher:
 
         Returns ``(had_updates, deferred)``. ``deferred`` means some service
         never answered for this entity, so the caller must not record a
-        verdict on it — the row stays pending for a later retry.
+        verdict on it — the row stays pending for a later retry. Whether it
+        may be held *again* is the caller's to decide, once per pass: see
+        :meth:`_still_worth_deferring`, which spends a row's allowance.
 
         ``after_resolution`` selects which half of the chain to run: the
         fetching plugins, or the ones that derive from the resolved entity
@@ -429,7 +431,7 @@ class MetadataEnricher:
                     logger.debug("%s has every desired field", entity_id)
                     updated["enriched"] = EnrichmentStatus.ENRICHED
                     break
-        return had_updates, self._still_worth_deferring(updated.get("id"), deferred)
+        return had_updates, deferred
 
     def _still_worth_deferring(self, row_id: Optional[str], deferred: bool) -> bool:
         """Whether a row held pending by a silent source may be held again.
@@ -582,6 +584,7 @@ class MetadataEnricher:
             lambda e: all(e.get(f) for f in ARTIST_DESIRED_FIELDS),
         )
         had_updates = had_updates or chain_updates
+        deferred = self._still_worth_deferring(artist["id"], deferred)
 
         # Resolve the display name from claims: a matching external match
         # supplies canonical casing without replacing a different local name.
@@ -859,20 +862,27 @@ class MetadataEnricher:
         ):
             had_updates = True
 
+        # Spent before the derived plugins run, because what they draw is
+        # written once and never redrawn: they get their turn only when
+        # nothing is still expected to change the title and genre they draw
+        # from — and the pass that stops waiting is such a turn.
+        deferred = self._still_worth_deferring(album["id"], deferred)
+
         # Now that title and genre have settled, the plugins that draw from
         # them get their turn. Nothing here completes the entity, so this pass
         # has no early break.
-        derived_updates, derived_deferred = await self._run_plugin_chain(
-            album.get("title", album["id"]),
-            updated_album,
-            emitted_claims,
-            lambda p: p.can_enrich_album(),
-            lambda p, e: p.enrich_album(e),
-            lambda e: False,
-            after_resolution=True,
-        )
-        had_updates = had_updates or derived_updates
-        deferred = deferred or derived_deferred
+        if not deferred:
+            derived_updates, derived_deferred = await self._run_plugin_chain(
+                album.get("title", album["id"]),
+                updated_album,
+                emitted_claims,
+                lambda p: p.can_enrich_album(),
+                lambda p, e: p.enrich_album(e),
+                lambda e: False,
+                after_resolution=True,
+            )
+            had_updates = had_updates or derived_updates
+            deferred = self._still_worth_deferring(album["id"], derived_deferred)
 
         # Status decision (Phase 2e): an album whose required local fields
         # (title + artist_id) resolved is ENRICHED even without an external
@@ -940,6 +950,7 @@ class MetadataEnricher:
             lambda e: all(e.get(f) for f in TRACK_DESIRED_FIELDS),
         )
         had_updates = had_updates or chain_updates
+        deferred = self._still_worth_deferring(track["id"], deferred)
 
         # Resolve the display title from claims: an external match (e.g.
         # AcoustID) re-cases a matching local title but never replaces or invents

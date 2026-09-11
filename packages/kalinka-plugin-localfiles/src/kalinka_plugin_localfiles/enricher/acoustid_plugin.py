@@ -37,10 +37,10 @@ _UNNAMED_ARTIST_IDS = (None, "", "unknown_artist")
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
 
-    # v2: rescue-mode gating + fill-only writes.
-    # v3: the rescue keys on provenance rather than emptiness, and its match
-    # is verified rather than inferred — see enrich_track.
-    # v4: an album that names its own tracks is left to name them.
+    # 2: rescue-mode gating + fill-only writes.
+    # 3: the rescue keys on provenance rather than emptiness, its match is
+    # verified rather than inferred (see enrich_track), and an album that
+    # names its own tracks is left to name them.
     ENRICHER_VERSION = 3
 
     def __init__(self, config: LocalFilesConfig, db_manager):

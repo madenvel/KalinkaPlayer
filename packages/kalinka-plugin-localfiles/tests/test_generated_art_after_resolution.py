@@ -12,8 +12,12 @@ would keep the wrong cover for good.
 import pytest
 
 from kalinka_plugin_localfiles.enricher.enricher import (
+    MAX_DEFERRALS,
     EnrichmentStatus,
     MetadataEnricher,
+)
+from kalinka_plugin_localfiles.enricher.enricher_plugin import (
+    EntityEnrichmentError,
 )
 from kalinka_plugin_localfiles.enricher.procedural_artwork_plugin import (
     ProceduralArtworkPlugin,
@@ -79,12 +83,29 @@ class _Deriver(_Recorder):
     runs_after_resolution = True
 
 
+class _Unanswerable(_Recorder):
+    """A source that cannot process this row, however often it is asked."""
+
+    async def enrich_album(self, album):
+        self.saw = album["title"]
+        raise EntityEnrichmentError("its picture would not decode")
+
+
 def _enricher(plugins):
     enr = MetadataEnricher.__new__(MetadataEnricher)
     enr.db_manager = FakeDb()
     enr.plugins = plugins
     enr._backoff_instance = None
     return enr
+
+
+def _album():
+    return {
+        "id": "al1",
+        "title": "The Beatles - ABBEY ROAD",
+        "artist_id": "ar1",
+        "enriched": EnrichmentStatus.NOT_ENRICHED,
+    }
 
 
 @pytest.mark.asyncio
@@ -102,3 +123,43 @@ async def test_a_deriving_plugin_sees_the_resolved_title():
 
 def test_the_artwork_generator_is_one_of_them():
     assert ProceduralArtworkPlugin.runs_after_resolution is True
+
+
+@pytest.mark.asyncio
+async def test_a_deriving_plugin_waits_while_a_source_may_still_answer():
+    """Held pending means the title is not settled, and what a deriver draws
+    is written once and never redrawn."""
+    enr = _enricher([_Unanswerable(), _Deriver()])
+
+    await enr._enrich_album(_album())
+
+    assert enr.plugins[1].saw is None
+
+
+@pytest.mark.asyncio
+async def test_the_pass_that_stops_waiting_still_gets_the_art_drawn():
+    """The row settles on this pass, so leaving the deriver out of it would
+    close the album for good with no cover at all."""
+    enr = _enricher([_Unanswerable(), _Deriver()])
+    deriver = enr.plugins[1]
+
+    for _ in range(MAX_DEFERRALS):
+        await enr._enrich_album(_album())
+        assert deriver.saw is None
+
+    await enr._enrich_album(_album())
+
+    assert deriver.saw is not None
+
+
+@pytest.mark.asyncio
+async def test_the_second_chain_does_not_refund_the_rows_allowance():
+    """The regression: the after-resolution chain reported "not deferred" and
+    cleared the count the fetch chain had just raised, so the ceiling never
+    arrived and a permanently silent source held the album for ever."""
+    enr = _enricher([_Unanswerable(), _Deriver()])
+
+    for _ in range(MAX_DEFERRALS):
+        await enr._enrich_album(_album())
+
+    assert enr._deferrals["al1"] == MAX_DEFERRALS

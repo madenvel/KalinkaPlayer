@@ -1303,6 +1303,7 @@ class FileIndexer:
                     await self._ensure_various_artists()
                     va_seeded = True
                 existing = await self.db_manager.get_album_by_id(album_id)
+                title_is_ours = True
                 if existing is None:
                     row = {
                         "id": album_id,
@@ -1321,12 +1322,13 @@ class FileIndexer:
                     # scan, so re-deriving it would revert that correction
                     # every scan. Covers are untouched either way.
                     fixes = {}
+                    title_is_ours = await self._title_is_ours_to_derive(album_id)
                     if existing.get("artist_id") != anchor:
                         fixes["artist_id"] = anchor
                     if (
                         cluster.title
                         and existing.get("title") != cluster.title
-                        and await self._title_is_ours_to_derive(album_id)
+                        and title_is_ours
                     ):
                         fixes["title"] = cluster.title
                     # A year read off the folder only ever fills a gap: an
@@ -1340,7 +1342,11 @@ class FileIndexer:
                         "album", album_id, "year", from_tag=False,
                         path_source=FOLDER_NAME,
                     )
-                if cluster.title:
+                # Only for a title this pass owns: a tag consensus recorded
+                # over an external source's origin would read as locally
+                # derived on the next scan, and the correction would be
+                # rebuilt away by the pass that must not touch it.
+                if cluster.title and title_is_ours:
                     await self._record_origin(
                         "album", album_id, "title",
                         from_tag=cluster.title_source == TAG_CONSENSUS,
