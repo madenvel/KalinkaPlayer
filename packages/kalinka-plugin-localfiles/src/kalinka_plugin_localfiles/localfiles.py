@@ -1399,19 +1399,29 @@ class LocalFilesInputModule(InputModule):
     def _resource_image_urls(
         self, entity_type: str, image_url: Optional[str]
     ) -> Optional[CoverImage]:
-        """/resource/ URLs for a saved image set, or None if it doesn't exist."""
+        """/resource/ URLs for a saved image set, or None if it doesn't exist.
+
+        @note The file name is fixed by the entity id, so a replaced cover
+            would keep its URL and any cache keyed on it would never refetch.
+            The write time rides along as a query parameter, which
+            ``/resource/`` ignores when resolving the file.
+        """
         if not image_url:
             return None
         image_base = image_url.replace(".jpg", "")
-        thumbnail_path = (
-            self.artwork_path / entity_type / f"{image_base}_thumbnail.jpg"
-        )
-        if not thumbnail_path.exists():
+        try:
+            written = int(
+                (self.artwork_path / entity_type / f"{image_base}_thumbnail.jpg")
+                .stat()
+                .st_mtime
+            )
+        except OSError:
             return None
+        base = f"/resource/{entity_type}/{image_base}"
         return CoverImage(
-            thumbnail=f"/resource/{entity_type}/{image_base}_thumbnail.jpg",
-            small=f"/resource/{entity_type}/{image_base}_small.jpg",
-            large=f"/resource/{entity_type}/{image_base}_large.jpg",
+            thumbnail=f"{base}_thumbnail.jpg?v={written}",
+            small=f"{base}_small.jpg?v={written}",
+            large=f"{base}_large.jpg?v={written}",
         )
 
     def _get_album_image_urls(self, album_id: str) -> Optional[CoverImage]:
