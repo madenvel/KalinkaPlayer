@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
 from PIL import Image
 
@@ -46,9 +46,31 @@ _ORDINAL_RE = re.compile(r"(\d+)\s*$")
 #: generous floor that keeps the sleeve and drops the label.
 _MIN_RELATIVE_SIDE = 0.5
 
+#: A CD inlay scanned unfolded in one pass: back panel left, front right.
+#: Never exactly two squares, because the back tray is shorter than the front
+#: is wide. Measured on real rips: 1.57 to 1.86, against 1.26 for the widest
+#: single panel.
+_FOLD_MIN_ASPECT, _FOLD_MAX_ASPECT = 1.5, 2.4
+
+#: The right half of such a scan, as fractions of the whole.
+_FRONT_PANEL = (0.5, 0.0, 1.0, 1.0)
+
 #: Covers are square give or take a scan border. This only has to exclude
 #: shapes that cannot be one: a spine, a panorama, an open booklet spread.
-_MIN_ASPECT, _MAX_ASPECT = 0.5, 2.0
+_MIN_ASPECT, _MAX_ASPECT = 0.5, _FOLD_MAX_ASPECT
+
+
+class FolderCover(NamedTuple):
+    """Where an album's front cover is: which file, and which part of it.
+
+    @param path The chosen image file.
+    @param box  The front panel as ``(left, top, right, bottom)`` fractions
+        of the image, or None to use the whole of it. Fractions rather than
+        pixels because the reader may decode at a reduced scale.
+    """
+
+    path: str
+    box: Optional[Tuple[float, float, float, float]]
 
 
 class _Candidate(NamedTuple):
@@ -65,6 +87,14 @@ class _Candidate(NamedTuple):
         """The number the name ends with, or 0. Scan sets run front-first."""
         match = _ORDINAL_RE.search(_stem(self.path))
         return int(match.group(1)) if match else 0
+
+    @property
+    def is_folded(self) -> bool:
+        """Whether this looks like an unfolded two-panel inlay."""
+        return _FOLD_MIN_ASPECT <= self.width / self.height <= _FOLD_MAX_ASPECT
+
+    def as_cover(self) -> "FolderCover":
+        return FolderCover(self.path, _FRONT_PANEL if self.is_folded else None)
 
 
 def _stem(path: str) -> str:
@@ -122,22 +152,25 @@ def _measure(path: str) -> Optional[_Candidate]:
     return _Candidate(path, width, height)
 
 
-def find_folder_cover(folder: str) -> Optional[str]:
+def find_folder_cover(folder: str) -> Optional[FolderCover]:
     """The image in ``folder`` most likely to be its front cover, or None.
 
     @param folder The album's directory; its immediate subdirectories are
         searched too.
-    @return A path to an existing image, or None when the folder offers
-        nothing that could be a cover.
+    @return Which file holds the cover and which part of it is the front,
+        or None when the folder offers nothing that could be a cover.
     """
     if not folder:
         return None
     candidates = [c for c in map(_measure, _image_paths(folder)) if c is not None]
 
-    # A name that says "cover" settles it, whatever the shape.
+    # A name that says "cover" settles it, whatever the shape — and a scan
+    # that is already the front beats one the front must be cut out of.
     named = [c for c in candidates if _PREFERRED_RE.search(_stem(c.path))]
     if named:
-        return max(named, key=lambda c: (c.longest_side, c.path)).path
+        return max(
+            named, key=lambda c: (not c.is_folded, c.longest_side, c.path)
+        ).as_cover()
 
     candidates = [
         c
@@ -150,4 +183,4 @@ def find_folder_cover(folder: str) -> Optional[str]:
 
     floor = max(c.longest_side for c in candidates) * _MIN_RELATIVE_SIDE
     sleeves = [c for c in candidates if c.longest_side >= floor]
-    return min(sleeves, key=lambda c: (c.ordinal, -c.longest_side, c.path)).path
+    return min(sleeves, key=lambda c: (c.ordinal, -c.longest_side, c.path)).as_cover()
