@@ -670,6 +670,45 @@ async def test_a_card_with_no_covers_at_all_still_retries_fastest(tmp_path):
     assert _due_in(svc, cat_id) <= FAIL_RETRY_SECONDS
 
 
+async def test_a_library_whose_albums_carry_no_art_yet_retries_soon(tmp_path):
+    """The regression this exists for: a library rebuilt minutes ago lists its
+    albums before the indexer has attached any artwork, which reads exactly
+    like a catalog that has none."""
+    module = _FakeModule([_album_child(n, with_image=False) for n in ("a1", "a2")], {})
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:library"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert svc._entries[cat_id]["provisional"] is True
+    assert _due_in(svc, cat_id) <= FAIL_RETRY_SECONDS
+
+
+async def test_a_rebuild_does_not_downgrade_the_tile_it_already_had(tmp_path):
+    """The same window seen from the card's side: the art it had is better
+    than the background the rebuild can offer, so it stands until the covers
+    come back."""
+    module = _FakeModule(
+        [_album_child(n) for n in ("a1", "a2", "a3")],
+        _distinct_covers(tmp_path, "a1", "a2", "a3"),
+    )
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:library"
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+    full_file = svc._entries[cat_id]["file"]
+    assert svc._entries[cat_id]["provisional"] is False
+
+    rebuilding = _FakeModule(
+        [_album_child(n, with_image=False) for n in ("a1", "a2")], {}
+    )
+    svc2 = _service(tmp_path, resolver=lambda eid: rebuilding)
+    await svc2._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert svc2._entries[cat_id]["file"] == full_file
+    assert (svc2._dir / full_file).is_file()
+    assert _due_in(svc2, cat_id) <= FAIL_RETRY_SECONDS
+
+
 async def test_a_textual_card_is_not_treated_as_short_of_covers(tmp_path):
     """It never wanted covers, so it must keep the long refresh."""
     module = _FakeModule([_catalog_item("albums"), _catalog_item("artists")], {})

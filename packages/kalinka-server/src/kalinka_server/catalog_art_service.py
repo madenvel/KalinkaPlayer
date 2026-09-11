@@ -311,7 +311,6 @@ class CatalogArtService:
         wanted = COVER_TILES if cover_style else MAX_COVERS
         covers: list[Image.Image] = []
         cover_bytes: list[bytes] = []
-        wanted_covers = False
         # Distinct covers this catalog offered, which bounds what the card can
         # ever show however often it is composed.
         offered = 0
@@ -326,7 +325,6 @@ class CatalogArtService:
                 album = _item_album_id(item)
                 if path in seen_paths or (album is not None and album in seen_albums):
                     continue
-                wanted_covers = True
                 seen_paths.add(path)
                 if album is not None:
                     seen_albums.add(album)
@@ -357,10 +355,10 @@ class CatalogArtService:
             self._record_failure(cat_id)
             return
 
-        # "Provisional" = a cover catalog we couldn't get any covers for (empty
-        # page or every fetch failed). Still ship a background-only tile now so
-        # the card isn't blank, and retry soon to add the cascade.
-        provisional = (not textual) and (not items or (wanted_covers and not covers))
+        # A card that wants a cascade and has none is held, not finished: a
+        # library rebuilt minutes ago offers no cover either, and filing that
+        # as complete strands the card on a bare background for a day.
+        provisional = (not textual) and not covers
         if provisional:
             next_check = FAIL_RETRY_SECONDS
         elif not textual and len(covers) < min(wanted, offered):
