@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from importlib import resources
@@ -40,15 +41,22 @@ class ModelIdentity:
     reason: Optional[str]
 
 
+# Holds the bundled weights open for the process. Under a zip-imported package
+# ``as_file`` materialises a temporary copy, and its own context would delete it
+# while the tagger — which reads the file for as long as it lives — still needs
+# it. A no-op for an ordinary install, where the file is already on disk.
+_materialised = ExitStack()
+
+
 def resolve_model_path() -> Tuple[Path, str]:
     """The weights to load, and whether they came from the env override."""
     override = os.environ.get(MODEL_ENV_VAR)
     if override:
         return Path(override), "env"
-    with resources.as_file(
-        resources.files(WEIGHTS_PACKAGE).joinpath(MODEL_FILENAME)
-    ) as path:
-        return path, "bundled"
+    path = _materialised.enter_context(
+        resources.as_file(resources.files(WEIGHTS_PACKAGE).joinpath(MODEL_FILENAME))
+    )
+    return path, "bundled"
 
 
 class FilenameModel:

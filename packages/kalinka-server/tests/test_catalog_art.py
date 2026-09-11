@@ -588,26 +588,6 @@ async def test_index_reload_drops_missing_files(tmp_path):
     assert "kalinka:localfiles:catalog:albums" not in reloaded._entries
 
 
-async def test_style_version_bump_forces_recheck(tmp_path, monkeypatch):
-    svc = _service(tmp_path)
-    svc._dir.mkdir(parents=True, exist_ok=True)
-    name = "deadbeefdeadbeef-01020304.jpg"
-    (svc._dir / name).write_bytes(b"x")
-    svc._entries["kalinka:localfiles:catalog:albums"] = {
-        "file": name,
-        "fingerprint": "x",
-        "next_check_at": 1e18,
-    }
-    svc._save_index()
-    monkeypatch.setattr(
-        "kalinka_server.catalog_art_service.STYLE_VERSION",
-        render.STYLE_VERSION + 1,
-    )
-    reloaded = _service(tmp_path)
-    entry = reloaded._entries["kalinka:localfiles:catalog:albums"]
-    assert entry["next_check_at"] == 0.0
-
-
 # --------------------------------------------------------------------------
 # When to look again
 # --------------------------------------------------------------------------
@@ -659,6 +639,23 @@ async def test_a_card_with_every_cover_it_wanted_keeps_the_long_refresh(tmp_path
 
     assert _due_in(svc, cat_id) > PARTIAL_RETRY_SECONDS
     assert _due_in(svc, cat_id) <= REFRESH_SECONDS
+
+
+async def test_a_catalog_smaller_than_the_tile_keeps_the_long_refresh(tmp_path):
+    """It gave every cover it has, so it is complete at two. Measuring it
+    against the tile's appetite instead would re-compose it hourly for the
+    life of the install and never add a thing."""
+    module = _FakeModule(
+        [_album_child("a1"), _album_child("a2")],
+        _distinct_covers(tmp_path, "a1", "a2"),
+    )
+    svc = _service(tmp_path, resolver=lambda eid: module)
+    cat_id = "kalinka:localfiles:catalog:albums"
+
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    assert svc._entries[cat_id]["provisional"] is False
+    assert _due_in(svc, cat_id) > PARTIAL_RETRY_SECONDS
 
 
 async def test_a_card_with_no_covers_at_all_still_retries_fastest(tmp_path):

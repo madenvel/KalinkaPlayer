@@ -93,7 +93,10 @@ def _enricher(plugins):
 
 
 async def _chain(enr, artist):
-    return await enr._run_plugin_chain(
+    """One pass over the chain as a caller makes it: run it, then spend the
+    row's holding allowance, which is the caller's decision and not the
+    chain's."""
+    had_updates, deferred = await enr._run_plugin_chain(
         artist["id"],
         artist,
         [],
@@ -101,6 +104,7 @@ async def _chain(enr, artist):
         lambda p, e: p.enrich_artist(e),
         lambda e: bool(e.get("image_url")),
     )
+    return had_updates, enr._still_worth_deferring(artist["id"], deferred)
 
 
 class TestAFailedRow:

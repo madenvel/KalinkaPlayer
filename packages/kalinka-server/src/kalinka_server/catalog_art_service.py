@@ -40,7 +40,6 @@ from kalinka_plugin_sdk.inputmodule import InputModule
 
 from .browse_source import BrowseSource
 from .catalog_art_render import (
-    STYLE_VERSION,
     ArtStyle,
     content_fingerprint,
     encode_jpeg,
@@ -204,9 +203,7 @@ class CatalogArtService:
 
     def _save_index(self) -> None:
         try:
-            payload = json.dumps(
-                {"style_version": STYLE_VERSION, "entries": self._entries}
-            ).encode()
+            payload = json.dumps({"entries": self._entries}).encode()
             _write_atomic(self._index_path, payload)
         except OSError as exc:
             logger.warning("Could not persist catalog art index: %s", exc)
@@ -315,6 +312,9 @@ class CatalogArtService:
         covers: list[Image.Image] = []
         cover_bytes: list[bytes] = []
         wanted_covers = False
+        # Distinct covers this catalog offered, which bounds what the card can
+        # ever show however often it is composed.
+        offered = 0
         if items and not textual:
             seen_paths: set[str] = set()
             seen_albums: set[str] = set()
@@ -348,6 +348,7 @@ class CatalogArtService:
                 cover_bytes.append(blob)
                 if len(covers) >= wanted:
                     break
+            offered = len(seen_paths)
 
         # A cover is its albums and nothing else, so with none to compose there
         # is no art to ship — the client draws its own stand-in. Try again soon
@@ -362,7 +363,11 @@ class CatalogArtService:
         provisional = (not textual) and (not items or (wanted_covers and not covers))
         if provisional:
             next_check = FAIL_RETRY_SECONDS
-        elif not textual and len(covers) < wanted:
+        elif not textual and len(covers) < min(wanted, offered):
+            # Short of what the catalog *had*, so a fetch is what fell short
+            # and may not next time. A catalog with fewer albums than the tile
+            # holds is already complete, and re-composing it hourly for the
+            # life of the install would never add a thing.
             next_check = PARTIAL_RETRY_SECONDS
         else:
             next_check = REFRESH_SECONDS
