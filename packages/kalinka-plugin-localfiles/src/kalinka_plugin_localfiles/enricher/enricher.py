@@ -21,7 +21,11 @@ from ..resolution.tag_consensus import album_tag_consensus
 from ..clustering.classify import strip_artist_prefix
 from ..worker_utils import nudge
 
-from .enricher_plugin import TransientEnrichmentError, has_real_cover
+from .enricher_plugin import (
+    EntityEnrichmentError,
+    TransientEnrichmentError,
+    has_real_cover,
+)
 from .service_backoff import ServiceBackoff
 from .service_timings import ServiceTimings
 from .musicbrainz_plugin import MusicBrainzPlugin
@@ -99,6 +103,10 @@ _shutdown_event = asyncio.Event()
 # bounded by MB's fixed rate, while every extra slot costs a thread (MB calls
 # run via to_thread) and RAM on a Pi.
 ENTITY_CONCURRENCY = 6
+
+#: Passes a row may be held pending before it settles for what did answer.
+#: Without a ceiling a lookup that always fails holds its row back for good.
+MAX_DEFERRALS = 5
 
 
 class PhaseResult(NamedTuple):
@@ -196,6 +204,18 @@ class MetadataEnricher:
             backoff = ServiceBackoff()
             self.__dict__["_service_backoff"] = backoff
         return backoff
+
+    @property
+    def _deferrals(self) -> Dict[str, int]:
+        """Times each row has been held pending, created on first use for the
+        same reason as :attr:`_backoff`. Not persisted: a restart means new
+        code or a new setup, which deserves a clean try.
+        """
+        counts = self.__dict__.get("_deferral_counts")
+        if counts is None:
+            counts = {}
+            self.__dict__["_deferral_counts"] = counts
+        return counts
 
     @property
     def _timings(self) -> ServiceTimings:
@@ -389,6 +409,15 @@ class MetadataEnricher:
                 )
                 deferred = True
                 continue
+            except EntityEnrichmentError as e:
+                # The service is fine, this row is not: hold the row, and let
+                # the service answer for everything else.
+                logger.warning(
+                    "%s could not answer for %s (%s); leaving it pending",
+                    service, entity_id, e,
+                )
+                deferred = True
+                continue
 
             self._backoff.record_success(service)
             if result:
@@ -400,7 +429,32 @@ class MetadataEnricher:
                     logger.debug("%s has every desired field", entity_id)
                     updated["enriched"] = EnrichmentStatus.ENRICHED
                     break
-        return had_updates, deferred
+        return had_updates, self._still_worth_deferring(updated.get("id"), deferred)
+
+    def _still_worth_deferring(self, row_id: Optional[str], deferred: bool) -> bool:
+        """Whether a row held pending by a silent source may be held again.
+
+        Waiting is right while a source might still answer, but one that
+        never does would hold its row back for good; past the ceiling the row
+        settles for the verdict the other sources support.
+        """
+        if not row_id:
+            return deferred
+        if not deferred:
+            self._deferrals.pop(row_id, None)
+            return False
+        held = self._deferrals.get(row_id, 0) + 1
+        if held <= MAX_DEFERRALS:
+            self._deferrals[row_id] = held
+            return True
+        # Only rows still being waited on are counted, so one re-opened later
+        # starts with its full allowance.
+        del self._deferrals[row_id]
+        logger.warning(
+            "%s has been held pending %d times; recording what did answer",
+            row_id, held,
+        )
+        return False
 
     async def _process_phase(self, kind: str, fetch, enrich) -> "PhaseResult":
         """Drain one entity kind through a pool of concurrent workers.

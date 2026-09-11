@@ -10,6 +10,7 @@ from ..utils.artwork_store import save_artwork_images
 from .mb_client import mb_call, set_user_agent
 from .enricher_plugin import (
     EnricherPlugin,
+    EntityEnrichmentError,
     TransientEnrichmentError,
     raise_if_service_unavailable,
     raise_musicbrainz_unreachable,
@@ -122,23 +123,26 @@ class WikidataPlugin(EnricherPlugin):
             # Get proper image URL using the MediaWiki API
             image_url = await self._get_wikimedia_image_url(image_filename)
             if not image_url:
-                logger.error(
-                    f"Failed to construct image URL for artist {artist['name']}"
+                raise EntityEnrichmentError(
+                    f"Wikidata names an image for {artist['name']} that Commons "
+                    f"would not resolve: {image_filename}"
                 )
-                return None
 
             # Download the image
             image_response = await self.async_client.get(image_url)
             raise_if_service_unavailable(image_response.status_code, "Wikimedia")
             if image_response.status_code != 200:
-                logger.error(
-                    f"Failed to download image for artist {artist['name']}: {image_response.status_code}"
+                raise EntityEnrichmentError(
+                    f"Commons returned {image_response.status_code} for "
+                    f"{artist['name']}'s image"
                 )
-                return None
 
             # Save the image in different sizes
             image_data = image_response.content
-            self._save_images(image_data, artist["id"], "artist")
+            if not self._save_images(image_data, artist["id"], "artist"):
+                raise EntityEnrichmentError(
+                    f"Commons image for {artist['name']} could not be stored"
+                )
 
             # Update artist data
             updates = {
@@ -147,21 +151,18 @@ class WikidataPlugin(EnricherPlugin):
 
             return {"updates": updates}
 
-        except TransientEnrichmentError:
+        except (TransientEnrichmentError, EntityEnrichmentError):
             raise
         except httpx.TransportError as e:
             raise TransientEnrichmentError(f"Wikidata is unreachable: {e}") from e
         except musicbrainzngs.NetworkError as e:
             raise_musicbrainz_unreachable(e)
-            logger.error(
-                f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"
-            )
-            return None
         except Exception as e:
-            logger.error(
-                f"Error enriching artist {artist['name']} with Wikidata image: {str(e)}"
-            )
-            return None
+            # Reporting nothing would read as "no picture" and let a guessing
+            # source fill the space this one was still entitled to.
+            raise EntityEnrichmentError(
+                f"Wikidata lookup for {artist['name']} failed: {e}"
+            ) from e
 
     async def _get_wikimedia_image_url(self, image_filename: str) -> Optional[str]:
         """Get the proper URL for a Wikimedia Commons image using the MediaWiki API"""
