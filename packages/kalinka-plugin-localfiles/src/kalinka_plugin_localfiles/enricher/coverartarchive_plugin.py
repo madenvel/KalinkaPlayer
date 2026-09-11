@@ -42,7 +42,7 @@ class CoverArtArchivePlugin(EnricherPlugin):
 
     # 2: a release with no cover of its own falls back to its release
     # group, which is where a sleeve shared by dozens of pressings lives.
-    ENRICHER_VERSION = 2
+    ENRICHER_VERSION = 1
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
