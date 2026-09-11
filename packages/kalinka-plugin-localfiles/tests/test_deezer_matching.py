@@ -119,6 +119,26 @@ class TestTheQueriesSent:
         assert len(p.async_client.queries) == 1
 
 
+    @pytest.mark.asyncio
+    async def test_a_cover_it_found_is_not_left_flagged_as_generated(
+        self, tmp_path
+    ):
+        """It runs on an album carrying generated art, so a row it fills that
+        still says generated has its real cover wiped by the art sweep."""
+        p = _plugin(tmp_path)
+        p.async_client = RecordingClient(
+            {"data": [_album("Abbey Road", "The Beatles")]}
+        )
+        p._save_images = lambda *a: True
+
+        result = await p.enrich_album(
+            dict(ABBEY_ROAD, image_url="al1", image_generated=1)
+        )
+
+        assert result["updates"]["image_url"]
+        assert result["updates"]["image_generated"] == 0
+
+
 class TestJudgingCandidates:
     def test_the_real_artist_beats_a_higher_scoring_cover_act(self, tmp_path):
         """The Abbey Road case: the tribute band's title is a perfect match

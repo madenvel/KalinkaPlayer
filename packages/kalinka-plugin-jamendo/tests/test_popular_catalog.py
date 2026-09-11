@@ -159,6 +159,23 @@ async def test_a_shelf_that_runs_short_leaves_the_others_in_place():
     ]
 
 
+async def test_a_short_shelf_does_not_end_the_listing_for_the_others():
+    # The page is short because albums ran out, but tracks and artists have
+    # thousands more; a total that stopped here would hide every one of them.
+    module, _ = _module({"tracks": 100, "albums": 1, "artists": 100})
+    page = await module.browse(_catalog("popular"), limit=6)
+
+    assert len(page.items) < 6
+    assert page.total > len(page.items)
+
+
+async def test_a_listing_every_shelf_has_run_out_of_says_so():
+    module, _ = _module({"tracks": 2, "albums": 1, "artists": 1})
+    page = await module.browse(_catalog("popular"), limit=12)
+
+    assert page.total == len(page.items)
+
+
 async def test_two_kinds_at_once_are_interleaved_between_themselves():
     module, _ = _module()
     page = await module.browse(

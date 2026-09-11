@@ -119,3 +119,5 @@ async def test_a_file_under_an_unavailable_root_is_skipped(indexed):
         [], {"artists": set(), "albums": set(), "tracks": set()}
     )
     assert (count, seen) == (0, [])
+    # Recording it would close the door on those tracks for good.
+    assert await fi.db_manager.get_filename_model_identity() is None
