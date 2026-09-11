@@ -300,6 +300,15 @@ class AsyncEnricherDb(ProvenanceDb):
             rows = await cursor.fetchall()
             return [row[0] for row in rows if row[0]]
 
+    async def get_album_track_paths(self, album_id: str) -> List[str]:
+        """Every file path on an album, so its naming can be judged as a set."""
+        async with self._open() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT file_path FROM tracks WHERE album_id = ?", (album_id,)
+            )
+            return [row[0] for row in await cursor.fetchall() if row[0]]
+
     async def get_album_track_tags(self, album_id: str) -> List[Dict]:
         """Decoded ``raw_tags`` for each of an album's tracks — the evidence
         tag-consensus (§6.5) reads to derive the album's origin/era fields.
