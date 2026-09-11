@@ -166,12 +166,13 @@ Added an API, fixed a bug, nothing removed/changed:
 Removed or changed an existing public API (a protocol change):
 
 1. Edit `__version__` in `_version.py` to `2.0.0`.
-2. Widen **every consumer pin** from `<2` to `<3`, i.e. `kalinka-plugin-sdk>=2,<3`:
-   - `packages/kalinka-server/pyproject.toml`
-   - `packages/kalinka-plugin-localfiles/pyproject.toml`
-   - `packages/kalinka-plugin-jamendo/pyproject.toml`
-   - `packages/kalinka-plugin-musiccast/pyproject.toml`
-   - `packages/kalinka-plugin-dummydevice/pyproject.toml`
+2. Widen **every consumer pin** from `<2` to `<3`, i.e. `kalinka-plugin-sdk>=2,<3`. Each consumer pins twice — `pyproject.toml` for the wheel, `debian/control.in` for the deb — and the deb pin is the one that decides whether `apt` will install the set at all:
+   - `packages/kalinka-server/pyproject.toml` and `packages/kalinka-server/DEBIAN/control.in`
+   - `packages/kalinka-plugin-localfiles/` — `pyproject.toml` and `debian/control.in`
+   - `packages/kalinka-plugin-jamendo/` — likewise
+   - `packages/kalinka-plugin-musiccast/` — likewise
+   - `packages/kalinka-plugin-dummydevice/` — likewise
+   - `template/cookiecutter-kalinka-plugin/{{cookiecutter.plugin_name}}/debian/control.in`, so a plugin generated after the bump is born on the new major
 3. Raise each plugin's `REQUIRES_SDK` floor to the new major. This is a
    *second* gate, checked when the plugin is loaded rather than installed: a
    plugin left at `>=1.0,<2` is skipped at startup even though its package pin
@@ -186,6 +187,7 @@ Removed or changed an existing public API (a protocol change):
 Find the spots to touch:
 ```bash
 grep -rn 'kalinka-plugin-sdk *[>=<]' packages/*/pyproject.toml   # the 5 consumer pins
+grep -rn 'kalinka-plugin-sdk (' packages/*/debian/control.in packages/kalinka-server/DEBIAN/control.in template/*/*/debian/control.in  # the deb pins
 grep -rn 'REQUIRES_SDK' packages/*/src --include='*.py'          # the load-time floors
 grep -n  '__version__' packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py  # the 1 SDK source
 ```
