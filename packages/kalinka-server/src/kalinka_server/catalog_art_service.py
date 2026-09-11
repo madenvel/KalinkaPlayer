@@ -436,7 +436,10 @@ class CatalogArtService:
                 logger.debug("Cover fetch failed for %s: %r", path, exc)
                 return None
 
-        resource = path.removeprefix("/resource/").removeprefix("resource/")
+        # A module may hang a query off its link; the resource it names is the
+        # path before it, and a query read as part of the name resolves nothing.
+        resource = path.split("?", 1)[0]
+        resource = resource.removeprefix("/resource/").removeprefix("resource/")
         item_id = (
             item.id
             if isinstance(item.id, EntityId)

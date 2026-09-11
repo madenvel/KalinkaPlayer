@@ -246,6 +246,7 @@ async def test_track_metadata_falls_back_to_track_art(tmp_path):
 
     [info] = await module.get_track_info(["track_1"])
     assert info.metadata.album.image is not None
-    assert info.metadata.album.image.thumbnail.startswith(
-        "/resource/track/track_1_thumbnail.jpg?v="
+    assert (
+        info.metadata.album.image.thumbnail
+        == "/resource/track/track_1_thumbnail.jpg"
     )
