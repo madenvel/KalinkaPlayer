@@ -12,6 +12,7 @@ from typing import Dict, Optional, List, Tuple
 from ..config_model import LocalFilesConfig
 from ..resolution.resolver import GUESSED
 from ..utils.name_utils import clean_display_name
+from ..utils.tracklist_names import name_carries_title
 from .enricher_plugin import (
     EnricherPlugin,
     TransientEnrichmentError,
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__.split(".")[-1])
 # lookup is real work for the server.
 _LOOKUP_TIMEOUT_S = (5, 30)
 
+#: Artist ids that name nobody, so filling one contests nothing.
+_UNNAMED_ARTIST_IDS = (None, "", "unknown_artist")
+
 
 class AcoustIdPlugin(EnricherPlugin):
     """AcoustID audio fingerprinting plugin for track identification"""
@@ -36,7 +40,8 @@ class AcoustIdPlugin(EnricherPlugin):
     # v2: rescue-mode gating + fill-only writes.
     # v3: the rescue keys on provenance rather than emptiness, and its match
     # is verified rather than inferred — see enrich_track.
-    ENRICHER_VERSION = 3
+    # v4: an album that names its own tracks is left to name them.
+    ENRICHER_VERSION = 4
 
     def __init__(self, config: LocalFilesConfig, db_manager):
         self.config = config
@@ -586,8 +591,23 @@ class AcoustIdPlugin(EnricherPlugin):
     async def _artist_is_unresolved(self, track: Dict) -> bool:
         """True when nothing better than the file's own path named the artist."""
         artist_id = track.get("artist_id")
-        return artist_id in (None, "", "unknown_artist") or await self._is_a_guess(
+        return artist_id in _UNNAMED_ARTIST_IDS or await self._is_a_guess(
             "artist", artist_id, "name"
+        )
+
+    async def _named_by_its_file_name(self, track: Dict) -> bool:
+        """Whether the file's name is this track's title on its album.
+
+        A rip named by hand holds its album's titles in the file names, and
+        those belong to the pressing on the shelf. The umbrella album is
+        unrelated loose tracks, so it has no tracklist to keep whole.
+        """
+        album_id = track.get("album_id")
+        if not album_id or album_id == "unknown_album":
+            return False
+        return name_carries_title(
+            track.get("file_path") or "",
+            await self.db_manager.get_album_track_paths(album_id),
         )
 
     async def _title_is_unresolved(self, track: Dict) -> bool:
@@ -606,7 +626,8 @@ class AcoustIdPlugin(EnricherPlugin):
         2. Generate fingerprint from audio file
         3. Look up fingerprint in AcoustID
         4. Record the recording mbid and fill only the unresolved field(s) —
-           never overwrite a tagged title or repoint a known artist
+           never overwrite a tagged title, repoint a known artist, or re-title
+           an album that names its own tracks
         """
         try:
             # Skip if track is already enriched or no file path
@@ -619,8 +640,15 @@ class AcoustIdPlugin(EnricherPlugin):
             # found the mbid was built *from* that path — a match on a guess
             # proves nothing the audio cannot overturn. A missing *album* never
             # triggers a lookup: album identity is the clustering pass's job.
-            artist_unresolved = await self._artist_is_unresolved(track)
-            title_unresolved = await self._title_is_unresolved(track)
+            if await self._named_by_its_file_name(track):
+                # Only part of an album is ever identifiable, so re-titling
+                # that part would leave the rest in a different naming. A
+                # blank is still filled: it completes the tracklist.
+                title_unresolved = not (track.get("title") or "").strip()
+                artist_unresolved = track.get("artist_id") in _UNNAMED_ARTIST_IDS
+            else:
+                artist_unresolved = await self._artist_is_unresolved(track)
+                title_unresolved = await self._title_is_unresolved(track)
             if track.get("mbid") and not (artist_unresolved or title_unresolved):
                 logger.debug(
                     f"Skipping acoustid enrichment for track {track.get('title', 'Unknown')} - "
