@@ -3,8 +3,9 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
 from pydantic import PositiveInt
@@ -33,6 +34,7 @@ from kalinka_plugin_sdk.datamodel import (
 from kalinka_plugin_sdk.filters import (
     or_unfiltered,
     TEXT_FIELD,
+    TYPE_FIELD,
     FilterKind,
     FilterOp,
     FilterQuery,
@@ -139,6 +141,13 @@ GENRE_FILTER = FilterSpec(
     ops=[FilterOp.ALL],
 )
 
+TYPE_FILTER = FilterSpec(
+    id=TYPE_FIELD,
+    kind=FilterKind.VALUES,
+    label="Type",
+    ops=[FilterOp.ANY],
+)
+
 
 def _text_filter(what: str) -> FilterSpec:
     """``namesearch`` matches the entity's own name and nothing else, so the
@@ -146,19 +155,89 @@ def _text_filter(what: str) -> FilterSpec:
     return FilterSpec(id=TEXT_FIELD, kind=FilterKind.TEXT, label=f"Search {what}")
 
 
+@dataclass(frozen=True)
+class _PopularSection:
+    """One kind's shelf within Popular.
+
+    Popular and its sections are two addresses for one listing: browsing
+    Popular under ``type: [kind]`` and browsing the section answer the same
+    rows. The section exists so a consumer can preview each kind without
+    knowing how to write that constraint.
+
+    Attributes:
+        kind: The ``type`` value that narrows Popular to this section, and the
+            :class:`SearchType` the rows are.
+        endpoint: The catalog slug the section is browsable under.
+        path: Jamendo API path the rows come from.
+        order: Jamendo sort this kind is popular by.
+    """
+
+    kind: str
+    endpoint: str
+    path: str
+    order: str
+    title: str
+    content_type: PreviewContentType
+    filters: List[FilterSpec]
+
+
+POPULAR_ENDPOINT = "popular"
+
+POPULAR_SECTIONS = (
+    _PopularSection(
+        kind=SearchType.track.value,
+        endpoint="popular-tracks",
+        path="tracks",
+        order="popularity_month",
+        title="Tracks",
+        content_type=PreviewContentType.TRACK,
+        filters=[_text_filter("track names"), GENRE_FILTER],
+    ),
+    _PopularSection(
+        kind=SearchType.album.value,
+        endpoint="popular-albums",
+        path="albums",
+        order="popularity_month",
+        title="Albums",
+        content_type=PreviewContentType.ALBUM,
+        filters=[_text_filter("album names")],
+    ),
+    _PopularSection(
+        kind=SearchType.artist.value,
+        endpoint="popular-artists",
+        path="artists",
+        # Artists have no monthly ranking on this API.
+        order="popularity_total",
+        title="Artists",
+        content_type=PreviewContentType.ARTIST,
+        filters=[_text_filter("artist names")],
+    ),
+)
+
+SECTION_BY_KIND = {section.kind: section for section in POPULAR_SECTIONS}
+SECTION_BY_ENDPOINT = {section.endpoint: section for section in POPULAR_SECTIONS}
+
+POPULAR_FILTERS = [
+    _text_filter("track, album and artist names"),
+    TYPE_FILTER,
+    GENRE_FILTER,
+]
+
 SHELF_FILTERS = {
-    "popular-tracks": [_text_filter("track names"), GENRE_FILTER],
-    "popular-albums": [_text_filter("album names")],
+    POPULAR_ENDPOINT: POPULAR_FILTERS,
+    **{section.endpoint: section.filters for section in POPULAR_SECTIONS},
     "new-releases": [_text_filter("album names")],
-    "popular-artists": [_text_filter("artist names")],
     "featured-playlists": [_text_filter("playlist names")],
 }
 
 
-def _shelf_params(endpoint: str, filter: FilterQuery) -> dict:
-    """The filter as Jamendo query parameters, refusing what this shelf never
-    offered."""
-    declared = SHELF_FILTERS.get(endpoint, [])
+def _narrowing_params(filter: FilterQuery, declared: List[FilterSpec]) -> dict:
+    """The filter as Jamendo query parameters, refusing what this listing never
+    offered.
+
+    ``type`` carries no parameter of its own — it chooses the listing rather
+    than narrowing one, and :func:`_popular_sections` is what reads it.
+    """
     declared_ids = {spec.id for spec in declared}
     filter.reject_undeclared(declared_ids)
 
@@ -177,6 +256,27 @@ def _shelf_params(endpoint: str, filter: FilterQuery) -> dict:
             )
         params["tags"] = " ".join(genres.all)
     return params
+
+
+def _popular_sections(filter: FilterQuery) -> Tuple[_PopularSection, ...]:
+    """The kinds a Popular listing holds, given its ``type`` constraint.
+
+    An unknown value is refused rather than matched by nothing: ``type`` has a
+    closed vocabulary, so a value outside it is a caller's mistake, and a
+    listing that silently held nothing would hide it.
+    """
+    selector = filter.values(TYPE_FIELD)
+    if selector is None:
+        return POPULAR_SECTIONS
+    if selector.all or selector.none:
+        raise UnsupportedFilter(TYPE_FIELD, "only `any` is supported")
+    unknown = [value for value in selector.any if value not in SECTION_BY_KIND]
+    if unknown:
+        raise UnsupportedFilter(
+            TYPE_FIELD, f"unknown value(s): {', '.join(unknown)}"
+        )
+    # Deduplicated: a kind named twice would otherwise interleave with itself.
+    return tuple(SECTION_BY_KIND[kind] for kind in dict.fromkeys(selector.any))
 
 
 FORMAT_CODE = {
@@ -521,6 +621,88 @@ def _playlist_tracks_section(pid: str) -> BrowseItem:
     )
 
 
+def _kind_values(offset: int, limit: int, q: str) -> FilterValueList:
+    """The kinds Popular holds, in the order its sections appear."""
+    wanted = q.strip().casefold()
+    values = [
+        FilterValue(id=section.kind, name=section.title)
+        for section in POPULAR_SECTIONS
+        if wanted in section.title.casefold()
+    ]
+    return FilterValueList(
+        offset=offset,
+        limit=limit,
+        total=len(values),
+        items=values[offset : offset + limit],
+    )
+
+
+def _genre_values(offset: int, limit: int, q: str) -> FilterValueList:
+    """The genre vocabulary, narrowed by label or slug. Jamendo cannot say how
+    many items a tag covers, so no counts."""
+    needle = q.casefold()
+    matching = [
+        (slug, label)
+        for slug, label in GENRES
+        if not needle or needle in label.casefold() or needle in slug
+    ]
+    return FilterValueList(
+        offset=offset,
+        limit=limit,
+        total=len(matching),
+        items=[
+            FilterValue(id=slug, name=label)
+            for slug, label in matching[offset : offset + limit]
+        ],
+    )
+
+
+def _catalog_card(
+    endpoint: str,
+    title: str,
+    *,
+    preview: Preview,
+    description: str = "",
+    role: CatalogRole = CatalogRole.DISCOVERY,
+    sections: Optional[List[BrowseItem]] = None,
+) -> BrowseItem:
+    """A catalog as the card that points at it, filtered by whatever that
+    endpoint declared."""
+    id = catalog_id(endpoint)
+    return BrowseItem(
+        id=id,
+        name=title,
+        subname=description or None,
+        can_browse=True,
+        can_add=False,
+        catalog=Catalog(
+            id=id,
+            title=title,
+            description=description,
+            filters=SHELF_FILTERS.get(endpoint, []),
+            preview_config=preview,
+            role=role,
+        ),
+        sections=sections,
+    )
+
+
+def _popular_section_card(section: _PopularSection) -> BrowseItem:
+    return _catalog_card(
+        section.endpoint,
+        section.title,
+        preview=Preview(
+            type=PreviewType.IMAGE_TEXT,
+            content_type=section.content_type,
+            icon=section.kind,
+            # Few enough that the next shelf stays on screen.
+            items_count=3,
+            rows_count=1,
+            card_size=CardSize.SMALL,
+        ),
+    )
+
+
 class JamendoInputModule(InputModule):
     def __init__(
         self,
@@ -576,17 +758,7 @@ class JamendoInputModule(InputModule):
             params["audioformat"] = self.audio_format
             params["include"] = "musicinfo"
         results = await self.client.request(endpoint, params)
-
-        if type == SearchType.track:
-            items = self._tracks_to_browse_items(results)
-        elif type == SearchType.album:
-            items = self._albums_to_browse_items(results)
-        elif type == SearchType.artist:
-            items = self._artists_to_browse_items(results)
-        elif type == SearchType.playlist:
-            items = self._playlists_to_browse_items(results)
-        else:
-            return EmptyList(offset, limit)
+        items = self._items_of_kind(type.value, results)
 
         return BrowseItemList(
             offset=offset,
@@ -741,35 +913,19 @@ class JamendoInputModule(InputModule):
         limit: int,
         filter: FilterQuery,
     ) -> BrowseItemList:
+        if endpoint == POPULAR_ENDPOINT:
+            return await self._browse_popular(offset, limit, filter)
+
         # Narrowed before anything is listed, so an undeclared field is
         # refused rather than dropped; the shelf keeps its own order either way.
-        narrowing = _shelf_params(endpoint, filter)
+        narrowing = _narrowing_params(filter, SHELF_FILTERS.get(endpoint, []))
 
         if endpoint == "root":
             return self._root_catalog(offset, limit)
-        elif endpoint == "popular-tracks":
-            results = await self.client.request(
-                "tracks",
-                {
-                    "order": "popularity_month",
-                    "offset": offset,
-                    "limit": limit,
-                    "audioformat": self.audio_format,
-                    **narrowing,
-                },
-            )
-            items = self._tracks_to_browse_items(results)
-        elif endpoint == "popular-albums":
-            results = await self.client.request(
-                "albums",
-                {
-                    "order": "popularity_month",
-                    "offset": offset,
-                    "limit": limit,
-                    **narrowing,
-                },
-            )
-            items = self._albums_to_browse_items(results)
+
+        section = SECTION_BY_ENDPOINT.get(endpoint)
+        if section is not None:
+            items = await self._section_items(section, offset, limit, narrowing)
         elif endpoint == "new-releases":
             today = date.today()
             since = today - timedelta(days=NEW_RELEASES_WINDOW_DAYS)
@@ -784,17 +940,6 @@ class JamendoInputModule(InputModule):
                 },
             )
             items = self._albums_to_browse_items(results)
-        elif endpoint == "popular-artists":
-            results = await self.client.request(
-                "artists",
-                {
-                    "order": "popularity_total",
-                    "offset": offset,
-                    "limit": limit,
-                    **narrowing,
-                },
-            )
-            items = self._artists_to_browse_items(results)
         elif endpoint == "featured-playlists":
             results = await self.client.request(
                 "playlists",
@@ -816,78 +961,139 @@ class JamendoInputModule(InputModule):
             items=items,
         )
 
+    async def _browse_popular(
+        self, offset: int, limit: int, filter: FilterQuery
+    ) -> BrowseItemList:
+        sections = _popular_sections(filter)
+        narrowing = _narrowing_params(filter, POPULAR_FILTERS)
+        if "tags" in narrowing and any(
+            section.kind != SearchType.track.value for section in sections
+        ):
+            raise UnsupportedFilter(
+                GENRE_FILTER.id, "only tracks carry genres on this source"
+            )
+
+        if len(sections) == 1:
+            items = await self._section_items(sections[0], offset, limit, narrowing)
+        else:
+            items = await self._interleaved_items(sections, offset, limit, narrowing)
+
+        return BrowseItemList(
+            offset=offset,
+            limit=limit,
+            total=_estimated_total(offset, limit, len(items)),
+            items=items,
+        )
+
+    async def _section_items(
+        self,
+        section: _PopularSection,
+        offset: int,
+        limit: int,
+        narrowing: dict,
+    ) -> List[BrowseItem]:
+        if limit <= 0:
+            return []
+        params = {
+            "order": section.order,
+            "offset": offset,
+            "limit": limit,
+            **narrowing,
+        }
+        if section.kind == SearchType.track.value:
+            params["audioformat"] = self.audio_format
+        results = await self.client.request(section.path, params)
+        return self._items_of_kind(section.kind, results)
+
+    def _items_of_kind(self, kind: str, results) -> List[BrowseItem]:
+        """Jamendo rows of one kind as browse items."""
+        return {
+            SearchType.track.value: self._tracks_to_browse_items,
+            SearchType.album.value: self._albums_to_browse_items,
+            SearchType.artist.value: self._artists_to_browse_items,
+            SearchType.playlist.value: self._playlists_to_browse_items,
+        }[kind](results)
+
+    async def _interleaved_items(
+        self,
+        sections: Tuple[_PopularSection, ...],
+        offset: int,
+        limit: int,
+        narrowing: dict,
+    ) -> List[BrowseItem]:
+        """Popular with no kind chosen: the sections round-robined into one
+        listing, which is what a consumer that cannot show shelves gets.
+
+        Position ``i`` always holds section ``i % n``'s row ``i // n``, so
+        paging neither repeats nor skips a row when one section runs short.
+        """
+        n = len(sections)
+        end = offset + limit
+        spans = []
+        for index in range(n):
+            first = offset + (index - offset) % n
+            spans.append((first // n, len(range(first, end, n))))
+
+        pages = await asyncio.gather(
+            *(
+                self._section_items(section, start, count, narrowing)
+                for section, (start, count) in zip(sections, spans)
+            )
+        )
+
+        items = []
+        for position in range(offset, end):
+            start, _ = spans[position % n]
+            rows = pages[position % n]
+            row = position // n - start
+            if row < len(rows):
+                items.append(rows[row])
+        return items
+
     def _root_catalog(self, offset: int, limit: int) -> BrowseItemList:
-        shelves = [
-            (
-                "popular-tracks",
-                "Popular Tracks",
-                "Most played this month",
-                PreviewType.TILE,
-                PreviewContentType.TRACK,
-                "popular",
-                CatalogRole.DISCOVERY,
+        all_items = [
+            _catalog_card(
+                POPULAR_ENDPOINT,
+                "Popular",
+                description="Most played on Jamendo this month",
+                preview=Preview(
+                    type=PreviewType.TILE,
+                    icon="popular",
+                    items_count=20,
+                    rows_count=2,
+                    aspect_ratio=1.0,
+                ),
+                sections=[
+                    _popular_section_card(section) for section in POPULAR_SECTIONS
+                ],
             ),
-            (
+            _catalog_card(
                 "new-releases",
                 "New Releases",
-                "Fresh albums, just added",
-                PreviewType.IMAGE_TEXT,
-                PreviewContentType.ALBUM,
-                "new_releases",
-                CatalogRole.DISCOVERY,
+                description="Fresh albums, just added",
+                preview=Preview(
+                    type=PreviewType.IMAGE_TEXT,
+                    content_type=PreviewContentType.ALBUM,
+                    icon="new_releases",
+                    items_count=20,
+                    rows_count=2,
+                    aspect_ratio=1.0,
+                ),
             ),
-            (
-                "popular-albums",
-                "Popular Albums",
-                "Trending albums this month",
-                PreviewType.IMAGE_TEXT,
-                PreviewContentType.ALBUM,
-                "album",
-                CatalogRole.DISCOVERY,
-            ),
-            (
-                "popular-artists",
-                "Popular Artists",
-                "The most followed artists",
-                PreviewType.IMAGE_TEXT,
-                PreviewContentType.ARTIST,
-                "artist",
-                CatalogRole.DISCOVERY,
-            ),
-            (
+            _catalog_card(
                 "featured-playlists",
                 "Featured Playlists",
-                "Hand-picked collections",
-                PreviewType.IMAGE_TEXT,
-                PreviewContentType.PLAYLIST,
-                "playlist",
-                CatalogRole.HIDE_ON_HOME,
-            ),
-        ]
-        all_items = [
-            BrowseItem(
-                id=catalog_id(slug),
-                name=title,
-                subname=description,
-                can_browse=True,
-                can_add=False,
-                catalog=Catalog(
-                    id=catalog_id(slug),
-                    title=title,
-                    description=description,
-                    filters=SHELF_FILTERS.get(slug, []),
-                    preview_config=Preview(
-                        type=ptype,
-                        content_type=ctype,
-                        icon=icon,
-                        items_count=20,
-                        rows_count=2,
-                        aspect_ratio=1.0,
-                    ),
-                    role=role,
+                description="Hand-picked collections",
+                preview=Preview(
+                    type=PreviewType.IMAGE_TEXT,
+                    content_type=PreviewContentType.PLAYLIST,
+                    icon="playlist",
+                    items_count=20,
+                    rows_count=2,
+                    aspect_ratio=1.0,
                 ),
-            )
-            for slug, title, description, ptype, ctype, icon, role in shelves
+                role=CatalogRole.HIDE_ON_HOME,
+            ),
         ]
         return BrowseItemList(
             offset=offset,
@@ -1172,25 +1378,12 @@ class JamendoInputModule(InputModule):
         limit: int = 50,
         q: str = "",
     ) -> FilterValueList:
-        declared = SHELF_FILTERS.get(catalog_id.id, [])
-        if field != GENRE_FILTER.id or not any(spec.id == field for spec in declared):
-            raise UnsupportedFilter(field, "no such vocabulary here")
-
-        needle = q.casefold()
-        matching = [
-            (slug, label)
-            for slug, label in GENRES
-            if not needle or needle in label.casefold() or needle in slug
-        ]
-        return FilterValueList(
-            offset=offset,
-            limit=limit,
-            total=len(matching),
-            items=[
-                FilterValue(id=slug, name=label)
-                for slug, label in matching[offset : offset + limit]
-            ],
-        )
+        declared = {spec.id for spec in SHELF_FILTERS.get(catalog_id.id, [])}
+        if field == TYPE_FIELD and field in declared:
+            return _kind_values(offset, limit, q)
+        if field == GENRE_FILTER.id and field in declared:
+            return _genre_values(offset, limit, q)
+        raise UnsupportedFilter(field, "no such vocabulary here")
 
     async def playlist_user_list(
         self, offset: int = 0, limit: int = 25
