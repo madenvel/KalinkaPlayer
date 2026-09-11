@@ -14,11 +14,26 @@ import pytest
 
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.enricher.enricher_plugin import (
+    EntityEnrichmentError,
     TransientEnrichmentError,
 )
 from kalinka_plugin_localfiles.enricher.wikidata_plugin import WikidataPlugin
 
 ARTIST = {"id": "artist_1", "name": "Виктор Цой", "mbid": "mbid-tsoi"}
+
+#: Wikidata naming an image file, and Commons resolving it to a URL.
+_P18 = {
+    "claims": {
+        "P18": [{"mainsnak": {"datavalue": {"value": "Tsoi.jpg"}}}]
+    }
+}
+_COMMONS = {
+    "query": {
+        "pages": {
+            "1": {"imageinfo": [{"url": "https://upload.example/Tsoi.jpg"}]}
+        }
+    }
+}
 
 _MB_WITH_WIKIDATA = {
     "artist": {
@@ -122,3 +137,82 @@ def test_the_plugin_identifies_itself_to_musicbrainz(tmp_path):
     musicbrainzngs.set_useragent("unset", "0", "")
     _plugin(tmp_path)
     assert mb._useragent.startswith("Kalinka/1.0")
+
+
+class TestFailureIsNotAnAnswer:
+    """The defect underneath the missing import: a plugin that *fails* and a
+    plugin that has *nothing* both returned None, so the chain could not tell
+    them apart. It moved on to the next source, which guessed from a name,
+    and closed the row — leaving a stranger's photograph on an artist until
+    something re-opened it. A failure now keeps the row pending instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_bug_in_the_lookup_is_not_reported_as_no_picture(
+        self, tmp_path, mb_says_wikidata
+    ):
+        """The shipped NameError, in the shape it actually had."""
+        p = _plugin(tmp_path)
+
+        def explode(*a, **kw):
+            raise NameError("name 'raise_if_service_unavailable' is not defined")
+
+        p.async_client = FakeClient(FakeResponse(200, {"claims": {}}))
+        p.async_client.get = explode
+
+        with pytest.raises(EntityEnrichmentError):
+            await p.enrich_artist(dict(ARTIST))
+
+    @pytest.mark.asyncio
+    async def test_an_image_commons_will_not_resolve_keeps_the_row_pending(
+        self, tmp_path, mb_says_wikidata
+    ):
+        p = _plugin(tmp_path)
+        p.async_client = FakeClient(
+            FakeResponse(200, _P18),          # Wikidata names a file
+            FakeResponse(404),                # Commons will not resolve it
+        )
+
+        with pytest.raises(EntityEnrichmentError):
+            await p.enrich_artist(dict(ARTIST))
+
+    @pytest.mark.asyncio
+    async def test_a_download_that_fails_keeps_the_row_pending(
+        self, tmp_path, mb_says_wikidata
+    ):
+        p = _plugin(tmp_path)
+        p.async_client = FakeClient(
+            FakeResponse(200, _P18),
+            FakeResponse(200, _COMMONS),
+            FakeResponse(403),                # the image itself is refused
+        )
+
+        with pytest.raises(EntityEnrichmentError):
+            await p.enrich_artist(dict(ARTIST))
+
+    @pytest.mark.asyncio
+    async def test_an_image_that_will_not_decode_keeps_the_row_pending(
+        self, tmp_path, mb_says_wikidata
+    ):
+        """Claiming image_url for bytes that were never stored would leave the
+        row pointing at a file that does not exist."""
+        p = _plugin(tmp_path)
+        p.async_client = FakeClient(
+            FakeResponse(200, _P18),
+            FakeResponse(200, _COMMONS),
+            FakeResponse(200, content=b"not an image"),
+        )
+
+        with pytest.raises(EntityEnrichmentError):
+            await p.enrich_artist(dict(ARTIST))
+
+    @pytest.mark.asyncio
+    async def test_having_no_picture_is_still_a_plain_answer(
+        self, tmp_path, mb_says_wikidata
+    ):
+        """Only failures defer. A source that genuinely has nothing must stay
+        a quiet no, or the next source would never get its turn."""
+        p = _plugin(tmp_path)
+        p.async_client = FakeClient(FakeResponse(200, {"claims": {}}))
+
+        assert await p.enrich_artist(dict(ARTIST)) is None

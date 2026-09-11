@@ -13,6 +13,15 @@ class TransientEnrichmentError(Exception):
     """
 
 
+class EntityEnrichmentError(Exception):
+    """One entity could not be processed though the service is answering — a
+    failed download, an unparseable reply, a bug on this row. The row stays
+    pending, because returning nothing is indistinguishable from "no answer"
+    and would let a later source fill what this one owed. The service keeps
+    its turn on every other row.
+    """
+
+
 def raise_musicbrainz_unreachable(error) -> None:
     """Re-raise a ``musicbrainzngs.NetworkError`` as transient. Verdicts
     (400/404/411) arrive as ``ResponseError``; a NetworkError wrapping an

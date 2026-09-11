@@ -381,6 +381,12 @@ class MusicBrainzPlugin(EnricherPlugin):
             if artist["id"] == "unknown_artist":
                 return None
 
+            # Searching again would spend a request — one a second, the
+            # scarce thing here — to rediscover an id already on the row.
+            if artist.get("mbid"):
+                logger.debug(f"Artist {artist['name']} is already identified")
+                return None
+
             logger.debug(f"Enriching artist: {artist['name']}")
 
             # Repair tag mangling before searching: "В.Цой" is one Lucene
