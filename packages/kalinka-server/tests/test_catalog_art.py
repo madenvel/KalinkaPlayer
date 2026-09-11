@@ -125,13 +125,13 @@ def _catalog_item(local, *, image=None, preview=None):
     )
 
 
-def _album_child(local, *, with_image=True):
+def _album_child(local, *, with_image=True, query=""):
     eid = EntityId(id=local, type=EntityType.ALBUM, source="localfiles")
     image = (
         CoverImage(
-            large=f"/resource/album/{local}_large.jpg",
-            small=f"/resource/album/{local}_small.jpg",
-            thumbnail=f"/resource/album/{local}_thumb.jpg",
+            large=f"/resource/album/{local}_large.jpg{query}",
+            small=f"/resource/album/{local}_small.jpg{query}",
+            thumbnail=f"/resource/album/{local}_thumb.jpg{query}",
         )
         if with_image
         else None
@@ -296,6 +296,26 @@ async def test_process_generates_a_card_with_covers(tmp_path):
     assert svc._entries[cat_id]["file"] == first_file
     # Atomic writes must not leave temp litter behind.
     assert list(svc._dir.glob("*.tmp")) == []
+
+
+async def test_a_cover_link_with_a_query_still_reads_from_disk(tmp_path):
+    """A link may carry a query and still name the same file. Read as part of
+    the name it matches nothing, and every local cover fails at once."""
+    covers = _covers_on_disk(tmp_path, "a1", "a2", "a3")
+    children = [
+        _album_child(local, query=f"?v=178913192{n}")
+        for n, local in enumerate(("a1", "a2", "a3"))
+    ]
+    svc = _service(tmp_path, resolver=lambda eid: _FakeModule(children, covers))
+
+    cat_id = "kalinka:localfiles:catalog:library"
+    await svc._process(cat_id, render.ArtStyle.CARD, textual=False)
+
+    entry = svc._entries[cat_id]
+    assert entry["file"]
+    assert (svc._dir / entry["file"]).is_file()
+    # Covers were found, so the card is finished rather than held for a retry.
+    assert entry["provisional"] is False
 
 
 async def test_a_collection_is_rendered_as_a_square_cover(tmp_path):
