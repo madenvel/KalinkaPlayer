@@ -27,7 +27,7 @@ except ImportError:
     HAS_INOTIFY = False
 
 from ..config_model import LocalFilesConfig
-from ..filename_model import get_parser, parse_music_path
+from ..filename_model import get_parser, names_a_vinyl_side, parse_music_path
 from ..resolution.resolver import (
     FILENAME,
     FOLDER_NAME,
@@ -162,9 +162,14 @@ def _tags_leave_a_gap(metadata: Dict, file_path: str) -> bool:
     """Whether the file's own tags left anything the path could still supply.
 
     Asked before parsing rather than after, because a fully tagged file would
-    have every path-derived value discarded anyway. Disc number only counts
-    inside a disc subdirectory, the one place a path can name one — most
-    single-disc rips carry no DISCNUMBER at all.
+    have every path-derived value discarded anyway. A missing disc number
+    counts only where a path can actually name one: inside a disc
+    subdirectory, or on a file whose own name opens on a vinyl side. Most
+    single-disc rips are neither and carry no DISCNUMBER at all.
+
+    A side-lettered rip is otherwise invisible here — it tags artist, title,
+    year and a track number that restarts at 1 on every side, so without this
+    the four sides interleave and nothing ever asks the path why.
     """
     return (
         not metadata.get("artist")
@@ -173,7 +178,10 @@ def _tags_leave_a_gap(metadata: Dict, file_path: str) -> bool:
         or metadata.get("year") is None
         or (
             metadata.get("disc_number") is None
-            and album_folder_for_path(file_path) != os.path.dirname(file_path)
+            and (
+                album_folder_for_path(file_path) != os.path.dirname(file_path)
+                or names_a_vinyl_side(file_path)
+            )
         )
     )
 

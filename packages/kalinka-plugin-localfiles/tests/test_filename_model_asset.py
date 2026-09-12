@@ -23,7 +23,7 @@ from kalinka_plugin_localfiles.filename_model.parser import (
 )
 
 EXPECTED_MODEL_SHA256 = (
-    "04377d6f69f73901ca246fa4651072e25fa6dd2c4573d807a71e55d9a12c0f80"
+    "f4b28c2c29aa3df006581de94905992d26372ab939810f73d527a961e1f924e4"
 )
 VENDOR_PACKAGE = "kalinka_plugin_localfiles.filename_model._vendor"
 
@@ -107,3 +107,54 @@ class TestDegradedModel:
     def test_a_path_outside_every_root_yields_nothing(self):
         assert parse_music_path("/etc/passwd.mp3", None) is None
         assert parse_music_path("", "/home/user/Music") is None
+
+
+class TestWhatTheShippedWeightsRead:
+    """End-to-end pins on the weights themselves, not on synthetic spans.
+
+    ``test_filename_assembler.py`` feeds hand-written spans, so it cannot
+    notice a retrain that stops producing them. These are the two readings a
+    retrain is most likely to move.
+    """
+
+    def test_a_vinyl_side_becomes_a_disc_and_restarts_the_numbering(self):
+        """A side marker is a disc and a track, not the first word of a title.
+
+        "B1 Goodbye Blue Sky" read as one title before these weights, which
+        cost The Wall every track and disc number it has.
+        """
+        metadata = parse_music_path(
+            "/music/Pink Floyd/The Wall (1979)/B1 Goodbye Blue Sky.flac", "/music"
+        )
+        assert metadata.title == "Goodbye Blue Sky"
+        assert (metadata.disc_number, metadata.track_number) == (2, 1)
+        assert (metadata.artist, metadata.album, metadata.year) == (
+            "Pink Floyd",
+            "The Wall",
+            1979,
+        )
+
+    def test_a_dash_split_title_is_rejoined_by_its_directory(self):
+        """ "Красно - желтые дни" is one title; the model splits it in two.
+
+        The directory names the artist, which is what lets the assembler put
+        the halves back together — see ``_choose_artist`` and ``_extend_left``.
+        """
+        metadata = parse_music_path(
+            "/music/В.Цой - Черный альбом/2.Красно - желтые дни.flac", "/music"
+        )
+        assert metadata.title == "Красно - желтые дни"
+        assert metadata.artist == "В.Цой"
+        assert metadata.track_number == 2
+
+    def test_without_that_context_the_split_stands(self):
+        """Accepted, not fixed: the bare basename offers nothing to undo it.
+
+        The spaced dash is a real separator everywhere else, and a flat
+        "Artist - Title.mp3" library is a convention this plugin measures
+        against, so suppressing the artist here would cost more than it saves.
+        A file directly in a music root is the only way to reach this.
+        """
+        metadata = parse_music_path("/music/2.Красно - желтые дни.flac", "/music")
+        assert metadata.artist == "Красно"
+        assert metadata.title == "желтые дни"

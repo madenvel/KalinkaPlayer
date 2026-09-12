@@ -11,7 +11,13 @@ from __future__ import annotations
 from typing import Optional
 
 from ..clustering.classify import is_various_artists_name
-from .assembler import MIN_SCORE, PathMetadata, assemble, build_view
+from .assembler import (
+    MIN_SCORE,
+    PathMetadata,
+    assemble,
+    build_view,
+    names_a_vinyl_side,
+)
 from .parser import FilenameModel, get_parser
 
 __all__ = [
@@ -19,6 +25,7 @@ __all__ = [
     "FilenameModel",
     "PathMetadata",
     "get_parser",
+    "names_a_vinyl_side",
     "parse_music_path",
 ]
 

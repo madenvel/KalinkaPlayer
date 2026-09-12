@@ -16,24 +16,24 @@
   "input_files": [
     {
       "name": "train.jsonl",
-      "sha256": "4dc71d151c2a68f4520b59e4b3c637b956dd7de9fc4f56c7bbe817db50480689"
+      "sha256": "296bc78fab6a099542b7578820db005fbdaa2d40648471b8387360339602f962"
     },
     {
       "name": "mltrain_train.jsonl",
-      "sha256": "7d6eb72993f2339c37b7b272c8b4e38d544dba11e7de213d76dac8616996bf42"
+      "sha256": "7e6f1f59452d83a66596464b6b564b032e167f58ab9981242f6f635f1a6149c9"
     }
   ],
   "counts": {
-    "weak_complete": 11789,
-    "sequences_with_repeats": 11789,
-    "tokens_with_repeats": 143140
+    "weak_complete": 12346,
+    "sequences_with_repeats": 12346,
+    "tokens_with_repeats": 152599
   },
   "rejected": {
     "conflicting_inputs": 0
   },
-  "wall_seconds": 20.876486191991717,
-  "model_bytes": 334148,
-  "model_sha256": "04377d6f69f73901ca246fa4651072e25fa6dd2c4573d807a71e55d9a12c0f80",
+  "wall_seconds": 22.48679662199993,
+  "model_bytes": 337960,
+  "model_sha256": "f4b28c2c29aa3df006581de94905992d26372ab939810f73d527a961e1f924e4",
   "python": "3.14.7",
   "python_crfsuite": "0.9.12",
   "labels": [

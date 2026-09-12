@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..utils.name_utils import album_folder_for_path, normalize_for_id
+from ._vendor.filename_parser.common import SIDE_LETTERS, numeric_value
 
 # A span below its floor is discarded. Swept against the embedded tags of a
 # 526-track library, which the parser never saw: artist and album accuracy are
@@ -22,8 +23,8 @@ from ..utils.name_utils import album_folder_for_path, normalize_for_id
 # 0.50 rather than 0.70 because the two score the same on ordinary paths while
 # 0.50 is 7 points better on bulk downloads. Title has no floor: a rejected
 # title falls back to the stem, which is the placeholder it was meant to
-# replace. Disc number is untested — no library to hand contains one — so it
-# borrows the track-number floor.
+# replace. Disc number borrows the track-number floor: the side-lettered rows
+# that exercise it score above 0.99, so no sweep separates the two.
 MIN_SCORE = {
     "artist": 0.50,
     "album": 0.70,
@@ -40,6 +41,12 @@ MIN_SCORE = {
 # context takes this library's 69 such files from 0/69 correct artists on the
 # old heuristic to 44/69.
 BULK_DOWNLOAD_PREFIX = re.compile(r"^(\d{2,3})-(\d{5,})-")
+
+# "B1 Goodbye Blue Sky.flac" — a vinyl side and a position on it, in the one
+# place no tag reaches. Deliberately only a question: it decides whether the
+# path is worth parsing, never what the answer is, so a name that merely looks
+# like a marker ("D12 - My Band.mp3") costs one parse and no wrong number.
+_SIDE_MARKER = re.compile(rf"^[{SIDE_LETTERS}]\d{{1,2}}[ ._-]", re.IGNORECASE)
 
 _UNSPACED_DASH = re.compile(r"[-–—]")
 _CLOSERS = {")": "(", "]": "[", "}": "{"}
@@ -75,6 +82,17 @@ class PathMetadata:
             if value is not None:
                 metadata[key] = repair(value) if isinstance(value, str) else value
         return metadata
+
+
+def names_a_vinyl_side(file_path: str) -> bool:
+    """Whether the basename opens on a side marker, e.g. ``B1 …``.
+
+    A side is written into the file's own name rather than a ``CD2`` folder,
+    so it is the one disc number a fully tagged rip can still be missing.
+    Matched on the stem: the marker has to be followed by a separator and the
+    title it numbers, which the extension's own dot must not stand in for.
+    """
+    return bool(_SIDE_MARKER.match(_stem(file_path)))
 
 
 def build_view(file_path: str, music_root: Optional[str]) -> Optional[str]:
@@ -300,12 +318,9 @@ def _text(view: str, span: Optional[Dict]) -> Optional[str]:
 
 
 def _number(span: Optional[Dict]) -> Optional[int]:
-    if not span:
-        return None
-    try:
-        return int(span["text"])
-    except (ValueError, KeyError):
-        return None
+    # A vinyl side arrives as the letter it is written with, so the reading of
+    # a numeric span belongs to the parser that labelled it, not to int().
+    return numeric_value(span["label"], span["text"]) if span else None
 
 
 def _stem(view: str) -> str:

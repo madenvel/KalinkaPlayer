@@ -303,6 +303,27 @@ class TestNumbers:
         assert result.disc_number == 1
         assert result.track_number == 8
 
+    def test_a_vinyl_side_numbers_the_disc_it_is(self):
+        """ "B1" is side two, track one — the letter is not a failed int()."""
+        view = "Pink Floyd/The Wall/B1 Goodbye Blue Sky.flac"
+        result = run(
+            view,
+            ("ARTIST", "Pink Floyd"),
+            ("ALBUM", "The Wall"),
+            ("DISC_NUMBER", "B"),
+            ("TRACK_NUMBER", "1"),
+            ("TITLE", "Goodbye Blue Sky"),
+        )
+        assert result.disc_number == 2
+        assert result.track_number == 1
+
+    def test_a_disc_letter_outside_the_sides_numbers_nothing(self):
+        """The runtime drops these before the assembler sees them; if one ever
+        arrives, it must not become a disc by accident."""
+        view = "U96 - Das Boot.mp3"
+        result = run(view, ("DISC_NUMBER", "U"), ("TITLE", "Das Boot"))
+        assert result.disc_number is None
+
     def test_the_earliest_year_is_the_release_year(self):
         """ "1973 (2021) Pink Floyd - …" states the original first."""
         view = "1973 (2021) Pink Floyd - Dark Side/09. Brain Damage.flac"

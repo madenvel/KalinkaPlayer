@@ -103,11 +103,24 @@ def repair_span(text: str, start: int, end: int) -> tuple[int, int]:
 def repair_spans(text: str, spans: list[dict]) -> list[dict]:
     """Repaired copies of ``spans``; a span shrunk to nothing is dropped."""
     out = []
+    rejected_side = None
     for span in spans:
         start, end = repair_span(text, span["start"], span["end"])
         if start >= end:
             continue
-        out.append({**span, "start": start, "end": end, "text": text[start:end]})
+        piece = text[start:end]
+        # A lettered disc is a vinyl side, and the importer only ever labels
+        # A-H. The tagger learned the shape rather than the letter set and will
+        # call the "U" of "U96 - Das Boot" a side, so hold it to the same range.
+        if span["label"] == "DISC_NUMBER" and numeric_value("DISC_NUMBER", piece) is None:
+            rejected_side = end
+            continue
+        # A side marker is one thing: "U96" is a letter and the position on it.
+        # If the letter was not a side, the digits are not a position on one.
+        if (span["label"] == "TRACK_NUMBER" and start == rejected_side
+                and text[span["start"]:end].isdecimal()):
+            continue
+        out.append({**span, "start": start, "end": end, "text": piece})
     return out
 
 
@@ -179,6 +192,26 @@ def read_jsonl(path: str | Path):
                 yield json.loads(line)
 
 
+SIDE_LETTERS = "ABCDEFGH"
+
+
+def numeric_value(label: str, text: str) -> int | None:
+    """The number a span stands for, or None when it names no number.
+
+    A disc may be written as a vinyl side letter ("A1 In the Flesh"), which the
+    importer labels DISC_NUMBER so that ordering by (disc, track) reproduces the
+    play order. The span keeps the letter as written; only this reading is
+    numeric, and it is a side index, not a physical disc.
+    """
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    if label == "DISC_NUMBER" and len(text) == 1 and text.upper() in SIDE_LETTERS:
+        return SIDE_LETTERS.index(text.upper()) + 1
+    return None
+
+
 def result_from_spans(text: str, spans: list[dict], min_confidence: float = 0.0) -> dict:
     accepted = [s for s in spans if s.get("score", 1.0) >= min_confidence]
     fields = {}
@@ -196,10 +229,7 @@ def result_from_spans(text: str, spans: list[dict], min_confidence: float = 0.0)
         if best:
             field.update({k: best[k] for k in ("text", "start", "end", "score") if k in best})
             if label in {"TRACK_NUMBER", "DISC_NUMBER", "YEAR"}:
-                try:
-                    field["value"] = int(best["text"])
-                except ValueError:
-                    field["value"] = None
+                field["value"] = numeric_value(label, best["text"])
         fields[label.lower()] = field
     extension = re.search(r"\.([a-zA-Z0-9]{1,8})$", text)
     return {"input": text, "spans": accepted, "fields": fields,

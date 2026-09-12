@@ -1,6 +1,6 @@
 # Vendored `filename_parser`
 
-Copied verbatim from `madenvel/kalinka-training` at commit `f8e1b57`, path
+Copied verbatim from `madenvel/kalinka-training` at commit `280271c`, path
 `filename_parser/`. **Never edit anything under `filename_parser/` here** —
 `filename_parser.sha256` pins every file and `tests/test_filename_model_asset.py`
 fails if one drifts. Local behaviour belongs in `../assembler.py`.
