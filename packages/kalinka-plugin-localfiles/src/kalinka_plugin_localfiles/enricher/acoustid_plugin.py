@@ -4,6 +4,7 @@ import math
 import time
 import os
 import json
+import shutil
 import subprocess
 import threading
 import requests
@@ -47,9 +48,20 @@ class AcoustIdPlugin(EnricherPlugin):
         self.config = config
         self.db_manager = db_manager
         self.api_key = config.enricher.plugins.acoustid.api_key
+        # Probed once: a missing binary is a property of the installation, not
+        # of the track, and shelling out per file turned one broken install
+        # into one error line per file in the library.
+        self.fpcalc = shutil.which("fpcalc")
 
         if not self.api_key:
             logger.warning("AcoustID API key not configured. Plugin will be disabled.")
+        elif not self.fpcalc:
+            logger.error(
+                "AcoustID is configured but fpcalc (chromaprint) is missing, so "
+                "fingerprint identification is off. Install chromaprint "
+                "(Debian: libchromaprint-tools) and restart; the tracks it could "
+                "not identify are retried by themselves."
+            )
 
         # Rate limiting. The interval is enforced inside worker threads, so
         # the pacing state needs a real lock once several tracks are enriched
@@ -74,7 +86,14 @@ class AcoustIdPlugin(EnricherPlugin):
         # resolving tracks that previously FAILED. Presence is what
         # changes outcomes — the key value itself isn't recorded (no
         # secret in the fingerprint).
-        return {"api_key_present": bool(self.api_key)}
+        #
+        # fpcalc counts for the same reason, and the plugin stays loaded
+        # without it: installing chromaprint has to move the fingerprint or
+        # every track it failed would stay FAILED until something else did.
+        return {
+            "api_key_present": bool(self.api_key),
+            "fpcalc_present": bool(self.fpcalc),
+        }
 
     def _wait_for_rate_limit(self):
         """Wait to respect rate limits.
@@ -565,7 +584,10 @@ class AcoustIdPlugin(EnricherPlugin):
         return False  # This plugin doesn't directly enrich albums, only via track identification
 
     def can_enrich_track(self) -> bool:
-        return bool(self.api_key)  # Only if API key is configured
+        # fpcalc is as hard a requirement as the key: there is no fingerprint
+        # to look up without it, so the chain must skip this plugin rather
+        # than have every track discover the same missing binary.
+        return bool(self.api_key and self.fpcalc)
 
     async def enrich_artist(self, artist: Dict) -> Optional[Dict]:
         """

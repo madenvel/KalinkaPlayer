@@ -4,6 +4,7 @@ import logging
 import logging.handlers
 import multiprocessing
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
@@ -140,6 +141,15 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             widget="rich_text",
             value_type="str",
         ),
+        # Beside the API key: a key alone does nothing without the binary,
+        # and the enricher's own status is one section further out than
+        # anyone looks for this.
+        "acoustid.status_view": DynamicFieldDecl(
+            section_id="enricher.plugins.acoustid",
+            label="Status",
+            widget="rich_text",
+            value_type="str",
+        ),
         "storage.status_view": DynamicFieldDecl(
             section_id="",
             label="Music folders status",
@@ -187,6 +197,7 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
             "ai_search": _SubfeatureBookkeeping(
                 title="AI search", required=False
             ),
+            "acoustid": _SubfeatureBookkeeping(title="AcoustID", required=False),
         }
 
     def get_interface(self) -> Optional[InputModule]:
@@ -357,6 +368,29 @@ class KalinkaPluginLocalFiles(InputModulePlugin):
         else:
             enr.state = ModuleHealthState.READY
             enr.message = ""
+
+        # AcoustID: a key is what turns it on, and fpcalc is what lets it
+        # run. The binary ships as a Recommends, so it can be absent on a
+        # deliberately slim install — and a key set against a missing
+        # binary is silent otherwise. Not offered as a missing_package:
+        # that list drives a pip install, which cannot supply a binary.
+        acoustid = self._subfeatures["acoustid"]
+        if not config.enricher.enabled:
+            acoustid.state = ModuleHealthState.DISABLED
+            acoustid.message = "Metadata enrichment is disabled."
+        elif not config.enricher.plugins.acoustid.api_key:
+            acoustid.state = ModuleHealthState.DISABLED
+            acoustid.message = "No API key configured."
+        elif not shutil.which("fpcalc"):
+            acoustid.state = ModuleHealthState.WARNING
+            acoustid.message = (
+                "The API key is set but `fpcalc` is not installed, so tracks "
+                "are not identified by their audio. Install the "
+                "**libchromaprint-tools** system package and restart."
+            )
+        else:
+            acoustid.state = ModuleHealthState.READY
+            acoustid.message = ""
 
         # AI search: the query and indexing halves report as one feature.
         # CLAP needs numpy + onnxruntime + soundfile + soxr + tokenizers
