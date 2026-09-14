@@ -202,7 +202,7 @@ jobs:
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Kalinka $VERSION" \
+              --title "Kalinka Player $VERSION" \
               --notes-file notes.md
           fi
           gh release upload "$TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
