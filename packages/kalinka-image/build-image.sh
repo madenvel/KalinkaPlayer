@@ -254,7 +254,11 @@ sync
 
 log "Compressing"
 VERSION="$(in_chroot dpkg-query -W -f='${Version}' kalinka-server)"
-NAME="kalinka-$VERSION-$TARGET-$TARGET_ARCH.img"
+# The target names the hardware and the architecture names the packages, and
+# for a plain PC those are the same word.
+SUFFIX="$TARGET"
+[ "$TARGET" = "$TARGET_ARCH" ] || SUFFIX="$TARGET-$TARGET_ARCH"
+NAME="kalinka-$VERSION-$SUFFIX.img"
 mkdir -p "$OUT_DIR"
 for (( i=${#MOUNTED[@]}-1 ; i>=0 ; i-- )); do umount "${MOUNTED[i]}"; done
 MOUNTED=()
