@@ -3,15 +3,16 @@
 How to cut a release and bump versions in this monorepo. Read this before
 tagging or changing any version — it is the source of truth for the process.
 
-## The model (three version lines)
+## The model (four version lines)
 
-There are three independent things to version, and they work differently:
+There are four independent things to version, and they work differently:
 
 | What | Packages | Versioned by | Needs a git tag? |
 |------|----------|--------------|------------------|
 | **App bundle** | `kalinka-server`, `kalinka-plugin-localfiles`, `kalinka-plugin-musiccast`, `kalinka-plugin-dummydevice` | A single `kalinka-vX.Y.Z` git tag (via setuptools_scm) | **Yes** |
 | **Renderer** | `kalinka-renderer` (deb/rpm/flatpak) | Its own `kalinka-renderer-vX.Y.Z` git tag | **Yes** (its own) |
 | **Plugin SDK** | `kalinka-plugin-sdk` | Its **own SemVer** — a constant in source | **No** |
+| **Appliance images** | `kalinka-*-rpi4-arm64.img.xz`, `kalinka-*-amd64.img.xz` | Their own `kalinka-image-vX.Y.Z` git tag | **Yes** (its own) |
 
 - The **app bundle** is lockstep: one tag versions the server and all
   first-party plugins together.
@@ -19,6 +20,7 @@ There are three independent things to version, and they work differently:
   builds only the renderer packages, and an app-bundle release never rebuilds
   or re-ships the renderer. Devices upgrade the renderer only when its own
   version moves — a server patch release doesn't restart renderers mid-playback.
+- The **appliance images** have their own train too, and for the same reason twice over: they change when Debian does or when the first-boot machinery does, neither of which is an app release, and two of them are a gigabyte of assets that has no business riding along with every patch. Which app-bundle release goes inside them is a separate choice made at build time.
 - The **SDK** is the plugin API contract, versioned by its **own SemVer**,
   independent of the app/`kalinka-v*` version. **Major** = a breaking API
   change; **minor** = a backwards-compatible addition; **patch** = a fix.
@@ -125,6 +127,30 @@ make renderer-rpm    # -> packages/kalinka-renderer/*.rpm
 
 ---
 
+## Release the appliance images
+
+Ready-to-flash Debian images with the whole player already installed — one for the Raspberry Pi 4 family, one for x86-64. See [`packages/kalinka-image/README.md`](packages/kalinka-image/README.md) for what is in them and how they are built.
+
+1. Tag and push. The version is the image train's own, not the app bundle's:
+   ```bash
+   git tag kalinka-image-v1.0.0
+   git push origin kalinka-image-v1.0.0
+   ```
+   `image-release.yml` builds each image on a runner of its own architecture — nothing is emulated — and publishes both to the tag's own release, never marked "latest".
+
+2. **Pick the app-bundle release to bake in.** The tag push installs whatever is the latest published `kalinka-v*` at build time, which is usually what you want. To pin a specific one, run the workflow by hand instead (**Actions → Image release → Run workflow**) with `kalinka_version` set; it also takes the existing tag to publish under. The image filename carries the version that actually landed inside it, not the one that was asked for.
+
+3. Cut an image release when the OS side changes — a Debian point release worth picking up, a first-boot or partitioning fix — or when the app bundle has moved far enough that a freshly flashed card would otherwise spend its first boot upgrading. Not on every app release: the images auto-upgrade like any other install.
+
+Local builds (needs root, and `qemu-user-static` under `binfmt_misc` to cross-build):
+```bash
+sudo make image-rpi4
+sudo make image-amd64 KALINKA_VERSION=4.3.2
+make image-test
+```
+
+---
+
 ## Data releases (models, indexes) — never let them become "latest"
 
 Releases that host data assets rather than software (`jamendo-ai-*`,
@@ -219,6 +245,9 @@ make build-all-deb                       # -> debs/
 # Bump the SDK (minor/patch): edit one line, then rebuild
 $EDITOR packages/kalinka-plugin-sdk/src/kalinka_plugin_sdk/_version.py   # __version__
 make build-all-deb
+
+# Cut an appliance image release
+git tag kalinka-image-vX.Y.Z && git push origin kalinka-image-vX.Y.Z
 ```
 
 ## Rules of thumb

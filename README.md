@@ -99,9 +99,13 @@ The server exposes a REST API (FastAPI) plus WebSocket channels for live state. 
 
 # Installation
 
+## Ready-to-flash images
+
+If the machine has nothing on it yet, skip the OS install: the [`kalinka-image-v*` releases](https://github.com/madenvel/KalinkaPlayer/releases?q=kalinka-image-v&expanded=true) carry a minimal Debian 13 with the whole player already installed — one for the Raspberry Pi 4 / 400 / CM4, one for any x86-64 PC or virtual machine. Flash it, power it on, open `http://<its-ip>:8000`, and it plays. The root filesystem grows into the card by itself, and a file on the boot partition sets up a login account and Wi-Fi if you want them. See [`packages/kalinka-image/README.md`](packages/kalinka-image/README.md).
+
 ## Quick install
 
-One command sets up a complete player on a Debian/Ubuntu/Raspberry Pi OS box:
+On a machine that already runs Debian, Ubuntu or Raspberry Pi OS, one command sets up a complete player:
 
 ```bash
 curl -fsSL https://kalinkaplayer.com/install.sh | sudo bash

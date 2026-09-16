@@ -6,7 +6,9 @@
 curl -fsSL https://kalinkaplayer.com/install.sh | sudo bash
 ```
 
-This file covers the two paths that command doesn't: running from a source checkout, and building the packages yourself.
+Starting from a bare machine? A ready-to-flash image installs nothing at all — see [`packages/kalinka-image/README.md`](packages/kalinka-image/README.md).
+
+This file covers the two paths neither of those covers: running from a source checkout, and building the packages yourself.
 
 ## Development Installation
 

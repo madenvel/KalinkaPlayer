@@ -1,0 +1,12 @@
+[Unit]
+Description=Grow the Kalinka root filesystem to fill its storage
+After=local-fs.target
+Before=kalinka-firstboot.service kalinka.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/kalinka-image/growroot.sh
+
+[Install]
+WantedBy=multi-user.target

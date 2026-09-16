@@ -1,6 +1,6 @@
 ## KalinkaPlayer Development Makefile
 
-.PHONY: clean test help venv-env kalinka-server-deb kalinka-server-rpm kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run renderer-build renderer-clean renderer-deb renderer-rpm proto
+.PHONY: clean test help venv-env kalinka-server-deb kalinka-server-rpm kalinka-plugins-deb build-all-deb copy-debs build-env dev-setup dev-run renderer-build renderer-clean renderer-deb renderer-rpm proto image-rpi4 image-amd64 image-test
 
 ## --- Local-from-source dev environment (no root, no systemd) ------------------
 ## Everything lands in a per-user fakeroot under $(KALINKA_PREFIX) instead of the
@@ -189,6 +189,39 @@ build-all-deb: kalinka-server-deb kalinka-plugins-deb renderer-deb copy-debs
 	@echo "All deb packages built successfully!"
 	@echo "Debs moved to debs/ directory"
 
+## --- Appliance images (packages/kalinka-image) ---------------------------------
+## Bootable Debian images with the whole player already installed. Both need
+## root for loop devices and mounts, and building for another architecture
+## needs qemu-user-static registered with binfmt_misc:
+##   sudo make image-rpi4                 # latest published release
+##   sudo make image-rpi4 KALINKA_VERSION=4.3.2
+IMAGE_DIR := packages/kalinka-image
+KALINKA_VERSION ?=
+
+image-rpi4:
+	@$(IMAGE_DIR)/build-image.sh rpi4 $(KALINKA_VERSION)
+
+image-amd64:
+	@$(IMAGE_DIR)/build-image.sh amd64 $(KALINKA_VERSION)
+
+## The tests that edit /etc run in a throwaway Debian container, since that is
+## the only way to let them near a real useradd and a real ssh-keygen.
+image-test:
+	@if command -v podman >/dev/null 2>&1 || command -v docker >/dev/null 2>&1; then \
+		engine=$$(command -v podman || command -v docker); \
+		echo "Running the image tests in debian:trixie via $$(basename $$engine)"; \
+		$$engine run --rm -v "$(CURDIR)/$(IMAGE_DIR):/img:z" -w /img \
+			-e KALINKA_IMAGE_TEST_DISPOSABLE=1 -e DEBIAN_FRONTEND=noninteractive \
+			debian:trixie bash -c 'apt-get update -qq >/dev/null && \
+				apt-get install -y -qq --no-install-recommends \
+					openssh-client openssl passwd python3 util-linux fdisk >/dev/null && \
+				bash tests/run-tests.sh'; \
+	else \
+		echo "No podman or docker: running only the tests that need neither root nor a container."; \
+		$(IMAGE_DIR)/tests/run-tests.sh; \
+	fi
+## -----------------------------------------------------------------------------
+
 ## Show help
 help:
 	@echo "KalinkaPlayer Development Commands:"
@@ -203,6 +236,9 @@ help:
 	@echo "  kalinka-server-deb  Build kalinka-server deb package"
 	@echo "  kalinka-plugins-deb Build all plugin deb packages (including SDK)"
 	@echo "  build-all-deb     Build all deb packages (server, plugins, renderer) and move to debs/"
+	@echo "  image-rpi4        Build the Raspberry Pi 4 appliance image (needs root)"
+	@echo "  image-amd64       Build the x86-64 appliance image (needs root)"
+	@echo "  image-test        Run the appliance image tests"
 	@echo "  copy-debs         Move built deb packages to debs/ directory"
 	@echo "  test              Run all tests"
 	@echo "  lint              Check for undefined names (F821)"

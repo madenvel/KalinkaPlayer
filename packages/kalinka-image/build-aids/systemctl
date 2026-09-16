@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# systemctl inside the image chroot, where no systemd is running.
+#
+# The packages being installed enable their own units and restart their own
+# services. The first half has to take effect — it is what makes the appliance
+# come up playing — and the second half has nothing to act on. Letting the
+# file-level verbs through against this root, and swallowing the rest, keeps
+# each package the authority on what runs at boot instead of making the image
+# builder keep a second copy of that list.
+args=()
+verb=""
+for arg in "$@"; do
+  case "$arg" in
+    --now|--no-block) continue ;;
+    -*) ;;
+    *) [ -n "$verb" ] || verb="$arg" ;;
+  esac
+  args+=("$arg")
+done
+case "$verb" in
+  enable|disable|preset|preset-all|mask|unmask|link|set-default)
+    exec /usr/bin/systemctl.real --root=/ "${args[@]}" ;;
+esac
+exit 0
