@@ -141,6 +141,7 @@ apply_configuration() {
 
 # \4 is agetty's escape for this machine's address, filled in per console.
 announce_status() {
+  mkdir -p "$(dirname "$ISSUE")"
   if getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 { found = 1 } END { exit !found }'; then
     cat > "$ISSUE" <<NOTICE
 Kalinka Player is running: open http://\4:8000 in a browser.

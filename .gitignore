@@ -37,6 +37,8 @@ _version.py
 # C/C++ build artifacts
 *.o
 *.d
+# ... but *.d also matches every drop-in directory the image ships.
+!packages/kalinka-image/rootfs/**/*.d/
 *.so
 *.a
 *.lib

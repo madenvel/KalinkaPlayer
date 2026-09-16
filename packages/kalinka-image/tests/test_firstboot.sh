@@ -20,7 +20,10 @@ STAMP=/var/lib/kalinka-image/firstboot-done
 # Runs firstboot.sh with the commands that need a running systemd or
 # NetworkManager replaced by recorders.
 _run_firstboot() {
-  mkdir -p "$BOOT" /etc/issue.d /etc/NetworkManager/system-connections /etc/ssh
+  # /etc/issue.d is deliberately not created here: a minimal Debian has no
+  # such directory, and firstboot.sh is what has to cope with that.
+  rm -rf /etc/issue.d
+  mkdir -p "$BOOT" /etc/NetworkManager/system-connections /etc/ssh
   rm -f /etc/modprobe.d/kalinka-regdom.conf
   rm -f /etc/NetworkManager/system-connections/kalinka-wifi.nmconnection
   echo "KALINKA_IMAGE_BOOT=$BOOT" > /etc/default/kalinka-image
