@@ -52,6 +52,19 @@ BASE_PACKAGES="ca-certificates curl openssl sudo openssh-server
                python3 python3-venv python3-pip
                alsa-utils"
 
+# Recommends are on, which is how fpcalc arrives behind the localfiles plugin.
+# What else arrives behind them is a graphics stack: fpcalc links ffmpeg,
+# ffmpeg's libavutil hard-depends libva2 and libvdpau1, and those two Recommend
+# the va-driver-all and vdpau-driver-all metapackages — 250 MB of Mesa and a
+# 118 MB libLLVM, to accelerate video on a headless machine that only ever
+# decodes audio, on the CPU. libva2 and libvdpau1 themselves stay; only the
+# drivers behind them are refused. The rest of this list is the same story on
+# a smaller scale: a cellular modem stack behind NetworkManager, X forwarding
+# behind sshd.
+EXCLUDED_PACKAGES=(va-driver-all vdpau-driver-all mesa-vulkan-drivers
+                   modemmanager ppp usb-modeswitch dnsmasq-base
+                   xauth bash-completion ncurses-term groff-base)
+
 die() { echo "build-image: $*" >&2; exit 1; }
 
 log() { echo; echo "==> $*"; }
@@ -64,9 +77,6 @@ in_chroot() {
 }
 
 apt_install() {
-  # Recommends stay on: fpcalc reaches the image as a Recommends of the
-  # localfiles plugin, and so do the codec and firmware odds and ends the
-  # packages below only suggest they want.
   in_chroot apt-get install -y "$@"
 }
 
@@ -183,6 +193,12 @@ mkdir -p "$ROOTFS/etc/systemd/journald.conf.d"
 printf '[Journal]\nSystemMaxUse=200M\n' \
   > "$ROOTFS/etc/systemd/journald.conf.d/kalinka.conf"
 
+cat > "$ROOTFS/etc/apt/preferences.d/kalinka-image-excludes" <<PREFERENCES
+Package: ${EXCLUDED_PACKAGES[*]}
+Pin: release *
+Pin-Priority: -1
+PREFERENCES
+
 # Nothing behind this chroot answers to systemctl; build-aids/systemctl says
 # what stands in for it and why.
 printf '#!/bin/sh\nexit 101\n' > "$ROOTFS/usr/sbin/policy-rc.d"
@@ -215,6 +231,11 @@ in_chroot /opt/kalinka/bootstrap.sh
   || die "bootstrap.sh left no kalinka-server in the venv"
 [ -x "$ROOTFS/usr/bin/fpcalc" ] \
   || die "fpcalc is missing — the localfiles plugin's Recommends did not install"
+landed="$(in_chroot dpkg-query -W -f='${Package} ${Status}\n' \
+  | awk '$4 == "installed" { print $1 }' \
+  | grep -Fx -f <(printf '%s\n' "${EXCLUDED_PACKAGES[@]}") || true)"
+[ -z "$landed" ] \
+  || die "packages this image refuses landed anyway: $(echo "$landed" | tr '\n' ' ')"
 
 log "Installing the first-boot machinery"
 cp -a "$SCRIPT_DIR/rootfs/." "$ROOTFS/"
@@ -230,6 +251,9 @@ rm -f "$ROOTFS/usr/bin/systemctl"
 in_chroot dpkg-divert --local --rename --divert /usr/bin/systemctl.real \
   --remove /usr/bin/systemctl
 rm -f "$ROOTFS/usr/sbin/policy-rc.d"
+# The refusals were about keeping this build lean, not about what the owner of
+# the machine may install on it later.
+rm -f "$ROOTFS/etc/apt/preferences.d/kalinka-image-excludes"
 in_chroot apt-get clean
 rm -rf "$ROOTFS"/var/lib/apt/lists/* "$ROOTFS"/tmp/*
 # Emptied rather than removed: something expects most of these files to exist,
@@ -251,6 +275,10 @@ printf 'nameserver 1.1.1.1\n' > "$ROOTFS/etc/resolv.conf"
 dd if=/dev/zero of="$ROOTFS/zero" bs=4M status=none || true
 rm -f "$ROOTFS/zero"
 sync
+
+# Asked of the filesystem, not of du, which would descend into the bind
+# mounts that are still up at this point.
+log "Root filesystem: $(df -h --output=used "$ROOT_DEV" | tail -1 | tr -d " ") used"
 
 log "Compressing"
 VERSION="$(in_chroot dpkg-query -W -f='${Version}' kalinka-server)"
