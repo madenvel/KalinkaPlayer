@@ -54,14 +54,24 @@ BASE_PACKAGES="ca-certificates curl openssl sudo openssh-server
 
 # Recommends are on, which is how fpcalc arrives behind the localfiles plugin.
 # What else arrives behind them is a graphics stack: fpcalc links ffmpeg,
-# ffmpeg's libavutil hard-depends libva2 and libvdpau1, and those two Recommend
-# the va-driver-all and vdpau-driver-all metapackages — 250 MB of Mesa and a
-# 118 MB libLLVM, to accelerate video on a headless machine that only ever
-# decodes audio, on the CPU. libva2 and libvdpau1 themselves stay; only the
-# drivers behind them are refused. The rest of this list is the same story on
-# a smaller scale: a cellular modem stack behind NetworkManager, X forwarding
-# behind sshd.
-EXCLUDED_PACKAGES=(va-driver-all vdpau-driver-all mesa-vulkan-drivers
+# ffmpeg's libavutil hard-depends libva2 and libvdpau1, and each of those
+# Recommends a video-acceleration driver — on a machine with no display, whose
+# own dependencies are Mesa and a 118 MB libLLVM.
+#
+# Refusing the two metapackages they name is not enough. Both Recommends read
+# `<name>-all | <virtual>`, and the same Mesa packages Provide the virtual, so
+# apt simply takes the second alternative. Every provider has to be named, and
+# what they carry is named too — so that a path opening somewhere else in the
+# graph fails this build rather than quietly adding 200 MB to it.
+#
+# libva2 and libvdpau1 themselves stay: ffmpeg needs them, they are small, and
+# VA-API without a driver is what any headless box does anyway. The rest of the
+# list is the same story on a smaller scale — a cellular modem stack behind
+# NetworkManager, X forwarding behind sshd.
+EXCLUDED_PACKAGES=(va-driver-all vdpau-driver-all
+                   mesa-va-drivers i965-va-driver intel-media-va-driver
+                   libvdpau-va-gl1 mesa-vdpau-drivers mesa-vulkan-drivers
+                   mesa-libgallium libllvm19 libgl1
                    modemmanager ppp usb-modeswitch dnsmasq-base
                    xauth bash-completion ncurses-term groff-base)
 
