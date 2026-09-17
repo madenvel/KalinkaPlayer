@@ -239,8 +239,23 @@ log "Pre-building the server venv"
 in_chroot /opt/kalinka/bootstrap.sh
 [ -x "$ROOTFS/opt/kalinka/venv/bin/kalinka-server" ] \
   || die "bootstrap.sh left no kalinka-server in the venv"
-[ -x "$ROOTFS/usr/bin/fpcalc" ] \
-  || die "fpcalc is missing — the localfiles plugin's Recommends did not install"
+# Not "did fpcalc install" but "does fpcalc work". Refusing packages further
+# down ffmpeg's dependency graph is exactly the kind of change that leaves the
+# binary in place and unable to load, and AcoustID enrichment is the feature
+# that would go quiet about it.
+in_chroot python3 -c "
+import math, struct, wave
+w = wave.open('/tmp/fpcalc-check.wav', 'w')
+w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100)
+w.writeframes(b''.join(struct.pack('<h', int(12000 * math.sin(2 * math.pi * 440 * i / 44100)))
+                       for i in range(44100 * 6)))
+w.close()"
+fingerprint="$(in_chroot fpcalc /tmp/fpcalc-check.wav || true)"
+rm -f "$ROOTFS/tmp/fpcalc-check.wav"
+case "$fingerprint" in
+  *FINGERPRINT=*) ;;
+  *) die "fpcalc cannot fingerprint audio in this image" ;;
+esac
 landed="$(in_chroot dpkg-query -W -f='${Package} ${Status}\n' \
   | awk '$4 == "installed" { print $1 }' \
   | grep -Fx -f <(printf '%s\n' "${EXCLUDED_PACKAGES[@]}") || true)"
