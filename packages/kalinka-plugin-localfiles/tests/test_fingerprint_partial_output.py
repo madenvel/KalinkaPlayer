@@ -16,6 +16,7 @@ import pytest
 
 from kalinka_plugin_localfiles.config_model import LocalFilesConfig
 from kalinka_plugin_localfiles.enricher.acoustid_plugin import AcoustIdPlugin
+from kalinka_plugin_localfiles.storage.local import LocalStorage
 
 TRUNCATED_MP3 = "/music/Dolphin Smiles/06 - The Farthest Shore.mp3"
 DECODE_ERROR = "ERROR: Error reading from the audio source (Invalid data found)"
@@ -41,7 +42,9 @@ def _completed(returncode, stdout, stderr=""):
 
 
 def _run(plugin, completed):
-    with patch("os.path.isfile", return_value=True), patch(
+    # The track is a stand-in for a real one, so its storage is told it is
+    # there; a local file is handed to fpcalc by name and never read here.
+    with patch.object(LocalStorage, "is_file", return_value=True), patch(
         "subprocess.run", return_value=completed
     ):
         return plugin._generate_fingerprint(TRUNCATED_MP3)
@@ -87,23 +90,60 @@ class TestAFailureThatYieldsNothing:
 
 class TestWhenFpcalcCannotRun:
     def test_a_missing_binary_is_reported(self, plugin, caplog):
-        with patch("os.path.isfile", return_value=True), patch(
+        with patch.object(LocalStorage, "is_file", return_value=True), patch(
             "subprocess.run", side_effect=FileNotFoundError()
         ):
             assert plugin._generate_fingerprint(TRUNCATED_MP3) == (None, None)
         assert "chromaprint" in caplog.text
 
+    def test_a_binary_that_will_not_run_is_not_blamed_on_the_track(
+        self, plugin, caplog
+    ):
+        """The wrong architecture, or a file without +x: fpcalc's problem,
+        and the one message that must not name the track."""
+        with patch.object(LocalStorage, "is_file", return_value=True), patch(
+            "subprocess.run", side_effect=PermissionError("Permission denied")
+        ):
+            assert plugin._generate_fingerprint(TRUNCATED_MP3) == (None, None)
+        assert "Could not run fpcalc" in caplog.text
+        assert TRUNCATED_MP3 not in caplog.text
+
     def test_a_timeout_is_still_caught(self, plugin):
         """Dropping ``check`` must not stop a hung fpcalc being handled."""
-        with patch("os.path.isfile", return_value=True), patch(
+        with patch.object(LocalStorage, "is_file", return_value=True), patch(
             "subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="fpcalc", timeout=30),
         ):
             assert plugin._generate_fingerprint(TRUNCATED_MP3) == (None, None)
 
     def test_a_missing_file_is_not_run_at_all(self, plugin):
-        with patch("os.path.isfile", return_value=False), patch(
+        with patch.object(LocalStorage, "is_file", return_value=False), patch(
             "subprocess.run"
         ) as run:
             assert plugin._generate_fingerprint(TRUNCATED_MP3) == (None, None)
         run.assert_not_called()
+
+
+class TestWhenTheTrackGoesAwayInstead:
+    """A share can drop a track between the check and the read of it, and
+    what reaches the handler is the same ``FileNotFoundError`` a missing
+    fpcalc raises. Blaming the install for it sends the user to install a
+    package they already have."""
+
+    def _vanishing(self, plugin):
+        gone = FileNotFoundError(f"no such file: {TRUNCATED_MP3}")
+        with patch.object(LocalStorage, "is_file", return_value=True), patch.object(
+            LocalStorage, "materialize", side_effect=gone
+        ), patch("subprocess.run") as run:
+            result = plugin._generate_fingerprint(TRUNCATED_MP3)
+        return result, run
+
+    def test_the_track_is_not_fingerprinted(self, plugin):
+        result, run = self._vanishing(plugin)
+        assert result == (None, None)
+        run.assert_not_called()
+
+    def test_chromaprint_is_not_blamed_for_it(self, plugin, caplog):
+        self._vanishing(plugin)
+        assert "chromaprint" not in caplog.text
+        assert TRUNCATED_MP3 in caplog.text

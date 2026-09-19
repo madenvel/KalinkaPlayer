@@ -2,23 +2,20 @@
 """Mount awareness: mountinfo parsing and the root availability probe.
 
 The probe's job is to tell an unmounted network share apart from a deleted
-library — the distinction every purge and playback guard hangs off.
+library — the distinction every purge and playback guard hangs off. Bounding
+and retrying it is every storage's business rather than the local mount's, so
+that lives with the storage interface and is covered by
+``test_storage_availability``.
 """
 
-import asyncio
-
-import pytest
-
+from kalinka_plugin_localfiles.storage import RootStatus, root_of
+from kalinka_plugin_localfiles.storage.local import LocalStorage
 from kalinka_plugin_localfiles.utils.mount_status import (
-    probe_root_async,
     Mount,
-    RootStatus,
     autofs_pending,
-    await_root_available,
     covering_mount,
     list_mounts,
     probe_root,
-    root_of,
 )
 
 # A realistic mountinfo snapshot: root fs, an autofs-managed NFS share that
@@ -82,14 +79,13 @@ def test_probe_available_nonempty_folder(tmp_path):
     (tmp_path / "a.mp3").write_bytes(b"x")
     status = probe_root(str(tmp_path))
     assert status.available
-    assert not status.empty
     assert status.reason == ""
 
 
 def test_probe_available_but_empty_folder(tmp_path):
     status = probe_root(str(tmp_path))
     assert status.available
-    assert status.empty
+    assert LocalStorage().is_empty(str(tmp_path))
 
 
 def test_probe_missing_folder_is_unavailable(tmp_path):
@@ -125,74 +121,12 @@ def test_probe_classifies_mounted_network_share(tmp_path):
     assert status.identity == "nfs4 host:/export"
 
 
-@pytest.mark.asyncio
-async def test_concurrent_probes_share_one_worker(tmp_path, monkeypatch):
-    """Piled-up requests against one root must ride a single probe: a hung
-    mount may cost one worker thread, never one per request."""
-    import threading
-
-    import kalinka_plugin_localfiles.utils.mount_status as ms
-
-    release = threading.Event()
-    calls = {"n": 0}
-    real_probe = ms.probe_root
-
-    def slow_probe(root, mounts=None):
-        calls["n"] += 1
-        release.wait(timeout=5)
-        return real_probe(root, mounts)
-
-    monkeypatch.setattr(ms, "probe_root", slow_probe)
-    first = asyncio.create_task(probe_root_async(str(tmp_path), timeout=5))
-    second = asyncio.create_task(probe_root_async(str(tmp_path), timeout=5))
-    await asyncio.sleep(0.05)
-    release.set()
-    statuses = await asyncio.gather(first, second)
-
-    assert calls["n"] == 1
-    assert all(s.available for s in statuses)
-
-
-@pytest.mark.asyncio
-async def test_await_root_available_returns_once_root_appears(tmp_path):
-    root = tmp_path / "late"
-
-    real_probe = probe_root
-    calls = {"n": 0}
-
-    def flaky_probe(path, mounts=None):
-        calls["n"] += 1
-        if calls["n"] >= 2:
-            root.mkdir(exist_ok=True)
-            (root / "a.mp3").write_bytes(b"x")
-        return real_probe(path, mounts)
-
-    import kalinka_plugin_localfiles.utils.mount_status as ms
-
-    original = ms.probe_root
-    ms.probe_root = flaky_probe
-    try:
-        status = await await_root_available(str(root), deadline_s=5.0)
-    finally:
-        ms.probe_root = original
-
-    assert status.available
-    assert calls["n"] >= 2
-
-
-@pytest.mark.asyncio
-async def test_await_root_available_gives_up_at_the_deadline(tmp_path):
-    status = await await_root_available(str(tmp_path / "never"), deadline_s=0.2)
-    assert not status.available
-
-
 def test_format_root_status_recommends_for_autofs_share():
     from kalinka_plugin_localfiles.module_setup import _format_root_status
 
     status = RootStatus(
         root="/mnt/nas/music",
         available=True,
-        empty=False,
         reason="",
         fs_type="nfs4",
         is_network=True,
@@ -211,7 +145,6 @@ def test_format_root_status_names_the_reason_when_unavailable():
     status = RootStatus(
         root="/mnt/nas/music",
         available=False,
-        empty=True,
         reason="the automounter has not mounted it",
         fs_type="autofs",
         is_network=False,
@@ -230,7 +163,6 @@ def test_format_root_status_flags_a_mount_identity_mismatch():
     status = RootStatus(
         root="/mnt/nas/music",
         available=True,
-        empty=False,
         reason="",
         fs_type="ext4",
         is_network=False,

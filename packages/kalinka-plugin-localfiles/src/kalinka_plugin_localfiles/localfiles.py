@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import Callable, List, Dict, Optional, Tuple
 import mimetypes
 
 from fastapi import HTTPException
@@ -54,8 +54,7 @@ from kalinka_plugin_sdk.filters import (
 )
 from .utils.id_generator import generate_playlist_id
 from .utils.image_utils import create_playlist_cover_collage
-from .utils.mount_status import await_root_available, root_of
-from .utils.name_utils import expand_music_folders, path_within_roots
+from .storage import FileStat, StorageResolver, build_resolver, media_type_of
 from .input_module_db import (
     ListingFilter,
     LocalFilesInputModuleDb,
@@ -247,18 +246,20 @@ class LocalFilesInputModule(InputModule):
         db_manager: LocalFilesInputModuleDb,
         search_request_queue: Optional[multiprocessing.Queue] = None,
         search_response_queue: Optional[multiprocessing.Queue] = None,
+        storage_source: Optional[Callable[[], StorageResolver]] = None,
     ):
         # Use the specialized LocalFilesInputModuleDb passed from module_setup.py
         self.config = config
         self.db_manager = db_manager
         self.artwork_path = Path(config.artwork_path).expanduser().resolve()
+        self._storage_source = storage_source or (lambda: build_resolver(config))
         # Access boundary: only files under a configured music folder may be
         # served / played. Captured once here, so it is fixed for the lifetime
         # of this module instance — a live config edit via PUT /server/config
         # does not re-run setup(), so the new boundary only takes effect on the
         # next restart / re-setup (at which point the indexer also purges the
         # now-out-of-scope rows).
-        self._music_folders = expand_music_folders(config.music_folders)
+        self._music_folders = self._storage.canonical_roots(config.music_folders)
         self._search_request_queue = search_request_queue
         self._search_response_queue = search_response_queue
         self._search_lock = asyncio.Lock()
@@ -271,6 +272,17 @@ class LocalFilesInputModule(InputModule):
         # Initialize mime types for serving files
         mimetypes.init()
         mimetypes.add_type("audio/flac", ".flac")
+
+    @property
+    def _storage(self) -> StorageResolver:
+        """The resolver as the configuration now stands.
+
+        Asked for rather than captured: the server edits credentials in
+        place, and a folder that reads as available on the settings page
+        while playback still logs in as the old account is worse than
+        either answer alone.
+        """
+        return self._storage_source()
 
     def module_name(self) -> str:
         """Return the name of the module"""
@@ -728,13 +740,14 @@ class LocalFilesInputModule(InputModule):
     def _require_readable(self, track_path: str) -> None:
         """Raise unless the file may still be served: inside a configured music
         folder, present, and readable."""
-        if not path_within_roots(track_path, self._music_folders):
+        if not self._storage.within_roots(track_path, self._music_folders):
             raise PermissionError(
                 f"Track path is outside the configured music folders: {track_path}"
             )
-        if not os.path.exists(track_path):
+        storage = self._storage.for_path(track_path)
+        if not storage.exists(track_path):
             raise FileNotFoundError(f"Track file no longer exists: {track_path}")
-        if not os.access(track_path, os.R_OK):
+        if not storage.readable(track_path):
             raise PermissionError(f"Track file is not readable: {track_path}")
 
     async def _require_readable_bounded(self, track_path: str) -> None:
@@ -756,19 +769,26 @@ class LocalFilesInputModule(InputModule):
         vouched for: an unmounted share — offline, automount pending, or a
         static mount whose recorded identity no longer matches — raises
         SourceUnavailableError instead of declaring the track gone or
-        serving whatever now sits at that path.
+        serving whatever now sits at that path."""
+        await self._require_root_available(track_path)
+        await self._require_readable_bounded(track_path)
 
-        The folder is cleared first because the file check cannot tell the
-        difference on its own: a stat under a hung mount blocks, and a stray
-        file in the empty directory behind a lost mount reads as perfectly
-        available. Probing goes through the shared per-root worker, so a hung
-        mount costs one blocked thread however many tracks ask."""
-        root = root_of(track_path, self._music_folders)
+    async def _require_root_available(self, track_path: str) -> None:
+        """Clear the track's music folder, or raise SourceUnavailableError.
+
+        Before any file check, because that check cannot tell the difference
+        on its own: a stat under a hung mount blocks, and a stray file in the
+        empty directory behind a lost mount reads as perfectly available.
+        Probing goes through the shared per-root worker, so a hung mount
+        costs one blocked thread however many tracks ask.
+
+        A path under no configured root is left to the boundary check.
+        """
+        root = self._storage.root_of(track_path, self._music_folders)
         if root is None:
-            await self._require_readable_bounded(track_path)
             return
 
-        status = await await_root_available(root)
+        status = await self._storage.for_path(root).await_root_available(root)
         if not status.available:
             raise SourceUnavailableError(
                 f"Music folder {root} is not available: {status.reason}"
@@ -779,7 +799,23 @@ class LocalFilesInputModule(InputModule):
                 f"Music folder {root} is not mounted "
                 f"(the library was indexed from {stored})"
             )
-        await self._require_readable_bounded(track_path)
+
+    def _measure_servable(self, track_path: str) -> FileStat:
+        """Measure a track the server is about to stream out of this module.
+
+        One round trip for what took three: the measurement says the file is
+        there and how long the response is, and the open the server makes
+        next is what says whether the bytes can be read — a failed one earns
+        the same 404 or 503 a check here would have.
+
+        @raise PermissionError If the path left the configured folders.
+        @raise OSError If the file is gone or cannot be measured.
+        """
+        if not self._storage.within_roots(track_path, self._music_folders):
+            raise PermissionError(
+                f"Track path is outside the configured music folders: {track_path}"
+            )
+        return self._storage.for_path(track_path).stat(track_path)
 
     async def get_content_info(self, asset_id: str) -> Optional[ContentInfo]:
         """Resolve a track id to the file the server serves for it.
@@ -796,16 +832,45 @@ class LocalFilesInputModule(InputModule):
         track_path = (track or {}).get("file_path")
         if not track_path:
             return None
+        await self._require_root_available(track_path)
+
+        mime_type = media_type_of(track_path) or "application/octet-stream"
+        storage = self._storage.for_path(track_path)
+        local_path = storage.local_path(track_path)
+        if local_path is not None:
+            # FileResponse has no answer for a file it cannot read, so the
+            # readability check stays on the path the server opens itself.
+            try:
+                await self._require_readable_bounded(track_path)
+            except OSError as e:
+                logger.warning("Refusing content for track %s: %s", asset_id, e)
+                return None
+            return ContentInfo(
+                mime_type=mime_type, local_path=local_path, cacheable=True
+            )
+
+        # Storage only this module can reach: the server streams it instead,
+        # and needs the length up front because a renderer seeks by byte
+        # range and reads the stream size out of Content-Range.
         try:
-            await self._await_readable(track_path)
+            measured = await asyncio.wait_for(
+                asyncio.to_thread(self._measure_servable, track_path),
+                STAT_TIMEOUT_S,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            # Bounded like every other stat on this path: an SMB client waits
+            # ten minutes for a quiet server by default, which would pin the
+            # request and its worker for as long.
+            raise SourceUnavailableError(
+                "Music storage did not respond while measuring the track"
+            )
         except OSError as e:
             logger.warning("Refusing content for track %s: %s", asset_id, e)
             return None
-
         return ContentInfo(
-            mime_type=mimetypes.guess_type(track_path)[0]
-            or "application/octet-stream",
-            local_path=track_path,
+            mime_type=mime_type,
+            reader=lambda: storage.open(track_path),
+            size=measured.size,
             cacheable=True,
         )
 
